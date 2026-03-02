@@ -1,0 +1,12 @@
+[package]
+name = "rts"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bevy = "0.15"
+noise = "0.9"
+
+# Enable optimizations for dependencies in dev builds for acceptable framerate
+[profile.dev.package."*"]
+opt-level = 2
