@@ -1,3 +1,4 @@
+mod buildings;
 mod camera;
 mod combat;
 mod components;
@@ -29,6 +30,7 @@ fn main() {
             selection::SelectionPlugin,
             ui::UiPlugin,
             resources::ResourcesPlugin,
+            buildings::BuildingsPlugin,
             pathvis::PathVisPlugin,
             vfx::VfxPlugin,
             mobs::MobsPlugin,

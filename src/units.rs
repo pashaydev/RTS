@@ -154,23 +154,13 @@ fn spawn_units(
     unit_mats: Res<UnitMaterials>,
     unit_meshes: Res<UnitMeshes>,
 ) {
-    // 3 Workers near center
+    // 2 Workers near center
     let worker_positions = [
         Vec3::new(0.0, 0.0, 0.0),
         Vec3::new(2.0, 0.0, 1.0),
-        Vec3::new(-2.0, 0.0, 1.0),
     ];
     for pos in worker_positions {
         spawn_unit_of_type(&mut commands, &unit_mats, &unit_meshes, UnitType::Worker, pos);
-    }
-
-    // 2 Soldiers near center
-    let soldier_positions = [
-        Vec3::new(1.0, 0.0, -2.0),
-        Vec3::new(-1.0, 0.0, -2.0),
-    ];
-    for pos in soldier_positions {
-        spawn_unit_of_type(&mut commands, &unit_mats, &unit_meshes, UnitType::Soldier, pos);
     }
 }
 

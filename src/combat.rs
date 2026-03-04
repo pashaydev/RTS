@@ -193,10 +193,10 @@ fn execute_ranged_attacks(
 
 fn handle_death(
     mut commands: Commands,
-    dead: Query<(Entity, &Health)>,
+    dead: Query<(Entity, &Health, Option<&Building>)>,
     mut attackers_with_target: Query<(Entity, &AttackTarget, Option<&mut PatrolState>)>,
 ) {
-    for (dead_entity, health) in &dead {
+    for (dead_entity, health, opt_building) in &dead {
         if health.current > 0.0 {
             continue;
         }
@@ -210,6 +210,10 @@ fn handle_death(
                 }
             }
         }
+
+        // Building death is handled by despawn; CompletedBuildings tracker
+        // will auto-update since it queries living buildings each frame
+        let _ = opt_building;
 
         commands.entity(dead_entity).despawn();
     }

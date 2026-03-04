@@ -95,8 +95,8 @@ pub struct PlayerResources {
 impl Default for PlayerResources {
     fn default() -> Self {
         Self {
-            wood: 0,
-            copper: 0,
+            wood: 150,
+            copper: 30,
             iron: 0,
             gold: 0,
             oil: 0,
@@ -123,6 +123,22 @@ impl PlayerResources {
             ResourceType::Gold => self.gold,
             ResourceType::Oil => self.oil,
         }
+    }
+
+    pub fn can_afford(&self, wood: u32, copper: u32, iron: u32, gold: u32, oil: u32) -> bool {
+        self.wood >= wood
+            && self.copper >= copper
+            && self.iron >= iron
+            && self.gold >= gold
+            && self.oil >= oil
+    }
+
+    pub fn subtract(&mut self, wood: u32, copper: u32, iron: u32, gold: u32, oil: u32) {
+        self.wood -= wood;
+        self.copper -= copper;
+        self.iron -= iron;
+        self.gold -= gold;
+        self.oil -= oil;
     }
 }
 
@@ -193,7 +209,12 @@ pub struct ResourceNodeMaterials {
 // ── Path visualization ──
 
 #[derive(Component)]
-pub struct PathArrow {
+pub struct PathDash {
+    pub owner: Entity,
+}
+
+#[derive(Component)]
+pub struct PathRing {
     pub owner: Entity,
 }
 
@@ -201,9 +222,11 @@ pub struct PathArrow {
 pub struct PreviousMoveTarget(pub Vec3);
 
 #[derive(Resource)]
-pub struct ArrowAssets {
-    pub mesh: Handle<Mesh>,
-    pub material: Handle<StandardMaterial>,
+pub struct PathVisAssets {
+    pub dash_mesh: Handle<Mesh>,
+    pub dash_material: Handle<StandardMaterial>,
+    pub ring_mesh: Handle<Mesh>,
+    pub ring_material: Handle<StandardMaterial>,
 }
 
 // ── Camera ──
@@ -219,6 +242,36 @@ pub struct RtsCamera {
 
 #[derive(Component)]
 pub struct Ground;
+
+// ── Biome system ──
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum Biome {
+    Forest,
+    Desert,
+    Mud,
+    Water,
+    Mountain,
+}
+
+#[derive(Resource)]
+pub struct BiomeMap {
+    pub data: Vec<Biome>,
+    pub grid_size: usize,
+    pub map_size: f32,
+}
+
+impl BiomeMap {
+    pub fn get_biome(&self, x: f32, z: f32) -> Biome {
+        let half = self.map_size / 2.0;
+        let step = self.map_size / (self.grid_size - 1) as f32;
+        let ix = ((x + half) / step).round() as usize;
+        let iz = ((z + half) / step).round() as usize;
+        let ix = ix.min(self.grid_size - 1);
+        let iz = iz.min(self.grid_size - 1);
+        self.data[iz * self.grid_size + ix]
+    }
+}
 
 // ── Mob types ──
 
@@ -329,7 +382,7 @@ pub struct SelectedUnitsPanel;
 pub struct SelectedUnitsSummaryText;
 
 #[derive(Component)]
-pub struct SpawnButton(pub UnitType);
+pub struct ActionBarInner;
 
 // ── Selection state ──
 
@@ -342,3 +395,117 @@ pub struct DragState {
 
 #[derive(Component)]
 pub struct SelectionBox;
+
+// ── Building system ──
+
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum BuildingType {
+    Base,
+    Barracks,
+    Workshop,
+    Tower,
+    Storage,
+}
+
+#[derive(Component)]
+pub struct Building;
+
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BuildingState {
+    UnderConstruction,
+    Complete,
+}
+
+#[derive(Component)]
+pub struct ConstructionProgress {
+    pub timer: Timer,
+}
+
+#[derive(Component)]
+pub struct TrainingQueue {
+    pub queue: Vec<UnitType>,
+    pub timer: Option<Timer>,
+}
+
+#[derive(Component)]
+pub struct BuildButton(pub BuildingType);
+
+#[derive(Component)]
+pub struct TrainButton(pub UnitType);
+
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PlacementMode {
+    None,
+    Placing(BuildingType),
+}
+
+#[derive(Resource)]
+pub struct BuildingPlacementState {
+    pub mode: PlacementMode,
+    pub preview_entity: Option<Entity>,
+}
+
+impl Default for BuildingPlacementState {
+    fn default() -> Self {
+        Self {
+            mode: PlacementMode::None,
+            preview_entity: None,
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct CompletedBuildings {
+    pub has_base: bool,
+    pub has_barracks: bool,
+    pub has_workshop: bool,
+}
+
+#[derive(Resource)]
+pub struct BuildingMeshes {
+    pub base: Handle<Mesh>,
+    pub barracks: Handle<Mesh>,
+    pub workshop: Handle<Mesh>,
+    pub tower: Handle<Mesh>,
+    pub storage: Handle<Mesh>,
+}
+
+impl BuildingMeshes {
+    pub fn mesh_for(&self, bt: BuildingType) -> Handle<Mesh> {
+        match bt {
+            BuildingType::Base => self.base.clone(),
+            BuildingType::Barracks => self.barracks.clone(),
+            BuildingType::Workshop => self.workshop.clone(),
+            BuildingType::Tower => self.tower.clone(),
+            BuildingType::Storage => self.storage.clone(),
+        }
+    }
+}
+
+#[derive(Resource)]
+pub struct BuildingMaterials {
+    pub base: Handle<StandardMaterial>,
+    pub barracks: Handle<StandardMaterial>,
+    pub workshop: Handle<StandardMaterial>,
+    pub tower: Handle<StandardMaterial>,
+    pub storage: Handle<StandardMaterial>,
+    pub ghost_valid: Handle<StandardMaterial>,
+    pub ghost_invalid: Handle<StandardMaterial>,
+    pub under_construction: Handle<StandardMaterial>,
+}
+
+impl BuildingMaterials {
+    pub fn material_for(&self, bt: BuildingType) -> Handle<StandardMaterial> {
+        match bt {
+            BuildingType::Base => self.base.clone(),
+            BuildingType::Barracks => self.barracks.clone(),
+            BuildingType::Workshop => self.workshop.clone(),
+            BuildingType::Tower => self.tower.clone(),
+            BuildingType::Storage => self.storage.clone(),
+        }
+    }
+}
+
+#[derive(Component)]
+pub struct GhostBuilding;

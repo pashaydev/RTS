@@ -103,14 +103,21 @@ fn handle_click_select(
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut drag: ResMut<DragState>,
+    placement: Res<BuildingPlacementState>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut ray_cast: MeshRayCast,
     units: Query<Entity, With<Unit>>,
+    buildings: Query<Entity, With<Building>>,
     selected: Query<Entity, With<Selected>>,
     unit_transforms: Query<&GlobalTransform, With<Unit>>,
 ) {
     if !mouse.just_released(MouseButton::Left) {
+        return;
+    }
+
+    // Don't select while placing a building
+    if placement.mode != PlacementMode::None {
         return;
     }
 
@@ -172,9 +179,14 @@ fn handle_click_select(
         let hits = ray_cast.cast_ray(ray, &default());
 
         let mut hit_unit = None;
+        let mut hit_building = None;
         for (entity, _) in hits {
             if units.contains(*entity) {
                 hit_unit = Some(*entity);
+                break;
+            }
+            if buildings.contains(*entity) {
+                hit_building = Some(*entity);
                 break;
             }
         }
@@ -186,6 +198,12 @@ fn handle_click_select(
         }
 
         if let Some(entity) = hit_unit {
+            if shift && selected.contains(entity) {
+                commands.entity(entity).remove::<Selected>();
+            } else {
+                commands.entity(entity).insert(Selected);
+            }
+        } else if let Some(entity) = hit_building {
             if shift && selected.contains(entity) {
                 commands.entity(entity).remove::<Selected>();
             } else {
