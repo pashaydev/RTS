@@ -3,6 +3,7 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::components::*;
 use crate::ground::{terrain_height, MAP_SIZE};
+use rand::Rng;
 
 pub struct ResourcesPlugin;
 
@@ -10,7 +11,7 @@ impl Plugin for ResourcesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlayerResources>()
             .add_systems(Startup, create_resource_node_materials)
-            .add_systems(PostStartup, spawn_resource_nodes)
+            .add_systems(PostStartup, (spawn_resource_nodes, spawn_decorations))
             .add_systems(
                 Update,
                 (auto_gather_nearby, gather_resources, deplete_resource_nodes),
@@ -136,16 +137,30 @@ fn secondary_resource_for(
     }
 }
 
+/// Pick a random scene handle from a slice, returning None if empty.
+fn random_model(rng: &mut impl Rng, models: &[Handle<Scene>]) -> Option<Handle<Scene>> {
+    if models.is_empty() {
+        None
+    } else {
+        Some(models[rng.random_range(0..models.len())].clone())
+    }
+}
+
 fn spawn_resource_nodes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     node_mats: Res<ResourceNodeMaterials>,
     biome_map: Res<BiomeMap>,
+    model_assets: Res<ModelAssets>,
 ) {
     let wood_mesh = meshes.add(Cuboid::new(0.6, 2.5, 0.6));
     let ore_mesh = meshes.add(Cuboid::new(1.0, 0.8, 1.0));
     let gold_mesh = meshes.add(Cuboid::new(0.8, 0.8, 0.8));
     let oil_mesh = meshes.add(Cylinder::new(0.5, 1.2));
+
+    let has_tree_models = !model_assets.trees.is_empty();
+    let has_rock_models = !model_assets.rocks.is_empty();
+    let mut rng = rand::rng();
 
     let placement_noise = Fbm::<Perlin>::new(999).set_octaves(2);
     let spacing = 12.0;
@@ -187,16 +202,54 @@ fn spawn_resource_nodes(
                     &oil_mesh,
                     &node_mats,
                 ) {
-                    let y = terrain_height(x, z) + half_h;
-                    commands.spawn((
-                        ResourceNode {
-                            resource_type: rt,
-                            amount_remaining: amount,
-                        },
-                        Mesh3d(mesh),
-                        MeshMaterial3d(mat),
-                        Transform::from_translation(Vec3::new(x, y, z)),
-                    ));
+                    let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
+                    let scale_factor = rng.random_range(0.8_f32..1.2);
+
+                    // Wood nodes → tree models
+                    if rt == ResourceType::Wood && has_tree_models {
+                        let scene_handle = random_model(&mut rng, &model_assets.trees).unwrap();
+                        commands.spawn((
+                            ResourceNode {
+                                resource_type: rt,
+                                amount_remaining: amount,
+                            },
+                            SceneRoot(scene_handle),
+                            Transform::from_translation(Vec3::new(x, terrain_height(x, z), z))
+                                .with_rotation(Quat::from_rotation_y(y_rotation))
+                                .with_scale(Vec3::splat(scale_factor)),
+                        ));
+                    }
+                    // Ore nodes (Copper/Iron/Gold) → rock models
+                    else if matches!(
+                        rt,
+                        ResourceType::Copper | ResourceType::Iron | ResourceType::Gold
+                    ) && has_rock_models
+                    {
+                        let scene_handle = random_model(&mut rng, &model_assets.rocks).unwrap();
+                        commands.spawn((
+                            ResourceNode {
+                                resource_type: rt,
+                                amount_remaining: amount,
+                            },
+                            SceneRoot(scene_handle),
+                            Transform::from_translation(Vec3::new(x, terrain_height(x, z), z))
+                                .with_rotation(Quat::from_rotation_y(y_rotation))
+                                .with_scale(Vec3::splat(scale_factor)),
+                        ));
+                    }
+                    // Oil + fallbacks → primitive mesh
+                    else {
+                        let y = terrain_height(x, z) + half_h;
+                        commands.spawn((
+                            ResourceNode {
+                                resource_type: rt,
+                                amount_remaining: amount,
+                            },
+                            Mesh3d(mesh),
+                            MeshMaterial3d(mat),
+                            Transform::from_translation(Vec3::new(x, y, z)),
+                        ));
+                    }
                 }
 
                 // Secondary resource (lower probability)
@@ -209,18 +262,146 @@ fn spawn_resource_nodes(
                     {
                         let offset_x = x + 3.0;
                         let offset_z = z + 2.0;
-                        let y = terrain_height(offset_x, offset_z) + half_h;
-                        commands.spawn((
-                            ResourceNode {
-                                resource_type: rt,
-                                amount_remaining: amount,
-                            },
-                            Mesh3d(mesh),
-                            MeshMaterial3d(mat),
-                            Transform::from_translation(Vec3::new(offset_x, y, offset_z)),
-                        ));
+
+                        if has_rock_models {
+                            let scene_handle =
+                                random_model(&mut rng, &model_assets.rocks).unwrap();
+                            let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
+                            let scale_factor = rng.random_range(0.8_f32..1.2);
+                            commands.spawn((
+                                ResourceNode {
+                                    resource_type: rt,
+                                    amount_remaining: amount,
+                                },
+                                SceneRoot(scene_handle),
+                                Transform::from_translation(Vec3::new(
+                                    offset_x,
+                                    terrain_height(offset_x, offset_z),
+                                    offset_z,
+                                ))
+                                .with_rotation(Quat::from_rotation_y(y_rotation))
+                                .with_scale(Vec3::splat(scale_factor)),
+                            ));
+                        } else {
+                            let y = terrain_height(offset_x, offset_z) + half_h;
+                            commands.spawn((
+                                ResourceNode {
+                                    resource_type: rt,
+                                    amount_remaining: amount,
+                                },
+                                Mesh3d(mesh),
+                                MeshMaterial3d(mat),
+                                Transform::from_translation(Vec3::new(offset_x, y, offset_z)),
+                            ));
+                        }
                     }
                 }
+            }
+
+            z += spacing;
+        }
+        x += spacing;
+    }
+}
+
+// ── Decoration spawning ──
+
+/// Decorations per biome: (grass_weight, bush_weight, rock_weight, dead_tree_weight)
+/// Weights control relative probability; 0 means none.
+fn biome_decoration_weights(biome: Biome) -> (f32, f32, f32, f32) {
+    match biome {
+        Biome::Forest => (0.4, 0.35, 0.1, 0.0),
+        Biome::Desert => (0.0, 0.0, 0.5, 0.3),
+        Biome::Mud => (0.35, 0.35, 0.0, 0.0),
+        Biome::Mountain => (0.0, 0.0, 0.6, 0.15),
+        Biome::Water => (0.0, 0.0, 0.0, 0.0),
+    }
+}
+
+enum DecoKind {
+    Grass,
+    Bush,
+    Rock,
+    DeadTree,
+}
+
+fn spawn_decorations(
+    mut commands: Commands,
+    biome_map: Res<BiomeMap>,
+    model_assets: Res<ModelAssets>,
+) {
+    let mut rng = rand::rng();
+    let deco_noise = Fbm::<Perlin>::new(777).set_octaves(2);
+    let spacing = 8.0;
+    let half = MAP_SIZE / 2.0;
+    let max_decorations = 700;
+    let mut count = 0u32;
+
+    let mut x = -half + 4.0;
+    while x < half - 4.0 {
+        let mut z = -half + 4.0;
+        while z < half - 4.0 {
+            if count >= max_decorations {
+                return;
+            }
+
+            // Keep starting area clear
+            let dist_from_center = (x * x + z * z).sqrt();
+            if dist_from_center < 20.0 {
+                z += spacing;
+                continue;
+            }
+
+            let biome = biome_map.get_biome(x, z);
+            let (gw, bw, rw, dw) = biome_decoration_weights(biome);
+            let total_weight = gw + bw + rw + dw;
+            if total_weight < 0.01 {
+                z += spacing;
+                continue;
+            }
+
+            let noise_val = deco_noise.get([x as f64 * 0.15, z as f64 * 0.15]) as f32;
+            // Only place decorations where noise is positive (roughly half)
+            if noise_val < 0.05 {
+                z += spacing;
+                continue;
+            }
+
+            // Pick decoration kind based on weights
+            let roll = rng.random_range(0.0..total_weight);
+            let kind = if roll < gw {
+                DecoKind::Grass
+            } else if roll < gw + bw {
+                DecoKind::Bush
+            } else if roll < gw + bw + rw {
+                DecoKind::Rock
+            } else {
+                DecoKind::DeadTree
+            };
+
+            let (models, scale_min, scale_max) = match kind {
+                DecoKind::Grass => (&model_assets.grass, 0.6_f32, 1.0_f32),
+                DecoKind::Bush => (&model_assets.bushes, 0.7, 1.1),
+                DecoKind::Rock => (&model_assets.rocks, 0.8, 1.5),
+                DecoKind::DeadTree => (&model_assets.dead_trees, 0.7, 1.1),
+            };
+
+            if let Some(scene_handle) = random_model(&mut rng, models) {
+                // Small random offset so decorations don't align to a grid
+                let ox = x + rng.random_range(-2.0_f32..2.0);
+                let oz = z + rng.random_range(-2.0_f32..2.0);
+                let y = terrain_height(ox, oz);
+                let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
+                let scale = rng.random_range(scale_min..scale_max);
+
+                commands.spawn((
+                    Decoration,
+                    SceneRoot(scene_handle),
+                    Transform::from_translation(Vec3::new(ox, y, oz))
+                        .with_rotation(Quat::from_rotation_y(y_rotation))
+                        .with_scale(Vec3::splat(scale)),
+                ));
+                count += 1;
             }
 
             z += spacing;

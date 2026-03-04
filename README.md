@@ -7,7 +7,8 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 ## Features
 
 - **World** — 500x500 procedural terrain with Perlin noise heightmap (fBm, 4 octaves) and 5 distinct biomes (Forest, Desert, Mud, Water, Mountain) using moisture/temperature noise layers
-- **Biomes** — Each biome has unique vertex coloring and biome-appropriate resource distribution
+- **Biomes** — Each biome has unique vertex coloring, biome-appropriate resource distribution, and scattered decorations (grass, bushes, rocks, dead trees)
+- **3D Assets** — KayKit Forest Nature Pack: low-poly trees for wood nodes, rocks for ore nodes, and decorative props placed via noise-based scatter
 - **Buildings** — 5 building types (Base, Barracks, Workshop, Tower, Storage) with placement preview, construction timer, and prerequisite system
 - **Units** — 4 types: Worker, Soldier, Archer (ranged), Tank — trained from buildings
 - **Enemies** — 4 mob camps (Goblin, Skeleton, Orc, Demon) with patrol AI, aggro detection, and boss variants
@@ -120,7 +121,8 @@ src/
 ├── buildings.rs   Building placement, construction, training, tower combat
 ├── selection.rs   Click, box, and shift selection + right-click commands
 ├── ui.rs          HUD: resource bar, selection panel, context-sensitive action bar
-├── resources.rs   Biome-based resource node spawning and auto-gathering
+├── model_assets.rs Loads KayKit 3D models (trees, rocks, bushes, grass)
+├── resources.rs   Biome-based resource node spawning, auto-gathering, and decoration scatter
 ├── mobs.rs        Enemy camps, patrol / aggro / chase AI
 ├── combat.rs      Melee and ranged attacks, auto-targeting, death
 ├── pathvis.rs     Dashed path lines with destination ring
@@ -135,7 +137,8 @@ src/
 | `BuildingsPlugin` | Building placement preview, construction progress, unit training queues, tower auto-attack |
 | `SelectionPlugin` | Click/box/shift selection for units and buildings, right-click move and attack |
 | `UiPlugin` | Resource bar, selection panel, context-sensitive action bar with build/train buttons |
-| `ResourcesPlugin` | Procedural biome-based resource node spawning, auto-gather + deposit loop |
+| `ModelAssetsPlugin` | Loads KayKit Forest Nature Pack 3D models (trees, dead trees, rocks, bushes, grass) |
+| `ResourcesPlugin` | Procedural biome-based resource node spawning with 3D models, auto-gather + deposit loop, biome-aware decoration scatter |
 | `MobsPlugin` | Spawns 4 enemy camps with patrol, aggro, chase, and return AI |
 | `CombatPlugin` | Melee/ranged attacks, auto-acquire targets, death cleanup |
 | `PathVisPlugin` | Terrain-following dashed path lines with destination ring |

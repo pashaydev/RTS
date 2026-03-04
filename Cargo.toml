@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 bevy = "0.15"
 noise = "0.9"
+rand = "0.9"
 
 # Enable optimizations for dependencies in dev builds for acceptable framerate
 [profile.dev.package."*"]

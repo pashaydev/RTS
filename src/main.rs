@@ -4,6 +4,7 @@ mod combat;
 mod components;
 mod ground;
 mod mobs;
+mod model_assets;
 mod pathvis;
 mod resources;
 mod selection;
@@ -24,6 +25,7 @@ fn main() {
             ..default()
         }))
         .add_plugins((
+            model_assets::ModelAssetsPlugin,
             ground::GroundPlugin,
             camera::CameraPlugin,
             units::UnitsPlugin,

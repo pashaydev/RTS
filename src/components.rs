@@ -195,6 +195,20 @@ impl UnitMeshes {
     }
 }
 
+// ── Model assets (3D models loaded from .glb files) ──
+
+#[derive(Resource, Default)]
+pub struct ModelAssets {
+    pub trees: Vec<Handle<Scene>>,
+    pub dead_trees: Vec<Handle<Scene>>,
+    pub rocks: Vec<Handle<Scene>>,
+    pub bushes: Vec<Handle<Scene>>,
+    pub grass: Vec<Handle<Scene>>,
+}
+
+#[derive(Component)]
+pub struct Decoration;
+
 // ── Resource node materials ──
 
 #[derive(Resource)]
