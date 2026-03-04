@@ -16,7 +16,7 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 - **Economy** — 5 resource types (Wood, Copper, Iron, Gold, Oil) procedurally distributed across biomes with auto-gathering workers. Start with 150 Wood and 30 Copper
 - **Controls** — Click, box-select, shift-toggle selection; formation movement; right-click attack targeting; building placement
 - **Camera** — WASD pan, Q/E rotate, scroll zoom
-- **UI** — Top resource bar, selection panel, context-sensitive action bar (build buttons / train buttons / building info) with cost tooltips
+- **UI** — Top resource bar, selection panel, context-sensitive action bar with card-hand building UI (dynamic states: enabled / can't afford with per-resource red highlights / locked with hover tooltips), train buttons, building info
 - **Pathfinding** — Thin dashed lines with destination ring, terrain-following
 
 ## Getting Started

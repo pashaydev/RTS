@@ -258,14 +258,45 @@ fn confirm_placement(
     existing_buildings: Query<&Transform, (With<Building>, Without<GhostBuilding>)>,
     biome_map: Option<Res<BiomeMap>>,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) {
-        return;
-    }
-
     let PlacementMode::Placing(bt) = placement.mode else {
         return;
     };
 
+    // Phase 1: awaiting initial mouse release (prevents placing on same click as card)
+    if placement.awaiting_release {
+        if mouse.just_released(MouseButton::Left) {
+            placement.awaiting_release = false;
+
+            // Try drag-and-drop placement: if cursor is on valid terrain, place immediately
+            if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) {
+                let on_water = biome_map.as_ref()
+                    .map_or(false, |bm| bm.get_biome(world_pos.x, world_pos.z) == Biome::Water);
+                let too_close = existing_buildings.iter().any(|building_tf| {
+                    let check_pos = Vec3::new(world_pos.x, building_tf.translation.y, world_pos.z);
+                    building_tf.translation.distance(check_pos) < 5.0
+                });
+                let half_map = 250.0;
+                let out_of_bounds = world_pos.x.abs() > half_map - 5.0
+                    || world_pos.z.abs() > half_map - 5.0;
+
+                if !on_water && !too_close && !out_of_bounds {
+                    // Valid drag-and-drop: fall through to placement below
+                } else {
+                    // Released on invalid spot — stay in placement mode for click-to-place
+                    return;
+                }
+            } else {
+                // No ground pos (e.g. cursor over UI) — stay in placement mode
+                return;
+            }
+        } else {
+            return;
+        }
+    } else if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    // Phase 2: normal click-to-place (or drag-and-drop that fell through)
     let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
         return;
     };
@@ -368,6 +399,7 @@ fn cancel_placement(
         }
         placement.mode = PlacementMode::None;
         placement.preview_entity = None;
+        placement.awaiting_release = false;
     }
 }
 
@@ -524,7 +556,12 @@ fn update_completed_buildings_tracker(
         }
     }
 
-    completed.has_base = has_base;
-    completed.has_barracks = has_barracks;
-    completed.has_workshop = has_workshop;
+    if completed.has_base != has_base
+        || completed.has_barracks != has_barracks
+        || completed.has_workshop != has_workshop
+    {
+        completed.has_base = has_base;
+        completed.has_barracks = has_barracks;
+        completed.has_workshop = has_workshop;
+    }
 }

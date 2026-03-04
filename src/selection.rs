@@ -11,6 +11,7 @@ impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MeshPickingPlugin)
             .init_resource::<DragState>()
+            .init_resource::<InspectedEnemy>()
             .add_systems(Startup, spawn_selection_box)
             .add_systems(
                 Update,
@@ -75,12 +76,13 @@ fn update_selection_box_visual(
     drag: Res<DragState>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut query: Query<(&mut Node, &mut Visibility), With<SelectionBox>>,
+    placement: Res<BuildingPlacementState>,
 ) {
     let Ok((mut node, mut vis)) = query.get_single_mut() else {
         return;
     };
 
-    if drag.dragging && mouse.pressed(MouseButton::Left) {
+    if drag.dragging && mouse.pressed(MouseButton::Left) && placement.mode == PlacementMode::None {
         if let (Some(start), Some(current)) = (drag.start, drag.current) {
             let min_x = start.x.min(current.x);
             let min_y = start.y.min(current.y);
@@ -103,12 +105,14 @@ fn handle_click_select(
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut drag: ResMut<DragState>,
+    mut inspected: ResMut<InspectedEnemy>,
     placement: Res<BuildingPlacementState>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut ray_cast: MeshRayCast,
     units: Query<Entity, With<Unit>>,
     buildings: Query<Entity, With<Building>>,
+    mobs: Query<Entity, With<Mob>>,
     selected: Query<Entity, With<Selected>>,
     unit_transforms: Query<&GlobalTransform, With<Unit>>,
 ) {
@@ -140,7 +144,7 @@ fn handle_click_select(
     let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
 
     if was_dragging {
-        // Box select
+        // Box select — only friendly units, clear enemy inspect
         if let (Some(start), Some(end)) = (drag_start, drag_end) {
             let min_x = start.x.min(end.x);
             let max_x = start.x.max(end.x);
@@ -152,6 +156,8 @@ fn handle_click_select(
                     commands.entity(entity).remove::<Selected>();
                 }
             }
+
+            inspected.entity = None;
 
             for entity in &units {
                 if let Ok(gt) = unit_transforms.get(entity) {
@@ -180,6 +186,7 @@ fn handle_click_select(
 
         let mut hit_unit = None;
         let mut hit_building = None;
+        let mut hit_mob = None;
         for (entity, _) in hits {
             if units.contains(*entity) {
                 hit_unit = Some(*entity);
@@ -189,25 +196,37 @@ fn handle_click_select(
                 hit_building = Some(*entity);
                 break;
             }
-        }
-
-        if !shift {
-            for entity in &selected {
-                commands.entity(entity).remove::<Selected>();
+            if mobs.contains(*entity) {
+                hit_mob = Some(*entity);
+                break;
             }
         }
 
-        if let Some(entity) = hit_unit {
-            if shift && selected.contains(entity) {
-                commands.entity(entity).remove::<Selected>();
-            } else {
-                commands.entity(entity).insert(Selected);
+        if let Some(mob_entity) = hit_mob {
+            // Clicking an enemy: set inspected, do NOT deselect friendly units
+            inspected.entity = Some(mob_entity);
+        } else {
+            // Clicking friendly or ground: clear enemy inspect
+            inspected.entity = None;
+
+            if !shift {
+                for entity in &selected {
+                    commands.entity(entity).remove::<Selected>();
+                }
             }
-        } else if let Some(entity) = hit_building {
-            if shift && selected.contains(entity) {
-                commands.entity(entity).remove::<Selected>();
-            } else {
-                commands.entity(entity).insert(Selected);
+
+            if let Some(entity) = hit_unit {
+                if shift && selected.contains(entity) {
+                    commands.entity(entity).remove::<Selected>();
+                } else {
+                    commands.entity(entity).insert(Selected);
+                }
+            } else if let Some(entity) = hit_building {
+                if shift && selected.contains(entity) {
+                    commands.entity(entity).remove::<Selected>();
+                } else {
+                    commands.entity(entity).insert(Selected);
+                }
             }
         }
     }

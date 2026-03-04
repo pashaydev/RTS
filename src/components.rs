@@ -415,6 +415,11 @@ pub struct IconAssets {
     pub soldier: Handle<Image>,
     pub archer: Handle<Image>,
     pub tank: Handle<Image>,
+    // Mobs
+    pub goblin: Handle<Image>,
+    pub skeleton: Handle<Image>,
+    pub orc: Handle<Image>,
+    pub demon: Handle<Image>,
 }
 
 impl IconAssets {
@@ -446,6 +451,15 @@ impl IconAssets {
             UnitType::Tank => self.tank.clone(),
         }
     }
+
+    pub fn mob_icon(&self, mt: MobType) -> Handle<Image> {
+        match mt {
+            MobType::Goblin => self.goblin.clone(),
+            MobType::Skeleton => self.skeleton.clone(),
+            MobType::Orc => self.orc.clone(),
+            MobType::Demon => self.demon.clone(),
+        }
+    }
 }
 
 // ── UI markers ──
@@ -454,13 +468,32 @@ impl IconAssets {
 pub struct ResourceText(pub ResourceType);
 
 #[derive(Component)]
-pub struct SelectedUnitsPanel;
-
-#[derive(Component)]
-pub struct SelectedUnitsSummaryText;
-
-#[derive(Component)]
 pub struct ActionBarInner;
+
+// ── Selection info panel markers ──
+
+#[derive(Resource, Default)]
+pub struct InspectedEnemy {
+    pub entity: Option<Entity>,
+}
+
+#[derive(Component)]
+pub struct Boss;
+
+#[derive(Component)]
+pub struct SelectionInfoPanel;
+
+#[derive(Component)]
+pub struct UnitCardGrid;
+
+#[derive(Component)]
+pub struct UnitCardRef(pub Entity);
+
+#[derive(Component)]
+pub struct HpBarFill(pub Entity);
+
+#[derive(Component)]
+pub struct EnemyInspectPanel;
 
 // ── Selection state ──
 
@@ -522,6 +555,7 @@ pub enum PlacementMode {
 pub struct BuildingPlacementState {
     pub mode: PlacementMode,
     pub preview_entity: Option<Entity>,
+    pub awaiting_release: bool,
 }
 
 impl Default for BuildingPlacementState {
@@ -529,6 +563,7 @@ impl Default for BuildingPlacementState {
         Self {
             mode: PlacementMode::None,
             preview_entity: None,
+            awaiting_release: false,
         }
     }
 }
@@ -587,3 +622,89 @@ impl BuildingMaterials {
 
 #[derive(Component)]
 pub struct GhostBuilding;
+
+// ── Card-Hand UI components ──
+
+#[derive(Component)]
+#[allow(dead_code)]
+pub struct CardHand;
+
+#[derive(Component)]
+pub struct BuildCard {
+    #[allow(dead_code)]
+    pub building_type: BuildingType,
+    pub index: usize,
+    pub total: usize,
+    pub enabled: bool,
+}
+
+#[derive(Component)]
+pub struct CardAnimState {
+    pub offset_y: f32,
+    pub scale: f32,
+    pub rotation_deg: f32,
+    pub opacity: f32,
+    pub target_offset_y: f32,
+    pub target_scale: f32,
+    pub target_rotation_deg: f32,
+    pub target_opacity: f32,
+}
+
+impl CardAnimState {
+    pub fn new(rotation_deg: f32, offset_y: f32) -> Self {
+        Self {
+            offset_y: -200.0, // start off-screen for deal-in
+            scale: 0.5,
+            rotation_deg,
+            opacity: 0.0,
+            target_offset_y: offset_y,
+            target_scale: 1.0,
+            target_rotation_deg: rotation_deg,
+            target_opacity: 1.0,
+        }
+    }
+}
+
+#[derive(Component)]
+pub struct CardDealIn {
+    pub delay_timer: Timer,
+    pub anim_timer: Timer,
+    pub started: bool,
+}
+
+#[derive(Component)]
+pub struct CardPlayOut {
+    pub timer: Timer,
+}
+
+#[derive(Component)]
+pub struct CardSpringBack {
+    pub timer: Timer,
+}
+
+#[derive(Component)]
+pub struct CardGlow;
+
+#[derive(Component)]
+pub struct CardCostEntry {
+    pub resource_type: ResourceType,
+    pub amount: u32,
+}
+
+#[derive(Component)]
+pub struct CardNameText;
+
+#[derive(Component)]
+pub struct CardTooltip;
+
+/// Returns (rotation_deg, y_offset) for a card at `index` out of `total` in the fan arc.
+pub fn fan_params(index: usize, total: usize) -> (f32, f32) {
+    if total <= 1 {
+        return (0.0, 0.0);
+    }
+    let t = index as f32 / (total - 1) as f32; // 0.0 .. 1.0
+    let centered = t - 0.5; // -0.5 .. 0.5
+    let rotation_deg = centered * 10.0; // -5° .. +5°
+    let y_offset = centered.abs() * 20.0; // edges dip down 10px
+    (rotation_deg, y_offset)
+}

@@ -23,6 +23,10 @@ impl Plugin for ModelAssetsPlugin {
             soldier: asset_server.load("icons/units/soldier.png"),
             archer: asset_server.load("icons/units/archer.png"),
             tank: asset_server.load("icons/units/tank.png"),
+            goblin: asset_server.load("icons/mobs/goblin.png"),
+            skeleton: asset_server.load("icons/mobs/skeleton.png"),
+            orc: asset_server.load("icons/mobs/orc.png"),
+            demon: asset_server.load("icons/mobs/demon.png"),
         };
         app.insert_resource(icons);
         app.add_systems(Startup, load_model_assets);

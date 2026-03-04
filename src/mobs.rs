@@ -197,6 +197,7 @@ fn spawn_mob_camps(
             let y = terrain_height(x, z) + mob_y_offset(camp.mob_type) * 1.5;
 
             commands.spawn((
+                Boss,
                 Mob,
                 camp.mob_type,
                 Faction::Enemy,
