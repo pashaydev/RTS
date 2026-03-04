@@ -247,9 +247,19 @@ pub struct PathVisAssets {
 
 #[derive(Component)]
 pub struct RtsCamera {
+    // Current smoothed state
     pub pivot: Vec3,
     pub distance: f32,
     pub angle: f32,
+    pub pitch: f32,
+
+    // Target state (inputs write here, current lerps toward these)
+    pub target_pivot: Vec3,
+    pub target_distance: f32,
+    pub target_angle: f32,
+
+    // Momentum
+    pub pan_velocity: Vec3,
 }
 
 // ── Ground ──
