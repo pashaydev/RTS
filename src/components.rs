@@ -394,6 +394,60 @@ pub struct MobMeshes {
     pub demon: Handle<Mesh>,
 }
 
+// ── Icon assets ──
+
+#[derive(Resource)]
+pub struct IconAssets {
+    // Resources
+    pub wood: Handle<Image>,
+    pub copper: Handle<Image>,
+    pub iron: Handle<Image>,
+    pub gold: Handle<Image>,
+    pub oil: Handle<Image>,
+    // Buildings
+    pub base: Handle<Image>,
+    pub barracks: Handle<Image>,
+    pub workshop: Handle<Image>,
+    pub tower: Handle<Image>,
+    pub storage: Handle<Image>,
+    // Units
+    pub worker: Handle<Image>,
+    pub soldier: Handle<Image>,
+    pub archer: Handle<Image>,
+    pub tank: Handle<Image>,
+}
+
+impl IconAssets {
+    pub fn resource_icon(&self, rt: ResourceType) -> Handle<Image> {
+        match rt {
+            ResourceType::Wood => self.wood.clone(),
+            ResourceType::Copper => self.copper.clone(),
+            ResourceType::Iron => self.iron.clone(),
+            ResourceType::Gold => self.gold.clone(),
+            ResourceType::Oil => self.oil.clone(),
+        }
+    }
+
+    pub fn building_icon(&self, bt: BuildingType) -> Handle<Image> {
+        match bt {
+            BuildingType::Base => self.base.clone(),
+            BuildingType::Barracks => self.barracks.clone(),
+            BuildingType::Workshop => self.workshop.clone(),
+            BuildingType::Tower => self.tower.clone(),
+            BuildingType::Storage => self.storage.clone(),
+        }
+    }
+
+    pub fn unit_icon(&self, ut: UnitType) -> Handle<Image> {
+        match ut {
+            UnitType::Worker => self.worker.clone(),
+            UnitType::Soldier => self.soldier.clone(),
+            UnitType::Archer => self.archer.clone(),
+            UnitType::Tank => self.tank.clone(),
+        }
+    }
+}
+
 // ── UI markers ──
 
 #[derive(Component)]

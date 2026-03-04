@@ -10,13 +10,13 @@ const PAN_SMOOTH: f32 = 10.0;
 const ZOOM_SMOOTH: f32 = 6.0;
 const ROTATE_SMOOTH: f32 = 8.0;
 const FRICTION: f32 = 8.0;
-const PAN_SPEED_SCALE: f32 = 0.6;
-const ZOOM_SENSITIVITY: f32 = 0.12;
+const PAN_SPEED_SCALE: f32 = 0.1;
+const ZOOM_SENSITIVITY: f32 = 0.07;
 const EDGE_THRESHOLD: f32 = 0.06;
 const PITCH_MIN: f32 = 0.4;
 const PITCH_MAX: f32 = 1.1;
 const DISTANCE_MIN: f32 = 10.0;
-const DISTANCE_MAX: f32 = 200.0;
+const DISTANCE_MAX: f32 = 50.0;
 
 pub struct CameraPlugin;
 

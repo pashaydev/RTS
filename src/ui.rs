@@ -21,16 +21,6 @@ impl Plugin for UiPlugin {
     }
 }
 
-fn resource_color(rt: ResourceType) -> Color {
-    match rt {
-        ResourceType::Wood => Color::srgb(0.15, 0.6, 0.1),
-        ResourceType::Copper => Color::srgb(0.8, 0.5, 0.2),
-        ResourceType::Iron => Color::srgb(0.6, 0.6, 0.65),
-        ResourceType::Gold => Color::srgb(0.95, 0.85, 0.2),
-        ResourceType::Oil => Color::srgb(0.2, 0.2, 0.25),
-    }
-}
-
 fn unit_type_label(ut: UnitType) -> &'static str {
     match ut {
         UnitType::Worker => "Worker",
@@ -40,7 +30,7 @@ fn unit_type_label(ut: UnitType) -> &'static str {
     }
 }
 
-fn spawn_hud(mut commands: Commands) {
+fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>) {
     // ── Top bar — resource display ──
     commands
         .spawn(Node {
@@ -73,12 +63,12 @@ fn spawn_hud(mut commands: Commands) {
                 })
                 .with_children(|entry| {
                     entry.spawn((
+                        ImageNode::new(icons.resource_icon(rt)),
                         Node {
-                            width: Val::Px(16.0),
-                            height: Val::Px(16.0),
+                            width: Val::Px(24.0),
+                            height: Val::Px(24.0),
                             ..default()
                         },
-                        BackgroundColor(resource_color(rt)),
                     ));
                     entry.spawn((
                         ResourceText(rt),
@@ -235,6 +225,7 @@ fn update_action_bar(
     added_selected: Query<Entity, Added<Selected>>,
     mut removed_selected: RemovedComponents<Selected>,
     changed_buildings: Query<Entity, Changed<BuildingState>>,
+    icons: Res<IconAssets>,
 ) {
     // Only rebuild if something changed
     let has_new = !added_selected.is_empty();
@@ -262,15 +253,15 @@ fn update_action_bar(
         if *state == BuildingState::Complete {
             match bt {
                 BuildingType::Barracks => {
-                    spawn_train_button(&mut commands, bar_entity, UnitType::Worker);
-                    spawn_train_button(&mut commands, bar_entity, UnitType::Soldier);
-                    spawn_train_button(&mut commands, bar_entity, UnitType::Archer);
+                    spawn_train_button(&mut commands, bar_entity, UnitType::Worker, &icons);
+                    spawn_train_button(&mut commands, bar_entity, UnitType::Soldier, &icons);
+                    spawn_train_button(&mut commands, bar_entity, UnitType::Archer, &icons);
                 }
                 BuildingType::Workshop => {
-                    spawn_train_button(&mut commands, bar_entity, UnitType::Tank);
+                    spawn_train_button(&mut commands, bar_entity, UnitType::Tank, &icons);
                 }
                 BuildingType::Base => {
-                    spawn_train_button(&mut commands, bar_entity, UnitType::Worker);
+                    spawn_train_button(&mut commands, bar_entity, UnitType::Worker, &icons);
                 }
                 _ => {
                     let child = commands
@@ -326,7 +317,7 @@ fn update_action_bar(
                 Some(BuildingType::Base) => completed.has_base,
                 Some(_) => false,
             };
-            spawn_build_button(&mut commands, bar_entity, bt, enabled);
+            spawn_build_button(&mut commands, bar_entity, bt, enabled, &icons);
         }
     }
 }
@@ -336,6 +327,7 @@ fn spawn_build_button(
     parent: Entity,
     bt: BuildingType,
     enabled: bool,
+    icons: &IconAssets,
 ) {
     let label = building_type_label(bt);
     let (w, c, i, g, o, _) = building_cost(bt);
@@ -355,6 +347,7 @@ fn spawn_build_button(
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                row_gap: Val::Px(2.0),
                 ..default()
             },
             BackgroundColor(color),
@@ -362,9 +355,17 @@ fn spawn_build_button(
         ))
         .with_children(|btn| {
             btn.spawn((
+                ImageNode::new(icons.building_icon(bt)),
+                Node {
+                    width: Val::Px(32.0),
+                    height: Val::Px(32.0),
+                    ..default()
+                },
+            ));
+            btn.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: 16.0,
+                    font_size: 14.0,
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -383,7 +384,7 @@ fn spawn_build_button(
     commands.entity(parent).add_child(child);
 }
 
-fn spawn_train_button(commands: &mut Commands, parent: Entity, ut: UnitType) {
+fn spawn_train_button(commands: &mut Commands, parent: Entity, ut: UnitType, icons: &IconAssets) {
     let label = unit_type_label(ut);
     let (w, c, i, g, o, _) = training_cost(ut);
     let cost_str = format_cost(w, c, i, g, o);
@@ -396,6 +397,7 @@ fn spawn_train_button(commands: &mut Commands, parent: Entity, ut: UnitType) {
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                row_gap: Val::Px(2.0),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.25, 0.25, 0.3, 0.9)),
@@ -403,9 +405,17 @@ fn spawn_train_button(commands: &mut Commands, parent: Entity, ut: UnitType) {
         ))
         .with_children(|btn| {
             btn.spawn((
+                ImageNode::new(icons.unit_icon(ut)),
+                Node {
+                    width: Val::Px(32.0),
+                    height: Val::Px(32.0),
+                    ..default()
+                },
+            ));
+            btn.spawn((
                 Text::new(format!("Train {}", label)),
                 TextFont {
-                    font_size: 16.0,
+                    font_size: 14.0,
                     ..default()
                 },
                 TextColor(Color::WHITE),

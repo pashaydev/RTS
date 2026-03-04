@@ -1,0 +1,7 @@
+Icons from game-icons.net
+License: CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/)
+
+Authors:
+- Delapouite (https://delapouite.com/) — log, gold-mine, barrel, castle, medieval-barracks,
+  mechanic-garage, watchtower, warehouse, viking-shield
+- Lorc (https://lorcblog.blogspot.com/) — metal-bar, anvil, mining, crossed-swords, bowman

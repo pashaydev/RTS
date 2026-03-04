@@ -1,11 +1,30 @@
 use bevy::prelude::*;
 
-use crate::components::ModelAssets;
+use crate::components::{IconAssets, ModelAssets};
 
 pub struct ModelAssetsPlugin;
 
 impl Plugin for ModelAssetsPlugin {
     fn build(&self, app: &mut App) {
+        // Load icon assets eagerly so they're available to all Startup systems
+        let asset_server = app.world().resource::<AssetServer>();
+        let icons = IconAssets {
+            wood: asset_server.load("icons/resources/wood.png"),
+            copper: asset_server.load("icons/resources/copper.png"),
+            iron: asset_server.load("icons/resources/iron.png"),
+            gold: asset_server.load("icons/resources/gold.png"),
+            oil: asset_server.load("icons/resources/oil.png"),
+            base: asset_server.load("icons/buildings/base.png"),
+            barracks: asset_server.load("icons/buildings/barracks.png"),
+            workshop: asset_server.load("icons/buildings/workshop.png"),
+            tower: asset_server.load("icons/buildings/tower.png"),
+            storage: asset_server.load("icons/buildings/storage.png"),
+            worker: asset_server.load("icons/units/worker.png"),
+            soldier: asset_server.load("icons/units/soldier.png"),
+            archer: asset_server.load("icons/units/archer.png"),
+            tank: asset_server.load("icons/units/tank.png"),
+        };
+        app.insert_resource(icons);
         app.add_systems(Startup, load_model_assets);
     }
 }
