@@ -2,6 +2,7 @@ mod buildings;
 mod camera;
 mod combat;
 mod components;
+mod fog;
 mod ground;
 mod mobs;
 mod model_assets;
@@ -37,6 +38,7 @@ fn main() {
             vfx::VfxPlugin,
             mobs::MobsPlugin,
             combat::CombatPlugin,
+            fog::FogPlugin,
         ))
         .run();
 }

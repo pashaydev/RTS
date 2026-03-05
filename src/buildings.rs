@@ -88,6 +88,16 @@ fn building_hp(bt: BuildingType) -> f32 {
     }
 }
 
+fn building_vision_range(bt: BuildingType) -> f32 {
+    match bt {
+        BuildingType::Base => 25.0,
+        BuildingType::Barracks => 15.0,
+        BuildingType::Workshop => 15.0,
+        BuildingType::Tower => 20.0,
+        BuildingType::Storage => 10.0,
+    }
+}
+
 // ── Asset creation ──
 
 fn create_building_assets(
@@ -362,6 +372,7 @@ fn confirm_placement(
             current: building_hp(bt),
             max: building_hp(bt),
         },
+        VisionRange(building_vision_range(bt)),
         Mesh3d(building_meshes.mesh_for(bt)),
         MeshMaterial3d(building_mats.under_construction.clone()),
         Transform::from_translation(Vec3::new(world_pos.x, y, world_pos.z)),

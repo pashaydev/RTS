@@ -352,6 +352,35 @@ pub struct PatrolState {
     pub patrol_target: Option<Vec3>,
 }
 
+// ── Fog of War ──
+
+#[derive(Component)]
+pub struct VisionRange(pub f32);
+
+#[derive(Resource)]
+pub struct FogOfWarMap {
+    /// Per-cell visibility: 0.0 = unexplored, 0.5 = explored (seen before), 1.0 = currently visible
+    pub visibility: Vec<f32>,
+    pub grid_size: usize,
+    pub map_size: f32,
+}
+
+impl FogOfWarMap {
+    pub fn get_visibility(&self, x: f32, z: f32) -> f32 {
+        let half = self.map_size / 2.0;
+        let step = self.map_size / (self.grid_size - 1) as f32;
+        let ix = ((x + half) / step).round() as usize;
+        let iz = ((z + half) / step).round() as usize;
+        if ix >= self.grid_size || iz >= self.grid_size {
+            return 0.0;
+        }
+        self.visibility[iz * self.grid_size + ix]
+    }
+}
+
+#[derive(Component)]
+pub struct FogOverlay;
+
 // ── VFX components ──
 
 #[derive(Component)]

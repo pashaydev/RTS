@@ -120,6 +120,15 @@ fn cooldown_for(ut: UnitType) -> f32 {
     }
 }
 
+fn vision_range_for(ut: UnitType) -> f32 {
+    match ut {
+        UnitType::Worker => 15.0,
+        UnitType::Soldier => 12.0,
+        UnitType::Archer => 18.0,
+        UnitType::Tank => 10.0,
+    }
+}
+
 pub fn spawn_unit_of_type(
     commands: &mut Commands,
     unit_mats: &UnitMaterials,
@@ -142,6 +151,7 @@ pub fn spawn_unit_of_type(
             AttackCooldown {
                 timer: Timer::from_seconds(cooldown_for(ut), TimerMode::Repeating),
             },
+            VisionRange(vision_range_for(ut)),
             Mesh3d(unit_meshes.mesh_for(ut)),
             MeshMaterial3d(unit_mats.default_for(ut)),
             Transform::from_translation(Vec3::new(pos.x, y, pos.z)),

@@ -211,19 +211,20 @@ fn spawn_ground(
         map_size: MAP_SIZE,
     });
 
-    // Directional light (sun)
+    // Directional light (sun) — dimmer for fog-of-war atmosphere
     commands.spawn((
         DirectionalLight {
-            illuminance: 8000.0,
+            illuminance: 4000.0,
             shadows_enabled: true,
+            color: Color::srgb(0.85, 0.8, 0.7),
             ..default()
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.3, 0.0)),
     ));
 
-    // Ambient light
+    // Ambient light — low for darker mood
     commands.insert_resource(AmbientLight {
-        color: Color::WHITE,
-        brightness: 300.0,
+        color: Color::srgb(0.6, 0.6, 0.75),
+        brightness: 120.0,
     });
 }
