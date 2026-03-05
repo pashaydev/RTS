@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
+use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::components::{Biome, BiomeMap, Ground};
@@ -209,22 +209,5 @@ fn spawn_ground(
         data: biome_data,
         grid_size: GRID_SIZE,
         map_size: MAP_SIZE,
-    });
-
-    // Directional light (sun) — dimmer for fog-of-war atmosphere
-    commands.spawn((
-        DirectionalLight {
-            illuminance: 4000.0,
-            shadows_enabled: true,
-            color: Color::srgb(0.85, 0.8, 0.7),
-            ..default()
-        },
-        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, 0.3, 0.0)),
-    ));
-
-    // Ambient light — low for darker mood
-    commands.insert_resource(AmbientLight {
-        color: Color::srgb(0.6, 0.6, 0.75),
-        brightness: 120.0,
     });
 }

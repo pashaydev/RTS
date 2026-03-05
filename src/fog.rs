@@ -1,27 +1,61 @@
-use bevy::pbr::{FogVolume, VolumetricFog, VolumetricLight};
+use bevy::image::ImageSampler;
+use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
+use bevy::asset::RenderAssetUsages;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 
 use crate::components::*;
+use crate::fog_material::{FogOfWarMaterial, FogSettings};
 use crate::ground::{terrain_height, GRID_SIZE, HALF_MAP, MAP_SIZE};
+
+/// Resource holding the handle to the GPU visibility texture.
+#[derive(Resource)]
+pub struct FogVisibilityTexture(pub Handle<Image>);
 
 pub struct FogPlugin;
 
 impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostStartup, (spawn_fog_overlay, setup_volumetric_fog))
+        app.add_plugins(MaterialPlugin::<FogOfWarMaterial>::default())
+            .add_systems(PostStartup, spawn_fog_overlay)
             .add_systems(
                 Update,
-                (update_fog_visibility, apply_fog_to_mesh, fog_hide_enemies).chain(),
+                (
+                    update_fog_visibility,
+                    update_fog_texture,
+                    update_fog_material_time,
+                    fog_hide_enemies,
+                )
+                    .chain(),
             );
     }
 }
 
-/// Spawn the fog-of-war overlay mesh and initialize the FogOfWarMap resource.
+/// Create the R8Unorm visibility texture for GPU sampling.
+fn create_visibility_texture(images: &mut Assets<Image>, grid_size: usize) -> Handle<Image> {
+    let size = Extent3d {
+        width: grid_size as u32,
+        height: grid_size as u32,
+        depth_or_array_layers: 1,
+    };
+    let mut image = Image::new_fill(
+        size,
+        TextureDimension::D2,
+        &[0u8],
+        TextureFormat::R8Unorm,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    image.sampler = ImageSampler::linear();
+    image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST;
+    images.add(image)
+}
+
+/// Spawn the fog-of-war overlay mesh and initialize resources.
 fn spawn_fog_overlay(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut fog_materials: ResMut<Assets<FogOfWarMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
     let grid_size = GRID_SIZE;
     let step = MAP_SIZE / (grid_size - 1) as f32;
@@ -29,13 +63,12 @@ fn spawn_fog_overlay(
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(grid_size * grid_size);
     let mut normals: Vec<[f32; 3]> = Vec::with_capacity(grid_size * grid_size);
     let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(grid_size * grid_size);
-    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(grid_size * grid_size);
 
     for iz in 0..grid_size {
         for ix in 0..grid_size {
             let x = -HALF_MAP + ix as f32 * step;
             let z = -HALF_MAP + iz as f32 * step;
-            let y = terrain_height(x, z) + 0.3;
+            let y = terrain_height(x, z) + 1.5;
 
             positions.push([x, y, z]);
             normals.push([0.0, 1.0, 0.0]);
@@ -43,7 +76,6 @@ fn spawn_fog_overlay(
                 ix as f32 / (grid_size - 1) as f32,
                 iz as f32 / (grid_size - 1) as f32,
             ]);
-            colors.push([0.02, 0.02, 0.05, 1.0]);
         }
     }
 
@@ -67,19 +99,14 @@ fn spawn_fog_overlay(
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-    mesh.insert_attribute(
-        Mesh::ATTRIBUTE_COLOR,
-        VertexAttributeValues::Float32x4(colors),
-    );
     mesh.insert_indices(Indices::U32(indices));
 
-    let material = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.02, 0.02, 0.05, 1.0),
-        unlit: true,
-        alpha_mode: AlphaMode::Blend,
-        double_sided: true,
-        cull_mode: None,
-        ..default()
+    // Create visibility texture for the shader
+    let vis_handle = create_visibility_texture(&mut images, grid_size);
+
+    let material = fog_materials.add(FogOfWarMaterial {
+        settings: FogSettings::default(),
+        visibility_texture: Some(vis_handle.clone()),
     });
 
     commands.spawn((
@@ -89,63 +116,14 @@ fn spawn_fog_overlay(
         Transform::default(),
     ));
 
-    // Initialize fog map
+    commands.insert_resource(FogVisibilityTexture(vis_handle));
+
     let total = grid_size * grid_size;
     commands.insert_resource(FogOfWarMap {
         visibility: vec![0.0; total],
         grid_size,
         map_size: MAP_SIZE,
     });
-}
-
-/// Set up volumetric fog, distance fog, fog volume, and darken scene lighting.
-fn setup_volumetric_fog(
-    mut commands: Commands,
-    camera_q: Query<Entity, With<RtsCamera>>,
-    dir_light_q: Query<Entity, With<DirectionalLight>>,
-    mut ambient: ResMut<AmbientLight>,
-) {
-    // Darken ambient light for moodier atmosphere
-    ambient.brightness = 80.0;
-    ambient.color = Color::srgb(0.6, 0.6, 0.75);
-
-    // Add volumetric fog + distance fog to camera
-    if let Ok(cam_entity) = camera_q.get_single() {
-        commands.entity(cam_entity).insert((
-            DistanceFog {
-                color: Color::srgba(0.05, 0.05, 0.1, 1.0),
-                falloff: FogFalloff::ExponentialSquared { density: 0.0015 },
-                ..default()
-            },
-            VolumetricFog {
-                ambient_color: Color::srgb(0.05, 0.05, 0.1),
-                ambient_intensity: 0.02,
-                step_count: 48,
-                jitter: 0.5,
-                ..default()
-            },
-        ));
-    }
-
-    // Enable volumetric light on the directional light (god rays)
-    if let Ok(light_entity) = dir_light_q.get_single() {
-        commands.entity(light_entity).insert(VolumetricLight);
-    }
-
-    // Large fog volume covering the whole map for atmospheric haze
-    commands.spawn((
-        FogVolume {
-            fog_color: Color::srgba(0.08, 0.08, 0.15, 1.0),
-            density_factor: 0.012,
-            absorption: 0.04,
-            scattering: 0.03,
-            scattering_asymmetry: 0.7,
-            light_tint: Color::srgb(0.6, 0.7, 1.0),
-            light_intensity: 0.8,
-            ..default()
-        },
-        Transform::from_xyz(0.0, 15.0, 0.0).with_scale(Vec3::new(MAP_SIZE, 30.0, MAP_SIZE)),
-    ));
 }
 
 fn update_fog_visibility(
@@ -156,14 +134,12 @@ fn update_fog_visibility(
     let grid_size = fog_map.grid_size;
     let step = fog_map.map_size / (grid_size - 1) as f32;
 
-    // Decay: visible → explored, explored stays, unexplored stays
     for v in fog_map.visibility.iter_mut() {
         if *v > 0.5 {
             *v = 0.5;
         }
     }
 
-    // Collect player viewers
     let mut viewers: Vec<(Vec3, f32)> = Vec::new();
     for (tf, vr, faction) in all_units.iter() {
         if *faction == Faction::Player {
@@ -176,7 +152,6 @@ fn update_fog_visibility(
         }
     }
 
-    // For each viewer, write smooth visibility with distance falloff
     for (pos, range) in &viewers {
         let range_sq = range * range;
 
@@ -196,10 +171,9 @@ fn update_fog_visibility(
                 let dist_sq = dx * dx + dz * dz;
 
                 if dist_sq <= range_sq {
-                    // Smooth falloff: 1.0 at center, fading toward edge
-                    let t = (dist_sq / range_sq).sqrt(); // 0..1 from center to edge
-                    let edge_fade = 1.0 - (t * t); // smooth quadratic falloff at edges
-                    let vis = 0.5 + 0.5 * edge_fade; // ranges from 0.5 (edge) to 1.0 (center)
+                    let t = (dist_sq / range_sq).sqrt();
+                    let edge_fade = 1.0 - (t * t);
+                    let vis = 0.5 + 0.5 * edge_fade;
                     let idx = iz * grid_size + ix;
                     if vis > fog_map.visibility[idx] {
                         fog_map.visibility[idx] = vis;
@@ -210,55 +184,38 @@ fn update_fog_visibility(
     }
 }
 
-fn apply_fog_to_mesh(
+/// Bake the CPU visibility grid into the GPU texture each frame.
+fn update_fog_texture(
     fog_map: Res<FogOfWarMap>,
-    fog_overlay: Query<&Mesh3d, With<FogOverlay>>,
-    mut meshes: ResMut<Assets<Mesh>>,
+    fog_tex: Res<FogVisibilityTexture>,
+    mut images: ResMut<Assets<Image>>,
 ) {
-    let Ok(mesh_handle) = fog_overlay.get_single() else {
+    let Some(image) = images.get_mut(&fog_tex.0) else {
         return;
     };
-    let Some(mesh) = meshes.get_mut(&mesh_handle.0) else {
+    let Some(ref mut data) = image.data else {
         return;
     };
-
-    let grid_size = fog_map.grid_size;
-    let total = grid_size * grid_size;
-
-    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(total);
+    let total = fog_map.grid_size * fog_map.grid_size;
     for i in 0..total {
-        let vis = fog_map.visibility[i];
-
-        // Smooth alpha mapping:
-        // vis 1.0 (center of vision) → alpha 0.0 (fully clear)
-        // vis 0.5 (explored / vision edge) → alpha 0.5 (dim)
-        // vis 0.0 (unexplored) → alpha 1.0 (fully opaque black)
-        let alpha = if vis >= 1.0 {
-            0.0
-        } else if vis > 0.5 {
-            // Smooth transition from clear to explored
-            let t = (vis - 0.5) / 0.5; // 0..1 where 1 = fully visible
-            let t_smooth = t * t * (3.0 - 2.0 * t); // smoothstep
-            0.5 * (1.0 - t_smooth)
-        } else if vis > 0.0 {
-            // Explored → unexplored: 0.5 → 1.0
-            let t = vis / 0.5; // 0..1 where 1 = explored edge
-            1.0 - t * 0.5 // 1.0 → 0.5
-        } else {
-            1.0
-        };
-
-        // Slight blue tint in fog for atmosphere
-        let r = 0.01;
-        let g = 0.01;
-        let b = 0.03;
-        colors.push([r, g, b, alpha]);
+        let vis = fog_map.visibility[i].clamp(0.0, 1.0);
+        data[i] = (vis * 255.0) as u8;
     }
+}
 
-    mesh.insert_attribute(
-        Mesh::ATTRIBUTE_COLOR,
-        VertexAttributeValues::Float32x4(colors),
-    );
+/// Push elapsed time into the material uniform for shader animation.
+fn update_fog_material_time(
+    time: Res<Time>,
+    fog_overlay: Query<&MeshMaterial3d<FogOfWarMaterial>, With<FogOverlay>>,
+    mut materials: ResMut<Assets<FogOfWarMaterial>>,
+) {
+    let Ok(mat_handle) = fog_overlay.single() else {
+        return;
+    };
+    let Some(mat) = materials.get_mut(&mat_handle.0) else {
+        return;
+    };
+    mat.settings.time = time.elapsed_secs();
 }
 
 fn fog_hide_enemies(

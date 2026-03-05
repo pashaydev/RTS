@@ -105,7 +105,7 @@ fn update_vfx_flashes(
         let scale = flash.start_scale + (flash.end_scale - flash.start_scale) * progress;
         tf.scale = Vec3::splat(scale);
 
-        if flash.timer.finished() {
+        if flash.timer.is_finished() {
             commands.entity(entity).despawn();
         }
     }

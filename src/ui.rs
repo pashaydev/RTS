@@ -1,3 +1,4 @@
+use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 
 use crate::buildings::{building_cost, building_prerequisite, building_type_label, training_cost};
@@ -108,10 +109,10 @@ fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>) {
             column_gap: Val::Px(8.0),
             min_height: Val::Px(60.0),
             max_width: Val::Px(800.0),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
             ..default()
         },
         BackgroundColor(Color::srgba(0.05, 0.05, 0.1, 0.85)),
-        BorderRadius::all(Val::Px(6.0)),
         Visibility::Hidden,
     ));
 
@@ -177,10 +178,10 @@ fn spawn_hp_bar(commands: &mut Commands, parent: Entity, tracked_entity: Entity,
             Node {
                 width: Val::Px(width),
                 height: Val::Px(6.0),
+                border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.9)),
-            BorderRadius::all(Val::Px(2.0)),
         ))
         .id();
     commands.entity(parent).add_child(bg);
@@ -191,10 +192,10 @@ fn spawn_hp_bar(commands: &mut Commands, parent: Entity, tracked_entity: Entity,
             Node {
                 width: Val::Percent(pct),
                 height: Val::Percent(100.0),
+                border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..default()
             },
             BackgroundColor(hp_color(health.current, health.max)),
-            BorderRadius::all(Val::Px(2.0)),
         ))
         .id();
     commands.entity(bg).add_child(fill);
@@ -381,10 +382,10 @@ fn spawn_enemy_detail_card(
                 padding: UiRect::all(Val::Px(8.0)),
                 column_gap: Val::Px(10.0),
                 border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
             },
-            BorderColor(Color::srgb(0.8, 0.3, 0.1)),
-            BorderRadius::all(Val::Px(4.0)),
+            BorderColor::all(Color::srgb(0.8, 0.3, 0.1)),
         ))
         .id();
     commands.entity(parent).add_child(card);
@@ -485,10 +486,10 @@ fn spawn_unit_mini_card(
                 padding: UiRect::all(Val::Px(4.0)),
                 row_gap: Val::Px(2.0),
                 width: Val::Px(56.0),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.15, 0.15, 0.2, 0.8)),
-            BorderRadius::all(Val::Px(4.0)),
         ))
         .id();
     commands.entity(parent).add_child(card);
@@ -549,14 +550,14 @@ fn rebuild_selection_panel(
         return;
     }
 
-    let Ok(panel_entity) = panel_q.get_single() else {
+    let Ok(panel_entity) = panel_q.single() else {
         return;
     };
 
     // Despawn all children
     if let Ok(children) = children_q.get(panel_entity) {
         for child in children.iter() {
-            commands.entity(*child).despawn_recursive();
+            commands.entity(child).despawn();
         }
     }
 
@@ -611,10 +612,10 @@ fn rebuild_selection_panel(
                         padding: UiRect::all(Val::Px(4.0)),
                         row_gap: Val::Px(2.0),
                         width: Val::Px(56.0),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.15, 0.15, 0.2, 0.8)),
-                    BorderRadius::all(Val::Px(4.0)),
                 ))
                 .id();
             commands.entity(grid).add_child(card);
@@ -744,12 +745,12 @@ fn update_action_bar(
         return;
     }
 
-    let Ok(bar_entity) = action_bar.get_single() else {
+    let Ok(bar_entity) = action_bar.single() else {
         return;
     };
 
     // Figure out what we need to show
-    let has_selected_building = selected_buildings.get_single().is_ok();
+    let has_selected_building = selected_buildings.single().is_ok();
     let has_selected_units = selected_units.iter().count() > 0;
     let need_cards = !has_selected_building && !has_selected_units;
 
@@ -761,12 +762,12 @@ fn update_action_bar(
     // Despawn all children
     if let Ok(children) = children_q.get(bar_entity) {
         for child in children.iter() {
-            commands.entity(*child).despawn_recursive();
+            commands.entity(child).despawn();
         }
     }
 
     // Check if a building is selected
-    if let Ok((bt, state)) = selected_buildings.get_single() {
+    if let Ok((bt, state)) = selected_buildings.single() {
         if *state == BuildingState::Complete {
             match bt {
                 BuildingType::Barracks => {
@@ -901,10 +902,10 @@ fn spawn_card_hand(
                         bottom: Val::Px(-200.0), // start off-screen
                         ..default()
                     },
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
                     ..default()
                 },
                 BackgroundColor(bg_color),
-                BorderRadius::all(Val::Px(8.0)),
                 Transform::from_scale(Vec3::splat(0.5))
                     .with_rotation(Quat::from_rotation_z(rot_deg.to_radians())),
                 ZIndex(i as i32),
@@ -962,10 +963,10 @@ fn spawn_card_hand(
                         top: Val::Px(0.0),
                         width: Val::Percent(100.0),
                         height: Val::Percent(100.0),
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.4, 0.5, 0.9, 0.0)),
-                    BorderRadius::all(Val::Px(8.0)),
                 ));
                 // Tooltip wrapper (centers the tooltip above the card)
                 card_node
@@ -989,22 +990,22 @@ fn spawn_card_hand(
                                 ..default()
                             },
                             TextColor(Color::srgba(0.9, 0.88, 0.82, 0.95)),
-                            TextLayout::new_with_justify(JustifyText::Center),
+                            TextLayout::new_with_justify(Justify::Center),
                             Node {
                                 padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
                                 ..default()
                             },
                             BackgroundColor(Color::srgba(0.1, 0.1, 0.14, 0.95)),
-                            BorderRadius::all(Val::Px(4.0)),
-                            BoxShadow {
-                                x_offset: Val::Px(0.0),
-                                y_offset: Val::Px(1.0),
-                                blur_radius: Val::Px(6.0),
-                                spread_radius: Val::Px(0.0),
-                                color: Color::srgba(0.0, 0.0, 0.0, 0.4),
-                            },
+                            BoxShadow::new(
+                                Color::srgba(0.0, 0.0, 0.0, 0.4),
+                                Val::Px(0.0),
+                                Val::Px(1.0),
+                                Val::Px(0.0),
+                                Val::Px(6.0),
+                            ),
                         ));
                     });
             })
@@ -1015,7 +1016,7 @@ fn spawn_card_hand(
 }
 
 fn spawn_cost_entry(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     icons: &IconAssets,
     rt: ResourceType,
     amount: u32,
@@ -1068,10 +1069,10 @@ fn spawn_train_button(commands: &mut Commands, parent: Entity, ut: UnitType, ico
                 align_items: AlignItems::Center,
                 padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
                 row_gap: Val::Px(2.0),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.25, 0.25, 0.3, 0.9)),
-            BorderRadius::all(Val::Px(4.0)),
         ))
         .with_children(|btn| {
             btn.spawn((
@@ -1218,7 +1219,7 @@ fn card_deal_in_system(
 ) {
     for (mut deal, mut anim, mut node, mut tf) in &mut cards {
         deal.delay_timer.tick(time.delta());
-        if !deal.delay_timer.finished() {
+        if !deal.delay_timer.is_finished() {
             continue;
         }
         deal.started = true;
@@ -1292,7 +1293,7 @@ fn card_play_out_system(
         let t = play.timer.fraction();
         anim.scale = 1.0 + 0.4 * t; // 1.0 -> 1.4
         anim.opacity = 1.0 - t;
-        if play.timer.finished() {
+        if play.timer.is_finished() {
             commands.entity(entity).remove::<CardPlayOut>();
         }
     }
@@ -1350,7 +1351,7 @@ fn card_spring_back_system(
             anim.offset_y = rest_y + overshoot;
         }
 
-        if spring.timer.finished() {
+        if spring.timer.is_finished() {
             anim.offset_y = rest_y;
             commands.entity(entity).remove::<CardSpringBack>();
         }
@@ -1442,7 +1443,7 @@ fn update_card_states(
         // Update children
         for child in card_children.iter() {
             // Update name text color
-            if let Ok(mut text_color) = name_texts.get_mut(*child) {
+            if let Ok(mut text_color) = name_texts.get_mut(child) {
                 if !prereq_met {
                     text_color.0 = Color::srgba(0.5, 0.5, 0.5, 0.7);
                 } else if !can_afford {
@@ -1453,7 +1454,7 @@ fn update_card_states(
             }
 
             // Update cost entry colors
-            if let Ok((cost_entry, entry_children)) = cost_entries.get(*child) {
+            if let Ok((cost_entry, entry_children)) = cost_entries.get(child) {
                 let has_enough = player_res.get(cost_entry.resource_type) >= cost_entry.amount;
                 let entry_color = if !prereq_met {
                     Color::srgba(0.4, 0.4, 0.4, 0.5)
@@ -1463,16 +1464,16 @@ fn update_card_states(
                     Color::srgb(0.6, 0.6, 0.5)
                 };
                 for entry_child in entry_children.iter() {
-                    if let Ok(mut tc) = cost_text_colors.get_mut(*entry_child) {
+                    if let Ok(mut tc) = cost_text_colors.get_mut(entry_child) {
                         tc.0 = entry_color;
                     }
                 }
             }
 
             // Update tooltip text (the Text is a child of the CardTooltip wrapper)
-            if let Ok(wrapper_children) = tooltip_wrappers.get(*child) {
+            if let Ok(wrapper_children) = tooltip_wrappers.get(child) {
                 for wc in wrapper_children.iter() {
-                    if let Ok(mut text) = texts.get_mut(*wc) {
+                    if let Ok(mut text) = texts.get_mut(wc) {
                         if text.0 != tooltip_text {
                             text.0 = tooltip_text.to_string();
                         }
@@ -1491,7 +1492,7 @@ fn card_tooltip_system(
     for (interaction, card, children) in &cards {
         let show = !card.enabled && *interaction == Interaction::Hovered;
         for child in children.iter() {
-            if let Ok(mut vis) = tooltips.get_mut(*child) {
+            if let Ok(mut vis) = tooltips.get_mut(child) {
                 *vis = if show {
                     Visibility::Visible
                 } else {
@@ -1528,7 +1529,7 @@ fn card_glow_system(
         };
 
         for child in children.iter() {
-            if let Ok(mut glow_bg) = glows.get_mut(*child) {
+            if let Ok(mut glow_bg) = glows.get_mut(child) {
                 let current = glow_bg.0.to_srgba();
                 let new_a = current.alpha + (target_opacity - current.alpha) * alpha;
                 *glow_bg = BackgroundColor(Color::srgba(0.4, 0.5, 0.9, new_a));

@@ -38,7 +38,7 @@ fn spawn_selection_box(mut commands: Commands) {
             ..default()
         },
         BackgroundColor(Color::srgba(0.2, 0.4, 1.0, 0.2)),
-        BorderColor(Color::srgba(0.3, 0.5, 1.0, 0.8)),
+        BorderColor::all(Color::srgba(0.3, 0.5, 1.0, 0.8)),
         Visibility::Hidden,
         GlobalTransform::default(),
     ));
@@ -49,7 +49,7 @@ fn track_drag(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut drag: ResMut<DragState>,
 ) {
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     let Some(cursor) = window.cursor_position() else {
@@ -78,7 +78,7 @@ fn update_selection_box_visual(
     mut query: Query<(&mut Node, &mut Visibility), With<SelectionBox>>,
     placement: Res<BuildingPlacementState>,
 ) {
-    let Ok((mut node, mut vis)) = query.get_single_mut() else {
+    let Ok((mut node, mut vis)) = query.single_mut() else {
         return;
     };
 
@@ -134,10 +134,10 @@ fn handle_click_select(
     drag.current = None;
     drag.dragging = false;
 
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
-    let Ok((camera, cam_gt)) = camera_q.get_single() else {
+    let Ok((camera, cam_gt)) = camera_q.single() else {
         return;
     };
 
@@ -245,13 +245,13 @@ fn handle_right_click_move(
         return;
     }
 
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
     let Some(cursor) = window.cursor_position() else {
         return;
     };
-    let Ok((camera, cam_gt)) = camera_q.get_single() else {
+    let Ok((camera, cam_gt)) = camera_q.single() else {
         return;
     };
     let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {

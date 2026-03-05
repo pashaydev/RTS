@@ -1,6 +1,7 @@
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use bevy::ecs::message::MessageReader;
 
 use crate::components::{DragState, RtsCamera};
 
@@ -70,7 +71,7 @@ fn camera_pan_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut query: Query<&mut RtsCamera>,
 ) {
-    let Ok(mut cam) = query.get_single_mut() else {
+    let Ok(mut cam) = query.single_mut() else {
         return;
     };
 
@@ -107,7 +108,7 @@ fn camera_edge_scroll(
         return;
     }
 
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return;
     };
 
@@ -126,7 +127,7 @@ fn camera_edge_scroll(
 
     let mut dir = Vec3::ZERO;
 
-    let Ok(mut cam) = query.get_single_mut() else {
+    let Ok(mut cam) = query.single_mut() else {
         return;
     };
 
@@ -153,12 +154,12 @@ fn camera_edge_scroll(
 }
 
 fn camera_zoom_input(
-    mut scroll_events: EventReader<MouseWheel>,
+    mut scroll_events: MessageReader<MouseWheel>,
     keyboard: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut query: Query<&mut RtsCamera>,
 ) {
-    let Ok(mut cam) = query.get_single_mut() else {
+    let Ok(mut cam) = query.single_mut() else {
         return;
     };
 
@@ -186,7 +187,7 @@ fn camera_rotate_input(
     time: Res<Time>,
     mut query: Query<&mut RtsCamera>,
 ) {
-    let Ok(mut cam) = query.get_single_mut() else {
+    let Ok(mut cam) = query.single_mut() else {
         return;
     };
 
@@ -204,7 +205,7 @@ fn camera_smooth_update(
     time: Res<Time>,
     mut query: Query<(&mut RtsCamera, &mut Transform)>,
 ) {
-    let Ok((mut cam, mut transform)) = query.get_single_mut() else {
+    let Ok((mut cam, mut transform)) = query.single_mut() else {
         return;
     };
 

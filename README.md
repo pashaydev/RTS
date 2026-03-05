@@ -1,6 +1,6 @@
 # RTS Prototype
 
-A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0.15.
+A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0.18.
 
 <!-- screenshot placeholder -->
 
@@ -146,4 +146,4 @@ src/
 
 ## Tech Stack
 
-- **Rust** / **Bevy 0.15** / **noise 0.9** (fBm Perlin terrain + biome generation)
+- **Rust** / **Bevy 0.18** / **noise 0.9** (fBm Perlin terrain + biome generation)

@@ -160,11 +160,11 @@ fn cursor_ground_pos(
     camera_q: &Query<(&Camera, &GlobalTransform)>,
     windows: &Query<&Window, With<PrimaryWindow>>,
 ) -> Option<Vec3> {
-    let Ok(window) = windows.get_single() else {
+    let Ok(window) = windows.single() else {
         return None;
     };
     let cursor = window.cursor_position()?;
-    let Ok((camera, cam_gt)) = camera_q.get_single() else {
+    let Ok((camera, cam_gt)) = camera_q.single() else {
         return None;
     };
     let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
@@ -432,7 +432,7 @@ fn construction_progress_system(
             continue;
         }
         progress.timer.tick(time.delta());
-        if progress.timer.finished() {
+        if progress.timer.is_finished() {
             *state = BuildingState::Complete;
 
             // Swap to final material
@@ -536,7 +536,7 @@ fn training_queue_system(
 
         if let Some(ref mut timer) = queue.timer {
             timer.tick(time.delta());
-            if timer.finished() {
+            if timer.is_finished() {
                 let ut = queue.queue.remove(0);
                 let spawn_pos = transform.translation + Vec3::new(3.0, 0.0, 3.0);
                 spawn_unit_of_type(&mut commands, &unit_mats, &unit_meshes, ut, spawn_pos);
