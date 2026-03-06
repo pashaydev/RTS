@@ -1,7 +1,7 @@
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 
-use crate::buildings::{building_cost, building_prerequisite, building_type_label, training_cost};
+use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::components::*;
 
 pub struct UiPlugin;
@@ -34,32 +34,23 @@ impl Plugin for UiPlugin {
     }
 }
 
-fn unit_type_label(ut: UnitType) -> &'static str {
-    match ut {
-        UnitType::Worker => "Worker",
-        UnitType::Soldier => "Soldier",
-        UnitType::Archer => "Archer",
-        UnitType::Tank => "Tank",
-    }
-}
-
 fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>) {
-    // ── Top bar — resource display ──
+    // ── Top-left widget — resource list ──
     commands
         .spawn(Node {
             position_type: PositionType::Absolute,
-            left: Val::Px(0.0),
-            top: Val::Px(0.0),
-            width: Val::Percent(100.0),
-            height: Val::Px(40.0),
-            padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(20.0),
+            left: Val::Px(10.0),
+            top: Val::Px(10.0),
+            width: Val::Px(170.0),
+            padding: UiRect::all(Val::Px(10.0)),
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::FlexStart,
+            row_gap: Val::Px(6.0),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
             ..default()
         })
         .insert(BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)))
-        .with_children(|bar| {
+        .with_children(|panel| {
             let resource_types = [
                 ResourceType::Wood,
                 ResourceType::Copper,
@@ -68,31 +59,32 @@ fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>) {
                 ResourceType::Oil,
             ];
             for rt in resource_types {
-                bar.spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(4.0),
-                    ..default()
-                })
-                .with_children(|entry| {
-                    entry.spawn((
-                        ImageNode::new(icons.resource_icon(rt)),
-                        Node {
-                            width: Val::Px(24.0),
-                            height: Val::Px(24.0),
-                            ..default()
-                        },
-                    ));
-                    entry.spawn((
-                        ResourceText(rt),
-                        Text::new(format!("{:?}: 0", rt)),
-                        TextFont {
-                            font_size: 18.0,
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    ));
-                });
+                panel
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(6.0),
+                        ..default()
+                    })
+                    .with_children(|entry| {
+                        entry.spawn((
+                            ImageNode::new(icons.resource_icon(rt)),
+                            Node {
+                                width: Val::Px(18.0),
+                                height: Val::Px(18.0),
+                                ..default()
+                            },
+                        ));
+                        entry.spawn((
+                            ResourceText(rt),
+                            Text::new(format!("{:?}: 0", rt)),
+                            TextFont {
+                                font_size: 16.0,
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                        ));
+                    });
             }
         });
 
@@ -150,15 +142,6 @@ fn update_resource_texts(
     }
 }
 
-fn mob_type_label(mt: MobType) -> &'static str {
-    match mt {
-        MobType::Goblin => "Goblin",
-        MobType::Skeleton => "Skeleton",
-        MobType::Orc => "Orc",
-        MobType::Demon => "Demon",
-    }
-}
-
 fn hp_color(current: f32, max: f32) -> Color {
     let pct = (current / max).clamp(0.0, 1.0);
     if pct > 0.6 {
@@ -205,7 +188,7 @@ fn spawn_friendly_detail_card(
     commands: &mut Commands,
     parent: Entity,
     entity: Entity,
-    unit_type: UnitType,
+    kind: EntityKind,
     health: &Health,
     damage: &AttackDamage,
     range: &AttackRange,
@@ -223,10 +206,9 @@ fn spawn_friendly_detail_card(
         .id();
     commands.entity(parent).add_child(card);
 
-    // Icon
     let icon = commands
         .spawn((
-            ImageNode::new(icons.unit_icon(unit_type)),
+            ImageNode::new(icons.entity_icon(kind)),
             Node {
                 width: Val::Px(44.0),
                 height: Val::Px(44.0),
@@ -236,7 +218,6 @@ fn spawn_friendly_detail_card(
         .id();
     commands.entity(card).add_child(icon);
 
-    // Info column
     let info = commands
         .spawn(Node {
             flex_direction: FlexDirection::Column,
@@ -246,20 +227,17 @@ fn spawn_friendly_detail_card(
         .id();
     commands.entity(card).add_child(info);
 
-    // Name
     let name = commands
         .spawn((
-            Text::new(unit_type_label(unit_type)),
+            Text::new(kind.display_name()),
             TextFont { font_size: 15.0, ..default() },
             TextColor(Color::WHITE),
         ))
         .id();
     commands.entity(info).add_child(name);
 
-    // HP bar
     spawn_hp_bar(commands, info, entity, health, 120.0);
 
-    // HP text
     let hp_text = commands
         .spawn((
             Text::new(format!("{:.0}/{:.0}", health.current, health.max)),
@@ -269,7 +247,6 @@ fn spawn_friendly_detail_card(
         .id();
     commands.entity(info).add_child(hp_text);
 
-    // Stats row
     let stats = commands
         .spawn(Node {
             flex_direction: FlexDirection::Row,
@@ -299,7 +276,7 @@ fn spawn_building_detail_card(
     commands: &mut Commands,
     parent: Entity,
     entity: Entity,
-    building_type: BuildingType,
+    kind: EntityKind,
     state: BuildingState,
     health: &Health,
     icons: &IconAssets,
@@ -315,10 +292,9 @@ fn spawn_building_detail_card(
         .id();
     commands.entity(parent).add_child(card);
 
-    // Icon
     let icon = commands
         .spawn((
-            ImageNode::new(icons.building_icon(building_type)),
+            ImageNode::new(icons.entity_icon(kind)),
             Node {
                 width: Val::Px(44.0),
                 height: Val::Px(44.0),
@@ -328,7 +304,6 @@ fn spawn_building_detail_card(
         .id();
     commands.entity(card).add_child(icon);
 
-    // Info column
     let info = commands
         .spawn(Node {
             flex_direction: FlexDirection::Column,
@@ -338,7 +313,6 @@ fn spawn_building_detail_card(
         .id();
     commands.entity(card).add_child(info);
 
-    // Name + state
     let state_str = match state {
         BuildingState::UnderConstruction => " (building...)",
         BuildingState::Complete => "",
@@ -349,14 +323,13 @@ fn spawn_building_detail_card(
     };
     let name = commands
         .spawn((
-            Text::new(format!("{}{}", building_type_label(building_type), state_str)),
+            Text::new(format!("{}{}", kind.display_name(), state_str)),
             TextFont { font_size: 15.0, ..default() },
             TextColor(name_color),
         ))
         .id();
     commands.entity(info).add_child(name);
 
-    // HP bar
     spawn_hp_bar(commands, info, entity, health, 120.0);
 }
 
@@ -364,7 +337,7 @@ fn spawn_enemy_detail_card(
     commands: &mut Commands,
     parent: Entity,
     entity: Entity,
-    mob_type: MobType,
+    kind: EntityKind,
     is_boss: bool,
     health: &Health,
     damage: &AttackDamage,
@@ -390,10 +363,9 @@ fn spawn_enemy_detail_card(
         .id();
     commands.entity(parent).add_child(card);
 
-    // Icon
     let icon = commands
         .spawn((
-            ImageNode::new(icons.mob_icon(mob_type)),
+            ImageNode::new(icons.entity_icon(kind)),
             Node {
                 width: Val::Px(44.0),
                 height: Val::Px(44.0),
@@ -403,7 +375,6 @@ fn spawn_enemy_detail_card(
         .id();
     commands.entity(card).add_child(icon);
 
-    // Info column
     let info = commands
         .spawn(Node {
             flex_direction: FlexDirection::Column,
@@ -413,11 +384,10 @@ fn spawn_enemy_detail_card(
         .id();
     commands.entity(card).add_child(info);
 
-    // Name
     let name_str = if is_boss {
-        format!("{} Boss", mob_type_label(mob_type))
+        format!("{} Boss", kind.display_name())
     } else {
-        mob_type_label(mob_type).to_string()
+        kind.display_name().to_string()
     };
     let name = commands
         .spawn((
@@ -428,10 +398,8 @@ fn spawn_enemy_detail_card(
         .id();
     commands.entity(info).add_child(name);
 
-    // HP bar
     spawn_hp_bar(commands, info, entity, health, 120.0);
 
-    // HP text
     let hp_text = commands
         .spawn((
             Text::new(format!("{:.0}/{:.0}", health.current, health.max)),
@@ -441,7 +409,6 @@ fn spawn_enemy_detail_card(
         .id();
     commands.entity(info).add_child(hp_text);
 
-    // Stats
     let stats = commands
         .spawn(Node {
             flex_direction: FlexDirection::Row,
@@ -472,7 +439,7 @@ fn spawn_unit_mini_card(
     commands: &mut Commands,
     parent: Entity,
     entity: Entity,
-    unit_type: UnitType,
+    kind: EntityKind,
     health: &Health,
     icons: &IconAssets,
 ) {
@@ -494,10 +461,9 @@ fn spawn_unit_mini_card(
         .id();
     commands.entity(parent).add_child(card);
 
-    // Small icon
     let icon = commands
         .spawn((
-            ImageNode::new(icons.unit_icon(unit_type)),
+            ImageNode::new(icons.entity_icon(kind)),
             Node {
                 width: Val::Px(26.0),
                 height: Val::Px(26.0),
@@ -507,13 +473,11 @@ fn spawn_unit_mini_card(
         .id();
     commands.entity(card).add_child(icon);
 
-    // Mini HP bar
     spawn_hp_bar(commands, card, entity, health, 48.0);
 
-    // Type label
     let label = commands
         .spawn((
-            Text::new(unit_type_label(unit_type)),
+            Text::new(kind.display_name()),
             TextFont { font_size: 9.0, ..default() },
             TextColor(Color::srgb(0.75, 0.75, 0.75)),
         ))
@@ -530,15 +494,15 @@ fn rebuild_selection_panel(
     added_selected: Query<Entity, Added<Selected>>,
     mut removed_selected: RemovedComponents<Selected>,
     selected_units: Query<
-        (Entity, &UnitType, &Health, &AttackDamage, &AttackRange, &UnitSpeed),
+        (Entity, &EntityKind, &Health, &AttackDamage, &AttackRange, &UnitSpeed),
         (With<Unit>, With<Selected>),
     >,
     selected_buildings: Query<
-        (Entity, &BuildingType, &BuildingState, &Health),
+        (Entity, &EntityKind, &BuildingState, &Health),
         (With<Building>, With<Selected>),
     >,
     mob_query: Query<
-        (&MobType, &Health, &AttackDamage, &AttackRange, &UnitSpeed, &AggroRange, Has<Boss>),
+        (&EntityKind, &Health, &AttackDamage, &AttackRange, &UnitSpeed, &AggroRange, Has<Boss>),
         With<Mob>,
     >,
 ) {
@@ -554,7 +518,6 @@ fn rebuild_selection_panel(
         return;
     };
 
-    // Despawn all children
     if let Ok(children) = children_q.get(panel_entity) {
         for child in children.iter() {
             commands.entity(child).despawn();
@@ -571,15 +534,13 @@ fn rebuild_selection_panel(
     }
     commands.entity(panel_entity).insert(Visibility::Visible);
 
-    // Friendly section
     if unit_count == 1 && building_count == 0 {
-        let (entity, ut, health, dmg, rng, spd) = selected_units.iter().next().unwrap();
-        spawn_friendly_detail_card(&mut commands, panel_entity, entity, *ut, health, dmg, rng, spd, &icons);
+        let (entity, kind, health, dmg, rng, spd) = selected_units.iter().next().unwrap();
+        spawn_friendly_detail_card(&mut commands, panel_entity, entity, *kind, health, dmg, rng, spd, &icons);
     } else if unit_count == 0 && building_count == 1 {
-        let (entity, bt, state, health) = selected_buildings.iter().next().unwrap();
-        spawn_building_detail_card(&mut commands, panel_entity, entity, *bt, *state, health, &icons);
+        let (entity, kind, state, health) = selected_buildings.iter().next().unwrap();
+        spawn_building_detail_card(&mut commands, panel_entity, entity, *kind, *state, health, &icons);
     } else if unit_count + building_count > 1 {
-        // Multi-select grid
         let grid = commands
             .spawn((
                 UnitCardGrid,
@@ -597,11 +558,10 @@ fn rebuild_selection_panel(
             .id();
         commands.entity(panel_entity).add_child(grid);
 
-        for (entity, ut, health, _, _, _) in &selected_units {
-            spawn_unit_mini_card(&mut commands, grid, entity, *ut, health, &icons);
+        for (entity, kind, health, _, _, _) in &selected_units {
+            spawn_unit_mini_card(&mut commands, grid, entity, *kind, health, &icons);
         }
-        for (entity, bt, _state, health) in &selected_buildings {
-            // Reuse mini card style for buildings in multi-select
+        for (entity, kind, _state, health) in &selected_buildings {
             let card = commands
                 .spawn((
                     UnitCardRef(entity),
@@ -622,7 +582,7 @@ fn rebuild_selection_panel(
 
             let icon = commands
                 .spawn((
-                    ImageNode::new(icons.building_icon(*bt)),
+                    ImageNode::new(icons.entity_icon(*kind)),
                     Node {
                         width: Val::Px(26.0),
                         height: Val::Px(26.0),
@@ -636,7 +596,7 @@ fn rebuild_selection_panel(
 
             let label = commands
                 .spawn((
-                    Text::new(building_type_label(*bt)),
+                    Text::new(kind.display_name()),
                     TextFont { font_size: 9.0, ..default() },
                     TextColor(Color::srgb(0.75, 0.75, 0.75)),
                 ))
@@ -647,8 +607,7 @@ fn rebuild_selection_panel(
 
     // Enemy inspect section
     if let Some(enemy_entity) = inspected.entity {
-        if let Ok((mt, health, dmg, rng, spd, aggro, is_boss)) = mob_query.get(enemy_entity) {
-            // Divider
+        if let Ok((kind, health, dmg, rng, spd, aggro, is_boss)) = mob_query.get(enemy_entity) {
             if unit_count + building_count > 0 {
                 let divider = commands
                     .spawn((
@@ -666,7 +625,7 @@ fn rebuild_selection_panel(
 
             spawn_enemy_detail_card(
                 &mut commands, panel_entity, enemy_entity,
-                *mt, is_boss, health, dmg, rng, spd, aggro, &icons,
+                *kind, is_boss, health, dmg, rng, spd, aggro, &icons,
             );
         }
     }
@@ -694,7 +653,6 @@ fn handle_unit_card_click(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        // Deselect all, select only this unit
         for entity in &selected {
             commands.entity(entity).remove::<Selected>();
         }
@@ -715,12 +673,13 @@ fn clear_stale_inspected(
 
 fn update_action_bar(
     mut commands: Commands,
-    selected_units: Query<&UnitType, (With<Unit>, With<Selected>)>,
+    selected_units: Query<&EntityKind, (With<Unit>, With<Selected>)>,
     selected_buildings: Query<
-        (&BuildingType, &BuildingState),
+        (&EntityKind, &BuildingState),
         (With<Building>, With<Selected>),
     >,
     completed: Res<CompletedBuildings>,
+    registry: Res<BlueprintRegistry>,
     action_bar: Query<Entity, With<ActionBarInner>>,
     children_q: Query<&Children>,
     added_selected: Query<Entity, Added<Selected>>,
@@ -730,7 +689,6 @@ fn update_action_bar(
     placement: Res<BuildingPlacementState>,
     existing_cards: Query<Entity, With<BuildCard>>,
 ) {
-    // Only rebuild if something changed
     let has_new = !added_selected.is_empty();
     let has_removed = removed_selected.read().count() > 0;
     let has_building_change = !changed_buildings.is_empty();
@@ -740,7 +698,6 @@ fn update_action_bar(
         return;
     }
 
-    // Don't rebuild if we're in placement mode (cards are animating out)
     if placement.mode != PlacementMode::None {
         return;
     }
@@ -749,46 +706,33 @@ fn update_action_bar(
         return;
     };
 
-    // Figure out what we need to show
     let has_selected_building = selected_buildings.single().is_ok();
     let has_selected_units = selected_units.iter().count() > 0;
     let need_cards = !has_selected_building && !has_selected_units;
 
-    // If we need cards and they already exist, skip rebuild
     if need_cards && !existing_cards.is_empty() {
         return;
     }
 
-    // Despawn all children
     if let Ok(children) = children_q.get(bar_entity) {
         for child in children.iter() {
             commands.entity(child).despawn();
         }
     }
 
-    // Check if a building is selected
-    if let Ok((bt, state)) = selected_buildings.single() {
+    if let Ok((kind, state)) = selected_buildings.single() {
         if *state == BuildingState::Complete {
-            match bt {
-                BuildingType::Barracks => {
-                    spawn_train_button(&mut commands, bar_entity, UnitType::Worker, &icons);
-                    spawn_train_button(&mut commands, bar_entity, UnitType::Soldier, &icons);
-                    spawn_train_button(&mut commands, bar_entity, UnitType::Archer, &icons);
-                }
-                BuildingType::Workshop => {
-                    spawn_train_button(&mut commands, bar_entity, UnitType::Tank, &icons);
-                }
-                BuildingType::Base => {
-                    spawn_train_button(&mut commands, bar_entity, UnitType::Worker, &icons);
-                }
-                _ => {
+            let bp = registry.get(*kind);
+            if let Some(ref bd) = bp.building {
+                if !bd.trains.is_empty() {
+                    for unit_kind in &bd.trains {
+                        spawn_train_button(&mut commands, bar_entity, *unit_kind, &icons, &registry);
+                    }
+                } else {
                     let child = commands
                         .spawn((
-                            Text::new(building_type_label(*bt).to_string()),
-                            TextFont {
-                                font_size: 16.0,
-                                ..default()
-                            },
+                            Text::new(kind.display_name().to_string()),
+                            TextFont { font_size: 16.0, ..default() },
                             TextColor(Color::WHITE),
                         ))
                         .id();
@@ -799,10 +743,7 @@ fn update_action_bar(
             let child = commands
                 .spawn((
                     Text::new("Under Construction..."),
-                    TextFont {
-                        font_size: 16.0,
-                        ..default()
-                    },
+                    TextFont { font_size: 16.0, ..default() },
                     TextColor(Color::srgb(0.8, 0.7, 0.3)),
                 ))
                 .id();
@@ -812,17 +753,13 @@ fn update_action_bar(
         let child = commands
             .spawn((
                 Text::new("Units selected"),
-                TextFont {
-                    font_size: 16.0,
-                    ..default()
-                },
+                TextFont { font_size: 16.0, ..default() },
                 TextColor(Color::WHITE),
             ))
             .id();
         commands.entity(bar_entity).add_child(child);
     } else {
-        // Nothing selected — spawn card hand
-        spawn_card_hand(&mut commands, bar_entity, &completed, &icons);
+        spawn_card_hand(&mut commands, bar_entity, &completed, &icons, &registry);
     }
 }
 
@@ -833,26 +770,21 @@ fn spawn_card_hand(
     parent: Entity,
     completed: &CompletedBuildings,
     icons: &IconAssets,
+    registry: &BlueprintRegistry,
 ) {
-    let building_types = [
-        BuildingType::Base,
-        BuildingType::Barracks,
-        BuildingType::Workshop,
-        BuildingType::Tower,
-        BuildingType::Storage,
-    ];
-    let total = building_types.len();
+    let building_kinds = registry.building_kinds();
+    let total = building_kinds.len();
 
-    for (i, bt) in building_types.iter().enumerate() {
-        let enabled = match building_prerequisite(*bt) {
+    for (i, kind) in building_kinds.iter().enumerate() {
+        let bp = registry.get(*kind);
+        let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
+        let enabled = match prereq {
             None => true,
-            Some(BuildingType::Base) => completed.has_base,
-            Some(_) => false,
+            Some(prereq_kind) => completed.has(prereq_kind),
         };
 
         let (rot_deg, y_off) = fan_params(i, total);
-        let label = building_type_label(*bt);
-        let (w, c, iron, g, o, _) = building_cost(*bt);
+        let label = kind.display_name();
 
         let bg_color = if enabled {
             Color::srgba(0.18, 0.20, 0.28, 0.92)
@@ -877,12 +809,12 @@ fn spawn_card_hand(
         let card = commands
             .spawn((
                 BuildCard {
-                    building_type: *bt,
+                    building_kind: *kind,
                     index: i,
                     total,
                     enabled,
                 },
-                BuildButton(*bt),
+                BuildButton(*kind),
                 Button,
                 CardAnimState::new(rot_deg, y_off),
                 CardDealIn {
@@ -899,7 +831,7 @@ fn spawn_card_hand(
                     row_gap: Val::Px(4.0),
                     margin: UiRect {
                         left: Val::Px(margin_left),
-                        bottom: Val::Px(-200.0), // start off-screen
+                        bottom: Val::Px(-200.0),
                         ..default()
                     },
                     border_radius: BorderRadius::all(Val::Px(8.0)),
@@ -913,7 +845,7 @@ fn spawn_card_hand(
             .with_children(|card_node| {
                 // Icon
                 card_node.spawn((
-                    ImageNode::new(icons.building_icon(*bt)),
+                    ImageNode::new(icons.entity_icon(*kind)),
                     Node {
                         width: Val::Px(48.0),
                         height: Val::Px(48.0),
@@ -924,13 +856,10 @@ fn spawn_card_hand(
                 card_node.spawn((
                     CardNameText,
                     Text::new(label),
-                    TextFont {
-                        font_size: 13.0,
-                        ..default()
-                    },
+                    TextFont { font_size: 13.0, ..default() },
                     TextColor(text_color),
                 ));
-                // Cost row with resource icons
+                // Cost row
                 card_node
                     .spawn(Node {
                         flex_direction: FlexDirection::Row,
@@ -941,17 +870,8 @@ fn spawn_card_hand(
                         ..default()
                     })
                     .with_children(|row| {
-                        let costs = [
-                            (w, ResourceType::Wood),
-                            (c, ResourceType::Copper),
-                            (iron, ResourceType::Iron),
-                            (g, ResourceType::Gold),
-                            (o, ResourceType::Oil),
-                        ];
-                        for (amount, rt) in costs {
-                            if amount > 0 {
-                                spawn_cost_entry(row, icons, rt, amount, cost_color);
-                            }
+                        for (rt, amount) in bp.cost.cost_entries() {
+                            spawn_cost_entry(row, icons, rt, amount, cost_color);
                         }
                     });
                 // Glow overlay
@@ -968,7 +888,7 @@ fn spawn_card_hand(
                     },
                     BackgroundColor(Color::srgba(0.4, 0.5, 0.9, 0.0)),
                 ));
-                // Tooltip wrapper (centers the tooltip above the card)
+                // Tooltip wrapper
                 card_node
                     .spawn((
                         Node {
@@ -985,10 +905,7 @@ fn spawn_card_hand(
                     .with_children(|wrapper| {
                         wrapper.spawn((
                             Text::new(""),
-                            TextFont {
-                                font_size: 9.0,
-                                ..default()
-                            },
+                            TextFont { font_size: 9.0, ..default() },
                             TextColor(Color::srgba(0.9, 0.88, 0.82, 0.95)),
                             TextLayout::new_with_justify(Justify::Center),
                             Node {
@@ -1046,23 +963,20 @@ fn spawn_cost_entry(
             ));
             entry.spawn((
                 Text::new(format!("{}", amount)),
-                TextFont {
-                    font_size: 9.0,
-                    ..default()
-                },
+                TextFont { font_size: 9.0, ..default() },
                 TextColor(color),
             ));
         });
 }
 
-fn spawn_train_button(commands: &mut Commands, parent: Entity, ut: UnitType, icons: &IconAssets) {
-    let label = unit_type_label(ut);
-    let (w, c, i, g, o, _) = training_cost(ut);
-    let cost_str = format_cost(w, c, i, g, o);
+fn spawn_train_button(commands: &mut Commands, parent: Entity, kind: EntityKind, icons: &IconAssets, registry: &BlueprintRegistry) {
+    let label = kind.display_name();
+    let bp = registry.get(kind);
+    let cost_str = format_cost_from_blueprint(bp);
 
     let child = commands
         .spawn((
-            TrainButton(ut),
+            TrainButton(kind),
             Button,
             Node {
                 flex_direction: FlexDirection::Column,
@@ -1076,7 +990,7 @@ fn spawn_train_button(commands: &mut Commands, parent: Entity, ut: UnitType, ico
         ))
         .with_children(|btn| {
             btn.spawn((
-                ImageNode::new(icons.unit_icon(ut)),
+                ImageNode::new(icons.entity_icon(kind)),
                 Node {
                     width: Val::Px(32.0),
                     height: Val::Px(32.0),
@@ -1085,18 +999,12 @@ fn spawn_train_button(commands: &mut Commands, parent: Entity, ut: UnitType, ico
             ));
             btn.spawn((
                 Text::new(format!("Train {}", label)),
-                TextFont {
-                    font_size: 14.0,
-                    ..default()
-                },
+                TextFont { font_size: 14.0, ..default() },
                 TextColor(Color::WHITE),
             ));
             btn.spawn((
                 Text::new(cost_str),
-                TextFont {
-                    font_size: 11.0,
-                    ..default()
-                },
+                TextFont { font_size: 11.0, ..default() },
                 TextColor(Color::srgb(0.6, 0.6, 0.5)),
             ));
         })
@@ -1105,23 +1013,13 @@ fn spawn_train_button(commands: &mut Commands, parent: Entity, ut: UnitType, ico
     commands.entity(parent).add_child(child);
 }
 
-fn format_cost(w: u32, c: u32, i: u32, g: u32, o: u32) -> String {
+fn format_cost_from_blueprint(bp: &crate::blueprints::Blueprint) -> String {
     let mut parts = Vec::new();
-    if w > 0 {
-        parts.push(format!("W:{}", w));
-    }
-    if c > 0 {
-        parts.push(format!("C:{}", c));
-    }
-    if i > 0 {
-        parts.push(format!("I:{}", i));
-    }
-    if g > 0 {
-        parts.push(format!("G:{}", g));
-    }
-    if o > 0 {
-        parts.push(format!("O:{}", o));
-    }
+    if bp.cost.wood > 0 { parts.push(format!("W:{}", bp.cost.wood)); }
+    if bp.cost.copper > 0 { parts.push(format!("C:{}", bp.cost.copper)); }
+    if bp.cost.iron > 0 { parts.push(format!("I:{}", bp.cost.iron)); }
+    if bp.cost.gold > 0 { parts.push(format!("G:{}", bp.cost.gold)); }
+    if bp.cost.oil > 0 { parts.push(format!("O:{}", bp.cost.oil)); }
     parts.join(" ")
 }
 
@@ -1131,32 +1029,36 @@ fn handle_build_buttons(
     mut placement: ResMut<BuildingPlacementState>,
     completed: Res<CompletedBuildings>,
     player_res: Res<PlayerResources>,
+    registry: Res<BlueprintRegistry>,
 ) {
     for (entity, interaction, build_btn, card) in &interactions {
         if *interaction == Interaction::Pressed {
-            let bt = build_btn.0;
-            let prereq_met = match building_prerequisite(bt) {
-                None => true,
-                Some(BuildingType::Base) => completed.has_base,
-                Some(_) => false,
+            let kind = build_btn.0;
+            let bp = registry.get(kind);
+
+            let prereq_met = if let Some(ref bd) = bp.building {
+                match bd.prerequisite {
+                    None => true,
+                    Some(prereq_kind) => completed.has(prereq_kind),
+                }
+            } else {
+                true
             };
             if !prereq_met {
                 continue;
             }
 
-            let (w, c, i, g, o, _) = building_cost(bt);
-            if !player_res.can_afford(w, c, i, g, o) {
+            if !bp.cost.can_afford(&player_res) {
                 continue;
             }
 
-            // Insert CardPlayOut on the card for the fly-away animation
             if card.is_some() {
                 commands.entity(entity).insert(CardPlayOut {
                     timer: Timer::from_seconds(0.3, TimerMode::Once),
                 });
             }
 
-            placement.mode = PlacementMode::Placing(bt);
+            placement.mode = PlacementMode::Placing(kind);
             placement.awaiting_release = true;
         }
     }
@@ -1167,22 +1069,23 @@ fn handle_train_buttons(
     mut player_res: ResMut<PlayerResources>,
     selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
     mut queues: Query<&mut TrainingQueue>,
+    registry: Res<BlueprintRegistry>,
 ) {
     for (interaction, train_btn) in &interactions {
         if *interaction != Interaction::Pressed {
             continue;
         }
 
-        let ut = train_btn.0;
-        let (w, c, i, g, o, _) = training_cost(ut);
-        if !player_res.can_afford(w, c, i, g, o) {
+        let kind = train_btn.0;
+        let bp = registry.get(kind);
+        if !bp.cost.can_afford(&player_res) {
             continue;
         }
 
         for building_entity in &selected_buildings {
             if let Ok(mut queue) = queues.get_mut(building_entity) {
-                player_res.subtract(w, c, i, g, o);
-                queue.queue.push(ut);
+                bp.cost.deduct(&mut player_res);
+                queue.queue.push(kind);
                 break;
             }
         }
@@ -1206,13 +1109,11 @@ fn button_hover_visual(
 
 // ── Card animation systems ──
 
-/// Ease-out cubic: 1 - (1-t)^3
 fn ease_out_cubic(t: f32) -> f32 {
     let inv = 1.0 - t;
     1.0 - inv * inv * inv
 }
 
-/// 1 — Deal-in: staggered entrance from below
 fn card_deal_in_system(
     time: Res<Time>,
     mut cards: Query<(&mut CardDealIn, &mut CardAnimState, &mut Node, &mut Transform)>,
@@ -1227,38 +1128,32 @@ fn card_deal_in_system(
 
         let t = ease_out_cubic(deal.anim_timer.fraction());
 
-        // Animate from off-screen (-200) to target offset
         let start_y = -200.0_f32;
         let target_y = anim.target_offset_y;
         anim.offset_y = start_y + (target_y - start_y) * t;
-
-        // Scale: 0.5 -> 1.0
         anim.scale = 0.5 + 0.5 * t;
-
-        // Opacity: 0 -> 1
         anim.opacity = t;
 
-        // Apply immediately during deal-in (bypass lerp for snappy entrance)
         node.margin.bottom = Val::Px(-anim.offset_y);
         tf.scale = Vec3::splat(anim.scale);
         tf.rotation = Quat::from_rotation_z(anim.rotation_deg.to_radians());
     }
 }
 
-/// 2 — Hover: sets targets on Interaction change
 fn card_hover_system(
     completed: Res<CompletedBuildings>,
+    registry: Res<BlueprintRegistry>,
     mut cards: Query<
         (&Interaction, &BuildCard, &mut CardAnimState),
         (Changed<Interaction>, Without<CardPlayOut>),
     >,
 ) {
     for (interaction, card, mut anim) in &mut cards {
-        // Locked cards (prerequisite missing) don't animate on hover
-        let prereq_met = match building_prerequisite(card.building_type) {
+        let bp = registry.get(card.building_kind);
+        let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
+        let prereq_met = match prereq {
             None => true,
-            Some(BuildingType::Base) => completed.has_base,
-            Some(_) => false,
+            Some(prereq_kind) => completed.has(prereq_kind),
         };
         if !prereq_met {
             continue;
@@ -1266,12 +1161,12 @@ fn card_hover_system(
         let (rest_rot, rest_y) = fan_params(card.index, card.total);
         match interaction {
             Interaction::Hovered => {
-                anim.target_offset_y = rest_y - 30.0; // lift up
+                anim.target_offset_y = rest_y - 30.0;
                 anim.target_scale = 1.12;
-                anim.target_rotation_deg = 0.0; // straighten
+                anim.target_rotation_deg = 0.0;
             }
             Interaction::Pressed => {
-                anim.target_scale = 1.05; // brief press
+                anim.target_scale = 1.05;
             }
             Interaction::None => {
                 anim.target_offset_y = rest_y;
@@ -1282,7 +1177,6 @@ fn card_hover_system(
     }
 }
 
-/// 3 — Play out: clicked card scales up and fades
 fn card_play_out_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -1291,7 +1185,7 @@ fn card_play_out_system(
     for (entity, mut play, mut anim) in &mut cards {
         play.timer.tick(time.delta());
         let t = play.timer.fraction();
-        anim.scale = 1.0 + 0.4 * t; // 1.0 -> 1.4
+        anim.scale = 1.0 + 0.4 * t;
         anim.opacity = 1.0 - t;
         if play.timer.is_finished() {
             commands.entity(entity).remove::<CardPlayOut>();
@@ -1299,7 +1193,6 @@ fn card_play_out_system(
     }
 }
 
-/// 4 — Placement mode: hide siblings when placing, show on cancel
 fn card_placement_mode_system(
     placement: Res<BuildingPlacementState>,
     mut cards: Query<(Entity, &BuildCard, &mut CardAnimState), Without<CardPlayOut>>,
@@ -1309,14 +1202,12 @@ fn card_placement_mode_system(
     }
     match placement.mode {
         PlacementMode::Placing(_) => {
-            // Hide all non-play-out cards
             for (_entity, _card, mut anim) in &mut cards {
                 anim.target_offset_y = 100.0;
                 anim.target_opacity = 0.0;
             }
         }
         PlacementMode::None => {
-            // Restore all cards to fan position
             for (_entity, card, mut anim) in &mut cards {
                 let (rot, y_off) = fan_params(card.index, card.total);
                 anim.target_offset_y = y_off;
@@ -1328,7 +1219,6 @@ fn card_placement_mode_system(
     }
 }
 
-/// 5 — Spring back: overshoot then settle after cancel
 fn card_spring_back_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -1340,12 +1230,9 @@ fn card_spring_back_system(
         let (_, rest_y) = fan_params(card.index, card.total);
 
         if t < 1.0 {
-            // Overshoot phase: go past rest by 8px, then settle
             let overshoot = if t < 0.5 {
-                // Going past
                 -8.0 * (t * 2.0)
             } else {
-                // Settling back
                 -8.0 * (1.0 - (t - 0.5) * 2.0)
             };
             anim.offset_y = rest_y + overshoot;
@@ -1358,10 +1245,10 @@ fn card_spring_back_system(
     }
 }
 
-/// 6 — Continuous lerp: drives actual Node/Transform from CardAnimState
 fn card_anim_lerp_system(
     time: Res<Time>,
     completed: Res<CompletedBuildings>,
+    registry: Res<BlueprintRegistry>,
     mut cards: Query<
         (&mut CardAnimState, &mut Node, &mut Transform, &mut BackgroundColor, &BuildCard),
         Without<CardDealIn>,
@@ -1372,41 +1259,36 @@ fn card_anim_lerp_system(
     let alpha = 1.0 - (-speed * dt).exp();
 
     for (mut anim, mut node, mut tf, mut bg, card) in &mut cards {
-        // Lerp current toward targets
         anim.offset_y += (anim.target_offset_y - anim.offset_y) * alpha;
         anim.scale += (anim.target_scale - anim.scale) * alpha;
         anim.rotation_deg += (anim.target_rotation_deg - anim.rotation_deg) * alpha;
         anim.opacity += (anim.target_opacity - anim.opacity) * alpha;
 
-        // Apply to UI
         node.margin.bottom = Val::Px(-anim.offset_y);
         tf.scale = Vec3::splat(anim.scale);
         tf.rotation = Quat::from_rotation_z(anim.rotation_deg.to_radians());
 
-        // Apply opacity to background color with 3 visual states
-        let prereq_met = match building_prerequisite(card.building_type) {
+        let bp = registry.get(card.building_kind);
+        let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
+        let prereq_met = match prereq {
             None => true,
-            Some(BuildingType::Base) => completed.has_base,
-            Some(_) => false,
+            Some(prereq_kind) => completed.has(prereq_kind),
         };
         let base = if card.enabled {
-            // Fully enabled
             Color::srgba(0.18, 0.20, 0.28, 0.92 * anim.opacity)
         } else if prereq_met {
-            // Can't afford — slightly dimmed but not fully grayed
             Color::srgba(0.15, 0.17, 0.24, 0.78 * anim.opacity)
         } else {
-            // Locked — fully grayed out
             Color::srgba(0.12, 0.12, 0.12, 0.5 * anim.opacity)
         };
         *bg = BackgroundColor(base);
     }
 }
 
-/// 7 — Dynamic card state: updates enabled/disabled, cost coloring, tooltip text
 fn update_card_states(
     completed: Res<CompletedBuildings>,
     player_res: Res<PlayerResources>,
+    registry: Res<BlueprintRegistry>,
     mut cards: Query<(&mut BuildCard, &Children)>,
     mut name_texts: Query<&mut TextColor, (With<CardNameText>, Without<CardCostEntry>)>,
     cost_entries: Query<(&CardCostEntry, &Children), Without<CardNameText>>,
@@ -1415,23 +1297,18 @@ fn update_card_states(
     mut texts: Query<&mut Text>,
 ) {
     for (mut card, card_children) in &mut cards {
-        let bt = card.building_type;
+        let kind = card.building_kind;
+        let bp = registry.get(kind);
 
-        // Check prerequisite
-        let prereq_met = match building_prerequisite(bt) {
+        let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
+        let prereq_met = match prereq {
             None => true,
-            Some(BuildingType::Base) => completed.has_base,
-            Some(_) => false,
+            Some(prereq_kind) => completed.has(prereq_kind),
         };
 
-        // Check affordability
-        let (w, c, iron, g, o, _) = building_cost(bt);
-        let can_afford = player_res.can_afford(w, c, iron, g, o);
-
-        // Determine card state
+        let can_afford = bp.cost.can_afford(&player_res);
         card.enabled = prereq_met && can_afford;
 
-        // Determine tooltip text
         let tooltip_text = if !prereq_met {
             "Requires Base"
         } else if !can_afford {
@@ -1440,9 +1317,7 @@ fn update_card_states(
             ""
         };
 
-        // Update children
         for child in card_children.iter() {
-            // Update name text color
             if let Ok(mut text_color) = name_texts.get_mut(child) {
                 if !prereq_met {
                     text_color.0 = Color::srgba(0.5, 0.5, 0.5, 0.7);
@@ -1453,7 +1328,6 @@ fn update_card_states(
                 }
             }
 
-            // Update cost entry colors
             if let Ok((cost_entry, entry_children)) = cost_entries.get(child) {
                 let has_enough = player_res.get(cost_entry.resource_type) >= cost_entry.amount;
                 let entry_color = if !prereq_met {
@@ -1470,7 +1344,6 @@ fn update_card_states(
                 }
             }
 
-            // Update tooltip text (the Text is a child of the CardTooltip wrapper)
             if let Ok(wrapper_children) = tooltip_wrappers.get(child) {
                 for wc in wrapper_children.iter() {
                     if let Ok(mut text) = texts.get_mut(wc) {
@@ -1484,7 +1357,6 @@ fn update_card_states(
     }
 }
 
-/// 8 — Tooltip visibility on hover over disabled cards
 fn card_tooltip_system(
     cards: Query<(&Interaction, &BuildCard, &Children), Without<CardPlayOut>>,
     mut tooltips: Query<&mut Visibility, With<CardTooltip>>,
@@ -1503,10 +1375,10 @@ fn card_tooltip_system(
     }
 }
 
-/// 9 — Glow overlay opacity on hover
 fn card_glow_system(
     time: Res<Time>,
     completed: Res<CompletedBuildings>,
+    registry: Res<BlueprintRegistry>,
     cards: Query<(&Interaction, &BuildCard, &Children), Without<CardPlayOut>>,
     mut glows: Query<&mut BackgroundColor, With<CardGlow>>,
 ) {
@@ -1514,11 +1386,11 @@ fn card_glow_system(
     let alpha = 1.0 - (-speed * time.delta_secs()).exp();
 
     for (interaction, card, children) in &cards {
-        // Locked cards (prerequisite missing) don't glow
-        let prereq_met = match building_prerequisite(card.building_type) {
+        let bp = registry.get(card.building_kind);
+        let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
+        let prereq_met = match prereq {
             None => true,
-            Some(BuildingType::Base) => completed.has_base,
-            Some(_) => false,
+            Some(prereq_kind) => completed.has(prereq_kind),
         };
         if !prereq_met {
             continue;

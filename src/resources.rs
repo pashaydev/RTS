@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
+use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::ground::{terrain_height, MAP_SIZE};
 use rand::Rng;
@@ -413,15 +414,15 @@ fn spawn_decorations(
 fn auto_gather_nearby(
     mut commands: Commands,
     units: Query<
-        (Entity, &Transform, &UnitType),
+        (Entity, &Transform, &EntityKind),
         (With<Unit>, Without<MoveTarget>, Without<GatherTarget>),
     >,
     nodes: Query<(Entity, &Transform), With<ResourceNode>>,
 ) {
     let gather_range = 3.0;
 
-    for (unit_entity, unit_tf, unit_type) in &units {
-        if *unit_type != UnitType::Worker {
+    for (unit_entity, unit_tf, unit_kind) in &units {
+        if *unit_kind != EntityKind::Worker {
             continue;
         }
 

@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::blueprints::{BlueprintRegistry, EntityKind, IsRanged};
 use crate::components::*;
 use crate::ground::terrain_height;
 
@@ -53,12 +54,13 @@ fn player_auto_acquire_target(
 
 fn approach_attack_target(
     time: Res<Time>,
+    registry: Res<BlueprintRegistry>,
     mut attackers: Query<
-        (&mut Transform, &AttackTarget, &UnitSpeed, &AttackRange, Option<&UnitType>, Option<&MobType>),
+        (&mut Transform, &AttackTarget, &UnitSpeed, &AttackRange, Option<&EntityKind>),
     >,
     targets: Query<&Transform, Without<AttackTarget>>,
 ) {
-    for (mut tf, attack_target, speed, range, opt_ut, opt_mt) in &mut attackers {
+    for (mut tf, attack_target, speed, range, opt_kind) in &mut attackers {
         let Ok(target_tf) = targets.get(attack_target.0) else {
             continue;
         };
@@ -74,16 +76,8 @@ fn approach_attack_target(
             let step = dir.normalize() * speed.0 * time.delta_secs();
             tf.translation += step;
 
-            // Snap Y to terrain
-            let y_off = if let Some(ut) = opt_ut {
-                crate::units::y_offset(*ut)
-            } else if let Some(mt) = opt_mt {
-                match mt {
-                    MobType::Goblin => 0.65,
-                    MobType::Skeleton => 0.78,
-                    MobType::Orc => 1.05,
-                    MobType::Demon => 1.15,
-                }
+            let y_off = if let Some(kind) = opt_kind {
+                registry.get(*kind).movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8)
             } else {
                 0.8
             };
@@ -97,20 +91,14 @@ fn execute_melee_attacks(
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut attackers: Query<
-        (&Transform, &AttackTarget, &mut AttackCooldown, &AttackDamage, &AttackRange, Option<&UnitType>),
+        (&Transform, &AttackTarget, &mut AttackCooldown, &AttackDamage, &AttackRange),
+        Without<IsRanged>,
     >,
     mut healths: Query<(&Transform, &mut Health)>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (atk_tf, attack_target, mut cooldown, damage, range, opt_ut) in &mut attackers {
-        // Skip archers (ranged)
-        if let Some(ut) = opt_ut {
-            if *ut == UnitType::Archer {
-                continue;
-            }
-        }
-
+    for (atk_tf, attack_target, mut cooldown, damage, range) in &mut attackers {
         cooldown.timer.tick(time.delta());
 
         if !cooldown.timer.just_finished() {
@@ -126,10 +114,8 @@ fn execute_melee_attacks(
             continue;
         }
 
-        // Apply damage
         health.current -= damage.0;
 
-        // Spawn melee flash VFX
         commands.spawn((
             VfxFlash {
                 timer: Timer::from_seconds(0.15, TimerMode::Once),
@@ -149,18 +135,14 @@ fn execute_ranged_attacks(
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut archers: Query<
-        (&Transform, &AttackTarget, &mut AttackCooldown, &AttackDamage, &AttackRange, &UnitType),
-        With<Unit>,
+        (&Transform, &AttackTarget, &mut AttackCooldown, &AttackDamage, &AttackRange),
+        (With<Unit>, With<IsRanged>),
     >,
     targets: Query<&Transform, Without<Unit>>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (atk_tf, attack_target, mut cooldown, damage, range, ut) in &mut archers {
-        if *ut != UnitType::Archer {
-            continue;
-        }
-
+    for (atk_tf, attack_target, mut cooldown, damage, range) in &mut archers {
         cooldown.timer.tick(time.delta());
 
         if !cooldown.timer.just_finished() {
@@ -176,7 +158,6 @@ fn execute_ranged_attacks(
             continue;
         }
 
-        // Spawn projectile
         commands.spawn((
             Projectile {
                 target: attack_target.0,
@@ -201,7 +182,6 @@ fn handle_death(
             continue;
         }
 
-        // Clean up AttackTarget references
         for (attacker_entity, attack_target, opt_patrol) in &mut attackers_with_target {
             if attack_target.0 == dead_entity {
                 commands.entity(attacker_entity).remove::<AttackTarget>();
@@ -211,8 +191,6 @@ fn handle_death(
             }
         }
 
-        // Building death is handled by despawn; CompletedBuildings tracker
-        // will auto-update since it queries living buildings each frame
         let _ = opt_building;
 
         commands.entity(dead_entity).despawn();

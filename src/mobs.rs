@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
 use crate::components::*;
 use crate::ground::terrain_height;
 
@@ -7,221 +8,114 @@ pub struct MobsPlugin;
 
 impl Plugin for MobsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Startup,
-            (create_mob_assets, spawn_mob_camps).chain(),
-        )
-        .add_systems(
-            Update,
-            (mob_patrol, mob_aggro, mob_chase, mob_return).chain(),
-        );
+        app.add_systems(Startup, spawn_mob_camps)
+            .add_systems(
+                Update,
+                (mob_patrol, mob_aggro, mob_chase, mob_return).chain(),
+            );
     }
 }
 
-fn create_mob_assets(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    commands.insert_resource(MobMaterials {
-        goblin: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.3, 0.6, 0.15),
-            ..default()
-        }),
-        skeleton: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.85, 0.82, 0.75),
-            ..default()
-        }),
-        orc: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.4, 0.3, 0.15),
-            ..default()
-        }),
-        demon: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.6, 0.1, 0.1),
-            emissive: LinearRgba::new(0.4, 0.05, 0.05, 1.0),
-            ..default()
-        }),
-    });
-
-    commands.insert_resource(MobMeshes {
-        goblin: meshes.add(Capsule3d::new(0.25, 0.8)),
-        skeleton: meshes.add(Capsule3d::new(0.28, 1.0)),
-        orc: meshes.add(Capsule3d::new(0.4, 1.3)),
-        demon: meshes.add(Capsule3d::new(0.45, 1.4)),
-    });
-}
-
-struct CampDef {
-    mob_type: MobType,
+struct CampSpawn {
+    kind: EntityKind,
     center: Vec3,
-    patrol_radius: f32,
     count: usize,
     has_boss: bool,
-    hp: f32,
     boss_hp: f32,
-    damage: f32,
-    speed: f32,
-    aggro: f32,
-    attack_range: f32,
-}
-
-fn mob_y_offset(mt: MobType) -> f32 {
-    match mt {
-        MobType::Goblin => 0.65,
-        MobType::Skeleton => 0.78,
-        MobType::Orc => 1.05,
-        MobType::Demon => 1.15,
-    }
 }
 
 fn spawn_mob_camps(
     mut commands: Commands,
-    mob_mats: Res<MobMaterials>,
-    mob_meshes: Res<MobMeshes>,
+    cache: Res<EntityVisualCache>,
+    registry: Res<BlueprintRegistry>,
 ) {
     let camps = [
-        CampDef {
-            mob_type: MobType::Goblin,
+        CampSpawn {
+            kind: EntityKind::Goblin,
             center: Vec3::new(50.0, 0.0, 0.0),
-            patrol_radius: 12.0,
             count: 5,
             has_boss: false,
-            hp: 50.0,
             boss_hp: 0.0,
-            damage: 5.0,
-            speed: 3.5,
-            aggro: 15.0,
-            attack_range: 1.5,
         },
-        CampDef {
-            mob_type: MobType::Skeleton,
+        CampSpawn {
+            kind: EntityKind::Skeleton,
             center: Vec3::new(-40.0, 0.0, 100.0),
-            patrol_radius: 15.0,
             count: 5,
             has_boss: true,
-            hp: 80.0,
             boss_hp: 200.0,
-            damage: 10.0,
-            speed: 3.0,
-            aggro: 18.0,
-            attack_range: 1.8,
         },
-        CampDef {
-            mob_type: MobType::Orc,
+        CampSpawn {
+            kind: EntityKind::Orc,
             center: Vec3::new(80.0, 0.0, -150.0),
-            patrol_radius: 18.0,
             count: 6,
             has_boss: true,
-            hp: 120.0,
             boss_hp: 300.0,
-            damage: 15.0,
-            speed: 2.5,
-            aggro: 20.0,
-            attack_range: 2.0,
         },
-        CampDef {
-            mob_type: MobType::Demon,
+        CampSpawn {
+            kind: EntityKind::Demon,
             center: Vec3::new(-100.0, 0.0, -170.0),
-            patrol_radius: 20.0,
             count: 5,
             has_boss: true,
-            hp: 200.0,
             boss_hp: 500.0,
-            damage: 25.0,
-            speed: 3.0,
-            aggro: 25.0,
-            attack_range: 2.2,
         },
     ];
 
     for camp in &camps {
-        let mesh = match camp.mob_type {
-            MobType::Goblin => mob_meshes.goblin.clone(),
-            MobType::Skeleton => mob_meshes.skeleton.clone(),
-            MobType::Orc => mob_meshes.orc.clone(),
-            MobType::Demon => mob_meshes.demon.clone(),
-        };
-        let mat = match camp.mob_type {
-            MobType::Goblin => mob_mats.goblin.clone(),
-            MobType::Skeleton => mob_mats.skeleton.clone(),
-            MobType::Orc => mob_mats.orc.clone(),
-            MobType::Demon => mob_mats.demon.clone(),
-        };
+        let bp = registry.get(camp.kind);
+        let patrol_radius = bp.mob_ai.as_ref().map(|ai| ai.patrol_radius).unwrap_or(12.0);
+        let y_off = bp.movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8);
 
-        // Set center Y to terrain
         let center = Vec3::new(
             camp.center.x,
             terrain_height(camp.center.x, camp.center.z),
             camp.center.z,
         );
 
-        // Spawn regular mobs in a circle around center
+        // Spawn regular mobs in a circle
         for i in 0..camp.count {
             let angle = i as f32 / camp.count as f32 * std::f32::consts::TAU;
-            let offset_r = camp.patrol_radius * 0.3;
+            let offset_r = patrol_radius * 0.3;
             let x = center.x + angle.cos() * offset_r;
             let z = center.z + angle.sin() * offset_r;
-            let y = terrain_height(x, z) + mob_y_offset(camp.mob_type);
 
-            commands.spawn((
-                Mob,
-                camp.mob_type,
-                Faction::Enemy,
-                Health {
-                    current: camp.hp,
-                    max: camp.hp,
-                },
-                UnitSpeed(camp.speed),
-                AttackDamage(camp.damage),
-                AttackRange(camp.attack_range),
-                AttackCooldown {
-                    timer: Timer::from_seconds(1.2, TimerMode::Repeating),
-                },
-                AggroRange(camp.aggro),
-                PatrolState {
-                    state: PatrolStateKind::Idle,
-                    center,
-                    radius: camp.patrol_radius,
-                    patrol_target: None,
-                },
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(mat.clone()),
-                Transform::from_translation(Vec3::new(x, y, z)),
-            ));
+            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(x, 0.0, z), &registry);
+
+            // Override patrol center
+            commands.entity(entity).insert(PatrolState {
+                state: PatrolStateKind::Idle,
+                center,
+                radius: patrol_radius,
+                patrol_target: None,
+            });
         }
 
         // Spawn boss
         if camp.has_boss {
-            let x = center.x;
-            let z = center.z;
-            let y = terrain_height(x, z) + mob_y_offset(camp.mob_type) * 1.5;
+            let combat = bp.combat.as_ref().unwrap();
 
-            commands.spawn((
+            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(center.x, 0.0, center.z), &registry);
+
+            // Apply boss modifiers
+            commands.entity(entity).insert((
                 Boss,
-                Mob,
-                camp.mob_type,
-                Faction::Enemy,
-                Health {
-                    current: camp.boss_hp,
-                    max: camp.boss_hp,
-                },
-                UnitSpeed(camp.speed * 0.9),
-                AttackDamage(camp.damage * 1.5),
-                AttackRange(camp.attack_range * 1.2),
+                Health { current: camp.boss_hp, max: camp.boss_hp },
+                UnitSpeed(bp.movement.as_ref().unwrap().speed * 0.9),
+                AttackDamage(combat.damage * 1.5),
+                AttackRange(combat.attack_range * 1.2),
                 AttackCooldown {
                     timer: Timer::from_seconds(1.0, TimerMode::Repeating),
                 },
-                AggroRange(camp.aggro),
+                Transform::from_translation(Vec3::new(
+                    center.x,
+                    terrain_height(center.x, center.z) + y_off * 1.5,
+                    center.z,
+                )).with_scale(Vec3::splat(1.5)),
                 PatrolState {
                     state: PatrolStateKind::Idle,
                     center,
-                    radius: camp.patrol_radius,
+                    radius: patrol_radius,
                     patrol_target: None,
                 },
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(mat.clone()),
-                Transform::from_translation(Vec3::new(x, y, z))
-                    .with_scale(Vec3::splat(1.5)),
             ));
         }
     }
@@ -229,15 +123,16 @@ fn spawn_mob_camps(
 
 fn mob_patrol(
     time: Res<Time>,
+    registry: Res<BlueprintRegistry>,
     mut mobs: Query<
-        (&mut Transform, &mut PatrolState, &UnitSpeed, &MobType),
+        (&mut Transform, &mut PatrolState, &UnitSpeed, &EntityKind),
         (With<Mob>, Without<AttackTarget>),
     >,
 ) {
-    for (mut tf, mut patrol, speed, mob_type) in &mut mobs {
+    for (mut tf, mut patrol, speed, kind) in &mut mobs {
+        let y_off = registry.get(*kind).movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8);
         match patrol.state {
             PatrolStateKind::Idle => {
-                // Pick a random patrol point within radius
                 let angle = time.elapsed_secs() * 1.7 + tf.translation.x * 0.1;
                 let r = patrol.radius * (0.3 + (angle.sin() * 0.5 + 0.5) * 0.7);
                 let target = Vec3::new(
@@ -263,8 +158,7 @@ fn mob_patrol(
                         let step = dir.normalize() * speed.0 * 0.5 * time.delta_secs();
                         tf.translation += step;
                         tf.translation.y =
-                            terrain_height(tf.translation.x, tf.translation.z)
-                                + mob_y_offset(*mob_type);
+                            terrain_height(tf.translation.x, tf.translation.z) + y_off;
                     }
                 }
             }
@@ -281,8 +175,7 @@ fn mob_patrol(
                     let step = dir.normalize() * speed.0 * time.delta_secs();
                     tf.translation += step;
                     tf.translation.y =
-                        terrain_height(tf.translation.x, tf.translation.z)
-                            + mob_y_offset(*mob_type);
+                        terrain_height(tf.translation.x, tf.translation.z) + y_off;
                 }
             }
             _ => {}
@@ -309,9 +202,7 @@ fn mob_aggro(
                     continue;
                 }
             }
-            let dist = mob_tf
-                .translation
-                .distance(player_tf.translation);
+            let dist = mob_tf.translation.distance(player_tf.translation);
             if dist < aggro.0 && dist < closest_dist {
                 closest_dist = dist;
                 closest_player = Some(player_entity);
@@ -326,6 +217,7 @@ fn mob_aggro(
 
 fn mob_chase(
     time: Res<Time>,
+    registry: Res<BlueprintRegistry>,
     mut mobs: Query<
         (
             &mut Transform,
@@ -333,15 +225,14 @@ fn mob_chase(
             &AttackTarget,
             &UnitSpeed,
             &AttackRange,
-            &MobType,
+            &EntityKind,
         ),
         With<Mob>,
     >,
     targets: Query<&Transform, Without<Mob>>,
 ) {
-    for (mut tf, mut patrol, attack_target, speed, range, mob_type) in &mut mobs {
+    for (mut tf, mut patrol, attack_target, speed, range, kind) in &mut mobs {
         let Ok(target_tf) = targets.get(attack_target.0) else {
-            // Target gone, return
             patrol.state = PatrolStateKind::Returning;
             continue;
         };
@@ -359,9 +250,9 @@ fn mob_chase(
             patrol.state = PatrolStateKind::Chasing;
             let step = dir.normalize() * speed.0 * time.delta_secs();
             tf.translation += step;
+            let y_off = registry.get(*kind).movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8);
             tf.translation.y =
-                terrain_height(tf.translation.x, tf.translation.z)
-                    + mob_y_offset(*mob_type);
+                terrain_height(tf.translation.x, tf.translation.z) + y_off;
         }
     }
 }

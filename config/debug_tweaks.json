@@ -1,0 +1,53 @@
+{
+  "Ambient": {
+    "brightness": 280.0,
+    "color B": 0.7651566,
+    "color G": 0.80354214,
+    "color R": 0.8535421,
+    "override": true
+  },
+  "Day Cycle": {
+    "cycle_duration": 3600.0,
+    "paused": false,
+    "time": 0.35975742
+  },
+  "Fog Gameplay": {
+    "decay_value": 0.1,
+    "mob_threshold": 0.1,
+    "object_threshold": 0.1,
+    "vfx_threshold": 0.15
+  },
+  "Fog Shader": {
+    "edge_glow_intensity": 0.95,
+    "edge_glow_width": 0.02,
+    "explored_tint A": 0.38,
+    "explored_tint B": 0.0,
+    "explored_tint G": 0.0,
+    "explored_tint R": 0.0,
+    "fog_color A": 0.61,
+    "fog_color B": 0.049999997,
+    "fog_color G": 0.03,
+    "fog_color R": 0.02,
+    "glow_color A": 0.84999996,
+    "glow_color B": 1.0,
+    "glow_color G": 0.96999997,
+    "glow_color R": 1.0,
+    "noise_scale": 15.5
+  },
+  "Sky / Fog": {
+    "color B": 0.6022459,
+    "color G": 0.50224596,
+    "color R": 0.5408984,
+    "override": false
+  },
+  "Sun": {
+    "color B": 1.0,
+    "color G": 1.0,
+    "color R": 1.0,
+    "illuminance": 2300.0,
+    "override": true,
+    "pitch": -0.7903619,
+    "shadows": true,
+    "yaw": 0.30000004
+  }
+}

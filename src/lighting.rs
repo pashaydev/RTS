@@ -5,9 +5,42 @@ pub struct LightingPlugin;
 
 impl Plugin for LightingPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup_lighting)
+        app.add_systems(Startup, (setup_lighting, register_lighting_tweaks))
             .add_systems(Update, (advance_day_cycle, update_lighting).chain());
     }
+}
+
+fn register_lighting_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
+    let cycle = DayCycle::default();
+
+    // Day Cycle folder
+    tweaks.add_float("Day Cycle", "cycle_duration", cycle.cycle_duration, 10.0, 3600.0, 10.0);
+    tweaks.add_float("Day Cycle", "time", cycle.time, 0.0, 1.0, 0.01);
+    tweaks.add_bool("Day Cycle", "paused", cycle.paused);
+    tweaks.add_readonly("Day Cycle", "phase", &format!("{:?}", cycle.phase));
+
+    // Sun folder
+    tweaks.add_bool("Sun", "override", false);
+    tweaks.add_float("Sun", "illuminance", 6000.0, 0.0, 15000.0, 100.0);
+    tweaks.add_float("Sun", "color R", 0.85, 0.0, 1.0, 0.01);
+    tweaks.add_float("Sun", "color G", 0.80, 0.0, 1.0, 0.01);
+    tweaks.add_float("Sun", "color B", 0.70, 0.0, 1.0, 0.01);
+    tweaks.add_float("Sun", "pitch", -0.8, -1.5, 0.0, 0.01);
+    tweaks.add_float("Sun", "yaw", SUN_YAW, -3.14, 3.14, 0.01);
+    tweaks.add_bool("Sun", "shadows", true);
+
+    // Ambient folder
+    tweaks.add_bool("Ambient", "override", false);
+    tweaks.add_float("Ambient", "brightness", 300.0, 0.0, 1000.0, 5.0);
+    tweaks.add_float("Ambient", "color R", 0.9, 0.0, 1.0, 0.01);
+    tweaks.add_float("Ambient", "color G", 0.85, 0.0, 1.0, 0.01);
+    tweaks.add_float("Ambient", "color B", 0.80, 0.0, 1.0, 0.01);
+
+    // Sky / Fog folder
+    tweaks.add_bool("Sky / Fog", "override", false);
+    tweaks.add_float("Sky / Fog", "color R", 0.6, 0.0, 1.0, 0.01);
+    tweaks.add_float("Sky / Fog", "color G", 0.65, 0.0, 1.0, 0.01);
+    tweaks.add_float("Sky / Fog", "color B", 0.75, 0.0, 1.0, 0.01);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,6 +82,18 @@ fn phase_from_time(t: f32) -> DayPhase {
 
 #[derive(Component)]
 pub struct SunLight;
+
+#[derive(Resource, Default)]
+pub struct LightingOverrides {
+    pub sun_illuminance: Option<f32>,
+    pub sun_color: Option<[f32; 3]>,
+    pub sun_pitch: Option<f32>,
+    pub sun_yaw: Option<f32>,
+    pub shadows_enabled: Option<bool>,
+    pub ambient_brightness: Option<f32>,
+    pub ambient_color: Option<[f32; 3]>,
+    pub fog_color: Option<[f32; 3]>,
+}
 
 // Keyframe times
 const KF_TIMES: [f32; 5] = [0.0, 0.25, 0.5, 0.75, 1.0];
@@ -126,6 +171,7 @@ const SUN_YAW: f32 = 0.3;
 
 fn setup_lighting(mut commands: Commands) {
     commands.insert_resource(DayCycle::default());
+    commands.insert_resource(LightingOverrides::default());
 
     // Directional light (sun)
     commands.spawn((
@@ -161,6 +207,7 @@ fn advance_day_cycle(mut cycle: ResMut<DayCycle>, time: Res<Time>) {
 
 fn update_lighting(
     cycle: Res<DayCycle>,
+    overrides: Res<LightingOverrides>,
     mut sun_q: Query<(&mut DirectionalLight, &mut Transform), With<SunLight>>,
     mut ambient: ResMut<GlobalAmbientLight>,
     mut clear: ResMut<ClearColor>,
@@ -169,21 +216,38 @@ fn update_lighting(
 
     // Sun
     if let Ok((mut sun, mut sun_tf)) = sun_q.single_mut() {
-        sun.illuminance = sample_f32(&KF_TIMES, &KF_SUN_ILLUM, t);
-        let sc = sample_rgb(&KF_TIMES, &KF_SUN_COLOR, t);
+        sun.illuminance = overrides
+            .sun_illuminance
+            .unwrap_or_else(|| sample_f32(&KF_TIMES, &KF_SUN_ILLUM, t));
+
+        let sc = overrides
+            .sun_color
+            .unwrap_or_else(|| sample_rgb(&KF_TIMES, &KF_SUN_COLOR, t));
         sun.color = Color::srgb(sc[0], sc[1], sc[2]);
 
-        let pitch = sample_f32(&KF_TIMES, &KF_SUN_PITCH, t);
-        *sun_tf = Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, pitch, SUN_YAW, 0.0));
+        let pitch = overrides
+            .sun_pitch
+            .unwrap_or_else(|| sample_f32(&KF_TIMES, &KF_SUN_PITCH, t));
+        let yaw = overrides.sun_yaw.unwrap_or(SUN_YAW);
+        *sun_tf = Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, pitch, yaw, 0.0));
+
+        if let Some(shadows) = overrides.shadows_enabled {
+            sun.shadows_enabled = shadows;
+        }
     }
 
     // Ambient
-    ambient.brightness = sample_f32(&KF_TIMES, &KF_AMB_BRIGHT, t);
-    let ac = sample_rgb(&KF_TIMES, &KF_AMB_COLOR, t);
+    ambient.brightness = overrides
+        .ambient_brightness
+        .unwrap_or_else(|| sample_f32(&KF_TIMES, &KF_AMB_BRIGHT, t));
+    let ac = overrides
+        .ambient_color
+        .unwrap_or_else(|| sample_rgb(&KF_TIMES, &KF_AMB_COLOR, t));
     ambient.color = Color::srgb(ac[0], ac[1], ac[2]);
 
     // Fog & sky color
-    let fc = sample_rgb(&KF_TIMES, &KF_FOG_COLOR, t);
-    let fog_color = Color::srgb(fc[0], fc[1], fc[2]);
-    clear.0 = fog_color;
+    let fc = overrides
+        .fog_color
+        .unwrap_or_else(|| sample_rgb(&KF_TIMES, &KF_FOG_COLOR, t));
+    clear.0 = Color::srgb(fc[0], fc[1], fc[2]);
 }

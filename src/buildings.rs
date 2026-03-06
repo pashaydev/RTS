@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
+use crate::blueprints::{BlueprintRegistry, EntityCategory, EntityKind, EntityVisualCache, spawn_from_blueprint};
 use crate::components::*;
 use crate::ground::terrain_height;
-use crate::units::spawn_unit_of_type;
 
 pub struct BuildingsPlugin;
 
@@ -11,7 +11,7 @@ impl Plugin for BuildingsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BuildingPlacementState>()
             .init_resource::<CompletedBuildings>()
-            .add_systems(Startup, create_building_assets)
+            .add_systems(Startup, create_ghost_materials)
             .add_systems(
                 Update,
                 (
@@ -28,112 +28,13 @@ impl Plugin for BuildingsPlugin {
     }
 }
 
-// ── Building data ──
+// ── Asset creation (ghost materials only) ──
 
-/// Returns (wood, copper, iron, gold, oil, construction_time_secs)
-pub fn building_cost(bt: BuildingType) -> (u32, u32, u32, u32, u32, f32) {
-    match bt {
-        BuildingType::Base => (100, 20, 0, 0, 0, 15.0),
-        BuildingType::Barracks => (80, 40, 20, 0, 0, 12.0),
-        BuildingType::Workshop => (60, 60, 40, 10, 0, 18.0),
-        BuildingType::Tower => (40, 30, 30, 0, 0, 10.0),
-        BuildingType::Storage => (60, 10, 0, 0, 0, 8.0),
-    }
-}
-
-pub fn building_prerequisite(bt: BuildingType) -> Option<BuildingType> {
-    match bt {
-        BuildingType::Base => None,
-        _ => Some(BuildingType::Base),
-    }
-}
-
-/// Returns (wood, copper, iron, gold, oil, train_time_secs)
-pub fn training_cost(ut: UnitType) -> (u32, u32, u32, u32, u32, f32) {
-    match ut {
-        UnitType::Worker => (30, 0, 0, 0, 0, 5.0),
-        UnitType::Soldier => (10, 20, 10, 0, 0, 8.0),
-        UnitType::Archer => (20, 10, 5, 0, 0, 7.0),
-        UnitType::Tank => (0, 30, 40, 10, 5, 15.0),
-    }
-}
-
-pub fn building_type_label(bt: BuildingType) -> &'static str {
-    match bt {
-        BuildingType::Base => "Base",
-        BuildingType::Barracks => "Barracks",
-        BuildingType::Workshop => "Workshop",
-        BuildingType::Tower => "Tower",
-        BuildingType::Storage => "Storage",
-    }
-}
-
-fn building_half_height(bt: BuildingType) -> f32 {
-    match bt {
-        BuildingType::Base => 1.5,
-        BuildingType::Barracks => 1.25,
-        BuildingType::Workshop => 1.5,
-        BuildingType::Tower => 3.0,
-        BuildingType::Storage => 0.75,
-    }
-}
-
-fn building_hp(bt: BuildingType) -> f32 {
-    match bt {
-        BuildingType::Base => 500.0,
-        BuildingType::Barracks => 300.0,
-        BuildingType::Workshop => 350.0,
-        BuildingType::Tower => 200.0,
-        BuildingType::Storage => 250.0,
-    }
-}
-
-fn building_vision_range(bt: BuildingType) -> f32 {
-    match bt {
-        BuildingType::Base => 25.0,
-        BuildingType::Barracks => 15.0,
-        BuildingType::Workshop => 15.0,
-        BuildingType::Tower => 20.0,
-        BuildingType::Storage => 10.0,
-    }
-}
-
-// ── Asset creation ──
-
-fn create_building_assets(
+fn create_ghost_materials(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    commands.insert_resource(BuildingMeshes {
-        base: meshes.add(Cuboid::new(4.0, 3.0, 4.0)),
-        barracks: meshes.add(Cuboid::new(5.0, 2.5, 3.0)),
-        workshop: meshes.add(Cuboid::new(4.0, 3.0, 4.0)),
-        tower: meshes.add(Cylinder::new(1.0, 6.0)),
-        storage: meshes.add(Cuboid::new(3.0, 1.5, 3.0)),
-    });
-
-    commands.insert_resource(BuildingMaterials {
-        base: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.6, 0.55, 0.45),
-            ..default()
-        }),
-        barracks: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.7, 0.3, 0.25),
-            ..default()
-        }),
-        workshop: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.45, 0.45, 0.5),
-            ..default()
-        }),
-        tower: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.55, 0.55, 0.6),
-            ..default()
-        }),
-        storage: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.5, 0.4, 0.25),
-            ..default()
-        }),
+    commands.insert_resource(BuildingGhostMaterials {
         ghost_valid: materials.add(StandardMaterial {
             base_color: Color::srgba(0.2, 0.8, 0.3, 0.4),
             alpha_mode: AlphaMode::Blend,
@@ -177,8 +78,9 @@ fn cursor_ground_pos(
 fn update_placement_preview(
     mut commands: Commands,
     mut placement: ResMut<BuildingPlacementState>,
-    building_meshes: Res<BuildingMeshes>,
-    building_mats: Res<BuildingMaterials>,
+    registry: Res<BlueprintRegistry>,
+    cache: Res<EntityVisualCache>,
+    ghost_mats: Res<BuildingGhostMaterials>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut ghosts: Query<
@@ -188,17 +90,21 @@ fn update_placement_preview(
     existing_buildings: Query<&Transform, (With<Building>, Without<GhostBuilding>)>,
     biome_map: Option<Res<BiomeMap>>,
 ) {
-    let PlacementMode::Placing(bt) = placement.mode else {
+    let PlacementMode::Placing(kind) = placement.mode else {
         return;
     };
 
+    let bp = registry.get(kind);
+    let half_h = bp.building.as_ref().map(|b| b.half_height).unwrap_or(1.0);
+
     // Spawn ghost if it doesn't exist
     if placement.preview_entity.is_none() {
+        let mesh = cache.meshes.get(&kind).expect("Missing mesh").clone();
         let ghost = commands
             .spawn((
                 GhostBuilding,
-                Mesh3d(building_meshes.mesh_for(bt)),
-                MeshMaterial3d(building_mats.ghost_valid.clone()),
+                Mesh3d(mesh),
+                MeshMaterial3d(ghost_mats.ghost_valid.clone()),
                 Transform::from_translation(Vec3::new(0.0, -100.0, 0.0)),
             ))
             .id();
@@ -216,42 +122,33 @@ fn update_placement_preview(
         return;
     };
 
-    let half_h = building_half_height(bt);
     let y = terrain_height(world_pos.x, world_pos.z) + half_h;
     ghost_tf.translation = Vec3::new(world_pos.x, y, world_pos.z);
 
-    // Check placement validity
     let mut valid = true;
 
-    // Not on water
     if let Some(ref bm) = biome_map {
         if bm.get_biome(world_pos.x, world_pos.z) == Biome::Water {
             valid = false;
         }
     }
 
-    // Not overlapping existing buildings (simple distance check)
     for building_tf in &existing_buildings {
-        if building_tf
-            .translation
-            .distance(ghost_tf.translation)
-            < 5.0
-        {
+        if building_tf.translation.distance(ghost_tf.translation) < 5.0 {
             valid = false;
             break;
         }
     }
 
-    // Within map bounds
     let half_map = 250.0;
     if world_pos.x.abs() > half_map - 5.0 || world_pos.z.abs() > half_map - 5.0 {
         valid = false;
     }
 
     *ghost_mat = if valid {
-        MeshMaterial3d(building_mats.ghost_valid.clone())
+        MeshMaterial3d(ghost_mats.ghost_valid.clone())
     } else {
-        MeshMaterial3d(building_mats.ghost_invalid.clone())
+        MeshMaterial3d(ghost_mats.ghost_invalid.clone())
     };
 }
 
@@ -261,23 +158,23 @@ fn confirm_placement(
     mut placement: ResMut<BuildingPlacementState>,
     mut player_res: ResMut<PlayerResources>,
     completed: Res<CompletedBuildings>,
-    building_meshes: Res<BuildingMeshes>,
-    building_mats: Res<BuildingMaterials>,
+    registry: Res<BlueprintRegistry>,
+    cache: Res<EntityVisualCache>,
+    ghost_mats: Res<BuildingGhostMaterials>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
     existing_buildings: Query<&Transform, (With<Building>, Without<GhostBuilding>)>,
     biome_map: Option<Res<BiomeMap>>,
 ) {
-    let PlacementMode::Placing(bt) = placement.mode else {
+    let PlacementMode::Placing(kind) = placement.mode else {
         return;
     };
 
-    // Phase 1: awaiting initial mouse release (prevents placing on same click as card)
+    // Phase 1: awaiting initial mouse release
     if placement.awaiting_release {
         if mouse.just_released(MouseButton::Left) {
             placement.awaiting_release = false;
 
-            // Try drag-and-drop placement: if cursor is on valid terrain, place immediately
             if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) {
                 let on_water = biome_map.as_ref()
                     .map_or(false, |bm| bm.get_biome(world_pos.x, world_pos.z) == Biome::Water);
@@ -290,13 +187,11 @@ fn confirm_placement(
                     || world_pos.z.abs() > half_map - 5.0;
 
                 if !on_water && !too_close && !out_of_bounds {
-                    // Valid drag-and-drop: fall through to placement below
+                    // Valid drag-and-drop
                 } else {
-                    // Released on invalid spot — stay in placement mode for click-to-place
                     return;
                 }
             } else {
-                // No ground pos (e.g. cursor over UI) — stay in placement mode
                 return;
             }
         } else {
@@ -306,16 +201,20 @@ fn confirm_placement(
         return;
     }
 
-    // Phase 2: normal click-to-place (or drag-and-drop that fell through)
     let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
         return;
     };
 
+    let bp = registry.get(kind);
+
     // Check prerequisite
-    let prereq_met = match building_prerequisite(bt) {
-        None => true,
-        Some(BuildingType::Base) => completed.has_base,
-        Some(_) => false,
+    let prereq_met = if let Some(ref bd) = bp.building {
+        match bd.prerequisite {
+            None => true,
+            Some(prereq_kind) => completed.has(prereq_kind),
+        }
+    } else {
+        true
     };
     if !prereq_met {
         return;
@@ -328,11 +227,7 @@ fn confirm_placement(
         }
     }
     for building_tf in &existing_buildings {
-        let check_pos = Vec3::new(
-            world_pos.x,
-            building_tf.translation.y,
-            world_pos.z,
-        );
+        let check_pos = Vec3::new(world_pos.x, building_tf.translation.y, world_pos.z);
         if building_tf.translation.distance(check_pos) < 5.0 {
             return;
         }
@@ -343,51 +238,27 @@ fn confirm_placement(
     }
 
     // Check affordability
-    let (w, c, i, g, o, construction_time) = building_cost(bt);
-    if !player_res.can_afford(w, c, i, g, o) {
+    if !bp.cost.can_afford(&player_res) {
         return;
     }
 
     // Deduct resources
-    player_res.subtract(w, c, i, g, o);
+    bp.cost.deduct(&mut player_res);
 
     // Despawn ghost
     if let Some(ghost) = placement.preview_entity {
         commands.entity(ghost).despawn();
     }
 
-    // Spawn building
-    let half_h = building_half_height(bt);
-    let y = terrain_height(world_pos.x, world_pos.z) + half_h;
+    // Spawn building using blueprint
+    let entity_id = spawn_from_blueprint(&mut commands, &cache, kind, world_pos, &registry);
 
-    let mut entity_cmds = commands.spawn((
-        Building,
-        bt,
-        BuildingState::UnderConstruction,
-        ConstructionProgress {
-            timer: Timer::from_seconds(construction_time, TimerMode::Once),
-        },
-        Faction::Player,
-        Health {
-            current: building_hp(bt),
-            max: building_hp(bt),
-        },
-        VisionRange(building_vision_range(bt)),
-        Mesh3d(building_meshes.mesh_for(bt)),
-        MeshMaterial3d(building_mats.under_construction.clone()),
-        Transform::from_translation(Vec3::new(world_pos.x, y, world_pos.z)),
-    ));
+    // Override material with under_construction
+    commands.entity(entity_id).insert(
+        MeshMaterial3d(ghost_mats.under_construction.clone()),
+    );
 
-    // Tower gets combat components
-    if bt == BuildingType::Tower {
-        entity_cmds.insert((
-            AttackRange(15.0),
-            AttackDamage(10.0),
-            AttackCooldown {
-                timer: Timer::from_seconds(2.0, TimerMode::Repeating),
-            },
-        ));
-    }
+    // Tower gets combat components from blueprint already
 
     // Reset placement
     placement.mode = PlacementMode::None;
@@ -419,15 +290,16 @@ fn cancel_placement(
 fn construction_progress_system(
     mut commands: Commands,
     time: Res<Time>,
-    building_mats: Res<BuildingMaterials>,
+    registry: Res<BlueprintRegistry>,
+    cache: Res<EntityVisualCache>,
     mut buildings: Query<(
         Entity,
-        &BuildingType,
+        &EntityKind,
         &mut BuildingState,
         &mut ConstructionProgress,
     )>,
 ) {
-    for (entity, bt, mut state, mut progress) in &mut buildings {
+    for (entity, kind, mut state, mut progress) in &mut buildings {
         if *state != BuildingState::UnderConstruction {
             continue;
         }
@@ -436,20 +308,22 @@ fn construction_progress_system(
             *state = BuildingState::Complete;
 
             // Swap to final material
-            commands
-                .entity(entity)
-                .insert(MeshMaterial3d(building_mats.material_for(*bt)))
-                .remove::<ConstructionProgress>();
+            if let Some(mat) = cache.materials_default.get(kind) {
+                commands
+                    .entity(entity)
+                    .insert(MeshMaterial3d(mat.clone()))
+                    .remove::<ConstructionProgress>();
+            }
 
             // Add training queue for production buildings
-            match bt {
-                BuildingType::Barracks | BuildingType::Workshop | BuildingType::Base => {
+            let bp = registry.get(*kind);
+            if let Some(ref bd) = bp.building {
+                if !bd.trains.is_empty() {
                     commands.entity(entity).insert(TrainingQueue {
                         queue: vec![],
                         timer: None,
                     });
                 }
-                _ => {}
             }
         }
     }
@@ -464,7 +338,7 @@ fn tower_auto_attack(
     mut towers: Query<
         (
             &Transform,
-            &BuildingType,
+            &EntityKind,
             &BuildingState,
             &mut AttackCooldown,
             &AttackDamage,
@@ -476,8 +350,8 @@ fn tower_auto_attack(
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (tower_tf, bt, state, mut cooldown, damage, range) in &mut towers {
-        if *bt != BuildingType::Tower || *state != BuildingState::Complete {
+    for (tower_tf, kind, state, mut cooldown, damage, range) in &mut towers {
+        if *kind != EntityKind::Tower || *state != BuildingState::Complete {
             continue;
         }
 
@@ -486,7 +360,6 @@ fn tower_auto_attack(
             continue;
         }
 
-        // Find closest mob in range
         let mut closest_dist = f32::MAX;
         let mut closest_mob = None;
         for (mob_entity, mob_tf) in &mobs {
@@ -518,28 +391,28 @@ fn tower_auto_attack(
 fn training_queue_system(
     mut commands: Commands,
     time: Res<Time>,
-    mut buildings: Query<(&Transform, &BuildingType, &mut TrainingQueue), With<Building>>,
-    unit_mats: Res<UnitMaterials>,
-    unit_meshes: Res<UnitMeshes>,
+    registry: Res<BlueprintRegistry>,
+    cache: Res<EntityVisualCache>,
+    mut buildings: Query<(&Transform, &EntityKind, &mut TrainingQueue), With<Building>>,
 ) {
-    for (transform, _bt, mut queue) in &mut buildings {
+    for (transform, _kind, mut queue) in &mut buildings {
         if queue.queue.is_empty() {
             continue;
         }
 
         // Start timer for first item if not started
         if queue.timer.is_none() {
-            let ut = queue.queue[0];
-            let (_, _, _, _, _, train_time) = training_cost(ut);
-            queue.timer = Some(Timer::from_seconds(train_time, TimerMode::Once));
+            let unit_kind = queue.queue[0];
+            let bp = registry.get(unit_kind);
+            queue.timer = Some(Timer::from_seconds(bp.train_time_secs, TimerMode::Once));
         }
 
         if let Some(ref mut timer) = queue.timer {
             timer.tick(time.delta());
             if timer.is_finished() {
-                let ut = queue.queue.remove(0);
+                let unit_kind = queue.queue.remove(0);
                 let spawn_pos = transform.translation + Vec3::new(3.0, 0.0, 3.0);
-                spawn_unit_of_type(&mut commands, &unit_mats, &unit_meshes, ut, spawn_pos);
+                spawn_from_blueprint(&mut commands, &cache, unit_kind, spawn_pos, &registry);
                 queue.timer = None;
             }
         }
@@ -550,29 +423,19 @@ fn training_queue_system(
 
 fn update_completed_buildings_tracker(
     mut completed: ResMut<CompletedBuildings>,
-    buildings: Query<(&BuildingType, &BuildingState), With<Building>>,
+    buildings: Query<(&EntityKind, &BuildingState), With<Building>>,
 ) {
-    let mut has_base = false;
-    let mut has_barracks = false;
-    let mut has_workshop = false;
+    let mut new_completed = Vec::new();
 
-    for (bt, state) in &buildings {
-        if *state == BuildingState::Complete {
-            match bt {
-                BuildingType::Base => has_base = true,
-                BuildingType::Barracks => has_barracks = true,
-                BuildingType::Workshop => has_workshop = true,
-                _ => {}
+    for (kind, state) in &buildings {
+        if *state == BuildingState::Complete && kind.category() == EntityCategory::Building {
+            if !new_completed.contains(kind) {
+                new_completed.push(*kind);
             }
         }
     }
 
-    if completed.has_base != has_base
-        || completed.has_barracks != has_barracks
-        || completed.has_workshop != has_workshop
-    {
-        completed.has_base = has_base;
-        completed.has_barracks = has_barracks;
-        completed.has_workshop = has_workshop;
+    if completed.completed != new_completed {
+        completed.completed = new_completed;
     }
 }

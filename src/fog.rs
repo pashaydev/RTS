@@ -12,12 +12,33 @@ use crate::ground::{terrain_height, GRID_SIZE, HALF_MAP, MAP_SIZE};
 #[derive(Resource)]
 pub struct FogVisibilityTexture(pub Handle<Image>);
 
+/// Tweakable gameplay thresholds for fog of war.
+#[derive(Resource)]
+pub struct FogTweakSettings {
+    pub mob_threshold: f32,
+    pub object_threshold: f32,
+    pub vfx_threshold: f32,
+    pub decay_value: f32,
+}
+
+impl Default for FogTweakSettings {
+    fn default() -> Self {
+        Self {
+            mob_threshold: 0.8,
+            object_threshold: 0.4,
+            vfx_threshold: 0.3,
+            decay_value: 0.5,
+        }
+    }
+}
+
 pub struct FogPlugin;
 
 impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<FogOfWarMaterial>::default())
-            .add_systems(PostStartup, spawn_fog_overlay)
+            .init_resource::<FogTweakSettings>()
+            .add_systems(PostStartup, (spawn_fog_overlay, register_fog_tweaks))
             .add_systems(
                 Update,
                 (
@@ -29,6 +50,34 @@ impl Plugin for FogPlugin {
                     .chain(),
             );
     }
+}
+
+fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
+    let s = FogSettings::default();
+
+    // Fog Shader folder
+    tweaks.add_float("Fog Shader", "noise_scale", s.noise_scale, 0.0, 30.0, 0.5);
+    tweaks.add_float("Fog Shader", "edge_glow_width", s.edge_glow_width, 0.0, 0.5, 0.01);
+    tweaks.add_float("Fog Shader", "edge_glow_intensity", s.edge_glow_intensity, 0.0, 2.0, 0.05);
+    tweaks.add_float("Fog Shader", "fog_color R", s.fog_color.x, 0.0, 1.0, 0.01);
+    tweaks.add_float("Fog Shader", "fog_color G", s.fog_color.y, 0.0, 1.0, 0.01);
+    tweaks.add_float("Fog Shader", "fog_color B", s.fog_color.z, 0.0, 1.0, 0.01);
+    tweaks.add_float("Fog Shader", "fog_color A", s.fog_color.w, 0.0, 1.0, 0.01);
+    tweaks.add_float("Fog Shader", "glow_color R", s.glow_color.x, 0.0, 1.0, 0.01);
+    tweaks.add_float("Fog Shader", "glow_color G", s.glow_color.y, 0.0, 1.0, 0.01);
+    tweaks.add_float("Fog Shader", "glow_color B", s.glow_color.z, 0.0, 1.0, 0.01);
+    tweaks.add_float("Fog Shader", "glow_color A", s.glow_color.w, 0.0, 1.0, 0.01);
+    tweaks.add_float("Fog Shader", "explored_tint R", s.explored_tint.x, 0.0, 1.0, 0.01);
+    tweaks.add_float("Fog Shader", "explored_tint G", s.explored_tint.y, 0.0, 1.0, 0.01);
+    tweaks.add_float("Fog Shader", "explored_tint B", s.explored_tint.z, 0.0, 1.0, 0.01);
+    tweaks.add_float("Fog Shader", "explored_tint A", s.explored_tint.w, 0.0, 1.0, 0.01);
+
+    // Fog Gameplay folder
+    let t = FogTweakSettings::default();
+    tweaks.add_float("Fog Gameplay", "mob_threshold", t.mob_threshold, 0.0, 1.0, 0.05);
+    tweaks.add_float("Fog Gameplay", "object_threshold", t.object_threshold, 0.0, 1.0, 0.05);
+    tweaks.add_float("Fog Gameplay", "vfx_threshold", t.vfx_threshold, 0.0, 1.0, 0.05);
+    tweaks.add_float("Fog Gameplay", "decay_value", t.decay_value, 0.0, 1.0, 0.05);
 }
 
 /// Create the R8Unorm visibility texture for GPU sampling.
@@ -128,15 +177,17 @@ fn spawn_fog_overlay(
 
 fn update_fog_visibility(
     mut fog_map: ResMut<FogOfWarMap>,
+    fog_settings: Res<FogTweakSettings>,
     all_units: Query<(&Transform, &VisionRange, &Faction), With<Unit>>,
     all_buildings: Query<(&Transform, &VisionRange, &Faction), With<Building>>,
 ) {
     let grid_size = fog_map.grid_size;
     let step = fog_map.map_size / (grid_size - 1) as f32;
+    let decay = fog_settings.decay_value;
 
     for v in fog_map.visibility.iter_mut() {
-        if *v > 0.5 {
-            *v = 0.5;
+        if *v > decay {
+            *v = decay;
         }
     }
 
@@ -220,6 +271,7 @@ fn update_fog_material_time(
 
 fn fog_hide_enemies(
     fog_map: Res<FogOfWarMap>,
+    fog_settings: Res<FogTweakSettings>,
     mut mobs: Query<(&Transform, &mut Visibility), With<Mob>>,
     mut resource_nodes: Query<(&Transform, &mut Visibility), (With<ResourceNode>, Without<Mob>)>,
     mut decorations: Query<
@@ -250,9 +302,13 @@ fn fog_hide_enemies(
         ),
     >,
 ) {
+    let mob_t = fog_settings.mob_threshold;
+    let obj_t = fog_settings.object_threshold;
+    let vfx_t = fog_settings.vfx_threshold;
+
     for (tf, mut vis) in mobs.iter_mut() {
         let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
-        *vis = if v >= 0.8 {
+        *vis = if v >= mob_t {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -261,7 +317,7 @@ fn fog_hide_enemies(
 
     for (tf, mut vis) in resource_nodes.iter_mut() {
         let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
-        *vis = if v >= 0.4 {
+        *vis = if v >= obj_t {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -270,7 +326,7 @@ fn fog_hide_enemies(
 
     for (tf, mut vis) in decorations.iter_mut() {
         let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
-        *vis = if v >= 0.4 {
+        *vis = if v >= obj_t {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -279,7 +335,7 @@ fn fog_hide_enemies(
 
     for (tf, mut vis) in projectiles.iter_mut() {
         let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
-        *vis = if v >= 0.3 {
+        *vis = if v >= vfx_t {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -288,7 +344,7 @@ fn fog_hide_enemies(
 
     for (tf, mut vis) in vfx.iter_mut() {
         let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
-        *vis = if v >= 0.3 {
+        *vis = if v >= vfx_t {
             Visibility::Inherited
         } else {
             Visibility::Hidden

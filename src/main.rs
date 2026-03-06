@@ -1,11 +1,14 @@
+mod blueprints;
 mod buildings;
 mod camera;
 mod combat;
 mod components;
+mod debug;
 mod fog;
 mod fog_material;
 mod ground;
 mod lighting;
+mod minimap;
 mod mobs;
 mod model_assets;
 mod pathvis;
@@ -27,7 +30,9 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(blueprints::BlueprintPlugin)
         .add_plugins((
+            debug::DebugPlugin,
             model_assets::ModelAssetsPlugin,
             ground::GroundPlugin,
             camera::CameraPlugin,
@@ -43,5 +48,6 @@ fn main() {
             combat::CombatPlugin,
             fog::FogPlugin,
         ))
+        .add_plugins(minimap::MinimapPlugin)
         .run();
 }

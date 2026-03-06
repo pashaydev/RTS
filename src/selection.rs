@@ -4,6 +4,7 @@ use bevy::picking::mesh_picking::ray_cast::MeshRayCast;
 use bevy::window::PrimaryWindow;
 
 use crate::components::*;
+use crate::minimap::{MinimapInteraction, MinimapSet};
 
 pub struct SelectionPlugin;
 
@@ -21,7 +22,8 @@ impl Plugin for SelectionPlugin {
                     handle_click_select,
                     handle_right_click_move,
                 )
-                    .chain(),
+                    .chain()
+                    .after(MinimapSet),
             );
     }
 }
@@ -48,7 +50,13 @@ fn track_drag(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut drag: ResMut<DragState>,
+    minimap_interaction: Res<MinimapInteraction>,
 ) {
+    // Don't start drags when clicking the minimap
+    if minimap_interaction.clicked {
+        return;
+    }
+
     let Ok(window) = windows.single() else {
         return;
     };
@@ -77,12 +85,17 @@ fn update_selection_box_visual(
     mouse: Res<ButtonInput<MouseButton>>,
     mut query: Query<(&mut Node, &mut Visibility), With<SelectionBox>>,
     placement: Res<BuildingPlacementState>,
+    minimap_interaction: Res<MinimapInteraction>,
 ) {
     let Ok((mut node, mut vis)) = query.single_mut() else {
         return;
     };
 
-    if drag.dragging && mouse.pressed(MouseButton::Left) && placement.mode == PlacementMode::None {
+    if drag.dragging
+        && mouse.pressed(MouseButton::Left)
+        && placement.mode == PlacementMode::None
+        && !minimap_interaction.clicked
+    {
         if let (Some(start), Some(current)) = (drag.start, drag.current) {
             let min_x = start.x.min(current.x);
             let min_y = start.y.min(current.y);
@@ -115,6 +128,7 @@ fn handle_click_select(
     mobs: Query<Entity, With<Mob>>,
     selected: Query<Entity, With<Selected>>,
     unit_transforms: Query<&GlobalTransform, With<Unit>>,
+    minimap_interaction: Res<MinimapInteraction>,
 ) {
     if !mouse.just_released(MouseButton::Left) {
         return;
@@ -122,6 +136,14 @@ fn handle_click_select(
 
     // Don't select while placing a building
     if placement.mode != PlacementMode::None {
+        return;
+    }
+
+    // Don't select when clicking minimap
+    if minimap_interaction.clicked {
+        drag.start = None;
+        drag.current = None;
+        drag.dragging = false;
         return;
     }
 
@@ -240,8 +262,13 @@ fn handle_right_click_move(
     selected_units: Query<Entity, (With<Unit>, With<Selected>)>,
     mut ray_cast: MeshRayCast,
     mobs: Query<Entity, With<Mob>>,
+    minimap_interaction: Res<MinimapInteraction>,
 ) {
     if !mouse.just_pressed(MouseButton::Right) {
+        return;
+    }
+
+    if minimap_interaction.clicked {
         return;
     }
 

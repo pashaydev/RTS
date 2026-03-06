@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 
+use crate::blueprints::EntityKind;
+
 // ── Resource types ──
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -9,16 +11,6 @@ pub enum ResourceType {
     Iron,
     Gold,
     Oil,
-}
-
-// ── Unit types ──
-
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum UnitType {
-    Worker,
-    Soldier,
-    Archer,
-    Tank,
 }
 
 // ── Unit markers ──
@@ -142,59 +134,6 @@ impl PlayerResources {
     }
 }
 
-// ── Unit materials & meshes ──
-
-#[derive(Resource)]
-pub struct UnitMaterials {
-    pub worker_default: Handle<StandardMaterial>,
-    pub worker_selected: Handle<StandardMaterial>,
-    pub soldier_default: Handle<StandardMaterial>,
-    pub soldier_selected: Handle<StandardMaterial>,
-    pub archer_default: Handle<StandardMaterial>,
-    pub archer_selected: Handle<StandardMaterial>,
-    pub tank_default: Handle<StandardMaterial>,
-    pub tank_selected: Handle<StandardMaterial>,
-}
-
-impl UnitMaterials {
-    pub fn default_for(&self, ut: UnitType) -> Handle<StandardMaterial> {
-        match ut {
-            UnitType::Worker => self.worker_default.clone(),
-            UnitType::Soldier => self.soldier_default.clone(),
-            UnitType::Archer => self.archer_default.clone(),
-            UnitType::Tank => self.tank_default.clone(),
-        }
-    }
-
-    pub fn selected_for(&self, ut: UnitType) -> Handle<StandardMaterial> {
-        match ut {
-            UnitType::Worker => self.worker_selected.clone(),
-            UnitType::Soldier => self.soldier_selected.clone(),
-            UnitType::Archer => self.archer_selected.clone(),
-            UnitType::Tank => self.tank_selected.clone(),
-        }
-    }
-}
-
-#[derive(Resource)]
-pub struct UnitMeshes {
-    pub worker: Handle<Mesh>,
-    pub soldier: Handle<Mesh>,
-    pub archer: Handle<Mesh>,
-    pub tank: Handle<Mesh>,
-}
-
-impl UnitMeshes {
-    pub fn mesh_for(&self, ut: UnitType) -> Handle<Mesh> {
-        match ut {
-            UnitType::Worker => self.worker.clone(),
-            UnitType::Soldier => self.soldier.clone(),
-            UnitType::Archer => self.archer.clone(),
-            UnitType::Tank => self.tank.clone(),
-        }
-    }
-}
-
 // ── Model assets (3D models loaded from .glb files) ──
 
 #[derive(Resource, Default)]
@@ -247,18 +186,13 @@ pub struct PathVisAssets {
 
 #[derive(Component)]
 pub struct RtsCamera {
-    // Current smoothed state
     pub pivot: Vec3,
     pub distance: f32,
     pub angle: f32,
     pub pitch: f32,
-
-    // Target state (inputs write here, current lerps toward these)
     pub target_pivot: Vec3,
     pub target_distance: f32,
     pub target_angle: f32,
-
-    // Momentum
     pub pan_velocity: Vec3,
 }
 
@@ -297,15 +231,7 @@ impl BiomeMap {
     }
 }
 
-// ── Mob types ──
-
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum MobType {
-    Goblin,
-    Skeleton,
-    Orc,
-    Demon,
-}
+// ── Mob marker ──
 
 #[derive(Component)]
 pub struct Mob;
@@ -359,7 +285,6 @@ pub struct VisionRange(pub f32);
 
 #[derive(Resource)]
 pub struct FogOfWarMap {
-    /// Per-cell visibility: 0.0 = unexplored, 0.5 = explored (seen before), 1.0 = currently visible
     pub visibility: Vec<f32>,
     pub grid_size: usize,
     pub map_size: f32,
@@ -405,24 +330,6 @@ pub struct VfxAssets {
     pub impact_material: Handle<StandardMaterial>,
 }
 
-// ── Mob asset resources ──
-
-#[derive(Resource)]
-pub struct MobMaterials {
-    pub goblin: Handle<StandardMaterial>,
-    pub skeleton: Handle<StandardMaterial>,
-    pub orc: Handle<StandardMaterial>,
-    pub demon: Handle<StandardMaterial>,
-}
-
-#[derive(Resource)]
-pub struct MobMeshes {
-    pub goblin: Handle<Mesh>,
-    pub skeleton: Handle<Mesh>,
-    pub orc: Handle<Mesh>,
-    pub demon: Handle<Mesh>,
-}
-
 // ── Icon assets ──
 
 #[derive(Resource)]
@@ -462,31 +369,26 @@ impl IconAssets {
         }
     }
 
-    pub fn building_icon(&self, bt: BuildingType) -> Handle<Image> {
-        match bt {
-            BuildingType::Base => self.base.clone(),
-            BuildingType::Barracks => self.barracks.clone(),
-            BuildingType::Workshop => self.workshop.clone(),
-            BuildingType::Tower => self.tower.clone(),
-            BuildingType::Storage => self.storage.clone(),
-        }
-    }
-
-    pub fn unit_icon(&self, ut: UnitType) -> Handle<Image> {
-        match ut {
-            UnitType::Worker => self.worker.clone(),
-            UnitType::Soldier => self.soldier.clone(),
-            UnitType::Archer => self.archer.clone(),
-            UnitType::Tank => self.tank.clone(),
-        }
-    }
-
-    pub fn mob_icon(&self, mt: MobType) -> Handle<Image> {
-        match mt {
-            MobType::Goblin => self.goblin.clone(),
-            MobType::Skeleton => self.skeleton.clone(),
-            MobType::Orc => self.orc.clone(),
-            MobType::Demon => self.demon.clone(),
+    pub fn entity_icon(&self, kind: EntityKind) -> Handle<Image> {
+        match kind {
+            // Buildings
+            EntityKind::Base => self.base.clone(),
+            EntityKind::Barracks => self.barracks.clone(),
+            EntityKind::Workshop => self.workshop.clone(),
+            EntityKind::Tower => self.tower.clone(),
+            EntityKind::Storage => self.storage.clone(),
+            // Units
+            EntityKind::Worker => self.worker.clone(),
+            EntityKind::Soldier => self.soldier.clone(),
+            EntityKind::Archer => self.archer.clone(),
+            EntityKind::Tank => self.tank.clone(),
+            // Mobs
+            EntityKind::Goblin => self.goblin.clone(),
+            EntityKind::Skeleton => self.skeleton.clone(),
+            EntityKind::Orc => self.orc.clone(),
+            EntityKind::Demon => self.demon.clone(),
+            // Fallback — use worker icon for new types without icons yet
+            _ => self.worker.clone(),
         }
     }
 }
@@ -538,15 +440,6 @@ pub struct SelectionBox;
 
 // ── Building system ──
 
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum BuildingType {
-    Base,
-    Barracks,
-    Workshop,
-    Tower,
-    Storage,
-}
-
 #[derive(Component)]
 pub struct Building;
 
@@ -563,21 +456,20 @@ pub struct ConstructionProgress {
 
 #[derive(Component)]
 pub struct TrainingQueue {
-    pub queue: Vec<UnitType>,
+    pub queue: Vec<EntityKind>,
     pub timer: Option<Timer>,
 }
 
 #[derive(Component)]
-pub struct BuildButton(pub BuildingType);
+pub struct BuildButton(pub EntityKind);
 
 #[derive(Component)]
-pub struct TrainButton(pub UnitType);
-
+pub struct TrainButton(pub EntityKind);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PlacementMode {
     None,
-    Placing(BuildingType),
+    Placing(EntityKind),
 }
 
 #[derive(Resource)]
@@ -599,54 +491,22 @@ impl Default for BuildingPlacementState {
 
 #[derive(Resource, Default)]
 pub struct CompletedBuildings {
-    pub has_base: bool,
-    pub has_barracks: bool,
-    pub has_workshop: bool,
+    pub completed: Vec<EntityKind>,
 }
 
-#[derive(Resource)]
-pub struct BuildingMeshes {
-    pub base: Handle<Mesh>,
-    pub barracks: Handle<Mesh>,
-    pub workshop: Handle<Mesh>,
-    pub tower: Handle<Mesh>,
-    pub storage: Handle<Mesh>,
-}
-
-impl BuildingMeshes {
-    pub fn mesh_for(&self, bt: BuildingType) -> Handle<Mesh> {
-        match bt {
-            BuildingType::Base => self.base.clone(),
-            BuildingType::Barracks => self.barracks.clone(),
-            BuildingType::Workshop => self.workshop.clone(),
-            BuildingType::Tower => self.tower.clone(),
-            BuildingType::Storage => self.storage.clone(),
-        }
+impl CompletedBuildings {
+    pub fn has(&self, kind: EntityKind) -> bool {
+        self.completed.contains(&kind)
     }
 }
 
+// ── Building materials (ghost, construction) ──
+
 #[derive(Resource)]
-pub struct BuildingMaterials {
-    pub base: Handle<StandardMaterial>,
-    pub barracks: Handle<StandardMaterial>,
-    pub workshop: Handle<StandardMaterial>,
-    pub tower: Handle<StandardMaterial>,
-    pub storage: Handle<StandardMaterial>,
+pub struct BuildingGhostMaterials {
     pub ghost_valid: Handle<StandardMaterial>,
     pub ghost_invalid: Handle<StandardMaterial>,
     pub under_construction: Handle<StandardMaterial>,
-}
-
-impl BuildingMaterials {
-    pub fn material_for(&self, bt: BuildingType) -> Handle<StandardMaterial> {
-        match bt {
-            BuildingType::Base => self.base.clone(),
-            BuildingType::Barracks => self.barracks.clone(),
-            BuildingType::Workshop => self.workshop.clone(),
-            BuildingType::Tower => self.tower.clone(),
-            BuildingType::Storage => self.storage.clone(),
-        }
-    }
 }
 
 #[derive(Component)]
@@ -660,8 +520,7 @@ pub struct CardHand;
 
 #[derive(Component)]
 pub struct BuildCard {
-    #[allow(dead_code)]
-    pub building_type: BuildingType,
+    pub building_kind: EntityKind,
     pub index: usize,
     pub total: usize,
     pub enabled: bool,
@@ -682,7 +541,7 @@ pub struct CardAnimState {
 impl CardAnimState {
     pub fn new(rotation_deg: f32, offset_y: f32) -> Self {
         Self {
-            offset_y: -200.0, // start off-screen for deal-in
+            offset_y: -200.0,
             scale: 0.5,
             rotation_deg,
             opacity: 0.0,
@@ -731,9 +590,9 @@ pub fn fan_params(index: usize, total: usize) -> (f32, f32) {
     if total <= 1 {
         return (0.0, 0.0);
     }
-    let t = index as f32 / (total - 1) as f32; // 0.0 .. 1.0
-    let centered = t - 0.5; // -0.5 .. 0.5
-    let rotation_deg = centered * 10.0; // -5° .. +5°
-    let y_offset = centered.abs() * 20.0; // edges dip down 10px
+    let t = index as f32 / (total - 1) as f32;
+    let centered = t - 0.5;
+    let rotation_deg = centered * 10.0;
+    let y_offset = centered.abs() * 20.0;
     (rotation_deg, y_offset)
 }
