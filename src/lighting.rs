@@ -47,17 +47,17 @@ fn register_lighting_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
     tweaks.add_float("Sky Color", "Color B", 0.75, 0.0, 1.0, 0.01);
 
     // Volumetric Fog folder
-    tweaks.add_bool("Volumetric Fog", "Override", false);
-    tweaks.add_bool("Volumetric Fog", "Enabled", true);
-    tweaks.add_float("Volumetric Fog", "Density", 0.003, 0.0, 0.02, 0.001);
-    tweaks.add_float("Volumetric Fog", "Color R", 0.75, 0.0, 1.0, 0.01);
-    tweaks.add_float("Volumetric Fog", "Color G", 0.7, 0.0, 1.0, 0.01);
-    tweaks.add_float("Volumetric Fog", "Color B", 0.6, 0.0, 1.0, 0.01);
-    tweaks.add_float("Volumetric Fog", "Ambient Intensity", 0.05, 0.0, 0.5, 0.01);
-    tweaks.add_float("Volumetric Fog", "Light Intensity", 1.0, 0.0, 5.0, 0.1);
-    tweaks.add_float("Volumetric Fog", "Step Count", 32.0, 4.0, 128.0, 4.0);
-    tweaks.add_float("Volumetric Fog", "Scattering", 0.2, 0.0, 1.0, 0.01);
-    tweaks.add_float("Volumetric Fog", "Absorption", 0.15, 0.0, 1.0, 0.01);
+    // tweaks.add_bool("Volumetric Fog", "Override", false);
+    // tweaks.add_bool("Volumetric Fog", "Enabled", true);
+    // tweaks.add_float("Volumetric Fog", "Density", 0.003, 0.0, 0.02, 0.001);
+    // tweaks.add_float("Volumetric Fog", "Color R", 0.75, 0.0, 1.0, 0.01);
+    // tweaks.add_float("Volumetric Fog", "Color G", 0.7, 0.0, 1.0, 0.01);
+    // tweaks.add_float("Volumetric Fog", "Color B", 0.6, 0.0, 1.0, 0.01);
+    // tweaks.add_float("Volumetric Fog", "Ambient Intensity", 0.05, 0.0, 0.5, 0.01);
+    // tweaks.add_float("Volumetric Fog", "Light Intensity", 1.0, 0.0, 5.0, 0.1);
+    // tweaks.add_float("Volumetric Fog", "Step Count", 32.0, 4.0, 128.0, 4.0);
+    // tweaks.add_float("Volumetric Fog", "Scattering", 0.2, 0.0, 1.0, 0.01);
+    // tweaks.add_float("Volumetric Fog", "Absorption", 0.15, 0.0, 1.0, 0.01);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

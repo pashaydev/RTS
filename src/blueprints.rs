@@ -172,11 +172,33 @@ impl ResourceCost {
 }
 
 #[derive(Clone, Debug)]
+pub struct BuildingLevelData {
+    pub cost: ResourceCost,
+    pub time_secs: f32,
+    pub scale_multiplier: f32,
+    pub bonus: LevelBonus,
+}
+
+#[derive(Clone, Debug)]
+pub enum LevelBonus {
+    None,
+    VisionBoost(f32),
+    TrainTimeMultiplier(f32),
+    TrainedStatBoost { hp_mult: f32, dmg_mult: f32 },
+    RangeAndDamage { range_boost: f32, damage_boost: f32 },
+    CooldownMultiplier(f32),
+    GatherAura { speed_bonus: f32, range: f32 },
+    HealAura { heal_per_sec: f32, range: f32 },
+    UnlocksTraining(Vec<EntityKind>),
+}
+
+#[derive(Clone, Debug)]
 pub struct BuildingData {
     pub construction_time_secs: f32,
     pub half_height: f32,
     pub trains: Vec<EntityKind>,
     pub prerequisite: Option<EntityKind>,
+    pub level_upgrades: Vec<BuildingLevelData>,
 }
 
 #[derive(Clone, Debug)]
@@ -200,6 +222,19 @@ pub enum MeshKind {
     Capsule { radius: f32, length: f32 },
     Cuboid { x: f32, y: f32, z: f32 },
     Cylinder { radius: f32, height: f32 },
+}
+
+impl MeshKind {
+    /// Bounding sphere radius for mouse picking, with a generous buffer.
+    pub fn pick_radius(&self) -> f32 {
+        let r = match *self {
+            MeshKind::Capsule { radius, length } => length / 2.0 + radius,
+            MeshKind::Cuboid { x, y, z } => (x * x + y * y + z * z).sqrt() / 2.0,
+            MeshKind::Cylinder { radius, height } => (radius * radius + (height / 2.0).powi(2)).sqrt(),
+        };
+        // 30% buffer for easier clicking
+        r * 1.3
+    }
 }
 
 // ── Ability system ──
@@ -344,6 +379,7 @@ pub struct EntityVisualCache {
     pub meshes: HashMap<EntityKind, Handle<Mesh>>,
     pub materials_default: HashMap<EntityKind, Handle<StandardMaterial>>,
     pub materials_selected: HashMap<EntityKind, Handle<StandardMaterial>>,
+    pub materials_hovered: HashMap<EntityKind, Handle<StandardMaterial>>,
 }
 
 // ── Build the registry ──
@@ -615,7 +651,10 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(EntityKind::Base, Blueprint {
         kind: EntityKind::Base,
         faction: Faction::Player,
-        combat: None,
+        combat: Some(CombatStats {
+            hp: 500.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
+            aggro_range: None, is_ranged: false, projectile_speed: None,
+        }),
         movement: None, gathering: None,
         vision: Some(VisionStats { range: 25.0 }),
         cost: ResourceCost { wood: 100, copper: 20, ..Default::default() },
@@ -624,6 +663,18 @@ pub fn build_registry() -> BlueprintRegistry {
             construction_time_secs: 15.0, half_height: 1.5,
             trains: vec![EntityKind::Worker],
             prerequisite: None,
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 150, copper: 40, ..Default::default() },
+                    time_secs: 20.0, scale_multiplier: 1.1,
+                    bonus: LevelBonus::VisionBoost(5.0),
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 250, copper: 80, iron: 40, ..Default::default() },
+                    time_secs: 30.0, scale_multiplier: 1.15,
+                    bonus: LevelBonus::TrainTimeMultiplier(0.7),
+                },
+            ],
         }),
         mob_ai: None,
         visual: VisualDef {
@@ -639,7 +690,10 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(EntityKind::Barracks, Blueprint {
         kind: EntityKind::Barracks,
         faction: Faction::Player,
-        combat: None,
+        combat: Some(CombatStats {
+            hp: 350.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
+            aggro_range: None, is_ranged: false, projectile_speed: None,
+        }),
         movement: None, gathering: None,
         vision: Some(VisionStats { range: 15.0 }),
         cost: ResourceCost { wood: 80, copper: 40, iron: 20, ..Default::default() },
@@ -648,6 +702,18 @@ pub fn build_registry() -> BlueprintRegistry {
             construction_time_secs: 12.0, half_height: 1.25,
             trains: vec![EntityKind::Worker, EntityKind::Soldier, EntityKind::Archer],
             prerequisite: Some(EntityKind::Base),
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 120, copper: 60, iron: 30, ..Default::default() },
+                    time_secs: 15.0, scale_multiplier: 1.08,
+                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.1, dmg_mult: 1.1 },
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 200, copper: 100, iron: 60, ..Default::default() },
+                    time_secs: 25.0, scale_multiplier: 1.12,
+                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.25, dmg_mult: 1.25 },
+                },
+            ],
         }),
         mob_ai: None,
         visual: VisualDef {
@@ -663,7 +729,10 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(EntityKind::Workshop, Blueprint {
         kind: EntityKind::Workshop,
         faction: Faction::Player,
-        combat: None,
+        combat: Some(CombatStats {
+            hp: 400.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
+            aggro_range: None, is_ranged: false, projectile_speed: None,
+        }),
         movement: None, gathering: None,
         vision: Some(VisionStats { range: 15.0 }),
         cost: ResourceCost { wood: 60, copper: 60, iron: 40, gold: 10, ..Default::default() },
@@ -672,6 +741,18 @@ pub fn build_registry() -> BlueprintRegistry {
             construction_time_secs: 18.0, half_height: 1.5,
             trains: vec![EntityKind::Tank],
             prerequisite: Some(EntityKind::Base),
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 100, copper: 80, iron: 60, ..Default::default() },
+                    time_secs: 18.0, scale_multiplier: 1.08,
+                    bonus: LevelBonus::TrainTimeMultiplier(0.8),
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 160, copper: 120, iron: 100, gold: 20, ..Default::default() },
+                    time_secs: 28.0, scale_multiplier: 1.12,
+                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.2, dmg_mult: 1.2 },
+                },
+            ],
         }),
         mob_ai: None,
         visual: VisualDef {
@@ -699,6 +780,18 @@ pub fn build_registry() -> BlueprintRegistry {
             construction_time_secs: 10.0, half_height: 3.0,
             trains: vec![],
             prerequisite: Some(EntityKind::Base),
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 60, copper: 40, iron: 40, ..Default::default() },
+                    time_secs: 12.0, scale_multiplier: 1.1,
+                    bonus: LevelBonus::RangeAndDamage { range_boost: 3.0, damage_boost: 5.0 },
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 100, copper: 60, iron: 60, gold: 20, ..Default::default() },
+                    time_secs: 20.0, scale_multiplier: 1.15,
+                    bonus: LevelBonus::RangeAndDamage { range_boost: 5.0, damage_boost: 8.0 },
+                },
+            ],
         }),
         mob_ai: None,
         visual: VisualDef {
@@ -714,7 +807,10 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(EntityKind::Storage, Blueprint {
         kind: EntityKind::Storage,
         faction: Faction::Player,
-        combat: None,
+        combat: Some(CombatStats {
+            hp: 200.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
+            aggro_range: None, is_ranged: false, projectile_speed: None,
+        }),
         movement: None, gathering: None,
         vision: Some(VisionStats { range: 10.0 }),
         cost: ResourceCost { wood: 60, copper: 10, ..Default::default() },
@@ -723,6 +819,18 @@ pub fn build_registry() -> BlueprintRegistry {
             construction_time_secs: 8.0, half_height: 0.75,
             trains: vec![],
             prerequisite: Some(EntityKind::Base),
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 80, copper: 20, ..Default::default() },
+                    time_secs: 10.0, scale_multiplier: 1.08,
+                    bonus: LevelBonus::GatherAura { speed_bonus: 0.15, range: 20.0 },
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 140, copper: 40, iron: 20, ..Default::default() },
+                    time_secs: 18.0, scale_multiplier: 1.12,
+                    bonus: LevelBonus::GatherAura { speed_bonus: 0.30, range: 30.0 },
+                },
+            ],
         }),
         mob_ai: None,
         visual: VisualDef {
@@ -738,7 +846,10 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(EntityKind::MageTower, Blueprint {
         kind: EntityKind::MageTower,
         faction: Faction::Player,
-        combat: None,
+        combat: Some(CombatStats {
+            hp: 300.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
+            aggro_range: None, is_ranged: false, projectile_speed: None,
+        }),
         movement: None, gathering: None,
         vision: Some(VisionStats { range: 22.0 }),
         cost: ResourceCost { wood: 60, iron: 30, gold: 40, ..Default::default() },
@@ -747,6 +858,18 @@ pub fn build_registry() -> BlueprintRegistry {
             construction_time_secs: 20.0, half_height: 2.5,
             trains: vec![EntityKind::Mage, EntityKind::Priest],
             prerequisite: Some(EntityKind::Base),
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 80, iron: 40, gold: 60, ..Default::default() },
+                    time_secs: 20.0, scale_multiplier: 1.08,
+                    bonus: LevelBonus::TrainTimeMultiplier(0.85),
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 120, iron: 60, gold: 100, ..Default::default() },
+                    time_secs: 30.0, scale_multiplier: 1.12,
+                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.15, dmg_mult: 1.2 },
+                },
+            ],
         }),
         mob_ai: None,
         visual: VisualDef {
@@ -762,7 +885,10 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(EntityKind::Temple, Blueprint {
         kind: EntityKind::Temple,
         faction: Faction::Player,
-        combat: None,
+        combat: Some(CombatStats {
+            hp: 250.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
+            aggro_range: None, is_ranged: false, projectile_speed: None,
+        }),
         movement: None, gathering: None,
         vision: Some(VisionStats { range: 18.0 }),
         cost: ResourceCost { wood: 80, copper: 20, gold: 50, ..Default::default() },
@@ -771,6 +897,18 @@ pub fn build_registry() -> BlueprintRegistry {
             construction_time_secs: 22.0, half_height: 2.0,
             trains: vec![EntityKind::Priest],
             prerequisite: Some(EntityKind::Base),
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 100, copper: 30, gold: 60, ..Default::default() },
+                    time_secs: 18.0, scale_multiplier: 1.08,
+                    bonus: LevelBonus::HealAura { heal_per_sec: 2.0, range: 15.0 },
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 160, copper: 50, gold: 100, ..Default::default() },
+                    time_secs: 28.0, scale_multiplier: 1.12,
+                    bonus: LevelBonus::HealAura { heal_per_sec: 5.0, range: 20.0 },
+                },
+            ],
         }),
         mob_ai: None,
         visual: VisualDef {
@@ -786,7 +924,10 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(EntityKind::Stable, Blueprint {
         kind: EntityKind::Stable,
         faction: Faction::Player,
-        combat: None,
+        combat: Some(CombatStats {
+            hp: 300.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
+            aggro_range: None, is_ranged: false, projectile_speed: None,
+        }),
         movement: None, gathering: None,
         vision: Some(VisionStats { range: 12.0 }),
         cost: ResourceCost { wood: 70, copper: 30, iron: 20, ..Default::default() },
@@ -795,6 +936,18 @@ pub fn build_registry() -> BlueprintRegistry {
             construction_time_secs: 14.0, half_height: 1.25,
             trains: vec![EntityKind::Cavalry, EntityKind::Knight],
             prerequisite: Some(EntityKind::Base),
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 100, copper: 40, iron: 30, ..Default::default() },
+                    time_secs: 16.0, scale_multiplier: 1.08,
+                    bonus: LevelBonus::TrainTimeMultiplier(0.85),
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 160, copper: 60, iron: 50, gold: 20, ..Default::default() },
+                    time_secs: 25.0, scale_multiplier: 1.12,
+                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.15, dmg_mult: 1.15 },
+                },
+            ],
         }),
         mob_ai: None,
         visual: VisualDef {
@@ -810,7 +963,10 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(EntityKind::SiegeWorks, Blueprint {
         kind: EntityKind::SiegeWorks,
         faction: Faction::Player,
-        combat: None,
+        combat: Some(CombatStats {
+            hp: 350.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
+            aggro_range: None, is_ranged: false, projectile_speed: None,
+        }),
         movement: None, gathering: None,
         vision: Some(VisionStats { range: 12.0 }),
         cost: ResourceCost { wood: 80, iron: 60, gold: 20, ..Default::default() },
@@ -819,6 +975,18 @@ pub fn build_registry() -> BlueprintRegistry {
             construction_time_secs: 20.0, half_height: 1.5,
             trains: vec![EntityKind::Catapult, EntityKind::BatteringRam],
             prerequisite: Some(EntityKind::Base),
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 120, iron: 80, gold: 30, ..Default::default() },
+                    time_secs: 20.0, scale_multiplier: 1.08,
+                    bonus: LevelBonus::TrainTimeMultiplier(0.8),
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 200, iron: 120, gold: 60, ..Default::default() },
+                    time_secs: 30.0, scale_multiplier: 1.12,
+                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.25, dmg_mult: 1.0 },
+                },
+            ],
         }),
         mob_ai: None,
         visual: VisualDef {
@@ -1008,9 +1176,12 @@ pub fn spawn_from_blueprint(
     let building_y = bp.building.as_ref().map(|b| b.half_height).unwrap_or(0.0);
     let y = terrain_height(pos.x, pos.z) + y_off + building_y;
 
+    let pick_radius = bp.visual.mesh_kind.pick_radius() * bp.visual.scale;
+
     let mut entity_cmds = commands.spawn((
         kind,
         bp.faction,
+        PickRadius(pick_radius),
         Mesh3d(mesh_handle),
         MeshMaterial3d(mat_handle),
         Transform::from_translation(Vec3::new(pos.x, y, pos.z))
@@ -1026,7 +1197,7 @@ pub fn spawn_from_blueprint(
             entity_cmds.insert(Mob);
         }
         EntityCategory::Building => {
-            entity_cmds.insert(Building);
+            entity_cmds.insert((Building, BuildingLevel(1)));
             if let Some(ref bd) = bp.building {
                 entity_cmds.insert((
                     BuildingState::UnderConstruction,
@@ -1034,6 +1205,9 @@ pub fn spawn_from_blueprint(
                         timer: Timer::from_seconds(bd.construction_time_secs, TimerMode::Once),
                     },
                 ));
+            }
+            if kind == EntityKind::Tower {
+                entity_cmds.insert(TowerAutoAttackEnabled(true));
             }
         }
     }
@@ -1121,9 +1295,22 @@ pub fn build_visual_cache(
             ..default()
         });
 
+        let hovered_emissive = LinearRgba::new(
+            bp.visual.selected_emissive.red * 0.35,
+            bp.visual.selected_emissive.green * 0.35,
+            bp.visual.selected_emissive.blue * 0.35,
+            bp.visual.selected_emissive.alpha,
+        );
+        let mat_hovered = materials.add(StandardMaterial {
+            base_color: bp.visual.color,
+            emissive: hovered_emissive,
+            ..default()
+        });
+
         cache.meshes.insert(*kind, mesh);
         cache.materials_default.insert(*kind, mat_default);
         cache.materials_selected.insert(*kind, mat_selected);
+        cache.materials_hovered.insert(*kind, mat_hovered);
     }
 
     cache

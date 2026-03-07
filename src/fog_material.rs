@@ -44,7 +44,7 @@ impl Default for FogSettings {
             noise_scale: 8.0,
             edge_glow_width: 0.08,
             edge_glow_intensity: 0.6,
-            fog_color: Vec4::new(0.01, 0.01, 0.02, 0.55),
+            fog_color: Vec4::new(0.01, 0.01, 0.02, 0.95),
             glow_color: Vec4::new(0.3, 0.5, 0.8, 1.0),
             explored_tint: Vec4::new(0.0, 0.0, 0.0, 0.15),
         }

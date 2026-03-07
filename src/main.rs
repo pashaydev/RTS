@@ -6,6 +6,7 @@ mod components;
 mod debug;
 mod fog;
 mod fog_material;
+mod hover_material;
 mod ground;
 mod lighting;
 mod minimap;

@@ -2,35 +2,54 @@ use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind};
+use crate::buildings;
 use crate::components::*;
 
 pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_hud).add_systems(
-            Update,
-            (
-                update_resource_texts,
-                rebuild_selection_panel,
-                update_hp_bars,
-                handle_unit_card_click,
-                clear_stale_inspected,
-                update_action_bar,
-                handle_build_buttons,
-                handle_train_buttons,
-                button_hover_visual,
-                card_deal_in_system,
-                card_hover_system,
-                card_play_out_system,
-                card_placement_mode_system,
-                card_spring_back_system,
-                card_anim_lerp_system,
-                update_card_states,
-                card_tooltip_system,
-                card_glow_system,
-            ),
-        );
+        app.init_resource::<RallyPointMode>()
+            .add_systems(Startup, spawn_hud)
+            .add_systems(
+                Update,
+                (
+                    update_resource_texts,
+                    rebuild_selection_panel,
+                    update_hp_bars,
+                    handle_unit_card_click,
+                    clear_stale_inspected,
+                    update_action_bar,
+                    handle_build_buttons,
+                    handle_train_buttons,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    handle_upgrade_button,
+                    handle_demolish_button,
+                    handle_demolish_confirm,
+                    handle_rally_point_button,
+                    update_training_queue_display,
+                    update_construction_progress_display,
+                    button_hover_visual,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    card_deal_in_system,
+                    card_hover_system,
+                    card_play_out_system,
+                    card_placement_mode_system,
+                    card_spring_back_system,
+                    card_anim_lerp_system,
+                    update_card_states,
+                    card_tooltip_system,
+                    card_glow_system,
+                ),
+            );
     }
 }
 
@@ -675,20 +694,27 @@ fn update_action_bar(
     mut commands: Commands,
     selected_units: Query<&EntityKind, (With<Unit>, With<Selected>)>,
     selected_buildings: Query<
-        (&EntityKind, &BuildingState),
+        (Entity, &EntityKind, &BuildingState, &BuildingLevel, Option<&UpgradeProgress>, Option<&ConstructionProgress>, Option<&TrainingQueue>),
         (With<Building>, With<Selected>),
     >,
     completed: Res<CompletedBuildings>,
     registry: Res<BlueprintRegistry>,
+    player_res: Res<PlayerResources>,
     action_bar: Query<Entity, With<ActionBarInner>>,
     children_q: Query<&Children>,
     added_selected: Query<Entity, Added<Selected>>,
     mut removed_selected: RemovedComponents<Selected>,
-    changed_buildings: Query<Entity, Changed<BuildingState>>,
+    changed_buildings: Query<Entity, Or<(Changed<BuildingState>, Changed<BuildingLevel>, Changed<UpgradeProgress>)>>,
     icons: Res<IconAssets>,
     placement: Res<BuildingPlacementState>,
     existing_cards: Query<Entity, With<BuildCard>>,
+    existing_confirm: Query<Entity, With<DemolishConfirmPanel>>,
 ) {
+    // Don't rebuild while a demolish confirm panel is open
+    if !existing_confirm.is_empty() {
+        return;
+    }
+
     let has_new = !added_selected.is_empty();
     let has_removed = removed_selected.read().count() > 0;
     let has_building_change = !changed_buildings.is_empty();
@@ -706,7 +732,7 @@ fn update_action_bar(
         return;
     };
 
-    let has_selected_building = selected_buildings.single().is_ok();
+    let has_selected_building = selected_buildings.iter().next().is_some();
     let has_selected_units = selected_units.iter().count() > 0;
     let need_cards = !has_selected_building && !has_selected_units;
 
@@ -720,34 +746,15 @@ fn update_action_bar(
         }
     }
 
-    if let Ok((kind, state)) = selected_buildings.single() {
+    if let Ok((_entity, kind, state, level, upgrade_progress, construction, training_queue)) = selected_buildings.single() {
         if *state == BuildingState::Complete {
-            let bp = registry.get(*kind);
-            if let Some(ref bd) = bp.building {
-                if !bd.trains.is_empty() {
-                    for unit_kind in &bd.trains {
-                        spawn_train_button(&mut commands, bar_entity, *unit_kind, &icons, &registry);
-                    }
-                } else {
-                    let child = commands
-                        .spawn((
-                            Text::new(kind.display_name().to_string()),
-                            TextFont { font_size: 16.0, ..default() },
-                            TextColor(Color::WHITE),
-                        ))
-                        .id();
-                    commands.entity(bar_entity).add_child(child);
-                }
-            }
+            spawn_building_action_bar(
+                &mut commands, bar_entity, *kind, level.0, upgrade_progress.is_some(),
+                training_queue, &icons, &registry, &player_res,
+            );
         } else {
-            let child = commands
-                .spawn((
-                    Text::new("Under Construction..."),
-                    TextFont { font_size: 16.0, ..default() },
-                    TextColor(Color::srgb(0.8, 0.7, 0.3)),
-                ))
-                .id();
-            commands.entity(bar_entity).add_child(child);
+            // Under construction — show progress + name + demolish (cancel)
+            spawn_construction_action_bar(&mut commands, bar_entity, *kind, construction, &registry);
         }
     } else if selected_units.iter().count() > 0 {
         let child = commands
@@ -761,6 +768,428 @@ fn update_action_bar(
     } else {
         spawn_card_hand(&mut commands, bar_entity, &completed, &icons, &registry);
     }
+}
+
+// ── Building action bar (complete building) ──
+
+fn spawn_building_action_bar(
+    commands: &mut Commands,
+    parent: Entity,
+    kind: EntityKind,
+    level: u8,
+    is_upgrading: bool,
+    training_queue: Option<&TrainingQueue>,
+    icons: &IconAssets,
+    registry: &BlueprintRegistry,
+    player_res: &PlayerResources,
+) {
+    let bp = registry.get(kind);
+
+    // Main container
+    let container = commands
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(6.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+            ..default()
+        })
+        .insert(BackgroundColor(Color::srgba(0.08, 0.08, 0.12, 0.9)))
+        .id();
+    commands.entity(parent).add_child(container);
+
+    // Building name + level
+    let level_str = format!("{} (Lv {})", kind.display_name(), level);
+    let name_child = commands
+        .spawn((
+            Text::new(level_str),
+            TextFont { font_size: 16.0, ..default() },
+            TextColor(Color::srgb(0.9, 0.85, 0.7)),
+        ))
+        .id();
+    commands.entity(container).add_child(name_child);
+
+    // Top row: train buttons (left) + action buttons (right)
+    let top_row = commands
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::FlexEnd,
+            column_gap: Val::Px(8.0),
+            ..default()
+        })
+        .id();
+    commands.entity(container).add_child(top_row);
+
+    // Train buttons
+    if let Some(ref bd) = bp.building {
+        if !bd.trains.is_empty() {
+            let train_section = commands
+                .spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::FlexEnd,
+                    column_gap: Val::Px(4.0),
+                    ..default()
+                })
+                .id();
+            commands.entity(top_row).add_child(train_section);
+
+            for unit_kind in &bd.trains {
+                spawn_train_button(commands, train_section, *unit_kind, icons, registry);
+            }
+        }
+    }
+
+    // Separator
+    let sep = commands
+        .spawn((
+            Node {
+                width: Val::Px(1.0),
+                height: Val::Px(50.0),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.4, 0.4, 0.5, 0.5)),
+        ))
+        .id();
+    commands.entity(top_row).add_child(sep);
+
+    // Action buttons column (upgrade, demolish, rally)
+    let actions = commands
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(4.0),
+            ..default()
+        })
+        .id();
+    commands.entity(top_row).add_child(actions);
+
+    // Upgrade button
+    if let Some(ref bd) = bp.building {
+        if level < 3 && !bd.level_upgrades.is_empty() {
+            let upgrade_index = (level - 1) as usize;
+            if upgrade_index < bd.level_upgrades.len() {
+                let upgrade_data = &bd.level_upgrades[upgrade_index];
+                let can_afford = upgrade_data.cost.can_afford(player_res);
+
+                if is_upgrading {
+                    // Show upgrading in progress
+                    let btn = commands
+                        .spawn((
+                            Button,
+                            UpgradeButton,
+                            Node {
+                                padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.3, 0.3, 0.15, 0.9)),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new("Upgrading..."),
+                                TextFont { font_size: 12.0, ..default() },
+                                TextColor(Color::srgb(0.9, 0.8, 0.3)),
+                            ));
+                        })
+                        .id();
+                    commands.entity(actions).add_child(btn);
+                } else {
+                    let cost_str = format_cost(&upgrade_data.cost);
+                    let text_color = if can_afford {
+                        Color::WHITE
+                    } else {
+                        Color::srgb(0.8, 0.3, 0.3)
+                    };
+                    let bg_color = if can_afford {
+                        Color::srgba(0.15, 0.3, 0.15, 0.9)
+                    } else {
+                        Color::srgba(0.2, 0.2, 0.2, 0.7)
+                    };
+
+                    let btn = commands
+                        .spawn((
+                            Button,
+                            UpgradeButton,
+                            Node {
+                                flex_direction: FlexDirection::Column,
+                                align_items: AlignItems::Center,
+                                padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(bg_color),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new(format!("Upgrade L{}", level + 1)),
+                                TextFont { font_size: 12.0, ..default() },
+                                TextColor(text_color),
+                            ));
+                            btn.spawn((
+                                Text::new(cost_str),
+                                TextFont { font_size: 9.0, ..default() },
+                                TextColor(Color::srgb(0.6, 0.6, 0.5)),
+                            ));
+                        })
+                        .id();
+                    commands.entity(actions).add_child(btn);
+                }
+            }
+        } else if level >= 3 {
+            let btn = commands
+                .spawn((
+                    Node {
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.15, 0.15, 0.15, 0.7)),
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        Text::new("MAX"),
+                        TextFont { font_size: 12.0, ..default() },
+                        TextColor(Color::srgba(0.5, 0.5, 0.5, 0.7)),
+                    ));
+                })
+                .id();
+            commands.entity(actions).add_child(btn);
+        }
+    }
+
+    // Demolish button
+    let demolish_btn = commands
+        .spawn((
+            Button,
+            DemolishButton,
+            Node {
+                padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.4, 0.15, 0.1, 0.9)),
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new("Demolish"),
+                TextFont { font_size: 12.0, ..default() },
+                TextColor(Color::srgb(0.9, 0.6, 0.5)),
+            ));
+        })
+        .id();
+    commands.entity(actions).add_child(demolish_btn);
+
+    // Rally point button (only for buildings that train units)
+    if let Some(ref bd) = bp.building {
+        if !bd.trains.is_empty() {
+            let rally_btn = commands
+                .spawn((
+                    Button,
+                    RallyPointButton,
+                    Node {
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.15, 0.25, 0.35, 0.9)),
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        Text::new("Set Rally"),
+                        TextFont { font_size: 12.0, ..default() },
+                        TextColor(Color::srgb(0.6, 0.8, 0.9)),
+                    ));
+                })
+                .id();
+            commands.entity(actions).add_child(rally_btn);
+        }
+    }
+
+    // Bottom row: training queue display
+    if let Some(queue) = training_queue {
+        if !queue.queue.is_empty() || queue.timer.is_some() {
+            spawn_training_queue_ui(commands, container, queue, icons, registry);
+        }
+    }
+}
+
+fn spawn_training_queue_ui(
+    commands: &mut Commands,
+    parent: Entity,
+    queue: &TrainingQueue,
+    icons: &IconAssets,
+    _registry: &BlueprintRegistry,
+) {
+    let queue_row = commands
+        .spawn((
+            TrainingQueueDisplay,
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(4.0),
+                padding: UiRect::all(Val::Px(4.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.1, 0.1, 0.15, 0.8)),
+        ))
+        .id();
+    commands.entity(parent).add_child(queue_row);
+
+    for (i, unit_kind) in queue.queue.iter().enumerate() {
+        let is_first = i == 0;
+        let icon_size = if is_first { 28.0 } else { 22.0 };
+
+        let item = commands
+            .spawn(Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                ..default()
+            })
+            .with_children(|item| {
+                item.spawn((
+                    ImageNode::new(icons.entity_icon(*unit_kind)),
+                    Node {
+                        width: Val::Px(icon_size),
+                        height: Val::Px(icon_size),
+                        ..default()
+                    },
+                ));
+
+                // Progress bar for first item
+                if is_first {
+                    // Progress bar background
+                    item.spawn(Node {
+                        width: Val::Px(28.0),
+                        height: Val::Px(4.0),
+                        border_radius: BorderRadius::all(Val::Px(2.0)),
+                        ..default()
+                    })
+                    .insert(BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.9)))
+                    .with_children(|bg| {
+                        let fraction = queue.timer.as_ref().map_or(0.0, |t| t.fraction());
+                        bg.spawn((
+                            TrainingProgressBar,
+                            Node {
+                                width: Val::Percent(fraction * 100.0),
+                                height: Val::Percent(100.0),
+                                border_radius: BorderRadius::all(Val::Px(2.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.2, 0.6, 0.9)),
+                        ));
+                    });
+                }
+            })
+            .id();
+        commands.entity(queue_row).add_child(item);
+    }
+}
+
+// ── Under-construction action bar ──
+
+fn spawn_construction_action_bar(
+    commands: &mut Commands,
+    parent: Entity,
+    kind: EntityKind,
+    construction: Option<&ConstructionProgress>,
+    _registry: &BlueprintRegistry,
+) {
+    let container = commands
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(6.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+            ..default()
+        })
+        .insert(BackgroundColor(Color::srgba(0.08, 0.08, 0.12, 0.9)))
+        .id();
+    commands.entity(parent).add_child(container);
+
+    // Building name
+    let name = commands
+        .spawn((
+            Text::new(format!("Building {}", kind.display_name())),
+            TextFont { font_size: 16.0, ..default() },
+            TextColor(Color::srgb(0.8, 0.7, 0.3)),
+        ))
+        .id();
+    commands.entity(container).add_child(name);
+
+    // Progress bar
+    if let Some(cp) = construction {
+        let fraction = cp.timer.fraction();
+        let pct_text = format!("{}%", (fraction * 100.0) as u32);
+
+        let bar_bg = commands
+            .spawn((
+                Node {
+                    width: Val::Px(200.0),
+                    height: Val::Px(8.0),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.9)),
+            ))
+            .with_children(|bg| {
+                bg.spawn((
+                    ConstructionProgressBar,
+                    Node {
+                        width: Val::Percent(fraction * 100.0),
+                        height: Val::Percent(100.0),
+                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.8, 0.65, 0.2)),
+                ));
+            })
+            .id();
+        commands.entity(container).add_child(bar_bg);
+
+        let pct = commands
+            .spawn((
+                Text::new(pct_text),
+                TextFont { font_size: 12.0, ..default() },
+                TextColor(Color::srgb(0.7, 0.7, 0.6)),
+            ))
+            .id();
+        commands.entity(container).add_child(pct);
+    }
+
+    // Cancel/demolish button (refunds 100% during construction)
+    let cancel_btn = commands
+        .spawn((
+            Button,
+            DemolishButton,
+            Node {
+                padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.4, 0.15, 0.1, 0.9)),
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new("Cancel"),
+                TextFont { font_size: 12.0, ..default() },
+                TextColor(Color::srgb(0.9, 0.6, 0.5)),
+            ));
+        })
+        .id();
+    commands.entity(container).add_child(cancel_btn);
+}
+
+fn format_cost(cost: &crate::blueprints::ResourceCost) -> String {
+    let mut parts = Vec::new();
+    if cost.wood > 0 { parts.push(format!("W:{}", cost.wood)); }
+    if cost.copper > 0 { parts.push(format!("C:{}", cost.copper)); }
+    if cost.iron > 0 { parts.push(format!("I:{}", cost.iron)); }
+    if cost.gold > 0 { parts.push(format!("G:{}", cost.gold)); }
+    if cost.oil > 0 { parts.push(format!("O:{}", cost.oil)); }
+    parts.join(" ")
 }
 
 // ── Card hand spawning ──
@@ -1030,9 +1459,11 @@ fn handle_build_buttons(
     completed: Res<CompletedBuildings>,
     player_res: Res<PlayerResources>,
     registry: Res<BlueprintRegistry>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
 ) {
     for (entity, interaction, build_btn, card) in &interactions {
         if *interaction == Interaction::Pressed {
+            ui_clicked.0 = true;
             let kind = build_btn.0;
             let bp = registry.get(kind);
 
@@ -1070,11 +1501,13 @@ fn handle_train_buttons(
     selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
     mut queues: Query<&mut TrainingQueue>,
     registry: Res<BlueprintRegistry>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
 ) {
     for (interaction, train_btn) in &interactions {
         if *interaction != Interaction::Pressed {
             continue;
         }
+        ui_clicked.0 = true;
 
         let kind = train_btn.0;
         let bp = registry.get(kind);
@@ -1089,6 +1522,281 @@ fn handle_train_buttons(
                 break;
             }
         }
+    }
+}
+
+// ── Upgrade button handler ──
+
+fn handle_upgrade_button(
+    mut commands: Commands,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<UpgradeButton>)>,
+    mut player_res: ResMut<PlayerResources>,
+    selected_buildings: Query<
+        (Entity, &EntityKind, &BuildingLevel, &BuildingState),
+        (With<Building>, With<Selected>, Without<UpgradeProgress>),
+    >,
+    registry: Res<BlueprintRegistry>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = true;
+
+        if let Ok((entity, kind, level, state)) = selected_buildings.single() {
+            if *state != BuildingState::Complete {
+                continue;
+            }
+            buildings::start_upgrade(
+                &mut commands,
+                entity,
+                level.0,
+                *kind,
+                &registry,
+                &mut player_res,
+            );
+        }
+    }
+}
+
+// ── Demolish button handler ──
+
+fn handle_demolish_button(
+    mut commands: Commands,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<DemolishButton>)>,
+    action_bar: Query<Entity, With<ActionBarInner>>,
+    selected_buildings: Query<
+        (Entity, &EntityKind, &BuildingState, &Transform),
+        (With<Building>, With<Selected>),
+    >,
+    registry: Res<BlueprintRegistry>,
+    existing_confirm: Query<Entity, With<DemolishConfirmPanel>>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = true;
+
+        // Don't show another confirm if one already exists
+        if !existing_confirm.is_empty() {
+            continue;
+        }
+
+        let Ok(bar_entity) = action_bar.single() else {
+            continue;
+        };
+
+        if let Ok((_entity, kind, state, _transform)) = selected_buildings.single() {
+            let bp = registry.get(*kind);
+            let refund_pct = if *state == BuildingState::Complete { 50 } else { 100 };
+            let refund_str = format!(
+                "Refunds ~{}% (W:{} C:{})",
+                refund_pct,
+                bp.cost.wood * refund_pct as u32 / 100,
+                bp.cost.copper * refund_pct as u32 / 100,
+            );
+
+            // Spawn confirm panel
+            let panel = commands
+                .spawn((
+                    DemolishConfirmPanel,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        bottom: Val::Percent(100.0),
+                        left: Val::Px(0.0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        row_gap: Val::Px(4.0),
+                        padding: UiRect::all(Val::Px(8.0)),
+                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.15, 0.05, 0.05, 0.95)),
+                ))
+                .with_children(|panel| {
+                    panel.spawn((
+                        Text::new("Demolish?"),
+                        TextFont { font_size: 14.0, ..default() },
+                        TextColor(Color::srgb(0.9, 0.5, 0.4)),
+                    ));
+                    panel.spawn((
+                        Text::new(refund_str),
+                        TextFont { font_size: 10.0, ..default() },
+                        TextColor(Color::srgb(0.7, 0.7, 0.6)),
+                    ));
+                    // Buttons row
+                    panel.spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        column_gap: Val::Px(6.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn((
+                            Button,
+                            ConfirmDemolishButton,
+                            Node {
+                                padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.5, 0.15, 0.1, 0.9)),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new("Yes"),
+                                TextFont { font_size: 12.0, ..default() },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+
+                        row.spawn((
+                            Button,
+                            CancelDemolishButton,
+                            Node {
+                                padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.25, 0.25, 0.3, 0.9)),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new("No"),
+                                TextFont { font_size: 12.0, ..default() },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    });
+                })
+                .id();
+            commands.entity(bar_entity).add_child(panel);
+        }
+    }
+}
+
+fn handle_demolish_confirm(
+    mut commands: Commands,
+    confirm_interactions: Query<&Interaction, (Changed<Interaction>, With<ConfirmDemolishButton>)>,
+    cancel_interactions: Query<&Interaction, (Changed<Interaction>, With<CancelDemolishButton>)>,
+    selected_buildings: Query<
+        (Entity, &Transform, &BuildingState),
+        (With<Building>, With<Selected>),
+    >,
+    mut player_res: ResMut<PlayerResources>,
+    registry: Res<BlueprintRegistry>,
+    building_kinds: Query<&EntityKind, With<Building>>,
+    confirm_panels: Query<Entity, With<DemolishConfirmPanel>>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+) {
+    // Handle confirm
+    for interaction in &confirm_interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = true;
+
+        if let Ok((entity, transform, state)) = selected_buildings.single() {
+            if *state == BuildingState::UnderConstruction {
+                // Cancel construction — refund 100%
+                if let Ok(kind) = building_kinds.get(entity) {
+                    let bp = registry.get(*kind);
+                    player_res.wood += bp.cost.wood;
+                    player_res.copper += bp.cost.copper;
+                    player_res.iron += bp.cost.iron;
+                    player_res.gold += bp.cost.gold;
+                    player_res.oil += bp.cost.oil;
+                }
+                commands.entity(entity).despawn();
+            } else {
+                buildings::start_demolish(&mut commands, entity, transform);
+            }
+        }
+
+        // Remove confirm panel
+        for panel in &confirm_panels {
+            commands.entity(panel).despawn();
+        }
+    }
+
+    // Handle cancel
+    for interaction in &cancel_interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = true;
+        for panel in &confirm_panels {
+            commands.entity(panel).despawn();
+        }
+    }
+}
+
+// ── Rally point button handler ──
+
+fn handle_rally_point_button(
+    mut commands: Commands,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<RallyPointButton>)>,
+    mut rally_mode: ResMut<RallyPointMode>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    camera_q: Query<(&Camera, &GlobalTransform)>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+) {
+    // Toggle rally mode on button press
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed {
+            ui_clicked.0 = true;
+            rally_mode.0 = !rally_mode.0;
+        }
+    }
+
+    // Set rally point on ground click while in rally mode
+    if rally_mode.0 && mouse.just_pressed(MouseButton::Left) {
+        // Get ground position from cursor
+        let Ok(window) = windows.single() else { return };
+        let Some(cursor) = window.cursor_position() else { return };
+        let Ok((camera, cam_gt)) = camera_q.single() else { return };
+        let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else { return };
+        let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) else { return };
+        let world_pos = ray.get_point(dist);
+
+        for entity in &selected_buildings {
+            commands.entity(entity).insert(RallyPoint(world_pos));
+        }
+        rally_mode.0 = false;
+    }
+
+    // Cancel on right click
+    if rally_mode.0 && mouse.just_pressed(MouseButton::Right) {
+        rally_mode.0 = false;
+    }
+}
+
+// ── Live training queue progress display ──
+
+fn update_training_queue_display(
+    selected_buildings: Query<&TrainingQueue, (With<Building>, With<Selected>)>,
+    mut progress_bars: Query<&mut Node, With<TrainingProgressBar>>,
+) {
+    let Ok(queue) = selected_buildings.single() else { return };
+    for mut node in &mut progress_bars {
+        let fraction = queue.timer.as_ref().map_or(0.0, |t| t.fraction());
+        node.width = Val::Percent(fraction * 100.0);
+    }
+}
+
+// ── Live construction progress display ──
+
+fn update_construction_progress_display(
+    selected_buildings: Query<&ConstructionProgress, (With<Building>, With<Selected>)>,
+    mut progress_bars: Query<&mut Node, With<ConstructionProgressBar>>,
+) {
+    let Ok(progress) = selected_buildings.single() else { return };
+    for mut node in &mut progress_bars {
+        node.width = Val::Percent(progress.timer.fraction() * 100.0);
     }
 }
 

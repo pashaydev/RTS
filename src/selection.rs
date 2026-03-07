@@ -1,31 +1,218 @@
 use bevy::prelude::*;
-use bevy::picking::mesh_picking::MeshPickingPlugin;
-use bevy::picking::mesh_picking::ray_cast::MeshRayCast;
 use bevy::window::PrimaryWindow;
 
+use crate::blueprints::{EntityKind, EntityVisualCache};
 use crate::components::*;
+use crate::ground::terrain_height;
+use crate::hover_material::{HoverRingMaterial, HoverRingSettings};
 use crate::minimap::{MinimapInteraction, MinimapSet};
+
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SelectionSet;
 
 pub struct SelectionPlugin;
 
 impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(MeshPickingPlugin)
+        app.add_plugins(MaterialPlugin::<HoverRingMaterial>::default())
             .init_resource::<DragState>()
             .init_resource::<InspectedEnemy>()
-            .add_systems(Startup, spawn_selection_box)
+            .init_resource::<UiClickedThisFrame>()
+            .add_systems(Startup, (spawn_selection_box, setup_hover_assets))
+            .add_systems(First, reset_ui_clicked)
             .add_systems(
                 Update,
                 (
                     track_drag,
                     update_selection_box_visual,
-                    handle_click_select,
-                    handle_right_click_move,
                 )
                     .chain()
+                    .in_set(SelectionSet)
                     .after(MinimapSet),
+            )
+            .add_systems(
+                Update,
+                (
+                    update_hover.after(update_selection_box_visual),
+                    handle_click_select.after(update_hover),
+                )
+                    .in_set(SelectionSet)
+                    .after(MinimapSet),
+            )
+            .add_systems(
+                Update,
+                (
+                    update_entity_visuals,
+                    handle_right_click_move,
+                )
+                    .after(SelectionSet),
+            )
+            .add_systems(
+                Update,
+                (update_hover_ring, update_hover_tooltip)
+                    .after(SelectionSet),
             );
     }
+}
+
+// ── Ray-sphere intersection ──
+
+/// Returns the distance along `ray` to the closest intersection with a sphere,
+/// or `None` if the ray misses. Uses a generous test — if the ray origin is
+/// inside the sphere it still counts as a hit (distance 0).
+fn ray_sphere_dist(ray: &Ray3d, center: Vec3, radius: f32) -> Option<f32> {
+    let oc = ray.origin - center;
+    let b = oc.dot(*ray.direction);
+    let c = oc.dot(oc) - radius * radius;
+
+    // Inside the sphere
+    if c < 0.0 {
+        return Some(0.0);
+    }
+
+    let discriminant = b * b - c;
+    if discriminant < 0.0 {
+        return None;
+    }
+
+    let t = -b - discriminant.sqrt();
+    if t < 0.0 {
+        // Sphere is behind the ray but we might be inside — already handled above
+        None
+    } else {
+        Some(t)
+    }
+}
+
+/// Cast a ray against all pickable entities (those with `PickRadius` + `GlobalTransform`)
+/// and one of the marker components. Returns the closest hit entity.
+fn pick_nearest(
+    ray: &Ray3d,
+    pickables: &Query<(Entity, &GlobalTransform, &PickRadius)>,
+    units: &Query<Entity, With<Unit>>,
+    buildings: &Query<Entity, With<Building>>,
+    mobs: &Query<Entity, With<Mob>>,
+    resource_nodes: &Query<Entity, With<ResourceNode>>,
+) -> Option<Entity> {
+    let mut best: Option<(Entity, f32)> = None;
+
+    for (entity, gt, pick_r) in pickables {
+        // Only pick entities that are units, buildings, mobs, or resource nodes
+        if !units.contains(entity)
+            && !buildings.contains(entity)
+            && !mobs.contains(entity)
+            && !resource_nodes.contains(entity)
+        {
+            continue;
+        }
+
+        let center = gt.translation();
+        if let Some(dist) = ray_sphere_dist(ray, center, pick_r.0) {
+            if best.is_none() || dist < best.unwrap().1 {
+                best = Some((entity, dist));
+            }
+        }
+    }
+
+    best.map(|(e, _)| e)
+}
+
+/// Categorized pick result for click selection.
+#[allow(dead_code)]
+struct PickResult {
+    entity: Entity,
+    is_unit: bool,
+    is_building: bool,
+    is_mob: bool,
+    is_resource: bool,
+}
+
+/// Pick the best entity for click selection — prioritizes units > buildings > resources > mobs.
+fn pick_for_click(
+    ray: &Ray3d,
+    pickables: &Query<(Entity, &GlobalTransform, &PickRadius)>,
+    units: &Query<Entity, With<Unit>>,
+    buildings: &Query<Entity, With<Building>>,
+    mobs: &Query<Entity, With<Mob>>,
+    resource_nodes: &Query<Entity, With<ResourceNode>>,
+) -> Option<PickResult> {
+    let mut hits: Vec<(Entity, f32, bool, bool, bool, bool)> = Vec::new();
+
+    for (entity, gt, pick_r) in pickables {
+        let is_unit = units.contains(entity);
+        let is_building = buildings.contains(entity);
+        let is_mob = mobs.contains(entity);
+        let is_resource = resource_nodes.contains(entity);
+
+        if !is_unit && !is_building && !is_mob && !is_resource {
+            continue;
+        }
+
+        let center = gt.translation();
+        if let Some(dist) = ray_sphere_dist(ray, center, pick_r.0) {
+            hits.push((entity, dist, is_unit, is_building, is_mob, is_resource));
+        }
+    }
+
+    if hits.is_empty() {
+        return None;
+    }
+
+    // Sort by distance
+    hits.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Among close hits (within 2 units of the closest), prefer units > buildings > resources > mobs
+    let closest_dist = hits[0].1;
+    let threshold = closest_dist + 2.0;
+    let close_hits: Vec<_> = hits.into_iter().filter(|h| h.1 <= threshold).collect();
+
+    // Priority: unit > building > resource > mob
+    if let Some(h) = close_hits.iter().find(|h| h.2) {
+        return Some(PickResult { entity: h.0, is_unit: true, is_building: false, is_mob: false, is_resource: false });
+    }
+    if let Some(h) = close_hits.iter().find(|h| h.3) {
+        return Some(PickResult { entity: h.0, is_unit: false, is_building: true, is_mob: false, is_resource: false });
+    }
+    if let Some(h) = close_hits.iter().find(|h| h.5) {
+        return Some(PickResult { entity: h.0, is_unit: false, is_building: false, is_mob: false, is_resource: true });
+    }
+    if let Some(h) = close_hits.iter().find(|h| h.4) {
+        return Some(PickResult { entity: h.0, is_unit: false, is_building: false, is_mob: true, is_resource: false });
+    }
+
+    None
+}
+
+fn reset_ui_clicked(mut ui_clicked: ResMut<UiClickedThisFrame>) {
+    ui_clicked.0 = false;
+}
+
+fn setup_hover_assets(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    // Flat plane that will show the ring shader — sized 3x3 units
+    let ring_mesh = meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(1.5)));
+    commands.insert_resource(HoverRingAssets {
+        mesh: ring_mesh,
+    });
+
+    // Spawn tooltip UI (hidden by default)
+    commands.spawn((
+        HoverTooltip,
+        Node {
+            position_type: PositionType::Absolute,
+            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+            border_radius: BorderRadius::all(Val::Px(4.0)),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.05, 0.05, 0.1, 0.85)),
+        Visibility::Hidden,
+        GlobalTransform::default(),
+        Text::new(""),
+        TextFont { font_size: 13.0, ..default() },
+        TextColor(Color::srgba(0.9, 0.9, 0.85, 1.0)),
+    ));
 }
 
 fn spawn_selection_box(mut commands: Commands) {
@@ -51,9 +238,9 @@ fn track_drag(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut drag: ResMut<DragState>,
     minimap_interaction: Res<MinimapInteraction>,
+    ui_clicked: Res<UiClickedThisFrame>,
 ) {
-    // Don't start drags when clicking the minimap
-    if minimap_interaction.clicked {
+    if minimap_interaction.clicked || ui_clicked.0 {
         return;
     }
 
@@ -113,34 +300,84 @@ fn update_selection_box_visual(
     }
 }
 
-fn handle_click_select(
+/// Raycast from cursor using ray-sphere intersection against all pickable entities.
+fn update_hover(
     mut commands: Commands,
-    mouse: Res<ButtonInput<MouseButton>>,
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut drag: ResMut<DragState>,
-    mut inspected: ResMut<InspectedEnemy>,
-    placement: Res<BuildingPlacementState>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut ray_cast: MeshRayCast,
+    pickables: Query<(Entity, &GlobalTransform, &PickRadius)>,
     units: Query<Entity, With<Unit>>,
     buildings: Query<Entity, With<Building>>,
     mobs: Query<Entity, With<Mob>>,
-    selected: Query<Entity, With<Selected>>,
-    unit_transforms: Query<&GlobalTransform, With<Unit>>,
-    minimap_interaction: Res<MinimapInteraction>,
+    resource_nodes: Query<Entity, With<ResourceNode>>,
+    hovered: Query<Entity, With<Hovered>>,
+    placement: Res<BuildingPlacementState>,
+    ui_interactions: Query<&Interaction, With<Button>>,
 ) {
-    if !mouse.just_released(MouseButton::Left) {
-        return;
+    // Remove previous hover
+    for entity in &hovered {
+        commands.entity(entity).remove::<Hovered>();
     }
 
-    // Don't select while placing a building
     if placement.mode != PlacementMode::None {
         return;
     }
 
-    // Don't select when clicking minimap
-    if minimap_interaction.clicked {
+    for interaction in &ui_interactions {
+        if *interaction == Interaction::Hovered || *interaction == Interaction::Pressed {
+            return;
+        }
+    }
+
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let Ok((camera, cam_gt)) = camera_q.single() else {
+        return;
+    };
+    let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
+        return;
+    };
+
+    if let Some(entity) = pick_nearest(&ray, &pickables, &units, &buildings, &mobs, &resource_nodes) {
+        commands.entity(entity).insert(Hovered);
+    }
+}
+
+fn handle_click_select(
+    mut commands: Commands,
+    mouse: Res<ButtonInput<MouseButton>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut state: (ResMut<DragState>, ResMut<InspectedEnemy>),
+    placement: Res<BuildingPlacementState>,
+    camera_q: Query<(&Camera, &GlobalTransform)>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    pickables: Query<(Entity, &GlobalTransform, &PickRadius)>,
+    entity_queries: (
+        Query<Entity, With<Unit>>,
+        Query<Entity, With<Building>>,
+        Query<Entity, With<Mob>>,
+        Query<Entity, With<ResourceNode>>,
+    ),
+    selected: Query<Entity, With<Selected>>,
+    unit_transforms: Query<&GlobalTransform, With<Unit>>,
+    flags: (Res<MinimapInteraction>, Res<UiClickedThisFrame>),
+) {
+    let (ref mut drag, ref mut inspected) = state;
+    let (ref units, ref buildings, ref mobs, ref resource_nodes) = entity_queries;
+    let (ref minimap_interaction, ref ui_clicked) = flags;
+    if !mouse.just_released(MouseButton::Left) {
+        return;
+    }
+
+    if placement.mode != PlacementMode::None {
+        return;
+    }
+
+    if minimap_interaction.clicked || ui_clicked.0 {
         drag.start = None;
         drag.current = None;
         drag.dragging = false;
@@ -151,7 +388,6 @@ fn handle_click_select(
     let drag_start = drag.start;
     let drag_end = drag.current;
 
-    // Reset drag state
     drag.start = None;
     drag.current = None;
     drag.dragging = false;
@@ -166,7 +402,6 @@ fn handle_click_select(
     let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
 
     if was_dragging {
-        // Box select — only friendly units, clear enemy inspect
         if let (Some(start), Some(end)) = (drag_start, drag_end) {
             let min_x = start.x.min(end.x);
             let max_x = start.x.max(end.x);
@@ -181,7 +416,7 @@ fn handle_click_select(
 
             inspected.entity = None;
 
-            for entity in &units {
+            for entity in units.iter() {
                 if let Ok(gt) = unit_transforms.get(entity) {
                     if let Ok(screen_pos) = camera.world_to_viewport(cam_gt, gt.translation()) {
                         if screen_pos.x >= min_x
@@ -196,7 +431,6 @@ fn handle_click_select(
             }
         }
     } else {
-        // Click select
         let Some(cursor) = window.cursor_position() else {
             return;
         };
@@ -204,54 +438,173 @@ fn handle_click_select(
             return;
         };
 
-        let hits = ray_cast.cast_ray(ray, &default());
+        let pick = pick_for_click(&ray, &pickables, &units, &buildings, &mobs, &resource_nodes);
 
-        let mut hit_unit = None;
-        let mut hit_building = None;
-        let mut hit_mob = None;
-        for (entity, _) in hits {
-            if units.contains(*entity) {
-                hit_unit = Some(*entity);
-                break;
-            }
-            if buildings.contains(*entity) {
-                hit_building = Some(*entity);
-                break;
-            }
-            if mobs.contains(*entity) {
-                hit_mob = Some(*entity);
-                break;
-            }
-        }
+        if let Some(result) = pick {
+            if result.is_mob {
+                inspected.entity = Some(result.entity);
+            } else {
+                inspected.entity = None;
 
-        if let Some(mob_entity) = hit_mob {
-            // Clicking an enemy: set inspected, do NOT deselect friendly units
-            inspected.entity = Some(mob_entity);
+                if !shift {
+                    for entity in &selected {
+                        commands.entity(entity).remove::<Selected>();
+                    }
+                }
+
+                if shift && selected.contains(result.entity) {
+                    commands.entity(result.entity).remove::<Selected>();
+                } else {
+                    commands.entity(result.entity).insert(Selected);
+                }
+            }
         } else {
-            // Clicking friendly or ground: clear enemy inspect
             inspected.entity = None;
-
             if !shift {
                 for entity in &selected {
                     commands.entity(entity).remove::<Selected>();
                 }
             }
+        }
+    }
+}
 
-            if let Some(entity) = hit_unit {
-                if shift && selected.contains(entity) {
-                    commands.entity(entity).remove::<Selected>();
-                } else {
-                    commands.entity(entity).insert(Selected);
+fn update_entity_visuals(
+    mut commands: Commands,
+    cache: Res<EntityVisualCache>,
+    added_selected: Query<(Entity, &EntityKind), Added<Selected>>,
+    mut removed_selected: RemovedComponents<Selected>,
+    added_hovered: Query<(Entity, &EntityKind), Added<Hovered>>,
+    mut removed_hovered: RemovedComponents<Hovered>,
+    all_entities: Query<(Entity, &EntityKind, Has<Selected>, Has<Hovered>)>,
+) {
+    for (entity, kind) in &added_selected {
+        if let Some(mat) = cache.materials_selected.get(kind) {
+            commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+        }
+    }
+
+    for entity in removed_selected.read() {
+        if let Ok((_, kind, _, has_hovered)) = all_entities.get(entity) {
+            if has_hovered {
+                if let Some(mat) = cache.materials_hovered.get(kind) {
+                    commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                 }
-            } else if let Some(entity) = hit_building {
-                if shift && selected.contains(entity) {
-                    commands.entity(entity).remove::<Selected>();
-                } else {
-                    commands.entity(entity).insert(Selected);
+            } else if let Some(mat) = cache.materials_default.get(kind) {
+                commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+            }
+        }
+    }
+
+    for (entity, kind) in &added_hovered {
+        if let Ok((_, _, has_selected, _)) = all_entities.get(entity) {
+            if !has_selected {
+                if let Some(mat) = cache.materials_hovered.get(kind) {
+                    commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                 }
             }
         }
     }
+
+    for entity in removed_hovered.read() {
+        if let Ok((_, kind, has_selected, _)) = all_entities.get(entity) {
+            if !has_selected {
+                if let Some(mat) = cache.materials_default.get(kind) {
+                    commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                }
+            }
+        }
+    }
+}
+
+/// Spawn/despawn a hover ring decal on the ground under the hovered entity.
+fn update_hover_ring(
+    mut commands: Commands,
+    hovered: Query<(Entity, &Transform), With<Hovered>>,
+    existing_rings: Query<(Entity, &MeshMaterial3d<HoverRingMaterial>), With<HoverRing>>,
+    ring_assets: Res<HoverRingAssets>,
+    mut hover_materials: ResMut<Assets<HoverRingMaterial>>,
+    time: Res<Time>,
+) {
+    // Despawn old rings
+    for (ring, _) in &existing_rings {
+        commands.entity(ring).despawn();
+    }
+
+    // Spawn ring for current hovered entity
+    for (_entity, transform) in &hovered {
+        let pos = transform.translation;
+        let mat = hover_materials.add(HoverRingMaterial {
+            settings: HoverRingSettings {
+                time: time.elapsed_secs(),
+                ..default()
+            },
+        });
+        commands.spawn((
+            HoverRing,
+            Mesh3d(ring_assets.mesh.clone()),
+            MeshMaterial3d(mat),
+            Transform::from_translation(Vec3::new(pos.x, terrain_height(pos.x, pos.z) + 0.1, pos.z)),
+        ));
+    }
+}
+
+/// Update tooltip position and text based on hovered entity.
+fn update_hover_tooltip(
+    mut tooltip_q: Query<(&mut Node, &mut Visibility, &mut Text), With<HoverTooltip>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    hovered_entities: Query<Entity, With<Hovered>>,
+    entity_kinds: Query<&EntityKind>,
+    resource_nodes: Query<&ResourceNode>,
+    healths: Query<&Health>,
+    building_levels: Query<&BuildingLevel>,
+) {
+    let Ok((mut node, mut vis, mut text)) = tooltip_q.single_mut() else {
+        return;
+    };
+
+    let Ok(window) = windows.single() else {
+        *vis = Visibility::Hidden;
+        return;
+    };
+
+    let Some(cursor) = window.cursor_position() else {
+        *vis = Visibility::Hidden;
+        return;
+    };
+
+    let Ok(entity) = hovered_entities.single() else {
+        *vis = Visibility::Hidden;
+        return;
+    };
+
+    // Build tooltip text
+    let mut label = String::new();
+
+    if let Ok(kind) = entity_kinds.get(entity) {
+        label.push_str(kind.display_name());
+        if let Ok(level) = building_levels.get(entity) {
+            label.push_str(&format!(" (Lv {})", level.0));
+        }
+    } else if let Ok(rn) = resource_nodes.get(entity) {
+        label.push_str(&format!("{} ({})", rn.resource_type.display_name(), rn.amount_remaining));
+    }
+
+    if label.is_empty() {
+        *vis = Visibility::Hidden;
+        return;
+    }
+
+    if let Ok(health) = healths.get(entity) {
+        label.push_str(&format!("\nHP: {}/{}", health.current as u32, health.max as u32));
+    }
+
+    *text = Text::new(label);
+
+    // Position tooltip near cursor with offset
+    node.left = Val::Px(cursor.x + 16.0);
+    node.top = Val::Px(cursor.y - 10.0);
+    *vis = Visibility::Visible;
 }
 
 fn handle_right_click_move(
@@ -259,9 +612,10 @@ fn handle_right_click_move(
     mouse: Res<ButtonInput<MouseButton>>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    selected_units: Query<Entity, (With<Unit>, With<Selected>)>,
-    mut ray_cast: MeshRayCast,
+    selected_units: Query<(Entity, &EntityKind), (With<Unit>, With<Selected>)>,
+    pickables: Query<(Entity, &GlobalTransform, &PickRadius)>,
     mobs: Query<Entity, With<Mob>>,
+    resource_nodes: Query<Entity, With<ResourceNode>>,
     minimap_interaction: Res<MinimapInteraction>,
 ) {
     if !mouse.just_pressed(MouseButton::Right) {
@@ -285,46 +639,71 @@ fn handle_right_click_move(
         return;
     };
 
-    let entities: Vec<Entity> = selected_units.iter().collect();
-    if entities.is_empty() {
+    let units_vec: Vec<(Entity, EntityKind)> = selected_units.iter().map(|(e, k)| (e, *k)).collect();
+    if units_vec.is_empty() {
         return;
     }
 
-    // Check if we clicked on a mob
-    let hits = ray_cast.cast_ray(ray, &default());
-    let mut hit_mob = None;
-    for (entity, _) in hits {
-        if mobs.contains(*entity) {
-            hit_mob = Some(*entity);
-            break;
+    // Find closest mob or resource node under cursor
+    let mut best_mob: Option<(Entity, f32)> = None;
+    let mut best_resource: Option<(Entity, f32)> = None;
+
+    for (entity, gt, pick_r) in &pickables {
+        let center = gt.translation();
+        if let Some(dist) = ray_sphere_dist(&ray, center, pick_r.0) {
+            if mobs.contains(entity) {
+                if best_mob.is_none() || dist < best_mob.unwrap().1 {
+                    best_mob = Some((entity, dist));
+                }
+            } else if resource_nodes.contains(entity) {
+                if best_resource.is_none() || dist < best_resource.unwrap().1 {
+                    best_resource = Some((entity, dist));
+                }
+            }
         }
     }
 
-    if let Some(mob_entity) = hit_mob {
-        // Attack the mob
-        for entity in &entities {
+    if let Some((mob_entity, _)) = best_mob {
+        for (entity, _) in &units_vec {
             commands
                 .entity(*entity)
                 .remove::<GatherTarget>()
                 .remove::<MoveTarget>()
                 .insert(AttackTarget(mob_entity));
         }
+    } else if let Some((resource_entity, _)) = best_resource {
+        // Only workers can gather; non-workers move to the resource instead
+        let resource_pos = pickables.get(resource_entity).map(|(_, gt, _)| gt.translation());
+        for (entity, kind) in &units_vec {
+            if *kind == EntityKind::Worker {
+                commands
+                    .entity(*entity)
+                    .remove::<AttackTarget>()
+                    .remove::<MoveTarget>()
+                    .insert(GatherTarget(resource_entity));
+            } else if let Ok(pos) = resource_pos {
+                commands
+                    .entity(*entity)
+                    .remove::<GatherTarget>()
+                    .remove::<AttackTarget>()
+                    .insert(MoveTarget(pos));
+            }
+        }
     } else {
-        // Move to ground — intersect with terrain approximation (Y=0 plane, then adjust)
         if let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) {
             let point = ray.get_point(dist);
-            let n = entities.len();
+            let n = units_vec.len();
 
             if n == 1 {
                 commands
-                    .entity(entities[0])
+                    .entity(units_vec[0].0)
                     .remove::<GatherTarget>()
                     .remove::<AttackTarget>()
                     .insert(MoveTarget(point));
             } else if n > 1 {
                 let spacing = 1.5;
                 let radius = (spacing * n as f32 / std::f32::consts::TAU).max(1.0);
-                for (i, entity) in entities.iter().enumerate() {
+                for (i, (entity, _)) in units_vec.iter().enumerate() {
                     let angle = i as f32 / n as f32 * std::f32::consts::TAU;
                     let offset =
                         Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);

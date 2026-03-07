@@ -1,10 +1,10 @@
 {
   "Ambient Light": {
-    "Brightness": 293.0189,
-    "Color B": 0.7767297,
-    "Color G": 0.82091206,
-    "Color R": 0.87672967,
-    "Override": false
+    "Brightness": 740.0,
+    "Color B": 1.0,
+    "Color G": 1.0,
+    "Color R": 1.0,
+    "Override": true
   },
   "FoW Gameplay": {
     "Decay Value": 0.5,
@@ -14,53 +14,40 @@
   },
   "FoW Shader": {
     "Edge Glow Intensity": 0.0,
-    "Edge Glow Width": 0.17,
+    "Edge Glow Width": 0.14,
     "Explored Tint A": 0.15,
     "Explored Tint B": 0.0,
     "Explored Tint G": 0.0,
     "Explored Tint R": 0.0,
-    "Fog Color A": 1.0,
-    "Fog Color B": 0.0,
-    "Fog Color G": 0.01,
-    "Fog Color R": 0.01,
-    "Glow Color A": 1.0,
-    "Glow Color B": 0.28,
-    "Glow Color G": 0.35,
-    "Glow Color R": 0.35,
-    "Noise Scale": 30.0
+    "Fog Color A": 0.21,
+    "Fog Color B": 1.0,
+    "Fog Color G": 1.0,
+    "Fog Color R": 1.0,
+    "Glow Color A": 0.0,
+    "Glow Color B": 0.0,
+    "Glow Color G": 0.0,
+    "Glow Color R": 0.0,
+    "Noise Scale": 2.0
   },
   "Sky Color": {
-    "Color B": 0.72963846,
-    "Color G": 0.6325472,
-    "Color R": 0.59709126,
-    "Override": false
+    "Color B": 0.15030794,
+    "Color G": 0.05036952,
+    "Color R": 0.0,
+    "Override": true
   },
   "Sunlight": {
-    "Color B": 0.6709121,
-    "Color G": 0.7825473,
-    "Color R": 0.8587264,
-    "Illuminance": 5825.4727,
-    "Override": false,
-    "Pitch": -0.76218563,
+    "Color B": 1.0,
+    "Color G": 1.0,
+    "Color R": 0.99999994,
+    "Illuminance": 7400.0,
+    "Override": true,
+    "Pitch": -1.16,
     "Shadows": true,
-    "Yaw": 0.3
+    "Yaw": -1.3199999
   },
   "Time of Day": {
     "Cycle Duration": 600.0,
     "Paused": false,
-    "Time": 0.53669286
-  },
-  "Volumetric Fog": {
-    "Absorption": 0.78999996,
-    "Ambient Intensity": 0.5,
-    "Color B": 0.0,
-    "Color G": 0.0,
-    "Color R": 1.0,
-    "Density": 0.02,
-    "Enabled": true,
-    "Light Intensity": 4.5,
-    "Override": true,
-    "Scattering": 0.81,
-    "Step Count": 100.0
+    "Time": 0.37829566
   }
 }

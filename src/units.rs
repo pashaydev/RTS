@@ -11,7 +11,7 @@ impl Plugin for UnitsPlugin {
         app.add_systems(Startup, spawn_units)
             .add_systems(
                 Update,
-                (steer_avoidance, move_units, update_unit_visuals).chain(),
+                (steer_avoidance, move_units).chain(),
             );
     }
 }
@@ -25,10 +25,33 @@ fn spawn_units(
     mut commands: Commands,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
+    mut completed_buildings: ResMut<CompletedBuildings>,
 ) {
+    // Spawn a pre-built Base at the origin
+    let base_pos = Vec3::new(0.0, 0.0, 0.0);
+    let base_entity = spawn_from_blueprint(&mut commands, &cache, EntityKind::Base, base_pos, &registry);
+
+    // Override: mark it as already complete (remove construction state, set final material)
+    commands.entity(base_entity).remove::<ConstructionProgress>();
+    commands.entity(base_entity).insert(BuildingState::Complete);
+    if let Some(mat) = cache.materials_default.get(&EntityKind::Base) {
+        commands.entity(base_entity).insert(MeshMaterial3d(mat.clone()));
+    }
+    commands.entity(base_entity).insert(TrainingQueue {
+        queue: vec![],
+        timer: None,
+    });
+
+    // Register Base as completed
+    if !completed_buildings.completed.contains(&EntityKind::Base) {
+        completed_buildings.completed.push(EntityKind::Base);
+    }
+
+    // Spawn 3 workers near the base
     let worker_positions = [
-        Vec3::new(0.0, 0.0, 0.0),
-        Vec3::new(2.0, 0.0, 1.0),
+        Vec3::new(3.0, 0.0, 0.0),
+        Vec3::new(-3.0, 0.0, 2.0),
+        Vec3::new(0.0, 0.0, -3.0),
     ];
     for pos in worker_positions {
         spawn_from_blueprint(&mut commands, &cache, EntityKind::Worker, pos, &registry);
@@ -91,24 +114,3 @@ fn move_units(
     }
 }
 
-fn update_unit_visuals(
-    mut commands: Commands,
-    cache: Res<EntityVisualCache>,
-    added: Query<(Entity, &EntityKind), (With<Unit>, Added<Selected>)>,
-    mut removed: RemovedComponents<Selected>,
-    units: Query<(Entity, &EntityKind), With<Unit>>,
-) {
-    for (entity, kind) in &added {
-        if let Some(mat) = cache.materials_selected.get(kind) {
-            commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
-        }
-    }
-
-    for entity in removed.read() {
-        if let Ok((_, kind)) = units.get(entity) {
-            if let Some(mat) = cache.materials_default.get(kind) {
-                commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
-            }
-        }
-    }
-}

@@ -228,8 +228,8 @@ fn update_minimap_texture(
                 ];
 
                 let blended = if vis < 0.01 {
-                    // Unexplored: ~85% fog color overlay
-                    let t = 0.15;
+                    // Unexplored: ~95% fog color overlay (nearly black)
+                    let t = 0.05;
                     [
                         base[0] * t + fog_color[0] * (1.0 - t),
                         base[1] * t + fog_color[1] * (1.0 - t),

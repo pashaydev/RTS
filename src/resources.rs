@@ -214,6 +214,7 @@ fn spawn_resource_nodes(
                                 resource_type: rt,
                                 amount_remaining: amount,
                             },
+                            PickRadius(3.0 * scale_factor),
                             SceneRoot(scene_handle),
                             Transform::from_translation(Vec3::new(x, terrain_height(x, z), z))
                                 .with_rotation(Quat::from_rotation_y(y_rotation))
@@ -232,6 +233,7 @@ fn spawn_resource_nodes(
                                 resource_type: rt,
                                 amount_remaining: amount,
                             },
+                            PickRadius(1.8 * scale_factor),
                             SceneRoot(scene_handle),
                             Transform::from_translation(Vec3::new(x, terrain_height(x, z), z))
                                 .with_rotation(Quat::from_rotation_y(y_rotation))
@@ -246,6 +248,7 @@ fn spawn_resource_nodes(
                                 resource_type: rt,
                                 amount_remaining: amount,
                             },
+                            PickRadius(half_h * 1.5),
                             Mesh3d(mesh),
                             MeshMaterial3d(mat),
                             Transform::from_translation(Vec3::new(x, y, z)),
@@ -274,6 +277,7 @@ fn spawn_resource_nodes(
                                     resource_type: rt,
                                     amount_remaining: amount,
                                 },
+                                PickRadius(1.8 * scale_factor),
                                 SceneRoot(scene_handle),
                                 Transform::from_translation(Vec3::new(
                                     offset_x,
@@ -290,6 +294,7 @@ fn spawn_resource_nodes(
                                     resource_type: rt,
                                     amount_remaining: amount,
                                 },
+                                PickRadius(half_h * 1.5),
                                 Mesh3d(mesh),
                                 MeshMaterial3d(mat),
                                 Transform::from_translation(Vec3::new(offset_x, y, offset_z)),
@@ -442,19 +447,26 @@ fn gather_resources(
     mut commands: Commands,
     time: Res<Time>,
     mut player_res: ResMut<PlayerResources>,
-    mut units: Query<(Entity, &GatherTarget, &mut Carrying, &GatherSpeed), With<Unit>>,
-    mut nodes: Query<&mut ResourceNode>,
+    mut units: Query<(Entity, &Transform, &GatherTarget, &mut Carrying, &GatherSpeed), With<Unit>>,
+    mut nodes: Query<(&Transform, &mut ResourceNode), Without<Unit>>,
 ) {
     let carry_capacity = 20;
+    let gather_range = 3.0;
 
-    for (unit_entity, gather_target, mut carrying, speed) in &mut units {
-        let Ok(mut node) = nodes.get_mut(gather_target.0) else {
+    for (unit_entity, unit_tf, gather_target, mut carrying, speed) in &mut units {
+        let Ok((node_tf, mut node)) = nodes.get_mut(gather_target.0) else {
             commands.entity(unit_entity).remove::<GatherTarget>();
             continue;
         };
 
         if node.amount_remaining == 0 {
             commands.entity(unit_entity).remove::<GatherTarget>();
+            continue;
+        }
+
+        // Only gather when close enough to the resource node
+        let dist = unit_tf.translation.distance(node_tf.translation);
+        if dist > gather_range {
             continue;
         }
 

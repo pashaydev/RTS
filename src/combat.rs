@@ -174,10 +174,10 @@ fn execute_ranged_attacks(
 
 fn handle_death(
     mut commands: Commands,
-    dead: Query<(Entity, &Health, Option<&Building>)>,
+    dead: Query<(Entity, &Health, Option<&Building>, Option<&Selected>)>,
     mut attackers_with_target: Query<(Entity, &AttackTarget, Option<&mut PatrolState>)>,
 ) {
-    for (dead_entity, health, opt_building) in &dead {
+    for (dead_entity, health, opt_building, opt_selected) in &dead {
         if health.current > 0.0 {
             continue;
         }
@@ -191,7 +191,10 @@ fn handle_death(
             }
         }
 
-        let _ = opt_building;
+        // Clear selection if selected
+        if opt_selected.is_some() {
+            commands.entity(dead_entity).remove::<Selected>();
+        }
 
         commands.entity(dead_entity).despawn();
     }

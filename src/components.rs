@@ -13,6 +13,18 @@ pub enum ResourceType {
     Oil,
 }
 
+impl ResourceType {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Wood => "Wood",
+            Self::Copper => "Copper",
+            Self::Iron => "Iron",
+            Self::Gold => "Gold",
+            Self::Oil => "Oil",
+        }
+    }
+}
+
 // ── Unit markers ──
 
 #[derive(Component)]
@@ -20,6 +32,27 @@ pub struct Unit;
 
 #[derive(Component)]
 pub struct Selected;
+
+#[derive(Component)]
+pub struct Hovered;
+
+/// Bounding sphere radius for mouse picking (ray-sphere intersection).
+#[derive(Component)]
+pub struct PickRadius(pub f32);
+
+#[derive(Resource, Default)]
+pub struct UiClickedThisFrame(pub bool);
+
+#[derive(Component)]
+pub struct HoverRing;
+
+#[derive(Component)]
+pub struct HoverTooltip;
+
+#[derive(Resource)]
+pub struct HoverRingAssets {
+    pub mesh: Handle<Mesh>,
+}
 
 #[derive(Component)]
 pub struct MoveTarget(pub Vec3);
@@ -87,9 +120,9 @@ pub struct PlayerResources {
 impl Default for PlayerResources {
     fn default() -> Self {
         Self {
-            wood: 150,
-            copper: 30,
-            iron: 0,
+            wood: 300,
+            copper: 60,
+            iron: 20,
             gold: 0,
             oil: 0,
         }
@@ -172,7 +205,8 @@ pub struct PathRing {
 }
 
 #[derive(Component)]
-pub struct PathVisState {
+pub struct PathVisEntities {
+    pub entities: Vec<Entity>,
     pub last_pos: Vec3,
     pub target: Vec3,
 }
@@ -502,6 +536,84 @@ impl CompletedBuildings {
         self.completed.contains(&kind)
     }
 }
+
+// ── Building upgrades & interactions ──
+
+#[derive(Component)]
+pub struct BuildingLevel(pub u8);
+
+#[derive(Component)]
+pub struct UpgradeProgress {
+    pub timer: Timer,
+    pub target_level: u8,
+}
+
+#[derive(Component)]
+pub struct DemolishAnimation {
+    pub timer: Timer,
+    pub original_scale: Vec3,
+}
+
+#[derive(Component)]
+pub struct RallyPoint(pub Vec3);
+
+#[derive(Component)]
+pub struct BuildingScaleAnim {
+    pub timer: Timer,
+    pub from: Vec3,
+    pub to: Vec3,
+}
+
+#[derive(Component)]
+pub struct LevelIndicator {
+    pub building: Entity,
+}
+
+#[derive(Component)]
+pub struct StorageAura {
+    pub gather_speed_bonus: f32,
+    pub range: f32,
+}
+
+#[derive(Component)]
+pub struct HealingAura {
+    pub heal_per_sec: f32,
+    pub range: f32,
+}
+
+#[derive(Component)]
+pub struct TowerAutoAttackEnabled(pub bool);
+
+// UI markers for building interactions
+#[derive(Component)]
+pub struct UpgradeButton;
+
+#[derive(Component)]
+pub struct DemolishButton;
+
+#[derive(Component)]
+pub struct RallyPointButton;
+
+#[derive(Component)]
+pub struct ConfirmDemolishButton;
+
+#[derive(Component)]
+pub struct CancelDemolishButton;
+
+#[derive(Component)]
+pub struct DemolishConfirmPanel;
+
+#[derive(Component)]
+pub struct TrainingQueueDisplay;
+
+#[derive(Component)]
+pub struct TrainingProgressBar;
+
+#[derive(Component)]
+pub struct ConstructionProgressBar;
+
+#[derive(Resource, Default)]
+pub struct RallyPointMode(pub bool);
 
 // ── Building materials (ghost, construction) ──
 

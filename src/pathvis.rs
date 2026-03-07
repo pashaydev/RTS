@@ -1,7 +1,40 @@
+use bevy::ecs::entity::Entities;
 use bevy::prelude::*;
 
 use crate::components::*;
-use crate::ground::terrain_height;
+use crate::ground::{terrain_height, GRID_SIZE, HALF_MAP, MAP_SIZE};
+
+/// Sample the terrain mesh surface height using bilinear interpolation between
+/// grid vertices — matches what the GPU actually renders, unlike raw noise sampling.
+fn mesh_surface_height(x: f32, z: f32) -> f32 {
+    let step = MAP_SIZE / (GRID_SIZE - 1) as f32;
+
+    // Convert world coords to grid-space (floating point grid indices)
+    let gx = (x + HALF_MAP) / step;
+    let gz = (z + HALF_MAP) / step;
+
+    let ix = (gx.floor() as usize).min(GRID_SIZE - 2);
+    let iz = (gz.floor() as usize).min(GRID_SIZE - 2);
+
+    let fx = gx - ix as f32;
+    let fz = gz - iz as f32;
+
+    // Get heights at the 4 grid corners (these are exact — mesh vertices use terrain_height)
+    let x0 = -HALF_MAP + ix as f32 * step;
+    let x1 = x0 + step;
+    let z0 = -HALF_MAP + iz as f32 * step;
+    let z1 = z0 + step;
+
+    let h00 = terrain_height(x0, z0);
+    let h10 = terrain_height(x1, z0);
+    let h01 = terrain_height(x0, z1);
+    let h11 = terrain_height(x1, z1);
+
+    // Bilinear interpolation (matches GPU triangle interpolation closely)
+    let h0 = h00 + (h10 - h00) * fx;
+    let h1 = h01 + (h11 - h01) * fx;
+    h0 + (h1 - h0) * fz
+}
 
 pub struct PathVisPlugin;
 
@@ -10,7 +43,12 @@ impl Plugin for PathVisPlugin {
         app.add_systems(Startup, create_path_vis_assets)
             .add_systems(
                 Update,
-                (spawn_path_visualization, animate_path_ring, cleanup_path_vis),
+                (
+                    spawn_path_visualization,
+                    animate_path_ring,
+                    cleanup_path_vis,
+                    cleanup_orphaned_path_vis,
+                ),
             );
     }
 }
@@ -20,11 +58,11 @@ fn create_path_vis_assets(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    // Small diamond-shaped dash for a fantasy breadcrumb trail
-    let dash_mesh = meshes.add(Cuboid::new(0.12, 0.02, 0.12));
+    // Tall thin diamond marker that pokes above terrain on any slope
+    let dash_mesh = meshes.add(Cuboid::new(0.1, 0.3, 0.1));
     let dash_material = materials.add(StandardMaterial {
-        base_color: Color::srgba(0.85, 0.65, 0.2, 0.6),
-        emissive: LinearRgba::new(0.6, 0.4, 0.1, 1.0),
+        base_color: Color::srgba(1.0, 0.8, 0.2, 0.8),
+        emissive: LinearRgba::new(1.2, 0.8, 0.2, 1.0),
         alpha_mode: AlphaMode::Blend,
         unlit: true,
         ..default()
@@ -52,18 +90,16 @@ fn spawn_path_visualization(
     mut commands: Commands,
     path_assets: Res<PathVisAssets>,
     mut units: Query<
-        (Entity, &Transform, &MoveTarget, Option<&PathVisState>),
+        (Entity, &Transform, &MoveTarget, Option<&mut PathVisEntities>),
         With<Unit>,
     >,
-    existing_dashes: Query<(Entity, &PathDash)>,
-    existing_rings: Query<(Entity, &PathRing)>,
 ) {
-    for (entity, transform, move_target, vis_state) in &mut units {
+    for (entity, transform, move_target, vis_entities) in &mut units {
         let pos = transform.translation;
         let target = move_target.0;
 
         // Only rebuild when unit moved enough or target changed
-        if let Some(state) = vis_state {
+        if let Some(ref state) = vis_entities {
             let pos_moved = Vec2::new(pos.x - state.last_pos.x, pos.z - state.last_pos.z).length();
             let target_moved =
                 Vec2::new(target.x - state.target.x, target.z - state.target.z).length();
@@ -72,23 +108,23 @@ fn spawn_path_visualization(
             }
         }
 
-        // Despawn old visualization for this unit
-        for (e, dash) in &existing_dashes {
-            if dash.owner == entity {
-                commands.entity(e).despawn();
-            }
-        }
-        for (e, ring) in &existing_rings {
-            if ring.owner == entity {
-                commands.entity(e).despawn();
+        // Despawn old visualization for this unit via stored entity list
+        if let Some(ref state) = vis_entities {
+            for &e in &state.entities {
+                if let Ok(mut cmd) = commands.get_entity(e) {
+                    cmd.despawn();
+                }
             }
         }
 
         let dir = Vec3::new(target.x - pos.x, 0.0, target.z - pos.z);
         let dist = dir.length();
 
+        let mut spawned_entities = Vec::new();
+
         if dist < 0.8 {
-            commands.entity(entity).insert(PathVisState {
+            commands.entity(entity).insert(PathVisEntities {
+                entities: spawned_entities,
                 last_pos: pos,
                 target,
             });
@@ -103,12 +139,14 @@ fn spawn_path_visualization(
         // Dashes from just ahead of unit to just before target
         let start_offset = 0.6;
         let end_margin = 0.6;
-        let dash_spacing = 0.5;
         let available = dist - start_offset - end_margin;
+        // Scale spacing so we always get a reasonable density across any distance
+        let max_dashes: usize = 40;
+        let min_spacing = 0.5;
+        let dash_spacing = (available / max_dashes as f32).max(min_spacing);
 
         if available > 0.0 {
-            let num_dashes = (available / dash_spacing).floor().max(0.0) as usize;
-            let num_dashes = num_dashes.min(24);
+            let num_dashes = (available / dash_spacing).floor() as usize;
 
             for i in 0..num_dashes {
                 let t = start_offset + i as f32 * dash_spacing + dash_spacing * 0.5;
@@ -118,33 +156,40 @@ fn spawn_path_visualization(
 
                 let px = pos.x + dir_norm.x * t;
                 let pz = pos.z + dir_norm.z * t;
-                let py = terrain_height(px, pz) + 0.06;
+                let py = mesh_surface_height(px, pz) + 0.35;
 
                 // Scale up toward the destination for a tapered trail
                 let frac = t / dist;
                 let scale = 0.65 + 0.35 * frac;
 
-                commands.spawn((
-                    PathDash { owner: entity },
-                    Mesh3d(path_assets.dash_mesh.clone()),
-                    MeshMaterial3d(path_assets.dash_material.clone()),
-                    Transform::from_translation(Vec3::new(px, py, pz))
-                        .with_rotation(rotation)
-                        .with_scale(Vec3::splat(scale)),
-                ));
+                let dash_id = commands
+                    .spawn((
+                        PathDash { owner: entity },
+                        Mesh3d(path_assets.dash_mesh.clone()),
+                        MeshMaterial3d(path_assets.dash_material.clone()),
+                        Transform::from_translation(Vec3::new(px, py, pz))
+                            .with_rotation(rotation)
+                            .with_scale(Vec3::splat(scale)),
+                    ))
+                    .id();
+                spawned_entities.push(dash_id);
             }
         }
 
         // Ring at destination
-        let ring_y = terrain_height(target.x, target.z) + 0.05;
-        commands.spawn((
-            PathRing { owner: entity },
-            Mesh3d(path_assets.ring_mesh.clone()),
-            MeshMaterial3d(path_assets.ring_material.clone()),
-            Transform::from_translation(Vec3::new(target.x, ring_y, target.z)),
-        ));
+        let ring_y = mesh_surface_height(target.x, target.z) + 0.3;
+        let ring_id = commands
+            .spawn((
+                PathRing { owner: entity },
+                Mesh3d(path_assets.ring_mesh.clone()),
+                MeshMaterial3d(path_assets.ring_material.clone()),
+                Transform::from_translation(Vec3::new(target.x, ring_y, target.z)),
+            ))
+            .id();
+        spawned_entities.push(ring_id);
 
-        commands.entity(entity).insert(PathVisState {
+        commands.entity(entity).insert(PathVisEntities {
+            entities: spawned_entities,
             last_pos: pos,
             target,
         });
@@ -165,26 +210,39 @@ fn animate_path_ring(time: Res<Time>, mut rings: Query<&mut Transform, With<Path
     }
 }
 
+/// Clean up path vis when a unit stops moving (no longer has MoveTarget)
 fn cleanup_path_vis(
     mut commands: Commands,
     units_without_target: Query<
-        Entity,
-        (With<Unit>, With<PathVisState>, Without<MoveTarget>),
+        (Entity, &PathVisEntities),
+        (With<Unit>, Without<MoveTarget>),
     >,
+) {
+    for (unit_entity, vis) in &units_without_target {
+        for &e in &vis.entities {
+            if let Ok(mut cmd) = commands.get_entity(e) {
+                cmd.despawn();
+            }
+        }
+        commands.entity(unit_entity).remove::<PathVisEntities>();
+    }
+}
+
+/// Safety net: despawn orphaned dashes/rings whose owner entity no longer exists
+fn cleanup_orphaned_path_vis(
+    mut commands: Commands,
     dashes: Query<(Entity, &PathDash)>,
     rings: Query<(Entity, &PathRing)>,
+    entities: &Entities,
 ) {
-    for unit_entity in &units_without_target {
-        for (e, dash) in &dashes {
-            if dash.owner == unit_entity {
-                commands.entity(e).despawn();
-            }
+    for (e, dash) in &dashes {
+        if !entities.contains(dash.owner) {
+            commands.entity(e).despawn();
         }
-        for (e, ring) in &rings {
-            if ring.owner == unit_entity {
-                commands.entity(e).despawn();
-            }
+    }
+    for (e, ring) in &rings {
+        if !entities.contains(ring.owner) {
+            commands.entity(e).despawn();
         }
-        commands.entity(unit_entity).remove::<PathVisState>();
     }
 }

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::blueprints::{BlueprintRegistry, EntityCategory, EntityKind, EntityVisualCache, spawn_from_blueprint};
+use crate::blueprints::{BlueprintRegistry, EntityCategory, EntityKind, EntityVisualCache, LevelBonus, spawn_from_blueprint};
 use crate::components::*;
 use crate::ground::terrain_height;
 
@@ -22,6 +22,11 @@ impl Plugin for BuildingsPlugin {
                     tower_auto_attack,
                     training_queue_system,
                     update_completed_buildings_tracker,
+                    building_upgrade_system,
+                    demolish_system,
+                    building_scale_anim_system,
+                    healing_aura_system,
+                    level_indicator_system,
                 )
                     .chain(),
             );
@@ -297,15 +302,27 @@ fn construction_progress_system(
         &EntityKind,
         &mut BuildingState,
         &mut ConstructionProgress,
+        &mut Transform,
     )>,
 ) {
-    for (entity, kind, mut state, mut progress) in &mut buildings {
+    for (entity, kind, mut state, mut progress, mut transform) in &mut buildings {
         if *state != BuildingState::UnderConstruction {
             continue;
         }
+
+        let bp = registry.get(*kind);
+        let base_scale = bp.visual.scale;
+
         progress.timer.tick(time.delta());
+
+        // Lerp scale during construction
+        let fraction = progress.timer.fraction();
+        let current_scale = 0.3 * base_scale + (base_scale - 0.3 * base_scale) * fraction;
+        transform.scale = Vec3::splat(current_scale);
+
         if progress.timer.is_finished() {
             *state = BuildingState::Complete;
+            transform.scale = Vec3::splat(base_scale);
 
             // Swap to final material
             if let Some(mat) = cache.materials_default.get(kind) {
@@ -316,7 +333,6 @@ fn construction_progress_system(
             }
 
             // Add training queue for production buildings
-            let bp = registry.get(*kind);
             if let Some(ref bd) = bp.building {
                 if !bd.trains.is_empty() {
                     commands.entity(entity).insert(TrainingQueue {
@@ -343,6 +359,7 @@ fn tower_auto_attack(
             &mut AttackCooldown,
             &AttackDamage,
             &AttackRange,
+            Option<&TowerAutoAttackEnabled>,
         ),
         With<Building>,
     >,
@@ -350,9 +367,16 @@ fn tower_auto_attack(
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (tower_tf, kind, state, mut cooldown, damage, range) in &mut towers {
+    for (tower_tf, kind, state, mut cooldown, damage, range, auto_attack) in &mut towers {
         if *kind != EntityKind::Tower || *state != BuildingState::Complete {
             continue;
+        }
+
+        // Check if auto-attack is disabled
+        if let Some(enabled) = auto_attack {
+            if !enabled.0 {
+                continue;
+            }
         }
 
         cooldown.timer.tick(time.delta());
@@ -393,9 +417,9 @@ fn training_queue_system(
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
-    mut buildings: Query<(&Transform, &EntityKind, &mut TrainingQueue), With<Building>>,
+    mut buildings: Query<(&Transform, &EntityKind, &mut TrainingQueue, Option<&RallyPoint>), With<Building>>,
 ) {
-    for (transform, _kind, mut queue) in &mut buildings {
+    for (transform, _kind, mut queue, rally_point) in &mut buildings {
         if queue.queue.is_empty() {
             continue;
         }
@@ -412,7 +436,13 @@ fn training_queue_system(
             if timer.is_finished() {
                 let unit_kind = queue.queue.remove(0);
                 let spawn_pos = transform.translation + Vec3::new(3.0, 0.0, 3.0);
-                spawn_from_blueprint(&mut commands, &cache, unit_kind, spawn_pos, &registry);
+                let unit_entity = spawn_from_blueprint(&mut commands, &cache, unit_kind, spawn_pos, &registry);
+
+                // If building has a rally point, send the unit there
+                if let Some(rally) = rally_point {
+                    commands.entity(unit_entity).insert(MoveTarget(rally.0));
+                }
+
                 queue.timer = None;
             }
         }
@@ -437,5 +467,344 @@ fn update_completed_buildings_tracker(
 
     if completed.completed != new_completed {
         completed.completed = new_completed;
+    }
+}
+
+// ── Building Upgrade ──
+
+/// Start an upgrade on a building. Returns true if the upgrade was started.
+pub fn start_upgrade(
+    commands: &mut Commands,
+    entity: Entity,
+    current_level: u8,
+    kind: EntityKind,
+    registry: &BlueprintRegistry,
+    player_res: &mut PlayerResources,
+) -> bool {
+    // Must be below max level (3)
+    if current_level >= 3 {
+        return false;
+    }
+
+    let bp = registry.get(kind);
+    let bd = match bp.building.as_ref() {
+        Some(bd) => bd,
+        None => return false,
+    };
+
+    // level_upgrades is 0-indexed: index 0 = upgrade from L1->L2, index 1 = L2->L3
+    let upgrade_index = (current_level - 1) as usize;
+    if upgrade_index >= bd.level_upgrades.len() {
+        return false;
+    }
+
+    let level_data = &bd.level_upgrades[upgrade_index];
+
+    // Check affordability
+    if !level_data.cost.can_afford(player_res) {
+        return false;
+    }
+
+    // Deduct resources
+    level_data.cost.deduct(player_res);
+
+    // Insert UpgradeProgress component
+    commands.entity(entity).insert(UpgradeProgress {
+        timer: Timer::from_seconds(level_data.time_secs, TimerMode::Once),
+        target_level: current_level + 1,
+    });
+
+    true
+}
+
+fn building_upgrade_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    registry: Res<BlueprintRegistry>,
+    vfx_assets: Option<Res<VfxAssets>>,
+    mut buildings: Query<(
+        Entity,
+        &EntityKind,
+        &mut BuildingLevel,
+        &mut UpgradeProgress,
+        &Transform,
+        Option<&mut VisionRange>,
+        Option<&mut AttackRange>,
+        Option<&mut AttackDamage>,
+    ), With<Building>>,
+) {
+    for (entity, kind, mut level, mut upgrade, transform, vision, attack_range, attack_damage) in &mut buildings {
+        upgrade.timer.tick(time.delta());
+
+        if !upgrade.timer.is_finished() {
+            continue;
+        }
+
+        // Upgrade complete
+        let new_level = upgrade.target_level;
+        level.0 = new_level;
+
+        let bp = registry.get(*kind);
+        let bd = match bp.building.as_ref() {
+            Some(bd) => bd,
+            None => continue,
+        };
+
+        // Get the level data for the upgrade that just completed
+        let upgrade_index = (new_level - 2) as usize; // L2 = index 0, L3 = index 1
+        if upgrade_index >= bd.level_upgrades.len() {
+            commands.entity(entity).remove::<UpgradeProgress>();
+            continue;
+        }
+
+        let level_data = &bd.level_upgrades[upgrade_index];
+
+        // Apply scale multiplier via animation
+        let current_scale = transform.scale;
+        let new_scale = current_scale * level_data.scale_multiplier;
+        commands.entity(entity).insert(BuildingScaleAnim {
+            timer: Timer::from_seconds(0.5, TimerMode::Once),
+            from: current_scale,
+            to: new_scale,
+        });
+
+        // Apply LevelBonus
+        match &level_data.bonus {
+            LevelBonus::None => {}
+            LevelBonus::VisionBoost(boost) => {
+                if let Some(mut vr) = vision {
+                    vr.0 += boost;
+                }
+            }
+            LevelBonus::TrainTimeMultiplier(_mult) => {
+                // Stored on the building; training system reads from blueprint + level
+                // No component change needed here — could be enhanced later
+            }
+            LevelBonus::TrainedStatBoost { .. } => {
+                // Affects trained units, not the building itself
+            }
+            LevelBonus::RangeAndDamage { range_boost, damage_boost } => {
+                if let Some(mut ar) = attack_range {
+                    ar.0 += range_boost;
+                }
+                if let Some(mut ad) = attack_damage {
+                    ad.0 += damage_boost;
+                }
+            }
+            LevelBonus::CooldownMultiplier(_mult) => {
+                // Could modify AttackCooldown timer duration — skipped for simplicity
+            }
+            LevelBonus::GatherAura { speed_bonus, range } => {
+                commands.entity(entity).insert(StorageAura {
+                    gather_speed_bonus: *speed_bonus,
+                    range: *range,
+                });
+            }
+            LevelBonus::HealAura { heal_per_sec, range } => {
+                commands.entity(entity).insert(HealingAura {
+                    heal_per_sec: *heal_per_sec,
+                    range: *range,
+                });
+            }
+            LevelBonus::UnlocksTraining(_kinds) => {
+                // Could extend the TrainingQueue's available units — handled at UI level
+            }
+        }
+
+        // Spawn VFX burst (4-6 flash entities in a ring)
+        if let Some(ref vfx) = vfx_assets {
+            let center = transform.translation;
+            let flash_count = 5;
+            for i in 0..flash_count {
+                let angle = std::f32::consts::TAU * (i as f32 / flash_count as f32);
+                let offset = Vec3::new(angle.cos() * 3.0, 2.0, angle.sin() * 3.0);
+                commands.spawn((
+                    VfxFlash {
+                        timer: Timer::from_seconds(0.6, TimerMode::Once),
+                        start_scale: 0.8,
+                        end_scale: 0.0,
+                    },
+                    Mesh3d(vfx.sphere_mesh.clone()),
+                    MeshMaterial3d(vfx.impact_material.clone()),
+                    Transform::from_translation(center + offset)
+                        .with_scale(Vec3::splat(0.8)),
+                ));
+            }
+        }
+
+        // Remove UpgradeProgress
+        commands.entity(entity).remove::<UpgradeProgress>();
+    }
+}
+
+// ── Demolish ──
+
+/// Start the demolish animation on a building.
+pub fn start_demolish(commands: &mut Commands, entity: Entity, transform: &Transform) {
+    commands.entity(entity).insert(DemolishAnimation {
+        timer: Timer::from_seconds(0.5, TimerMode::Once),
+        original_scale: transform.scale,
+    });
+}
+
+fn demolish_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    registry: Res<BlueprintRegistry>,
+    mut player_res: ResMut<PlayerResources>,
+    mut completed: ResMut<CompletedBuildings>,
+    mut buildings: Query<(
+        Entity,
+        &EntityKind,
+        &mut Transform,
+        &mut DemolishAnimation,
+    ), With<Building>>,
+) {
+    for (entity, kind, mut transform, mut demolish) in &mut buildings {
+        demolish.timer.tick(time.delta());
+
+        let fraction = demolish.timer.fraction();
+        // Lerp scale from original to zero
+        transform.scale = demolish.original_scale * (1.0 - fraction);
+
+        if demolish.timer.is_finished() {
+            // Refund 50% of building cost
+            let bp = registry.get(*kind);
+            let cost = &bp.cost;
+            player_res.wood += cost.wood / 2;
+            player_res.copper += cost.copper / 2;
+            player_res.iron += cost.iron / 2;
+            player_res.gold += cost.gold / 2;
+            player_res.oil += cost.oil / 2;
+
+            // Remove from completed buildings
+            completed.completed.retain(|k| k != kind);
+
+            // Despawn
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+// ── Building Scale Animation ──
+
+fn building_scale_anim_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut buildings: Query<(Entity, &mut Transform, &mut BuildingScaleAnim)>,
+) {
+    for (entity, mut transform, mut anim) in &mut buildings {
+        anim.timer.tick(time.delta());
+
+        let t = anim.timer.fraction();
+        // Ease-in-out (smoothstep)
+        let eased = t * t * (3.0 - 2.0 * t);
+        transform.scale = anim.from.lerp(anim.to, eased);
+
+        if anim.timer.is_finished() {
+            transform.scale = anim.to;
+            commands.entity(entity).remove::<BuildingScaleAnim>();
+        }
+    }
+}
+
+// ── Aura Systems ──
+
+fn healing_aura_system(
+    time: Res<Time>,
+    auras: Query<(&Transform, &HealingAura, &BuildingState), With<Building>>,
+    mut healable: Query<(&Transform, &mut Health, &Faction), Without<Building>>,
+) {
+    for (aura_tf, aura, state) in &auras {
+        if *state != BuildingState::Complete {
+            continue;
+        }
+        for (unit_tf, mut health, faction) in &mut healable {
+            if *faction != Faction::Player {
+                continue;
+            }
+            let dist = aura_tf.translation.distance(unit_tf.translation);
+            if dist <= aura.range && health.current < health.max {
+                health.current =
+                    (health.current + aura.heal_per_sec * time.delta_secs()).min(health.max);
+            }
+        }
+    }
+}
+
+/// Returns the highest gather speed bonus from any StorageAura in range of the given position.
+pub fn storage_aura_bonus(
+    worker_pos: Vec3,
+    auras: &Query<(&Transform, &StorageAura, &BuildingState), With<Building>>,
+) -> f32 {
+    let mut bonus = 0.0f32;
+    for (aura_tf, aura, state) in auras {
+        if *state != BuildingState::Complete {
+            continue;
+        }
+        let dist = aura_tf.translation.distance(worker_pos);
+        if dist <= aura.range {
+            bonus = bonus.max(aura.gather_speed_bonus); // Don't stack, take highest
+        }
+    }
+    bonus
+}
+
+// ── Level Indicator ──
+
+fn level_indicator_system(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    buildings: Query<
+        (Entity, &BuildingLevel, &Transform),
+        (With<Building>, Changed<BuildingLevel>),
+    >,
+    existing_indicators: Query<(Entity, &LevelIndicator)>,
+) {
+    for (building_entity, level, transform) in &buildings {
+        if level.0 <= 1 {
+            continue;
+        }
+
+        // Remove existing indicators for this building
+        for (ind_entity, indicator) in &existing_indicators {
+            if indicator.building == building_entity {
+                commands.entity(ind_entity).despawn();
+            }
+        }
+
+        // Spawn pip spheres above the building
+        let pip_count = (level.0 - 1) as usize; // 1 for L2, 2 for L3
+        let pip_mesh = meshes.add(Sphere::new(0.2));
+        let pip_material = materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.85, 0.2),
+            emissive: LinearRgba::new(2.0, 1.7, 0.4, 1.0),
+            ..default()
+        });
+
+        let base_y = transform.translation.y + transform.scale.y * 2.0 + 1.0;
+
+        for i in 0..pip_count {
+            let x_offset = if pip_count == 1 {
+                0.0
+            } else {
+                (i as f32 - (pip_count - 1) as f32 / 2.0) * 0.6
+            };
+
+            commands.spawn((
+                LevelIndicator {
+                    building: building_entity,
+                },
+                Mesh3d(pip_mesh.clone()),
+                MeshMaterial3d(pip_material.clone()),
+                Transform::from_translation(Vec3::new(
+                    transform.translation.x + x_offset,
+                    base_y,
+                    transform.translation.z,
+                ))
+                .with_scale(Vec3::splat(1.0)),
+            ));
+        }
     }
 }
