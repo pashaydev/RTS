@@ -172,7 +172,10 @@ pub struct PathRing {
 }
 
 #[derive(Component)]
-pub struct PreviousMoveTarget(pub Vec3);
+pub struct PathVisState {
+    pub last_pos: Vec3,
+    pub target: Vec3,
+}
 
 #[derive(Resource)]
 pub struct PathVisAssets {
