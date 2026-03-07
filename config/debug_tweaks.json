@@ -1,53 +1,66 @@
 {
-  "Ambient": {
-    "brightness": 280.0,
-    "color B": 0.7651566,
-    "color G": 0.80354214,
-    "color R": 0.8535421,
-    "override": true
+  "Ambient Light": {
+    "Brightness": 293.0189,
+    "Color B": 0.7767297,
+    "Color G": 0.82091206,
+    "Color R": 0.87672967,
+    "Override": false
   },
-  "Day Cycle": {
-    "cycle_duration": 3600.0,
-    "paused": false,
-    "time": 0.35975742
+  "FoW Gameplay": {
+    "Decay Value": 0.5,
+    "Mob Threshold": 0.8,
+    "Object Threshold": 0.4,
+    "VFX Threshold": 0.3
   },
-  "Fog Gameplay": {
-    "decay_value": 0.1,
-    "mob_threshold": 0.1,
-    "object_threshold": 0.1,
-    "vfx_threshold": 0.15
+  "FoW Shader": {
+    "Edge Glow Intensity": 0.0,
+    "Edge Glow Width": 0.17,
+    "Explored Tint A": 0.15,
+    "Explored Tint B": 0.0,
+    "Explored Tint G": 0.0,
+    "Explored Tint R": 0.0,
+    "Fog Color A": 1.0,
+    "Fog Color B": 0.0,
+    "Fog Color G": 0.01,
+    "Fog Color R": 0.01,
+    "Glow Color A": 1.0,
+    "Glow Color B": 0.28,
+    "Glow Color G": 0.35,
+    "Glow Color R": 0.35,
+    "Noise Scale": 30.0
   },
-  "Fog Shader": {
-    "edge_glow_intensity": 0.95,
-    "edge_glow_width": 0.02,
-    "explored_tint A": 0.38,
-    "explored_tint B": 0.0,
-    "explored_tint G": 0.0,
-    "explored_tint R": 0.0,
-    "fog_color A": 0.61,
-    "fog_color B": 0.049999997,
-    "fog_color G": 0.03,
-    "fog_color R": 0.02,
-    "glow_color A": 0.84999996,
-    "glow_color B": 1.0,
-    "glow_color G": 0.96999997,
-    "glow_color R": 1.0,
-    "noise_scale": 15.5
+  "Sky Color": {
+    "Color B": 0.72963846,
+    "Color G": 0.6325472,
+    "Color R": 0.59709126,
+    "Override": false
   },
-  "Sky / Fog": {
-    "color B": 0.6022459,
-    "color G": 0.50224596,
-    "color R": 0.5408984,
-    "override": false
+  "Sunlight": {
+    "Color B": 0.6709121,
+    "Color G": 0.7825473,
+    "Color R": 0.8587264,
+    "Illuminance": 5825.4727,
+    "Override": false,
+    "Pitch": -0.76218563,
+    "Shadows": true,
+    "Yaw": 0.3
   },
-  "Sun": {
-    "color B": 1.0,
-    "color G": 1.0,
-    "color R": 1.0,
-    "illuminance": 2300.0,
-    "override": true,
-    "pitch": -0.7903619,
-    "shadows": true,
-    "yaw": 0.30000004
+  "Time of Day": {
+    "Cycle Duration": 600.0,
+    "Paused": false,
+    "Time": 0.53669286
+  },
+  "Volumetric Fog": {
+    "Absorption": 0.78999996,
+    "Ambient Intensity": 0.5,
+    "Color B": 0.0,
+    "Color G": 0.0,
+    "Color R": 1.0,
+    "Density": 0.02,
+    "Enabled": true,
+    "Light Intensity": 4.5,
+    "Override": true,
+    "Scattering": 0.81,
+    "Step Count": 100.0
   }
 }

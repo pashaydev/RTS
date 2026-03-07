@@ -1,4 +1,5 @@
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::light::VolumetricFog;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy::ecs::message::MessageReader;
@@ -64,6 +65,12 @@ fn spawn_camera(mut commands: Commands) {
         },
         Camera3d::default(),
         Transform::from_translation(pivot + offset).looking_at(pivot, Vec3::Y),
+        // VolumetricFog {
+        //     ambient_color: Color::srgba(0.8, 0.75, 0.65, 1.0),
+        //     ambient_intensity: 0.05,
+        //     step_count: 32,
+        //     jitter: 0.5,
+        // },
     ));
 }
 

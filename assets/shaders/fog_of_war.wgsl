@@ -73,22 +73,39 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let boundary = smoothstep(0.0, 0.2, vis) * (1.0 - smoothstep(0.8, 1.0, vis));
     let distorted_vis = clamp(vis + noise_val * 0.15 * boundary, 0.0, 1.0);
 
-    // Alpha: simple mapping. Visible = transparent, fog = opaque.
-    // Use a sharp cutoff so visible areas are truly clear.
-    let alpha = smoothstep(1.0, 0.3, distorted_vis) * 0.55;
+    // Three-zone fog: unexplored | explored (terrain visible, darkened) | visible (clear)
+    // fog_factor: 1 in unexplored, 0 once explored (even small vis like 0.05+ counts)
+    let fog_factor = 1.0 - smoothstep(0.01, 0.08, distorted_vis);
+    // clear_factor: 0 in fog/explored, 1 in fully visible area
+    let clear_factor = smoothstep(0.6, 0.95, distorted_vis);
+    // explored_factor: the remainder — everything between unexplored and visible
+    let explored_factor = clamp(1.0 - fog_factor - clear_factor, 0.0, 1.0);
+
+    // Alpha per zone: unexplored=opaque fog, explored=light tint, visible=transparent
+    let alpha = fog_factor * settings.fog_color.a
+              + explored_factor * settings.explored_tint.a;
 
     // Fully transparent — skip everything
     if alpha < 0.005 {
         return vec4<f32>(0.0, 0.0, 0.0, 0.0);
     }
 
-    // Fog color: dark with subtle animated swirling in deep fog only
-    var fog_rgb = settings.fog_color.rgb;
-    if distorted_vis < 0.3 {
+    // Color: blend between fog color and explored tint
+    let color_blend = explored_factor / max(fog_factor + explored_factor, 0.001);
+    var fog_rgb = mix(settings.fog_color.rgb, settings.explored_tint.rgb, color_blend);
+
+    // Animated swirling in deep unexplored fog only
+    if fog_factor > 0.5 {
         let warp = domain_warp(uv * 3.0, time);
         let swirl = fbm(uv * 5.0 + warp * 0.8 + time * 0.01, 4);
         fog_rgb = fog_rgb * (0.8 + 0.2 * swirl);
     }
+
+    // Edge glow at fog boundary
+    let glow_dist = (distorted_vis - 0.5) / max(settings.edge_glow_width, 0.001);
+    let glow_factor = exp(-glow_dist * glow_dist);
+    let glow_strength = glow_factor * settings.edge_glow_intensity * settings.glow_color.a;
+    fog_rgb = fog_rgb + settings.glow_color.rgb * glow_strength;
 
     return vec4<f32>(fog_rgb, alpha);
 }

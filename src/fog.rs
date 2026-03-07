@@ -55,29 +55,29 @@ impl Plugin for FogPlugin {
 fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
     let s = FogSettings::default();
 
-    // Fog Shader folder
-    tweaks.add_float("Fog Shader", "noise_scale", s.noise_scale, 0.0, 30.0, 0.5);
-    tweaks.add_float("Fog Shader", "edge_glow_width", s.edge_glow_width, 0.0, 0.5, 0.01);
-    tweaks.add_float("Fog Shader", "edge_glow_intensity", s.edge_glow_intensity, 0.0, 2.0, 0.05);
-    tweaks.add_float("Fog Shader", "fog_color R", s.fog_color.x, 0.0, 1.0, 0.01);
-    tweaks.add_float("Fog Shader", "fog_color G", s.fog_color.y, 0.0, 1.0, 0.01);
-    tweaks.add_float("Fog Shader", "fog_color B", s.fog_color.z, 0.0, 1.0, 0.01);
-    tweaks.add_float("Fog Shader", "fog_color A", s.fog_color.w, 0.0, 1.0, 0.01);
-    tweaks.add_float("Fog Shader", "glow_color R", s.glow_color.x, 0.0, 1.0, 0.01);
-    tweaks.add_float("Fog Shader", "glow_color G", s.glow_color.y, 0.0, 1.0, 0.01);
-    tweaks.add_float("Fog Shader", "glow_color B", s.glow_color.z, 0.0, 1.0, 0.01);
-    tweaks.add_float("Fog Shader", "glow_color A", s.glow_color.w, 0.0, 1.0, 0.01);
-    tweaks.add_float("Fog Shader", "explored_tint R", s.explored_tint.x, 0.0, 1.0, 0.01);
-    tweaks.add_float("Fog Shader", "explored_tint G", s.explored_tint.y, 0.0, 1.0, 0.01);
-    tweaks.add_float("Fog Shader", "explored_tint B", s.explored_tint.z, 0.0, 1.0, 0.01);
-    tweaks.add_float("Fog Shader", "explored_tint A", s.explored_tint.w, 0.0, 1.0, 0.01);
+    // FoW Shader folder
+    tweaks.add_float("FoW Shader", "Noise Scale", s.noise_scale, 0.0, 30.0, 0.5);
+    tweaks.add_float("FoW Shader", "Edge Glow Width", s.edge_glow_width, 0.0, 0.5, 0.01);
+    tweaks.add_float("FoW Shader", "Edge Glow Intensity", s.edge_glow_intensity, 0.0, 2.0, 0.05);
+    tweaks.add_float("FoW Shader", "Fog Color R", s.fog_color.x, 0.0, 1.0, 0.01);
+    tweaks.add_float("FoW Shader", "Fog Color G", s.fog_color.y, 0.0, 1.0, 0.01);
+    tweaks.add_float("FoW Shader", "Fog Color B", s.fog_color.z, 0.0, 1.0, 0.01);
+    tweaks.add_float("FoW Shader", "Fog Color A", s.fog_color.w, 0.0, 1.0, 0.01);
+    tweaks.add_float("FoW Shader", "Glow Color R", s.glow_color.x, 0.0, 1.0, 0.01);
+    tweaks.add_float("FoW Shader", "Glow Color G", s.glow_color.y, 0.0, 1.0, 0.01);
+    tweaks.add_float("FoW Shader", "Glow Color B", s.glow_color.z, 0.0, 1.0, 0.01);
+    tweaks.add_float("FoW Shader", "Glow Color A", s.glow_color.w, 0.0, 1.0, 0.01);
+    tweaks.add_float("FoW Shader", "Explored Tint R", s.explored_tint.x, 0.0, 1.0, 0.01);
+    tweaks.add_float("FoW Shader", "Explored Tint G", s.explored_tint.y, 0.0, 1.0, 0.01);
+    tweaks.add_float("FoW Shader", "Explored Tint B", s.explored_tint.z, 0.0, 1.0, 0.01);
+    tweaks.add_float("FoW Shader", "Explored Tint A", s.explored_tint.w, 0.0, 1.0, 0.01);
 
-    // Fog Gameplay folder
+    // FoW Gameplay folder
     let t = FogTweakSettings::default();
-    tweaks.add_float("Fog Gameplay", "mob_threshold", t.mob_threshold, 0.0, 1.0, 0.05);
-    tweaks.add_float("Fog Gameplay", "object_threshold", t.object_threshold, 0.0, 1.0, 0.05);
-    tweaks.add_float("Fog Gameplay", "vfx_threshold", t.vfx_threshold, 0.0, 1.0, 0.05);
-    tweaks.add_float("Fog Gameplay", "decay_value", t.decay_value, 0.0, 1.0, 0.05);
+    tweaks.add_float("FoW Gameplay", "Mob Threshold", t.mob_threshold, 0.0, 1.0, 0.05);
+    tweaks.add_float("FoW Gameplay", "Object Threshold", t.object_threshold, 0.0, 1.0, 0.05);
+    tweaks.add_float("FoW Gameplay", "VFX Threshold", t.vfx_threshold, 0.0, 1.0, 0.05);
+    tweaks.add_float("FoW Gameplay", "Decay Value", t.decay_value, 0.0, 1.0, 0.05);
 }
 
 /// Create the R8Unorm visibility texture for GPU sampling.
