@@ -78,7 +78,7 @@ fn spawn_mob_camps(
             let x = center.x + angle.cos() * offset_r;
             let z = center.z + angle.sin() * offset_r;
 
-            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(x, 0.0, z), &registry);
+            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(x, 0.0, z), &registry, None);
 
             // Override patrol center
             commands.entity(entity).insert(PatrolState {
@@ -93,7 +93,7 @@ fn spawn_mob_camps(
         if camp.has_boss {
             let combat = bp.combat.as_ref().unwrap();
 
-            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(center.x, 0.0, center.z), &registry);
+            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(center.x, 0.0, center.z), &registry, None);
 
             // Apply boss modifiers
             commands.entity(entity).insert((

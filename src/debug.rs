@@ -9,7 +9,7 @@ use crate::fog::FogTweakSettings;
 use crate::fog_material::FogOfWarMaterial;
 use bevy::light::{FogVolume, VolumetricFog};
 use crate::lighting::{AtmosphericFogVolume, DayCycle, LightingOverrides, SunLight};
-use crate::components::FogOverlay;
+use crate::components::{FogOverlay, UiClickedThisFrame, UiPressActive};
 
 const DEBUG_CONFIG_PATH: &str = "config/debug_tweaks.json";
 
@@ -41,6 +41,7 @@ impl Plugin for DebugPlugin {
                     sync_fog_tweaks,
                     rebuild_tweak_panel,
                     update_tweak_visuals,
+                    block_input_over_debug_panel,
                 ),
             );
     }
@@ -362,6 +363,7 @@ fn spawn_debug_overlay(mut commands: Commands) {
     commands
         .spawn((
             DebugOverlayRoot,
+            Interaction::default(),
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::Px(8.0),
@@ -396,7 +398,7 @@ fn spawn_debug_overlay(mut commands: Commands) {
                             font_size: 15.0,
                             ..default()
                         },
-                        TextColor(Color::srgb(1.0, 0.85, 0.2)),
+                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
                     ));
 
                     row.spawn((
@@ -408,7 +410,7 @@ fn spawn_debug_overlay(mut commands: Commands) {
                             border_radius: BorderRadius::all(Val::Px(3.0)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(0.3, 0.6, 1.0, 0.3)),
+                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)),
                     ))
                     .with_children(|btn| {
                         btn.spawn((
@@ -434,7 +436,7 @@ fn spawn_debug_overlay(mut commands: Commands) {
                     font_size: 13.0,
                     ..default()
                 },
-                TextColor(Color::srgb(0.6, 1.0, 0.6)),
+                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
             ));
 
             // Entity count
@@ -445,7 +447,7 @@ fn spawn_debug_overlay(mut commands: Commands) {
                     font_size: 13.0,
                     ..default()
                 },
-                TextColor(Color::srgb(0.7, 0.8, 1.0)),
+                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
             ));
 
             // Day cycle
@@ -456,7 +458,7 @@ fn spawn_debug_overlay(mut commands: Commands) {
                     font_size: 13.0,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.9, 0.7)),
+                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
             ));
 
             spawn_separator(panel);
@@ -485,6 +487,41 @@ fn spawn_separator(parent: &mut ChildSpawnerCommands) {
         },
         BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)),
     ));
+}
+
+// ── Block gameplay input when cursor is over the debug panel ──
+
+fn block_input_over_debug_panel(
+    state: Res<DebugPanelState>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    panel_q: Query<(&ComputedNode, &UiGlobalTransform), With<DebugOverlayRoot>>,
+) {
+    if !state.visible {
+        return;
+    }
+
+    let Some(cursor_phys) = windows
+        .single()
+        .ok()
+        .and_then(|w| w.physical_cursor_position())
+    else {
+        return;
+    };
+
+    for (computed, ui_tf) in &panel_q {
+        if computed.contains_point(*ui_tf, cursor_phys) {
+            // Cursor is over the debug panel — block all gameplay input
+            if mouse.pressed(MouseButton::Left) || mouse.pressed(MouseButton::Right) {
+                ui_press.0 = true;
+            }
+            if mouse.just_pressed(MouseButton::Left) || mouse.just_pressed(MouseButton::Right) {
+                ui_clicked.0 = 2;
+            }
+        }
+    }
 }
 
 // ── Toggle panel with F3 ──
@@ -716,7 +753,7 @@ fn update_tweak_visuals(
     for (tog, mut bg) in &mut toggle_q {
         if let Some(v) = tweaks.get_bool(&tog.folder, &tog.label) {
             let target = if v {
-                Color::srgb(0.15, 0.6, 0.25)
+                Color::srgba(1.0, 1.0, 1.0, 0.35)
             } else {
                 Color::srgba(1.0, 1.0, 1.0, 0.12)
             };
@@ -787,7 +824,7 @@ fn spawn_folder_header(parent: &mut ChildSpawnerCommands, name: &str, collapsed:
                     font_size: 13.0,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.85, 0.3)),
+                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
             ));
         });
 }
@@ -852,7 +889,7 @@ fn spawn_slider_row(
                         border_radius: BorderRadius::all(Val::Px(3.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgb(0.25, 0.6, 1.0)),
+                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
                 ));
             });
 
@@ -901,7 +938,7 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
             ));
 
             let (bg, text) = if value {
-                (Color::srgb(0.15, 0.6, 0.25), "ON")
+                (Color::srgba(1.0, 1.0, 1.0, 0.35), "ON")
             } else {
                 (Color::srgba(1.0, 1.0, 1.0, 0.12), "OFF")
             };
@@ -1120,6 +1157,7 @@ fn handle_toggle_click(
 fn handle_slider_interaction(
     mut tweaks: ResMut<DebugTweaks>,
     mut active: ResMut<ActiveSlider>,
+    mut ui_press: ResMut<UiPressActive>,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window>,
     slider_q: Query<(&TweakSlider, &ComputedNode, &UiGlobalTransform)>,
@@ -1129,6 +1167,7 @@ fn handle_slider_interaction(
         if active.folder.is_some() {
             active.folder = None;
             active.label = None;
+            ui_press.0 = false;
         }
         return;
     }
@@ -1148,6 +1187,7 @@ fn handle_slider_interaction(
             if computed.contains_point(*ui_tf, cursor_phys) {
                 active.folder = Some(slider.folder.clone());
                 active.label = Some(slider.label.clone());
+                ui_press.0 = true;
                 break;
             }
         }

@@ -1,3 +1,4 @@
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_mod_outline::OutlineVolume;
@@ -245,6 +246,7 @@ fn spawn_selection_box(mut commands: Commands) {
         BorderColor::all(Color::srgba(0.3, 0.5, 1.0, 0.8)),
         Visibility::Hidden,
         GlobalTransform::default(),
+
     ));
 }
 
@@ -607,6 +609,8 @@ fn update_hover_ring(
             Mesh3d(ring_assets.mesh.clone()),
             MeshMaterial3d(mat),
             Transform::from_translation(Vec3::new(pos.x, terrain_height(pos.x, pos.z) + 0.1, pos.z)),
+            NotShadowCaster,
+            NotShadowReceiver
         ));
     }
 }
@@ -680,12 +684,14 @@ fn handle_right_click_move(
     resource_nodes: Query<Entity, With<ResourceNode>>,
     construction_q: Query<(Entity, &GlobalTransform), (With<Building>, With<ConstructionProgress>)>,
     minimap_interaction: Res<MinimapInteraction>,
+    ui_clicked: Res<UiClickedThisFrame>,
+    ui_press: Res<UiPressActive>,
 ) {
     if !mouse.just_pressed(MouseButton::Right) {
         return;
     }
 
-    if minimap_interaction.clicked {
+    if minimap_interaction.clicked || ui_clicked.0 > 0 || ui_press.0 {
         return;
     }
 

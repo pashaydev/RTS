@@ -782,6 +782,10 @@ pub struct ActionTooltipTrigger {
 #[derive(Component)]
 pub struct BuildingHpBarFill;
 
+/// Marker for the child entity holding a building's GLTF scene.
+#[derive(Component)]
+pub struct BuildingSceneChild;
+
 #[derive(Resource, Default)]
 pub struct RallyPointMode(pub bool);
 

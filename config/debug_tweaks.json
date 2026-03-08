@@ -1,9 +1,9 @@
 {
   "Ambient Light": {
-    "Brightness": 246.94681,
-    "Color B": 0.6231561,
-    "Color G": 0.6289451,
-    "Color R": 0.72315603,
+    "Brightness": 189.8053,
+    "Color B": 0.4326843,
+    "Color G": 0.39085537,
+    "Color R": 0.5326843,
     "Override": false
   },
   "FoW Gameplay": {
@@ -20,34 +20,34 @@
     "Explored Tint G": 0.0,
     "Explored Tint R": 0.0,
     "Fog Color A": 0.21,
-    "Fog Color B": 1.0,
-    "Fog Color G": 1.0,
-    "Fog Color R": 1.0,
+    "Fog Color B": 0.72999996,
+    "Fog Color G": 0.66999996,
+    "Fog Color R": 0.089999996,
     "Glow Color A": 0.0,
     "Glow Color B": 0.0,
     "Glow Color G": 0.0,
     "Glow Color R": 0.0,
-    "Noise Scale": 2.0
+    "Noise Scale": 12.5
   },
   "Sky Color": {
-    "Color B": 0.5952616,
-    "Color G": 0.51736706,
-    "Color R": 0.5778945,
+    "Color B": 0.42859876,
+    "Color G": 0.37451324,
+    "Color R": 0.55408555,
     "Override": false
   },
   "Sunlight": {
-    "Color B": 0.47894508,
-    "Color G": 0.6673671,
-    "Color R": 0.9163165,
-    "Illuminance": 4673.6704,
+    "Color B": 0.24085538,
+    "Color G": 0.52451324,
+    "Color R": 0.9877434,
+    "Illuminance": 3245.1323,
     "Override": false,
-    "Pitch": -0.5126287,
+    "Pitch": -0.20311202,
     "Shadows": true,
     "Yaw": 0.30000004
   },
   "Time of Day": {
     "Cycle Duration": 600.0,
     "Paused": false,
-    "Time": 0.6153461
+    "Time": 0.7061184
   }
 }

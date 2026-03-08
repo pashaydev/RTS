@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
 use crate::components::*;
 use crate::ground::terrain_height;
+use crate::model_assets::BuildingModelAssets;
 
 pub struct UnitsPlugin;
 
@@ -25,18 +26,16 @@ fn spawn_units(
     mut commands: Commands,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
+    building_models: Option<Res<BuildingModelAssets>>,
     mut completed_buildings: ResMut<CompletedBuildings>,
 ) {
     // Spawn a pre-built Base at the origin
     let base_pos = Vec3::new(0.0, 0.0, 0.0);
-    let base_entity = spawn_from_blueprint(&mut commands, &cache, EntityKind::Base, base_pos, &registry);
+    let base_entity = spawn_from_blueprint(&mut commands, &cache, EntityKind::Base, base_pos, &registry, building_models.as_deref());
 
-    // Override: mark it as already complete (remove construction state, set final material)
+    // Override: mark it as already complete (remove construction state)
     commands.entity(base_entity).remove::<ConstructionProgress>();
     commands.entity(base_entity).insert(BuildingState::Complete);
-    if let Some(mat) = cache.materials_default.get(&EntityKind::Base) {
-        commands.entity(base_entity).insert(MeshMaterial3d(mat.clone()));
-    }
     commands.entity(base_entity).insert(TrainingQueue {
         queue: vec![],
         timer: None,
@@ -54,7 +53,7 @@ fn spawn_units(
         Vec3::new(0.0, 0.0, -3.0),
     ];
     for pos in worker_positions {
-        spawn_from_blueprint(&mut commands, &cache, EntityKind::Worker, pos, &registry);
+        spawn_from_blueprint(&mut commands, &cache, EntityKind::Worker, pos, &registry, None);
     }
 }
 

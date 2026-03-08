@@ -3,9 +3,11 @@ use std::time::Duration;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
+use bevy_mod_outline::AsyncSceneInheritOutline;
 use crate::blueprints::{BlueprintRegistry, EntityCategory, EntityKind, EntityVisualCache, LevelBonus, spawn_from_blueprint};
 use crate::components::*;
 use crate::ground::terrain_height;
+use crate::model_assets::BuildingModelAssets;
 
 pub struct BuildingsPlugin;
 
@@ -171,6 +173,7 @@ fn confirm_placement(
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
     ghost_mats: Res<BuildingGhostMaterials>,
+    building_models: Option<Res<BuildingModelAssets>>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
     existing_buildings: Query<&Transform, (With<Building>, Without<GhostBuilding>)>,
@@ -261,12 +264,16 @@ fn confirm_placement(
     }
 
     // Spawn building using blueprint
-    let entity_id = spawn_from_blueprint(&mut commands, &cache, kind, world_pos, &registry);
+    let bp = registry.get(kind);
+    let is_gltf = bp.visual.mesh_kind.is_gltf();
+    let entity_id = spawn_from_blueprint(&mut commands, &cache, kind, world_pos, &registry, building_models.as_deref());
 
-    // Override material with under_construction
-    commands.entity(entity_id).insert(
-        MeshMaterial3d(ghost_mats.under_construction.clone()),
-    );
+    // Override material with under_construction (only for non-GLTF buildings)
+    if !is_gltf {
+        commands.entity(entity_id).insert(
+            MeshMaterial3d(ghost_mats.under_construction.clone()),
+        );
+    }
 
     // Tower gets combat components from blueprint already
 
@@ -351,14 +358,16 @@ fn construction_progress_system(
             *state = BuildingState::Complete;
             transform.scale = Vec3::splat(base_scale);
 
-            // Swap to final material
-            if let Some(mat) = cache.materials_default.get(kind) {
-                commands
-                    .entity(entity)
-                    .insert(MeshMaterial3d(mat.clone()))
-                    .remove::<ConstructionProgress>()
-                    .remove::<ConstructionWorkers>();
+            // Swap to final material (only for non-GLTF buildings)
+            let is_gltf = bp.visual.mesh_kind.is_gltf();
+            if !is_gltf {
+                if let Some(mat) = cache.materials_default.get(kind) {
+                    commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                }
             }
+            commands.entity(entity)
+                .remove::<ConstructionProgress>()
+                .remove::<ConstructionWorkers>();
 
             // Add training queue for production buildings
             if let Some(ref bd) = bp.building {
@@ -464,7 +473,7 @@ fn training_queue_system(
             if timer.is_finished() {
                 let unit_kind = queue.queue.remove(0);
                 let spawn_pos = transform.translation + Vec3::new(3.0, 0.0, 3.0);
-                let unit_entity = spawn_from_blueprint(&mut commands, &cache, unit_kind, spawn_pos, &registry);
+                let unit_entity = spawn_from_blueprint(&mut commands, &cache, unit_kind, spawn_pos, &registry, None);
 
                 // If building has a rally point, send the unit there
                 if let Some(rally) = rally_point {
@@ -549,6 +558,7 @@ fn building_upgrade_system(
     mut commands: Commands,
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
+    building_models: Option<Res<BuildingModelAssets>>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut buildings: Query<(
         Entity,
@@ -560,6 +570,8 @@ fn building_upgrade_system(
         Option<&mut AttackRange>,
         Option<&mut AttackDamage>,
     ), With<Building>>,
+    children_q: Query<&Children>,
+    scene_child_q: Query<Entity, With<BuildingSceneChild>>,
 ) {
     for (entity, kind, mut level, mut upgrade, transform, vision, attack_range, attack_damage) in &mut buildings {
         upgrade.timer.tick(time.delta());
@@ -587,14 +599,46 @@ fn building_upgrade_system(
 
         let level_data = &bd.level_upgrades[upgrade_index];
 
-        // Apply scale multiplier via animation
-        let current_scale = transform.scale;
-        let new_scale = current_scale * level_data.scale_multiplier;
-        commands.entity(entity).insert(BuildingScaleAnim {
-            timer: Timer::from_seconds(0.5, TimerMode::Once),
-            from: current_scale,
-            to: new_scale,
-        });
+        // For GLTF buildings: swap scene child to new level's model
+        let bp = registry.get(*kind);
+        let is_gltf = bp.visual.mesh_kind.is_gltf();
+        if is_gltf {
+            if let Some(ref models) = building_models {
+                if let Some(new_scene) = models.scenes.get(&(*kind, new_level)) {
+                    // Despawn old scene child
+                    if let Ok(children) = children_q.get(entity) {
+                        for child in children.iter() {
+                            if scene_child_q.contains(child) {
+                                commands.entity(child).try_despawn();
+                            }
+                        }
+                    }
+                    // Spawn new scene child with calibration
+                    let cal = models.calibration.get(kind);
+                    let scale = cal.map(|c| c.scale).unwrap_or(1.0);
+                    let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
+                    let child = commands.spawn((
+                        SceneRoot(new_scene.clone()),
+                        BuildingSceneChild,
+                        AsyncSceneInheritOutline::default(),
+                        Transform::from_scale(Vec3::splat(scale))
+                            .with_translation(Vec3::new(0.0, y_off, 0.0)),
+                    )).id();
+                    commands.entity(entity).add_child(child);
+                }
+            }
+        }
+
+        // Apply scale multiplier via animation (skip for GLTF — model swap IS the visual feedback)
+        if !is_gltf {
+            let current_scale = transform.scale;
+            let new_scale = current_scale * level_data.scale_multiplier;
+            commands.entity(entity).insert(BuildingScaleAnim {
+                timer: Timer::from_seconds(0.5, TimerMode::Once),
+                from: current_scale,
+                to: new_scale,
+            });
+        }
 
         // Apply LevelBonus
         match &level_data.bonus {
@@ -784,13 +828,15 @@ fn level_indicator_system(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    building_models: Option<Res<BuildingModelAssets>>,
+    registry: Res<BlueprintRegistry>,
     buildings: Query<
-        (Entity, &BuildingLevel, &Transform),
+        (Entity, &BuildingLevel, &Transform, &EntityKind),
         (With<Building>, Changed<BuildingLevel>),
     >,
     existing_indicators: Query<(Entity, &LevelIndicator)>,
 ) {
-    for (building_entity, level, transform) in &buildings {
+    for (building_entity, level, transform, kind) in &buildings {
         if level.0 <= 1 {
             continue;
         }
@@ -798,7 +844,7 @@ fn level_indicator_system(
         // Remove existing indicators for this building
         for (ind_entity, indicator) in &existing_indicators {
             if indicator.building == building_entity {
-                commands.entity(ind_entity).despawn();
+                commands.entity(ind_entity).try_despawn();
             }
         }
 
@@ -811,7 +857,16 @@ fn level_indicator_system(
             ..default()
         });
 
-        let base_y = transform.translation.y + transform.scale.y * 2.0 + 1.0;
+        let bp = registry.get(*kind);
+        let base_y = if bp.visual.mesh_kind.is_gltf() {
+            let height = building_models.as_ref()
+                .and_then(|m| m.calibration.get(kind))
+                .map(|c| c.building_height)
+                .unwrap_or(4.0);
+            transform.translation.y + height + 1.0
+        } else {
+            transform.translation.y + transform.scale.y * 2.0 + 1.0
+        };
 
         for i in 0..pip_count {
             let x_offset = if pip_count == 1 {
@@ -899,14 +954,16 @@ fn sync_storage_on_spend(
 fn update_storage_piles(
     mut commands: Commands,
     pile_assets: Option<Res<StoragePileAssets>>,
+    building_models: Option<Res<BuildingModelAssets>>,
+    registry: Res<BlueprintRegistry>,
     mut storages: Query<
-        (Entity, &Transform, &mut StorageInventory, Option<&ResourcePileVisuals>),
+        (Entity, &Transform, &EntityKind, &mut StorageInventory, Option<&ResourcePileVisuals>),
         (With<Building>, With<DepositPoint>),
     >,
 ) {
     let Some(assets) = pile_assets else { return };
 
-    for (entity, transform, mut inventory, pile_visuals) in &mut storages {
+    for (entity, transform, kind, mut inventory, pile_visuals) in &mut storages {
         let new_total = inventory.total();
         if new_total == inventory.last_total {
             continue;
@@ -916,12 +973,21 @@ fn update_storage_piles(
         // Despawn old pile visuals
         if let Some(piles) = pile_visuals {
             for pile_entity in &piles.entities {
-                commands.entity(*pile_entity).despawn();
+                commands.entity(*pile_entity).try_despawn();
             }
         }
 
         let mut pile_entities = Vec::new();
-        let base_y = transform.scale.y + 0.5;
+        let bp = registry.get(*kind);
+        let base_y = if bp.visual.mesh_kind.is_gltf() {
+            let height = building_models.as_ref()
+                .and_then(|m| m.calibration.get(kind))
+                .map(|c| c.building_height)
+                .unwrap_or(3.0);
+            height + 0.5
+        } else {
+            transform.scale.y + 0.5
+        };
 
         // Positions for each resource type on the building top
         let positions = [

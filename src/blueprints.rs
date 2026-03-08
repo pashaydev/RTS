@@ -1,9 +1,10 @@
 use bevy::prelude::*;
-use bevy_mod_outline::{OutlineStencil, OutlineVolume};
+use bevy_mod_outline::{AsyncSceneInheritOutline, OutlineStencil, OutlineVolume};
 use std::collections::HashMap;
 
 use crate::components::*;
 use crate::ground::terrain_height;
+use crate::model_assets::BuildingModelAssets;
 
 // ── EntityKind — unified type enum ──
 
@@ -223,6 +224,7 @@ pub enum MeshKind {
     Capsule { radius: f32, length: f32 },
     Cuboid { x: f32, y: f32, z: f32 },
     Cylinder { radius: f32, height: f32 },
+    GltfScene { pick_radius: f32 },
 }
 
 impl MeshKind {
@@ -232,9 +234,14 @@ impl MeshKind {
             MeshKind::Capsule { radius, length } => length / 2.0 + radius,
             MeshKind::Cuboid { x, y, z } => (x * x + y * y + z * z).sqrt() / 2.0,
             MeshKind::Cylinder { radius, height } => (radius * radius + (height / 2.0).powi(2)).sqrt(),
+            MeshKind::GltfScene { pick_radius } => return pick_radius,
         };
         // 30% buffer for easier clicking
         r * 1.3
+    }
+
+    pub fn is_gltf(&self) -> bool {
+        matches!(self, MeshKind::GltfScene { .. })
     }
 }
 
@@ -679,7 +686,7 @@ pub fn build_registry() -> BlueprintRegistry {
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 4.0, y: 3.0, z: 4.0 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
             color: Color::srgb(0.6, 0.55, 0.45),
             selected_color: Color::srgb(0.6, 0.55, 0.45),
             selected_emissive: LinearRgba::NONE,
@@ -718,7 +725,7 @@ pub fn build_registry() -> BlueprintRegistry {
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 5.0, y: 2.5, z: 3.0 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
             color: Color::srgb(0.7, 0.3, 0.25),
             selected_color: Color::srgb(0.7, 0.3, 0.25),
             selected_emissive: LinearRgba::NONE,
@@ -757,7 +764,7 @@ pub fn build_registry() -> BlueprintRegistry {
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 4.0, y: 3.0, z: 4.0 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
             color: Color::srgb(0.45, 0.45, 0.5),
             selected_color: Color::srgb(0.45, 0.45, 0.5),
             selected_emissive: LinearRgba::NONE,
@@ -796,7 +803,7 @@ pub fn build_registry() -> BlueprintRegistry {
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cylinder { radius: 1.0, height: 6.0 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
             color: Color::srgb(0.55, 0.55, 0.6),
             selected_color: Color::srgb(0.55, 0.55, 0.6),
             selected_emissive: LinearRgba::NONE,
@@ -835,7 +842,7 @@ pub fn build_registry() -> BlueprintRegistry {
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 4.0, y: 0.3, z: 3.5 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 4.5 },
             color: Color::srgb(0.45, 0.32, 0.18),
             selected_color: Color::srgb(0.45, 0.32, 0.18),
             selected_emissive: LinearRgba::NONE,
@@ -874,7 +881,7 @@ pub fn build_registry() -> BlueprintRegistry {
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cylinder { radius: 1.2, height: 5.0 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
             color: Color::srgb(0.35, 0.25, 0.55),
             selected_color: Color::srgb(0.35, 0.25, 0.55),
             selected_emissive: LinearRgba::NONE,
@@ -913,7 +920,7 @@ pub fn build_registry() -> BlueprintRegistry {
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 4.0, y: 4.0, z: 4.0 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
             color: Color::srgb(0.85, 0.8, 0.65),
             selected_color: Color::srgb(0.85, 0.8, 0.65),
             selected_emissive: LinearRgba::NONE,
@@ -952,7 +959,7 @@ pub fn build_registry() -> BlueprintRegistry {
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 5.0, y: 2.5, z: 4.0 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
             color: Color::srgb(0.5, 0.35, 0.2),
             selected_color: Color::srgb(0.5, 0.35, 0.2),
             selected_emissive: LinearRgba::NONE,
@@ -991,7 +998,7 @@ pub fn build_registry() -> BlueprintRegistry {
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 5.0, y: 3.0, z: 5.0 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 5.5 },
             color: Color::srgb(0.4, 0.35, 0.3),
             selected_color: Color::srgb(0.4, 0.35, 0.3),
             selected_emissive: LinearRgba::NONE,
@@ -1166,34 +1173,59 @@ pub fn spawn_from_blueprint(
     kind: EntityKind,
     pos: Vec3,
     registry: &BlueprintRegistry,
+    building_models: Option<&BuildingModelAssets>,
 ) -> Entity {
     let bp = registry.get(kind);
 
     let mesh_handle = cache.meshes.get(&kind).expect("Missing mesh for entity kind").clone();
     let mat_handle = cache.materials_default.get(&kind).expect("Missing material for entity kind").clone();
 
+    let is_gltf_building = bp.visual.mesh_kind.is_gltf();
+
     // Compute Y position
     let y_off = bp.movement.as_ref().map(|m| m.y_offset).unwrap_or(0.0);
-    let building_y = bp.building.as_ref().map(|b| b.half_height).unwrap_or(0.0);
+    let building_y = if is_gltf_building {
+        0.0 // GLTF models sit at ground level
+    } else {
+        bp.building.as_ref().map(|b| b.half_height).unwrap_or(0.0)
+    };
     let y = terrain_height(pos.x, pos.z) + y_off + building_y;
 
     let pick_radius = bp.visual.mesh_kind.pick_radius() * bp.visual.scale;
 
-    let mut entity_cmds = commands.spawn((
-        kind,
-        bp.faction,
-        PickRadius(pick_radius),
-        Mesh3d(mesh_handle),
-        MeshMaterial3d(mat_handle),
-        Transform::from_translation(Vec3::new(pos.x, y, pos.z))
-            .with_scale(Vec3::splat(bp.visual.scale)),
-        OutlineVolume {
-            visible: false,
-            colour: Color::NONE,
-            width: 3.0,
-        },
-        OutlineStencil::default(),
-    ));
+    let mut entity_cmds = if is_gltf_building {
+        // GLTF buildings: no Mesh3d/MeshMaterial3d on parent
+        commands.spawn((
+            kind,
+            bp.faction,
+            PickRadius(pick_radius),
+            Transform::from_translation(Vec3::new(pos.x, y, pos.z))
+                .with_scale(Vec3::splat(bp.visual.scale)),
+            Visibility::default(),
+            OutlineVolume {
+                visible: false,
+                colour: Color::NONE,
+                width: 3.0,
+            },
+            OutlineStencil::default(),
+        ))
+    } else {
+        commands.spawn((
+            kind,
+            bp.faction,
+            PickRadius(pick_radius),
+            Mesh3d(mesh_handle),
+            MeshMaterial3d(mat_handle),
+            Transform::from_translation(Vec3::new(pos.x, y, pos.z))
+                .with_scale(Vec3::splat(bp.visual.scale)),
+            OutlineVolume {
+                visible: false,
+                colour: Color::NONE,
+                width: 3.0,
+            },
+            OutlineStencil::default(),
+        ))
+    };
 
     // Category markers
     match kind.category() {
@@ -1285,7 +1317,28 @@ pub fn spawn_from_blueprint(
         });
     }
 
-    entity_cmds.id()
+    let entity_id = entity_cmds.id();
+
+    // Spawn GLTF scene child for buildings with GltfScene mesh kind
+    if is_gltf_building {
+        if let Some(models) = building_models {
+            if let Some(scene_handle) = models.scenes.get(&(kind, 1)) {
+                let cal = models.calibration.get(&kind);
+                let scale = cal.map(|c| c.scale).unwrap_or(1.0);
+                let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
+                let child = commands.spawn((
+                    SceneRoot(scene_handle.clone()),
+                    BuildingSceneChild,
+                    AsyncSceneInheritOutline::default(),
+                    Transform::from_scale(Vec3::splat(scale))
+                        .with_translation(Vec3::new(0.0, y_off, 0.0)),
+                )).id();
+                commands.entity(entity_id).add_child(child);
+            }
+        }
+    }
+
+    entity_id
 }
 
 // ── Build visual cache from registry ──
@@ -1302,6 +1355,7 @@ pub fn build_visual_cache(
             MeshKind::Capsule { radius, length } => meshes.add(Capsule3d::new(radius, length)),
             MeshKind::Cuboid { x, y, z } => meshes.add(Cuboid::new(x, y, z)),
             MeshKind::Cylinder { radius, height } => meshes.add(Cylinder::new(radius, height)),
+            MeshKind::GltfScene { .. } => meshes.add(Cuboid::new(4.0, 0.3, 4.0)),
         };
 
         let mat_default = materials.add(StandardMaterial {
@@ -1336,159 +1390,6 @@ pub fn build_visual_cache(
     cache
 }
 
-// ── Storage building visual parts ──
-
-#[derive(Resource)]
-pub struct StorageBuildingParts {
-    pub post_mesh: Handle<Mesh>,
-    pub post_material: Handle<StandardMaterial>,
-    pub beam_mesh: Handle<Mesh>,
-    pub beam_material: Handle<StandardMaterial>,
-    pub roof_mesh: Handle<Mesh>,
-    pub roof_material: Handle<StandardMaterial>,
-    pub back_wall_mesh: Handle<Mesh>,
-    pub wall_material: Handle<StandardMaterial>,
-    pub side_wall_mesh: Handle<Mesh>,
-}
-
-fn create_storage_parts(
-    meshes: &mut Assets<Mesh>,
-    materials: &mut Assets<StandardMaterial>,
-) -> StorageBuildingParts {
-    // Dark wooden posts
-    let post_mesh = meshes.add(Cuboid::new(0.2, 2.0, 0.2));
-    let post_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.3, 0.2, 0.1),
-        ..default()
-    });
-
-    // Horizontal beams connecting posts at the top
-    let beam_mesh = meshes.add(Cuboid::new(4.2, 0.15, 0.15));
-    let beam_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.35, 0.22, 0.12),
-        ..default()
-    });
-
-    // Slanted roof (thatch/wood) — a flat tilted slab
-    let roof_mesh = meshes.add(Cuboid::new(4.6, 0.12, 4.0));
-    let roof_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.55, 0.4, 0.2),
-        ..default()
-    });
-
-    // Back wall — partial wall on the back side
-    let back_wall_mesh = meshes.add(Cuboid::new(4.2, 1.2, 0.12));
-    let wall_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.4, 0.28, 0.15),
-        ..default()
-    });
-
-    // Side walls — partial walls on left and right
-    let side_wall_mesh = meshes.add(Cuboid::new(0.12, 1.2, 3.5));
-
-    StorageBuildingParts {
-        post_mesh,
-        post_material,
-        beam_mesh,
-        beam_material,
-        roof_mesh,
-        roof_material,
-        back_wall_mesh,
-        wall_material,
-        side_wall_mesh,
-    }
-}
-
-fn attach_storage_parts(
-    mut commands: Commands,
-    new_storages: Query<(Entity, &EntityKind), Added<Building>>,
-    parts: Res<StorageBuildingParts>,
-) {
-    for (entity, kind) in &new_storages {
-        if *kind != EntityKind::Storage {
-            continue;
-        }
-
-        // 4 corner posts
-        let post_positions = [
-            Vec3::new(-1.8, 1.0, -1.5),
-            Vec3::new(1.8, 1.0, -1.5),
-            Vec3::new(-1.8, 1.3, 1.5),  // back posts taller for roof slope
-            Vec3::new(1.8, 1.3, 1.5),
-        ];
-        let post_scales = [
-            Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(1.0, 1.0, 1.0),
-            Vec3::new(1.0, 1.3, 1.0),
-            Vec3::new(1.0, 1.3, 1.0),
-        ];
-
-        for (i, &pos) in post_positions.iter().enumerate() {
-            let child = commands.spawn((
-                Mesh3d(parts.post_mesh.clone()),
-                MeshMaterial3d(parts.post_material.clone()),
-                Transform::from_translation(pos)
-                    .with_scale(post_scales[i]),
-            )).id();
-            commands.entity(entity).add_child(child);
-        }
-
-        // Cross beams at top (front and back)
-        let front_beam = commands.spawn((
-            Mesh3d(parts.beam_mesh.clone()),
-            MeshMaterial3d(parts.beam_material.clone()),
-            Transform::from_translation(Vec3::new(0.0, 1.9, -1.5)),
-        )).id();
-        commands.entity(entity).add_child(front_beam);
-
-        let back_beam = commands.spawn((
-            Mesh3d(parts.beam_mesh.clone()),
-            MeshMaterial3d(parts.beam_material.clone()),
-            Transform::from_translation(Vec3::new(0.0, 2.5, 1.5)),
-        )).id();
-        commands.entity(entity).add_child(back_beam);
-
-        // Side beams (depth-wise)
-        let side_beam_mesh = parts.beam_mesh.clone();
-        for x in [-1.8_f32, 1.8] {
-            let child = commands.spawn((
-                Mesh3d(side_beam_mesh.clone()),
-                MeshMaterial3d(parts.beam_material.clone()),
-                Transform::from_translation(Vec3::new(x, 2.2, 0.0))
-                    .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))
-                    .with_scale(Vec3::new(0.85, 1.0, 1.0)),
-            )).id();
-            commands.entity(entity).add_child(child);
-        }
-
-        // Slanted roof — tilted forward (higher at back, lower at front)
-        let roof = commands.spawn((
-            Mesh3d(parts.roof_mesh.clone()),
-            MeshMaterial3d(parts.roof_material.clone()),
-            Transform::from_translation(Vec3::new(0.0, 2.35, 0.0))
-                .with_rotation(Quat::from_rotation_x(-0.12)),
-        )).id();
-        commands.entity(entity).add_child(roof);
-
-        // Back wall (partial)
-        let back_wall = commands.spawn((
-            Mesh3d(parts.back_wall_mesh.clone()),
-            MeshMaterial3d(parts.wall_material.clone()),
-            Transform::from_translation(Vec3::new(0.0, 0.75, 1.5)),
-        )).id();
-        commands.entity(entity).add_child(back_wall);
-
-        // Side walls (partial, half-height)
-        for x in [-1.8_f32, 1.8] {
-            let child = commands.spawn((
-                Mesh3d(parts.side_wall_mesh.clone()),
-                MeshMaterial3d(parts.wall_material.clone()),
-                Transform::from_translation(Vec3::new(x, 0.75, 0.0)),
-            )).id();
-            commands.entity(entity).add_child(child);
-        }
-    }
-}
 
 // ── Plugin ──
 
@@ -1496,8 +1397,7 @@ pub struct BlueprintPlugin;
 
 impl Plugin for BlueprintPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreStartup, setup_blueprints)
-            .add_systems(Update, attach_storage_parts);
+        app.add_systems(PreStartup, setup_blueprints);
     }
 }
 
@@ -1508,8 +1408,6 @@ fn setup_blueprints(
 ) {
     let registry = build_registry();
     let cache = build_visual_cache(&registry, &mut meshes, &mut materials);
-    let storage_parts = create_storage_parts(&mut meshes, &mut materials);
     commands.insert_resource(registry);
     commands.insert_resource(cache);
-    commands.insert_resource(storage_parts);
 }

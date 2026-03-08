@@ -1,4 +1,5 @@
 use bevy::ecs::entity::Entities;
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 use crate::components::*;
@@ -170,6 +171,7 @@ fn spawn_path_visualization(
                         Transform::from_translation(Vec3::new(px, py, pz))
                             .with_rotation(rotation)
                             .with_scale(Vec3::splat(scale)),
+                        NotShadowCaster,
                     ))
                     .id();
                 spawned_entities.push(dash_id);
@@ -184,6 +186,7 @@ fn spawn_path_visualization(
                 Mesh3d(path_assets.ring_mesh.clone()),
                 MeshMaterial3d(path_assets.ring_material.clone()),
                 Transform::from_translation(Vec3::new(target.x, ring_y, target.z)),
+                NotShadowCaster,
             ))
             .id();
         spawned_entities.push(ring_id);
