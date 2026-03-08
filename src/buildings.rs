@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
@@ -11,6 +13,7 @@ impl Plugin for BuildingsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BuildingPlacementState>()
             .init_resource::<CompletedBuildings>()
+            .init_resource::<LastPlayerResources>()
             .add_systems(Startup, create_ghost_materials)
             .add_systems(
                 Update,
@@ -27,6 +30,8 @@ impl Plugin for BuildingsPlugin {
                     building_scale_anim_system,
                     healing_aura_system,
                     level_indicator_system,
+                    sync_storage_on_spend,
+                    update_storage_piles,
                 )
                     .chain(),
             );
@@ -304,16 +309,38 @@ fn construction_progress_system(
         &mut ConstructionProgress,
         &mut Transform,
     )>,
+    workers: Query<&WorkerTask, With<Unit>>,
 ) {
     for (entity, kind, mut state, mut progress, mut transform) in &mut buildings {
         if *state != BuildingState::UnderConstruction {
             continue;
         }
 
+        // Count workers actively building this entity
+        let builder_count = workers
+            .iter()
+            .filter(|task| matches!(task, WorkerTask::Building(e) if *e == entity))
+            .count();
+
+        if builder_count == 0 {
+            // No workers assigned — pause and show current scale
+            progress.timer.pause();
+            let bp = registry.get(*kind);
+            let base_scale = bp.visual.scale;
+            let fraction = progress.timer.fraction();
+            let current_scale = 0.3 * base_scale + (base_scale - 0.3 * base_scale) * fraction;
+            transform.scale = Vec3::splat(current_scale);
+            continue;
+        }
+
+        // Unpause when workers are present
+        progress.timer.unpause();
+        let speed_mult = 1.0 + 0.5 * (builder_count as f32 - 1.0);
+
         let bp = registry.get(*kind);
         let base_scale = bp.visual.scale;
 
-        progress.timer.tick(time.delta());
+        progress.timer.tick(Duration::from_secs_f32(time.delta_secs() * speed_mult));
 
         // Lerp scale during construction
         let fraction = progress.timer.fraction();
@@ -329,7 +356,8 @@ fn construction_progress_system(
                 commands
                     .entity(entity)
                     .insert(MeshMaterial3d(mat.clone()))
-                    .remove::<ConstructionProgress>();
+                    .remove::<ConstructionProgress>()
+                    .remove::<ConstructionWorkers>();
             }
 
             // Add training queue for production buildings
@@ -806,5 +834,129 @@ fn level_indicator_system(
                 .with_scale(Vec3::splat(1.0)),
             ));
         }
+    }
+}
+
+// ── Sync Storage on Spend ──
+
+fn sync_storage_on_spend(
+    player_res: Res<PlayerResources>,
+    mut last_res: ResMut<LastPlayerResources>,
+    mut storages: Query<&mut StorageInventory, (With<Building>, With<DepositPoint>)>,
+) {
+    let resource_types = [
+        ResourceType::Wood,
+        ResourceType::Copper,
+        ResourceType::Iron,
+        ResourceType::Gold,
+        ResourceType::Oil,
+    ];
+
+    for rt in resource_types {
+        let current = player_res.get(rt);
+        let last = match rt {
+            ResourceType::Wood => last_res.wood,
+            ResourceType::Copper => last_res.copper,
+            ResourceType::Iron => last_res.iron,
+            ResourceType::Gold => last_res.gold,
+            ResourceType::Oil => last_res.oil,
+        };
+
+        if current < last {
+            let spent = last - current;
+            let mut remaining = spent;
+
+            for mut inv in &mut storages {
+                if remaining == 0 {
+                    break;
+                }
+                let share = inv.get(rt);
+                let deduct = share.min(remaining);
+                if deduct > 0 {
+                    match rt {
+                        ResourceType::Wood => inv.wood -= deduct,
+                        ResourceType::Copper => inv.copper -= deduct,
+                        ResourceType::Iron => inv.iron -= deduct,
+                        ResourceType::Gold => inv.gold -= deduct,
+                        ResourceType::Oil => inv.oil -= deduct,
+                    }
+                    remaining -= deduct;
+                }
+            }
+        }
+    }
+
+    // Update last values
+    last_res.wood = player_res.wood;
+    last_res.copper = player_res.copper;
+    last_res.iron = player_res.iron;
+    last_res.gold = player_res.gold;
+    last_res.oil = player_res.oil;
+}
+
+// ── Storage Pile Visuals ──
+
+fn update_storage_piles(
+    mut commands: Commands,
+    pile_assets: Option<Res<StoragePileAssets>>,
+    mut storages: Query<
+        (Entity, &Transform, &mut StorageInventory, Option<&ResourcePileVisuals>),
+        (With<Building>, With<DepositPoint>),
+    >,
+) {
+    let Some(assets) = pile_assets else { return };
+
+    for (entity, transform, mut inventory, pile_visuals) in &mut storages {
+        let new_total = inventory.total();
+        if new_total == inventory.last_total {
+            continue;
+        }
+        inventory.last_total = new_total;
+
+        // Despawn old pile visuals
+        if let Some(piles) = pile_visuals {
+            for pile_entity in &piles.entities {
+                commands.entity(*pile_entity).despawn();
+            }
+        }
+
+        let mut pile_entities = Vec::new();
+        let base_y = transform.scale.y + 0.5;
+
+        // Positions for each resource type on the building top
+        let positions = [
+            (ResourceType::Wood, Vec3::new(-0.8, base_y, -0.8)),
+            (ResourceType::Copper, Vec3::new(0.8, base_y, -0.8)),
+            (ResourceType::Iron, Vec3::new(-0.8, base_y, 0.8)),
+            (ResourceType::Gold, Vec3::new(0.8, base_y, 0.8)),
+            (ResourceType::Oil, Vec3::new(0.0, base_y, 0.0)),
+        ];
+
+        for (rt, offset) in positions {
+            let amount = inventory.get(rt);
+            if amount == 0 {
+                continue;
+            }
+
+            let scale = (amount as f32 / 100.0).min(1.0) * 0.8 + 0.2;
+            let (mesh, mat) = match rt {
+                ResourceType::Wood => (assets.cube_mesh.clone(), assets.materials.get(&rt).cloned().unwrap_or_default()),
+                ResourceType::Gold => (assets.sphere_mesh.clone(), assets.materials.get(&rt).cloned().unwrap_or_default()),
+                ResourceType::Oil => (assets.cylinder_mesh.clone(), assets.materials.get(&rt).cloned().unwrap_or_default()),
+                _ => (assets.cube_mesh.clone(), assets.materials.get(&rt).cloned().unwrap_or_default()),
+            };
+
+            let pile = commands
+                .spawn((
+                    Mesh3d(mesh),
+                    MeshMaterial3d(mat),
+                    Transform::from_translation(transform.translation + offset)
+                        .with_scale(Vec3::splat(scale)),
+                ))
+                .id();
+            pile_entities.push(pile);
+        }
+
+        commands.entity(entity).insert(ResourcePileVisuals { entities: pile_entities });
     }
 }

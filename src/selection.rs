@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use bevy_mod_outline::OutlineVolume;
 
 use crate::blueprints::{EntityKind, EntityVisualCache};
 use crate::components::*;
@@ -18,6 +19,7 @@ impl Plugin for SelectionPlugin {
             .init_resource::<DragState>()
             .init_resource::<InspectedEnemy>()
             .init_resource::<UiClickedThisFrame>()
+            .init_resource::<UiPressActive>()
             .add_systems(Startup, (spawn_selection_box, setup_hover_assets))
             .add_systems(First, reset_ui_clicked)
             .add_systems(
@@ -51,6 +53,10 @@ impl Plugin for SelectionPlugin {
                 Update,
                 (update_hover_ring, update_hover_tooltip)
                     .after(SelectionSet),
+            )
+            .add_systems(
+                PostUpdate,
+                clear_ui_press_on_release,
             );
     }
 }
@@ -184,7 +190,16 @@ fn pick_for_click(
 }
 
 fn reset_ui_clicked(mut ui_clicked: ResMut<UiClickedThisFrame>) {
-    ui_clicked.0 = false;
+    ui_clicked.0 = ui_clicked.0.saturating_sub(1);
+}
+
+fn clear_ui_press_on_release(
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    if mouse.just_released(MouseButton::Left) {
+        ui_press.0 = false;
+    }
 }
 
 fn setup_hover_assets(
@@ -239,9 +254,17 @@ fn track_drag(
     mut drag: ResMut<DragState>,
     minimap_interaction: Res<MinimapInteraction>,
     ui_clicked: Res<UiClickedThisFrame>,
+    ui_press: Res<UiPressActive>,
+    ui_interactions: Query<&Interaction, With<Node>>,
 ) {
-    if minimap_interaction.clicked || ui_clicked.0 {
+    if minimap_interaction.clicked || ui_clicked.0 > 0 || ui_press.0 {
         return;
+    }
+    // Block drag when mouse is over any UI node
+    for interaction in &ui_interactions {
+        if *interaction == Interaction::Pressed || *interaction == Interaction::Hovered {
+            return;
+        }
     }
 
     let Ok(window) = windows.single() else {
@@ -312,7 +335,7 @@ fn update_hover(
     resource_nodes: Query<Entity, With<ResourceNode>>,
     hovered: Query<Entity, With<Hovered>>,
     placement: Res<BuildingPlacementState>,
-    ui_interactions: Query<&Interaction, With<Button>>,
+    ui_interactions: Query<&Interaction, With<Node>>,
 ) {
     // Remove previous hover
     for entity in &hovered {
@@ -364,11 +387,12 @@ fn handle_click_select(
     ),
     selected: Query<Entity, With<Selected>>,
     unit_transforms: Query<&GlobalTransform, With<Unit>>,
-    flags: (Res<MinimapInteraction>, Res<UiClickedThisFrame>),
+    flags: (Res<MinimapInteraction>, Res<UiClickedThisFrame>, Res<UiPressActive>),
+    ui_interactions: Query<&Interaction, With<Node>>,
 ) {
     let (ref mut drag, ref mut inspected) = state;
     let (ref units, ref buildings, ref mobs, ref resource_nodes) = entity_queries;
-    let (ref minimap_interaction, ref ui_clicked) = flags;
+    let (ref minimap_interaction, ref ui_clicked, ref ui_press) = flags;
     if !mouse.just_released(MouseButton::Left) {
         return;
     }
@@ -377,7 +401,17 @@ fn handle_click_select(
         return;
     }
 
-    if minimap_interaction.clicked || ui_clicked.0 {
+    // Block selection when clicking on any UI element
+    let mut ui_blocking = minimap_interaction.clicked || ui_clicked.0 > 0 || ui_press.0;
+    if !ui_blocking {
+        for interaction in &ui_interactions {
+            if *interaction == Interaction::Pressed || *interaction == Interaction::Hovered {
+                ui_blocking = true;
+                break;
+            }
+        }
+    }
+    if ui_blocking {
         drag.start = None;
         drag.current = None;
         drag.dragging = false;
@@ -477,10 +511,20 @@ fn update_entity_visuals(
     added_hovered: Query<(Entity, &EntityKind), Added<Hovered>>,
     mut removed_hovered: RemovedComponents<Hovered>,
     all_entities: Query<(Entity, &EntityKind, Has<Selected>, Has<Hovered>)>,
+    mut outlines: Query<&mut OutlineVolume>,
 ) {
+    // Outline colors
+    let outline_selected = Color::srgb(0.2, 1.0, 0.3);
+    let outline_hovered = Color::srgb(0.3, 0.8, 1.0);
+
     for (entity, kind) in &added_selected {
         if let Some(mat) = cache.materials_selected.get(kind) {
             commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+        }
+        if let Ok(mut outline) = outlines.get_mut(entity) {
+            outline.visible = true;
+            outline.colour = outline_selected;
+            outline.width = 4.0;
         }
     }
 
@@ -490,8 +534,18 @@ fn update_entity_visuals(
                 if let Some(mat) = cache.materials_hovered.get(kind) {
                     commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                 }
-            } else if let Some(mat) = cache.materials_default.get(kind) {
-                commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                if let Ok(mut outline) = outlines.get_mut(entity) {
+                    outline.visible = true;
+                    outline.colour = outline_hovered;
+                    outline.width = 3.0;
+                }
+            } else {
+                if let Some(mat) = cache.materials_default.get(kind) {
+                    commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                }
+                if let Ok(mut outline) = outlines.get_mut(entity) {
+                    outline.visible = false;
+                }
             }
         }
     }
@@ -502,6 +556,11 @@ fn update_entity_visuals(
                 if let Some(mat) = cache.materials_hovered.get(kind) {
                     commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                 }
+                if let Ok(mut outline) = outlines.get_mut(entity) {
+                    outline.visible = true;
+                    outline.colour = outline_hovered;
+                    outline.width = 3.0;
+                }
             }
         }
     }
@@ -511,6 +570,9 @@ fn update_entity_visuals(
             if !has_selected {
                 if let Some(mat) = cache.materials_default.get(kind) {
                     commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                }
+                if let Ok(mut outline) = outlines.get_mut(entity) {
+                    outline.visible = false;
                 }
             }
         }
@@ -616,6 +678,7 @@ fn handle_right_click_move(
     pickables: Query<(Entity, &GlobalTransform, &PickRadius)>,
     mobs: Query<Entity, With<Mob>>,
     resource_nodes: Query<Entity, With<ResourceNode>>,
+    construction_q: Query<(Entity, &GlobalTransform), (With<Building>, With<ConstructionProgress>)>,
     minimap_interaction: Res<MinimapInteraction>,
 ) {
     if !mouse.just_pressed(MouseButton::Right) {
@@ -644,9 +707,10 @@ fn handle_right_click_move(
         return;
     }
 
-    // Find closest mob or resource node under cursor
+    // Find closest mob, construction site, or resource node under cursor
     let mut best_mob: Option<(Entity, f32)> = None;
     let mut best_resource: Option<(Entity, f32)> = None;
+    let mut best_construction: Option<(Entity, f32)> = None;
 
     for (entity, gt, pick_r) in &pickables {
         let center = gt.translation();
@@ -654,6 +718,10 @@ fn handle_right_click_move(
             if mobs.contains(entity) {
                 if best_mob.is_none() || dist < best_mob.unwrap().1 {
                     best_mob = Some((entity, dist));
+                }
+            } else if construction_q.contains(entity) {
+                if best_construction.is_none() || dist < best_construction.unwrap().1 {
+                    best_construction = Some((entity, dist));
                 }
             } else if resource_nodes.contains(entity) {
                 if best_resource.is_none() || dist < best_resource.unwrap().1 {
@@ -664,12 +732,29 @@ fn handle_right_click_move(
     }
 
     if let Some((mob_entity, _)) = best_mob {
-        for (entity, _) in &units_vec {
-            commands
-                .entity(*entity)
-                .remove::<GatherTarget>()
-                .remove::<MoveTarget>()
+        for (entity, kind) in &units_vec {
+            let mut ec = commands.entity(*entity);
+            ec.remove::<MoveTarget>()
                 .insert(AttackTarget(mob_entity));
+            if *kind == EntityKind::Worker {
+                ec.insert(WorkerTask::Idle);
+            }
+        }
+    } else if let Some((construction_entity, _)) = best_construction {
+        let construction_pos = pickables.get(construction_entity).map(|(_, gt, _)| gt.translation());
+        for (entity, kind) in &units_vec {
+            if *kind == EntityKind::Worker {
+                commands
+                    .entity(*entity)
+                    .remove::<AttackTarget>()
+                    .remove::<MoveTarget>()
+                    .insert(WorkerTask::MovingToBuild(construction_entity));
+            } else if let Ok(pos) = construction_pos {
+                commands
+                    .entity(*entity)
+                    .remove::<AttackTarget>()
+                    .insert(MoveTarget(pos));
+            }
         }
     } else if let Some((resource_entity, _)) = best_resource {
         // Only workers can gather; non-workers move to the resource instead
@@ -680,11 +765,10 @@ fn handle_right_click_move(
                     .entity(*entity)
                     .remove::<AttackTarget>()
                     .remove::<MoveTarget>()
-                    .insert(GatherTarget(resource_entity));
+                    .insert(WorkerTask::MovingToResource(resource_entity));
             } else if let Ok(pos) = resource_pos {
                 commands
                     .entity(*entity)
-                    .remove::<GatherTarget>()
                     .remove::<AttackTarget>()
                     .insert(MoveTarget(pos));
             }
@@ -692,26 +776,61 @@ fn handle_right_click_move(
     } else {
         if let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) {
             let point = ray.get_point(dist);
-            let n = units_vec.len();
 
-            if n == 1 {
-                commands
-                    .entity(units_vec[0].0)
-                    .remove::<GatherTarget>()
-                    .remove::<AttackTarget>()
-                    .insert(MoveTarget(point));
-            } else if n > 1 {
-                let spacing = 1.5;
-                let radius = (spacing * n as f32 / std::f32::consts::TAU).max(1.0);
-                for (i, (entity, _)) in units_vec.iter().enumerate() {
-                    let angle = i as f32 / n as f32 * std::f32::consts::TAU;
-                    let offset =
-                        Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
-                    commands
-                        .entity(*entity)
-                        .remove::<GatherTarget>()
-                        .remove::<AttackTarget>()
-                        .insert(MoveTarget(point + offset));
+            // Check if ground click is near a construction site (fallback for missed pick sphere)
+            let nearby_construction_radius = 5.0;
+            let mut nearest_site: Option<(Entity, f32)> = None;
+            for (site_entity, site_gt) in &construction_q {
+                let site_pos = site_gt.translation();
+                let d = point.distance(Vec3::new(site_pos.x, point.y, site_pos.z));
+                if d < nearby_construction_radius {
+                    if nearest_site.is_none() || d < nearest_site.unwrap().1 {
+                        nearest_site = Some((site_entity, d));
+                    }
+                }
+            }
+
+            let has_workers = units_vec.iter().any(|(_, k)| *k == EntityKind::Worker);
+            if let Some((site_entity, _)) = nearest_site.filter(|_| has_workers) {
+                for (entity, kind) in &units_vec {
+                    if *kind == EntityKind::Worker {
+                        commands
+                            .entity(*entity)
+                            .remove::<AttackTarget>()
+                            .remove::<MoveTarget>()
+                            .insert(WorkerTask::MovingToBuild(site_entity));
+                    } else {
+                        commands
+                            .entity(*entity)
+                            .remove::<AttackTarget>()
+                            .insert(MoveTarget(point));
+                    }
+                }
+            } else {
+                let n = units_vec.len();
+
+                if n == 1 {
+                    let (ent, kind) = &units_vec[0];
+                    let mut ec = commands.entity(*ent);
+                    ec.remove::<AttackTarget>()
+                        .insert(MoveTarget(point));
+                    if *kind == EntityKind::Worker {
+                        ec.insert(WorkerTask::Idle);
+                    }
+                } else if n > 1 {
+                    let spacing = 1.5;
+                    let radius = (spacing * n as f32 / std::f32::consts::TAU).max(1.0);
+                    for (i, (entity, kind)) in units_vec.iter().enumerate() {
+                        let angle = i as f32 / n as f32 * std::f32::consts::TAU;
+                        let offset =
+                            Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
+                        let mut ec = commands.entity(*entity);
+                        ec.remove::<AttackTarget>()
+                            .insert(MoveTarget(point + offset));
+                        if *kind == EntityKind::Worker {
+                            ec.insert(WorkerTask::Idle);
+                        }
+                    }
                 }
             }
         }

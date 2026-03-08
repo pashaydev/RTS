@@ -25,14 +25,20 @@ impl Plugin for CombatPlugin {
 fn player_auto_acquire_target(
     mut commands: Commands,
     idle_units: Query<
-        (Entity, &Transform, &AttackRange, &Faction),
-        (With<Unit>, Without<MoveTarget>, Without<AttackTarget>, Without<GatherTarget>),
+        (Entity, &Transform, &AttackRange, &Faction, Option<&WorkerTask>),
+        (With<Unit>, Without<MoveTarget>, Without<AttackTarget>),
     >,
     mobs: Query<(Entity, &Transform), With<Mob>>,
 ) {
-    for (unit_entity, unit_tf, range, faction) in &idle_units {
+    for (unit_entity, unit_tf, range, faction, worker_task) in &idle_units {
         if *faction != Faction::Player {
             continue;
+        }
+        // Skip workers that are busy (not idle)
+        if let Some(task) = worker_task {
+            if !matches!(task, WorkerTask::Idle) {
+                continue;
+            }
         }
         let scan_range = range.0 * 2.0;
         let mut closest_dist = f32::MAX;

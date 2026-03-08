@@ -96,9 +96,9 @@ fn move_units(
     mut commands: Commands,
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
-    mut query: Query<(Entity, &mut Transform, &MoveTarget, &UnitSpeed, &EntityKind), With<Unit>>,
+    mut query: Query<(Entity, &mut Transform, &MoveTarget, &UnitSpeed, &EntityKind, Option<&Carrying>, Option<&CarryCapacity>), With<Unit>>,
 ) {
-    for (entity, mut transform, target, unit_speed, kind) in &mut query {
+    for (entity, mut transform, target, unit_speed, kind, carrying, capacity) in &mut query {
         let direction = target.0 - transform.translation;
         let flat_dir = Vec3::new(direction.x, 0.0, direction.z);
         let distance = flat_dir.length();
@@ -106,7 +106,19 @@ fn move_units(
         if distance < 0.2 {
             commands.entity(entity).remove::<MoveTarget>();
         } else {
-            let step = flat_dir.normalize() * unit_speed.0 * time.delta_secs();
+            // Encumbrance: slow down when carrying heavy loads
+            let speed_mult = if let (Some(carry), Some(cap)) = (carrying, capacity) {
+                if cap.0 > 0.0 && carry.weight > 0.0 {
+                    let load_fraction = (carry.weight / cap.0).min(1.0);
+                    1.0 - load_fraction * 0.4 // 40% slower at full load
+                } else {
+                    1.0
+                }
+            } else {
+                1.0
+            };
+
+            let step = flat_dir.normalize() * unit_speed.0 * speed_mult * time.delta_secs();
             transform.translation += step;
         }
         // Snap Y to terrain

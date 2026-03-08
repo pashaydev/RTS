@@ -20,6 +20,7 @@ mod units;
 mod vfx;
 
 use bevy::prelude::*;
+use bevy_mod_outline::OutlinePlugin;
 
 fn main() {
     App::new()
@@ -31,6 +32,7 @@ fn main() {
             }),
             ..default()
         }))
+        .add_plugins(OutlinePlugin)
         .add_plugins(blueprints::BlueprintPlugin)
         .add_plugins((
             debug::DebugPlugin,

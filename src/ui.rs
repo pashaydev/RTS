@@ -31,9 +31,18 @@ impl Plugin for UiPlugin {
                     handle_demolish_button,
                     handle_demolish_confirm,
                     handle_rally_point_button,
+                    handle_toggle_auto_attack,
+                    handle_cancel_train,
                     update_training_queue_display,
                     update_construction_progress_display,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    update_upgrade_progress_display,
                     button_hover_visual,
+                    show_action_tooltips,
                 ),
             )
             .add_systems(
@@ -667,11 +676,13 @@ fn handle_unit_card_click(
     mut commands: Commands,
     interactions: Query<(&Interaction, &UnitCardRef), (Changed<Interaction>, With<Button>)>,
     selected: Query<Entity, With<Selected>>,
+    mut ui_press: ResMut<UiPressActive>,
 ) {
     for (interaction, card_ref) in &interactions {
         if *interaction != Interaction::Pressed {
             continue;
         }
+        ui_press.0 = true;
         for entity in &selected {
             commands.entity(entity).remove::<Selected>();
         }
@@ -692,26 +703,27 @@ fn clear_stale_inspected(
 
 fn update_action_bar(
     mut commands: Commands,
-    selected_units: Query<&EntityKind, (With<Unit>, With<Selected>)>,
+    selected_units: Query<(&EntityKind, Option<&Carrying>, Option<&CarryCapacity>, Option<&WorkerTask>), (With<Unit>, With<Selected>)>,
     selected_buildings: Query<
-        (Entity, &EntityKind, &BuildingState, &BuildingLevel, Option<&UpgradeProgress>, Option<&ConstructionProgress>, Option<&TrainingQueue>),
+        (Entity, &EntityKind, &BuildingState, &BuildingLevel, Option<&UpgradeProgress>, Option<&ConstructionProgress>, Option<&TrainingQueue>, Option<&StorageInventory>, Option<&Health>, Option<&TowerAutoAttackEnabled>),
         (With<Building>, With<Selected>),
     >,
     completed: Res<CompletedBuildings>,
     registry: Res<BlueprintRegistry>,
     player_res: Res<PlayerResources>,
-    action_bar: Query<Entity, With<ActionBarInner>>,
-    children_q: Query<&Children>,
+    action_bar: Query<(Entity, Option<&Children>), With<ActionBarInner>>,
     added_selected: Query<Entity, Added<Selected>>,
     mut removed_selected: RemovedComponents<Selected>,
-    changed_buildings: Query<Entity, Or<(Changed<BuildingState>, Changed<BuildingLevel>, Changed<UpgradeProgress>)>>,
+    changed_buildings: Query<Entity, Or<(Changed<BuildingState>, Changed<BuildingLevel>, Changed<UpgradeProgress>, Changed<TowerAutoAttackEnabled>)>>,
+    mut last_queue_len: Local<usize>,
     icons: Res<IconAssets>,
     placement: Res<BuildingPlacementState>,
     existing_cards: Query<Entity, With<BuildCard>>,
-    existing_confirm: Query<Entity, With<DemolishConfirmPanel>>,
+    confirm_panels: Query<Entity, With<DemolishConfirmPanel>>,
+    rally_mode: Res<RallyPointMode>,
 ) {
     // Don't rebuild while a demolish confirm panel is open
-    if !existing_confirm.is_empty() {
+    if !confirm_panels.is_empty() {
         return;
     }
 
@@ -719,8 +731,16 @@ fn update_action_bar(
     let has_removed = removed_selected.read().count() > 0;
     let has_building_change = !changed_buildings.is_empty();
     let completed_changed = completed.is_changed();
+    let rally_changed = rally_mode.is_changed();
 
-    if !has_new && !has_removed && !has_building_change && !completed_changed {
+    // Detect queue length changes (timer ticks don't count — those are handled by update_training_queue_display)
+    let current_queue_len = selected_buildings.iter().next()
+        .and_then(|(_, _, _, _, _, _, q, _, _, _)| q.map(|q| q.queue.len()))
+        .unwrap_or(0);
+    let queue_changed = current_queue_len != *last_queue_len;
+    *last_queue_len = current_queue_len;
+
+    if !has_new && !has_removed && !has_building_change && !completed_changed && !queue_changed && !rally_changed {
         return;
     }
 
@@ -728,7 +748,7 @@ fn update_action_bar(
         return;
     }
 
-    let Ok(bar_entity) = action_bar.single() else {
+    let Ok((bar_entity, bar_children)) = action_bar.single() else {
         return;
     };
 
@@ -740,31 +760,25 @@ fn update_action_bar(
         return;
     }
 
-    if let Ok(children) = children_q.get(bar_entity) {
+    if let Some(children) = bar_children {
         for child in children.iter() {
             commands.entity(child).despawn();
         }
     }
 
-    if let Ok((_entity, kind, state, level, upgrade_progress, construction, training_queue)) = selected_buildings.single() {
+    if let Ok((_entity, kind, state, level, upgrade_progress, construction, training_queue, storage_inv, health, auto_attack)) = selected_buildings.single() {
         if *state == BuildingState::Complete {
             spawn_building_action_bar(
-                &mut commands, bar_entity, *kind, level.0, upgrade_progress.is_some(),
-                training_queue, &icons, &registry, &player_res,
+                &mut commands, bar_entity, *kind, level.0, upgrade_progress,
+                training_queue, storage_inv, health, auto_attack,
+                &icons, &registry, &player_res, &rally_mode,
             );
         } else {
             // Under construction — show progress + name + demolish (cancel)
             spawn_construction_action_bar(&mut commands, bar_entity, *kind, construction, &registry);
         }
     } else if selected_units.iter().count() > 0 {
-        let child = commands
-            .spawn((
-                Text::new("Units selected"),
-                TextFont { font_size: 16.0, ..default() },
-                TextColor(Color::WHITE),
-            ))
-            .id();
-        commands.entity(bar_entity).add_child(child);
+        spawn_units_action_bar(&mut commands, bar_entity, &selected_units);
     } else {
         spawn_card_hand(&mut commands, bar_entity, &completed, &icons, &registry);
     }
@@ -772,17 +786,129 @@ fn update_action_bar(
 
 // ── Building action bar (complete building) ──
 
+fn spawn_units_action_bar(
+    commands: &mut Commands,
+    parent: Entity,
+    selected_units: &Query<(&EntityKind, Option<&Carrying>, Option<&CarryCapacity>, Option<&WorkerTask>), (With<Unit>, With<Selected>)>,
+) {
+    let container = commands
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            align_items: AlignItems::Center,
+            row_gap: Val::Px(4.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            ..default()
+        })
+        .id();
+    commands.entity(parent).add_child(container);
+
+    let unit_count = selected_units.iter().count();
+    let worker_count = selected_units.iter().filter(|(k, ..)| **k == EntityKind::Worker).count();
+
+    let label_text = if worker_count == unit_count && worker_count > 0 {
+        format!("{} Worker{}", worker_count, if worker_count > 1 { "s" } else { "" })
+    } else {
+        format!("{} unit{} selected", unit_count, if unit_count > 1 { "s" } else { "" })
+    };
+
+    let label = commands
+        .spawn((
+            Text::new(label_text),
+            TextFont { font_size: 16.0, ..default() },
+            TextColor(Color::WHITE),
+        ))
+        .id();
+    commands.entity(container).add_child(label);
+
+    // Show carrying info for single selected worker
+    if unit_count == 1 {
+        if let Some((kind, carrying, capacity, worker_state)) = selected_units.iter().next() {
+            if *kind == EntityKind::Worker {
+                if let (Some(carry), Some(cap)) = (carrying, capacity) {
+                    if carry.amount > 0 {
+                        let rt_name = carry.resource_type
+                            .map(|rt| rt.display_name())
+                            .unwrap_or("Nothing");
+                        let carry_text = format!("Carrying: {:.1}/{:.0} {}", carry.weight, cap.0, rt_name);
+                        let carry_label = commands
+                            .spawn((
+                                Text::new(carry_text),
+                                TextFont { font_size: 13.0, ..default() },
+                                TextColor(Color::srgb(0.8, 0.75, 0.5)),
+                            ))
+                            .id();
+                        commands.entity(container).add_child(carry_label);
+
+                        // Progress bar
+                        let bar_bg = commands
+                            .spawn((
+                                Node {
+                                    width: Val::Px(120.0),
+                                    height: Val::Px(6.0),
+                                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgba(0.2, 0.2, 0.2, 0.8)),
+                            ))
+                            .id();
+                        commands.entity(container).add_child(bar_bg);
+
+                        let fill_frac = (carry.weight / cap.0).min(1.0);
+                        let fill = commands
+                            .spawn((
+                                Node {
+                                    width: Val::Percent(fill_frac * 100.0),
+                                    height: Val::Percent(100.0),
+                                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.8, 0.65, 0.2)),
+                            ))
+                            .id();
+                        commands.entity(bar_bg).add_child(fill);
+                    }
+
+                    if let Some(state) = worker_state {
+                        let state_text = match state {
+                            WorkerTask::Idle => "Idle",
+                            WorkerTask::MovingToResource(_) => "Moving to resource",
+                            WorkerTask::Gathering(_) => "Gathering",
+                            WorkerTask::ReturningToDeposit { .. } => "Returning to depot",
+                            WorkerTask::Depositing { .. } => "Depositing",
+                            WorkerTask::MovingToBuild(_) => "Moving to build",
+                            WorkerTask::Building(_) => "Building",
+                        };
+                        let state_label = commands
+                            .spawn((
+                                Text::new(state_text),
+                                TextFont { font_size: 12.0, ..default() },
+                                TextColor(Color::srgba(0.6, 0.6, 0.7, 0.9)),
+                            ))
+                            .id();
+                        commands.entity(container).add_child(state_label);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn spawn_building_action_bar(
     commands: &mut Commands,
     parent: Entity,
     kind: EntityKind,
     level: u8,
-    is_upgrading: bool,
+    upgrade_progress: Option<&UpgradeProgress>,
     training_queue: Option<&TrainingQueue>,
+    storage_inventory: Option<&StorageInventory>,
+    health: Option<&Health>,
+    auto_attack: Option<&TowerAutoAttackEnabled>,
     icons: &IconAssets,
     registry: &BlueprintRegistry,
     player_res: &PlayerResources,
+    rally_mode: &RallyPointMode,
 ) {
+    let is_upgrading = upgrade_progress.is_some();
     let bp = registry.get(kind);
 
     // Main container
@@ -809,6 +935,110 @@ fn spawn_building_action_bar(
         ))
         .id();
     commands.entity(container).add_child(name_child);
+
+    // HP bar
+    if let Some(hp) = health {
+        let hp_fraction = hp.current / hp.max;
+        let hp_color = if hp_fraction > 0.6 {
+            Color::srgb(0.3, 0.8, 0.3)
+        } else if hp_fraction > 0.3 {
+            Color::srgb(0.9, 0.7, 0.2)
+        } else {
+            Color::srgb(0.9, 0.3, 0.2)
+        };
+        let hp_bar_bg = commands
+            .spawn((
+                Node {
+                    width: Val::Px(160.0),
+                    height: Val::Px(6.0),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.9)),
+            ))
+            .with_children(|bg| {
+                bg.spawn((
+                    BuildingHpBarFill,
+                    Node {
+                        width: Val::Percent(hp_fraction * 100.0),
+                        height: Val::Percent(100.0),
+                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                        ..default()
+                    },
+                    BackgroundColor(hp_color),
+                ));
+            })
+            .id();
+        commands.entity(container).add_child(hp_bar_bg);
+
+        let hp_text = commands
+            .spawn((
+                Text::new(format!("{}/{}", hp.current as u32, hp.max as u32)),
+                TextFont { font_size: 10.0, ..default() },
+                TextColor(Color::srgba(0.7, 0.7, 0.7, 0.8)),
+            ))
+            .id();
+        commands.entity(container).add_child(hp_text);
+    }
+
+    // Storage inventory display for Base/Storage
+    if let Some(inv) = storage_inventory {
+        // Always show capacity header
+        let total = inv.total();
+        let capacity_color = if total >= inv.capacity {
+            Color::srgb(1.0, 0.3, 0.3)
+        } else if total as f32 >= inv.capacity as f32 * 0.8 {
+            Color::srgb(1.0, 0.8, 0.3)
+        } else {
+            Color::srgb(0.7, 0.7, 0.65)
+        };
+        let cap_text = commands
+            .spawn((
+                Text::new(format!("Storage: {} / {}", total, inv.capacity)),
+                TextFont { font_size: 12.0, ..default() },
+                TextColor(capacity_color),
+            ))
+            .id();
+        commands.entity(container).add_child(cap_text);
+
+        if total > 0 {
+            let inv_row = commands
+                .spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(8.0),
+                    flex_wrap: FlexWrap::Wrap,
+                    ..default()
+                })
+                .id();
+            commands.entity(container).add_child(inv_row);
+
+            for (rt, amount) in [
+                (ResourceType::Wood, inv.wood),
+                (ResourceType::Copper, inv.copper),
+                (ResourceType::Iron, inv.iron),
+                (ResourceType::Gold, inv.gold),
+                (ResourceType::Oil, inv.oil),
+            ] {
+                if amount == 0 { continue; }
+                let text = format!("{}: {}", rt.display_name(), amount);
+                let color = match rt {
+                    ResourceType::Wood => Color::srgb(0.55, 0.35, 0.15),
+                    ResourceType::Copper => Color::srgb(0.72, 0.45, 0.2),
+                    ResourceType::Iron => Color::srgb(0.7, 0.7, 0.73),
+                    ResourceType::Gold => Color::srgb(0.95, 0.8, 0.2),
+                    ResourceType::Oil => Color::srgb(0.4, 0.4, 0.45),
+                };
+                let entry = commands
+                    .spawn((
+                        Text::new(text),
+                        TextFont { font_size: 11.0, ..default() },
+                        TextColor(color),
+                    ))
+                    .id();
+                commands.entity(inv_row).add_child(entry);
+            }
+        }
+    }
 
     // Top row: train buttons (left) + action buttons (right)
     let top_row = commands
@@ -873,27 +1103,50 @@ fn spawn_building_action_bar(
                 let can_afford = upgrade_data.cost.can_afford(player_res);
 
                 if is_upgrading {
-                    // Show upgrading in progress
-                    let btn = commands
-                        .spawn((
-                            Button,
-                            UpgradeButton,
-                            Node {
-                                padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-                                border_radius: BorderRadius::all(Val::Px(4.0)),
-                                ..default()
-                            },
-                            BackgroundColor(Color::srgba(0.3, 0.3, 0.15, 0.9)),
-                        ))
-                        .with_children(|btn| {
-                            btn.spawn((
-                                Text::new("Upgrading..."),
-                                TextFont { font_size: 12.0, ..default() },
+                    // Show upgrading progress bar
+                    let fraction = upgrade_progress.map_or(0.0, |up| up.timer.fraction());
+                    let remaining = upgrade_progress.map_or(0.0, |up| up.timer.remaining_secs());
+                    let target_lvl = upgrade_progress.map_or(level + 1, |up| up.target_level);
+
+                    let upgrade_container = commands
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Column,
+                            align_items: AlignItems::Center,
+                            row_gap: Val::Px(2.0),
+                            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                            border_radius: BorderRadius::all(Val::Px(4.0)),
+                            ..default()
+                        })
+                        .insert(BackgroundColor(Color::srgba(0.2, 0.2, 0.1, 0.9)))
+                        .with_children(|c| {
+                            c.spawn((
+                                Text::new(format!("Upgrading L{} — {:.0}s", target_lvl, remaining)),
+                                TextFont { font_size: 11.0, ..default() },
                                 TextColor(Color::srgb(0.9, 0.8, 0.3)),
                             ));
+                            // Progress bar
+                            c.spawn(Node {
+                                width: Val::Px(100.0),
+                                height: Val::Px(5.0),
+                                border_radius: BorderRadius::all(Val::Px(2.0)),
+                                ..default()
+                            })
+                            .insert(BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.9)))
+                            .with_children(|bg| {
+                                bg.spawn((
+                                    UpgradeProgressBar,
+                                    Node {
+                                        width: Val::Percent(fraction * 100.0),
+                                        height: Val::Percent(100.0),
+                                        border_radius: BorderRadius::all(Val::Px(2.0)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(Color::srgb(0.9, 0.75, 0.2)),
+                                ));
+                            });
                         })
                         .id();
-                    commands.entity(actions).add_child(btn);
+                    commands.entity(actions).add_child(upgrade_container);
                 } else {
                     let cost_str = format_cost(&upgrade_data.cost);
                     let text_color = if can_afford {
@@ -959,10 +1212,16 @@ fn spawn_building_action_bar(
     }
 
     // Demolish button
+    let refund_pct = 50;
+    let demolish_tooltip = format!(
+        "Demolish building\nRefunds {}% of cost",
+        refund_pct,
+    );
     let demolish_btn = commands
         .spawn((
             Button,
             DemolishButton,
+            ActionTooltipTrigger { text: demolish_tooltip },
             Node {
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
                 border_radius: BorderRadius::all(Val::Px(4.0)),
@@ -983,27 +1242,76 @@ fn spawn_building_action_bar(
     // Rally point button (only for buildings that train units)
     if let Some(ref bd) = bp.building {
         if !bd.trains.is_empty() {
+            let is_rally_active = rally_mode.0;
+            let rally_bg = if is_rally_active {
+                Color::srgba(0.2, 0.5, 0.7, 0.9)
+            } else {
+                Color::srgba(0.15, 0.25, 0.35, 0.9)
+            };
+            let rally_text = if is_rally_active { "Click Ground..." } else { "Set Rally" };
+            let rally_text_color = if is_rally_active {
+                Color::WHITE
+            } else {
+                Color::srgb(0.6, 0.8, 0.9)
+            };
             let rally_btn = commands
                 .spawn((
                     Button,
                     RallyPointButton,
+                    ActionTooltipTrigger { text: "Set rally point\nNew units will move here after training".to_string() },
                     Node {
                         padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
                         border_radius: BorderRadius::all(Val::Px(4.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.15, 0.25, 0.35, 0.9)),
+                    BackgroundColor(rally_bg),
                 ))
                 .with_children(|btn| {
                     btn.spawn((
-                        Text::new("Set Rally"),
+                        Text::new(rally_text),
                         TextFont { font_size: 12.0, ..default() },
-                        TextColor(Color::srgb(0.6, 0.8, 0.9)),
+                        TextColor(rally_text_color),
                     ));
                 })
                 .id();
             commands.entity(actions).add_child(rally_btn);
         }
+    }
+
+    // Tower auto-attack toggle
+    if kind == EntityKind::Tower {
+        let is_enabled = auto_attack.map_or(true, |a| a.0);
+        let toggle_bg = if is_enabled {
+            Color::srgba(0.15, 0.35, 0.15, 0.9)
+        } else {
+            Color::srgba(0.25, 0.2, 0.2, 0.9)
+        };
+        let toggle_text = if is_enabled { "Auto-Attack: ON" } else { "Auto-Attack: OFF" };
+        let toggle_color = if is_enabled {
+            Color::srgb(0.5, 0.9, 0.5)
+        } else {
+            Color::srgb(0.7, 0.5, 0.5)
+        };
+        let toggle_btn = commands
+            .spawn((
+                Button,
+                ToggleAutoAttackButton,
+                Node {
+                    padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(toggle_bg),
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Text::new(toggle_text),
+                    TextFont { font_size: 12.0, ..default() },
+                    TextColor(toggle_color),
+                ));
+            })
+            .id();
+        commands.entity(actions).add_child(toggle_btn);
     }
 
     // Bottom row: training queue display
@@ -1042,11 +1350,17 @@ fn spawn_training_queue_ui(
         let icon_size = if is_first { 28.0 } else { 22.0 };
 
         let item = commands
-            .spawn(Node {
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Center,
-                ..default()
-            })
+            .spawn((
+                Button,
+                CancelTrainButton(i),
+                Node {
+                    flex_direction: FlexDirection::Column,
+                    align_items: AlignItems::Center,
+                    padding: UiRect::all(Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    ..default()
+                },
+            ))
             .with_children(|item| {
                 item.spawn((
                     ImageNode::new(icons.entity_icon(*unit_kind)),
@@ -1059,7 +1373,6 @@ fn spawn_training_queue_ui(
 
                 // Progress bar for first item
                 if is_first {
-                    // Progress bar background
                     item.spawn(Node {
                         width: Val::Px(28.0),
                         height: Val::Px(4.0),
@@ -1081,6 +1394,13 @@ fn spawn_training_queue_ui(
                         ));
                     });
                 }
+
+                // "x" cancel hint on hover
+                item.spawn((
+                    Text::new("x"),
+                    TextFont { font_size: 9.0, ..default() },
+                    TextColor(Color::srgba(0.9, 0.4, 0.3, 0.6)),
+                ));
             })
             .id();
         commands.entity(queue_row).add_child(item);
@@ -1157,6 +1477,17 @@ fn spawn_construction_action_bar(
             ))
             .id();
         commands.entity(container).add_child(pct);
+
+        // Worker count text
+        let worker_text = commands
+            .spawn((
+                ConstructionWorkerCountText,
+                Text::new("Waiting for workers..."),
+                TextFont { font_size: 11.0, ..default() },
+                TextColor(Color::srgb(0.6, 0.7, 0.9)),
+            ))
+            .id();
+        commands.entity(container).add_child(worker_text);
     }
 
     // Cancel/demolish button (refunds 100% during construction)
@@ -1403,10 +1734,22 @@ fn spawn_train_button(commands: &mut Commands, parent: Entity, kind: EntityKind,
     let bp = registry.get(kind);
     let cost_str = format_cost_from_blueprint(bp);
 
+    // Build tooltip text with stats
+    let tooltip = if let Some(ref combat) = bp.combat {
+        format!(
+            "{}\nHP: {} | DMG: {} | Range: {:.0}\nCost: {} | Train: {:.0}s",
+            label, combat.hp as u32, combat.damage as u32, combat.attack_range,
+            cost_str, bp.train_time_secs,
+        )
+    } else {
+        format!("{}\nCost: {}", label, cost_str)
+    };
+
     let child = commands
         .spawn((
             TrainButton(kind),
             Button,
+            ActionTooltipTrigger { text: tooltip },
             Node {
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
@@ -1463,7 +1806,7 @@ fn handle_build_buttons(
 ) {
     for (entity, interaction, build_btn, card) in &interactions {
         if *interaction == Interaction::Pressed {
-            ui_clicked.0 = true;
+            ui_clicked.0 = 2;
             let kind = build_btn.0;
             let bp = registry.get(kind);
 
@@ -1507,7 +1850,7 @@ fn handle_train_buttons(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        ui_clicked.0 = true;
+        ui_clicked.0 = 2;
 
         let kind = train_btn.0;
         let bp = registry.get(kind);
@@ -1542,7 +1885,7 @@ fn handle_upgrade_button(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        ui_clicked.0 = true;
+        ui_clicked.0 = 2;
 
         if let Ok((entity, kind, level, state)) = selected_buildings.single() {
             if *state != BuildingState::Complete {
@@ -1578,7 +1921,7 @@ fn handle_demolish_button(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        ui_clicked.0 = true;
+        ui_clicked.0 = 2;
 
         // Don't show another confirm if one already exists
         if !existing_confirm.is_empty() {
@@ -1696,7 +2039,7 @@ fn handle_demolish_confirm(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        ui_clicked.0 = true;
+        ui_clicked.0 = 2;
 
         if let Ok((entity, transform, state)) = selected_buildings.single() {
             if *state == BuildingState::UnderConstruction {
@@ -1726,7 +2069,7 @@ fn handle_demolish_confirm(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        ui_clicked.0 = true;
+        ui_clicked.0 = 2;
         for panel in &confirm_panels {
             commands.entity(panel).despawn();
         }
@@ -1748,7 +2091,7 @@ fn handle_rally_point_button(
     // Toggle rally mode on button press
     for interaction in &interactions {
         if *interaction == Interaction::Pressed {
-            ui_clicked.0 = true;
+            ui_clicked.0 = 2;
             rally_mode.0 = !rally_mode.0;
         }
     }
@@ -1791,12 +2134,30 @@ fn update_training_queue_display(
 // ── Live construction progress display ──
 
 fn update_construction_progress_display(
-    selected_buildings: Query<&ConstructionProgress, (With<Building>, With<Selected>)>,
+    selected_buildings: Query<(Entity, &ConstructionProgress), (With<Building>, With<Selected>)>,
     mut progress_bars: Query<&mut Node, With<ConstructionProgressBar>>,
+    mut worker_texts: Query<(&mut Text, &mut TextColor), With<ConstructionWorkerCountText>>,
+    workers: Query<&WorkerTask, With<Unit>>,
 ) {
-    let Ok(progress) = selected_buildings.single() else { return };
+    let Ok((building_entity, progress)) = selected_buildings.single() else { return };
     for mut node in &mut progress_bars {
         node.width = Val::Percent(progress.timer.fraction() * 100.0);
+    }
+
+    let builder_count = workers
+        .iter()
+        .filter(|task| matches!(task, WorkerTask::Building(e) if *e == building_entity))
+        .count();
+
+    for (mut text, mut color) in &mut worker_texts {
+        if builder_count == 0 {
+            **text = "Waiting for workers...".to_string();
+            *color = TextColor(Color::srgb(0.9, 0.5, 0.3));
+        } else {
+            let pct = (progress.timer.fraction() * 100.0) as u32;
+            **text = format!("{}% ({} worker{})", pct, builder_count, if builder_count == 1 { "" } else { "s" });
+            *color = TextColor(Color::srgb(0.6, 0.8, 0.5));
+        }
     }
 }
 
@@ -1812,6 +2173,134 @@ fn button_hover_visual(
             Interaction::Hovered => BackgroundColor(Color::srgba(0.35, 0.35, 0.4, 0.9)),
             Interaction::None => BackgroundColor(Color::srgba(0.25, 0.25, 0.3, 0.9)),
         };
+    }
+}
+
+// ── Toggle auto-attack handler ──
+
+fn handle_toggle_auto_attack(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<ToggleAutoAttackButton>)>,
+    selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
+    mut auto_attacks: Query<&mut TowerAutoAttackEnabled>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        for entity in &selected_buildings {
+            if let Ok(mut aa) = auto_attacks.get_mut(entity) {
+                aa.0 = !aa.0;
+            }
+        }
+    }
+}
+
+// ── Cancel training queue item handler ──
+
+fn handle_cancel_train(
+    interactions: Query<(&Interaction, &CancelTrainButton), Changed<Interaction>>,
+    selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
+    mut queues: Query<&mut TrainingQueue>,
+    registry: Res<BlueprintRegistry>,
+    mut player_res: ResMut<PlayerResources>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+) {
+    for (interaction, cancel_btn) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+
+        for building_entity in &selected_buildings {
+            if let Ok(mut queue) = queues.get_mut(building_entity) {
+                let idx = cancel_btn.0;
+                if idx < queue.queue.len() {
+                    let removed_kind = queue.queue.remove(idx);
+                    // Refund cost
+                    let bp = registry.get(removed_kind);
+                    player_res.wood += bp.cost.wood;
+                    player_res.copper += bp.cost.copper;
+                    player_res.iron += bp.cost.iron;
+                    player_res.gold += bp.cost.gold;
+                    player_res.oil += bp.cost.oil;
+                    // If we removed the currently training item (index 0), reset timer
+                    if idx == 0 {
+                        queue.timer = None;
+                    }
+                }
+                break;
+            }
+        }
+    }
+}
+
+// ── Live upgrade progress display ──
+
+fn update_upgrade_progress_display(
+    selected_buildings: Query<&UpgradeProgress, (With<Building>, With<Selected>)>,
+    mut progress_bars: Query<&mut Node, With<UpgradeProgressBar>>,
+) {
+    let Ok(progress) = selected_buildings.single() else { return };
+    for mut node in &mut progress_bars {
+        node.width = Val::Percent(progress.timer.fraction() * 100.0);
+    }
+}
+
+// ── Action button tooltips ──
+
+fn show_action_tooltips(
+    mut commands: Commands,
+    triggers: Query<(Entity, &Interaction, &ActionTooltipTrigger, Option<&Children>), Changed<Interaction>>,
+    existing_tooltips: Query<Entity, With<ActionTooltip>>,
+) {
+    for (entity, interaction, trigger, children) in &triggers {
+        match interaction {
+            Interaction::Hovered => {
+                // Check if tooltip already exists
+                let has_tooltip = children.map_or(false, |c| {
+                    c.iter().any(|child| existing_tooltips.get(child).is_ok())
+                });
+                if has_tooltip {
+                    continue;
+                }
+                let tooltip = commands
+                    .spawn((
+                        ActionTooltip,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            bottom: Val::Percent(100.0),
+                            left: Val::Px(0.0),
+                            padding: UiRect::all(Val::Px(6.0)),
+                            border_radius: BorderRadius::all(Val::Px(4.0)),
+                            max_width: Val::Px(180.0),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.05, 0.05, 0.08, 0.95)),
+                        GlobalZIndex(100),
+                    ))
+                    .with_children(|tt| {
+                        tt.spawn((
+                            Text::new(&trigger.text),
+                            TextFont { font_size: 10.0, ..default() },
+                            TextColor(Color::srgb(0.8, 0.8, 0.75)),
+                        ));
+                    })
+                    .id();
+                commands.entity(entity).add_child(tooltip);
+            }
+            _ => {
+                // Remove tooltip
+                if let Some(children) = children {
+                    for child in children.iter() {
+                        if existing_tooltips.get(child).is_ok() {
+                            commands.entity(child).despawn();
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

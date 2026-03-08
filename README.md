@@ -9,14 +9,19 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 - **World** — 500x500 procedural terrain with Perlin noise heightmap (fBm, 4 octaves) and 5 distinct biomes (Forest, Desert, Mud, Water, Mountain) using moisture/temperature noise layers
 - **Biomes** — Each biome has unique vertex coloring, biome-appropriate resource distribution, and scattered decorations (grass, bushes, rocks, dead trees)
 - **3D Assets** — KayKit Forest Nature Pack: low-poly trees for wood nodes, rocks for ore nodes, and decorative props placed via noise-based scatter
-- **Buildings** — 5 building types (Base, Barracks, Workshop, Tower, Storage) with placement preview, construction timer, and prerequisite system
-- **Units** — 4 types: Worker, Soldier, Archer (ranged), Tank — trained from buildings
+- **Buildings** — 9 building types with placement preview, construction timer, prerequisite system, and 3-level upgrade system with unique bonuses per level
+- **Units** — 8 types: Worker, Soldier, Archer (ranged), Tank, Knight, Mage, Priest, Cavalry — trained from buildings. Soldiers can upgrade to Knights
+- **Siege** — 2 siege units: Catapult (long-range AoE) and Battering Ram (melee anti-structure)
+- **Abilities** — Knights (Charge, Shield Bash), Mages (Fireball, Frost Nova), Priests (Heal, Holy Smite), Catapults (Boulder Throw)
+- **Summons** — Skeleton Minion, Spirit Wolf, Fire Elemental
 - **Enemies** — 4 mob camps (Goblin, Skeleton, Orc, Demon) with patrol AI, aggro detection, and boss variants
 - **Combat** — Melee and ranged attacks, auto-targeting idle units, projectiles, hit-flash VFX, tower auto-attack
-- **Economy** — 5 resource types (Wood, Copper, Iron, Gold, Oil) procedurally distributed across biomes with auto-gathering workers. Start with 150 Wood and 30 Copper
+- **Economy** — 5 resource types (Wood, Copper, Iron, Gold, Oil) procedurally distributed across biomes with auto-gathering workers
+- **Fog of War** — Texture-based fog of war with per-entity vision ranges
+- **Minimap** — Interactive minimap with real-time unit and building positions
 - **Controls** — Click, box-select, shift-toggle selection; formation movement; right-click attack targeting; building placement
 - **Camera** — WASD pan, Q/E rotate, scroll zoom
-- **UI** — Top resource bar, selection panel, context-sensitive action bar with card-hand building UI (dynamic states: enabled / can't afford with per-resource red highlights / locked with hover tooltips), train buttons, building info
+- **UI** — Top resource bar, selection panel, context-sensitive action bar with card-hand building UI (dynamic states: enabled / can't afford with per-resource red highlights / locked with hover tooltips), train buttons, building info, training queue with progress bars
 - **Pathfinding** — Thin dashed lines with destination ring, terrain-following
 
 ## Getting Started
@@ -50,15 +55,20 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 
 ## How to Play
 
-1. You start with **2 Workers** and **150 Wood / 30 Copper**
-2. Click the **Base** button at the bottom bar to enter placement mode
-3. A green ghost preview follows your cursor — left-click to place, right-click or Escape to cancel
-4. The Base takes 15 seconds to construct (shown with translucent material)
-5. Once the Base is complete, **Barracks, Workshop, Tower, and Storage** unlock
-6. Select a completed **Barracks** to train Workers, Soldiers, and Archers
-7. Select a completed **Workshop** to train Tanks
-8. **Towers** automatically attack nearby mobs with projectiles
-9. Send workers near resource nodes to auto-gather — resources are distributed by biome
+1. You start with a pre-built **Base**, **3 Workers**, and **300 Wood / 60 Copper / 20 Iron**
+2. Once the Base is ready, **Barracks, Workshop, Tower, Storage, Mage Tower, Temple, Stable, and Siege Works** unlock
+3. Click a building button at the bottom bar to enter placement mode
+4. A green ghost preview follows your cursor — left-click to place, right-click or Escape to cancel
+5. Buildings construct over time (shown with translucent material and scale animation)
+6. Select a completed building to train units or upgrade it (up to level 3)
+7. Select a completed **Barracks** to train Workers, Soldiers, and Archers
+8. Select a completed **Workshop** to train Tanks
+9. Select a completed **Mage Tower** to train Mages and Priests
+10. Select a completed **Stable** to train Cavalry and Knights
+11. Select a completed **Siege Works** to train Catapults and Battering Rams
+12. **Towers** automatically attack nearby mobs with projectiles
+13. Send workers near resource nodes to auto-gather — resources are distributed by biome
+14. Buildings can be demolished for a 50% resource refund
 
 ## Biomes
 
@@ -78,25 +88,43 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 | Barracks | 80W 40C 20I | 12s | Base | Trains Workers, Soldiers, Archers |
 | Workshop | 60W 60C 40I 10G | 18s | Base | Trains Tanks |
 | Tower | 40W 30C 30I | 10s | Base | Auto-attacks nearby mobs (range 15) |
-| Storage | 60W 10C | 8s | Base | Storage building |
+| Storage | 60W 10C | 8s | Base | Gather aura for nearby workers |
+| Mage Tower | 60W 30I 40G | 20s | Base | Trains Mages, Priests |
+| Temple | 80W 20C 50G | 22s | Base | Trains Priests, healing aura |
+| Stable | 70W 30C 20I | 14s | Base | Trains Cavalry, Knights |
+| Siege Works | 80W 60I 20G | 20s | Base | Trains Catapults, Battering Rams |
+
+All buildings support 3-level upgrades with bonuses like vision boost, train time reduction, stat boosts, range/damage increase, gather aura, and heal aura.
 
 ## Training Costs
 
-| Unit | Cost | Train Time |
-|---|---|---|
-| Worker | 30W | 5s |
-| Soldier | 10W 20C 10I | 8s |
-| Archer | 20W 10C 5I | 7s |
-| Tank | 30C 40I 10G 5O | 15s |
+| Unit | Cost | Train Time | Trained At |
+|---|---|---|---|
+| Worker | 30W | 5s | Base, Barracks |
+| Soldier | 10W 20C 10I | 8s | Barracks |
+| Archer | 20W 10C 5I | 7s | Barracks |
+| Tank | 30C 40I 10G 5O | 15s | Workshop |
+| Knight | 10W 20C 40I 20G | 12s | Stable |
+| Mage | 10W 40G | 15s | Mage Tower |
+| Priest | 15W 30G | 12s | Mage Tower, Temple |
+| Cavalry | 20W 15C 20I 10G | 10s | Stable |
+| Catapult | 80W 60I 20G | 20s | Siege Works |
+| Battering Ram | 100W 40I | 18s | Siege Works |
 
 ## Unit Stats
 
-| Type | HP | Speed | Damage | Range | Cooldown |
-|---|---|---|---|---|---|
-| Worker | 100 | 5.0 | 3 | 1.5 | 1.5s |
-| Soldier | 100 | 4.5 | 12 | 2.0 | 1.0s |
-| Archer | 100 | 5.5 | 8 | 12.0 | 1.5s |
-| Tank | 100 | 3.0 | 18 | 2.5 | 2.0s |
+| Type | HP | Speed | Damage | Range | Cooldown | Abilities |
+|---|---|---|---|---|---|---|
+| Worker | 100 | 5.0 | 3 | 1.5 | 1.5s | — |
+| Soldier | 100 | 4.5 | 12 | 2.0 | 1.0s | Upgrades to Knight |
+| Archer | 100 | 5.5 | 8 | 12.0 | 1.5s | — |
+| Tank | 100 | 3.0 | 18 | 2.5 | 2.0s | — |
+| Knight | 200 | 6.0 | 18 | 2.5 | 0.8s | Charge, Shield Bash |
+| Mage | 70 | 4.0 | 15 | 14.0 | 2.0s | Fireball, Frost Nova |
+| Priest | 80 | 4.5 | 6 | 10.0 | 2.0s | Heal, Holy Smite |
+| Cavalry | 150 | 7.0 | 14 | 2.0 | 0.9s | — |
+| Catapult | 150 | 2.0 | 40 | 25.0 | 5.0s | Boulder Throw |
+| Battering Ram | 200 | 2.5 | 50 | 2.0 | 4.0s | — |
 
 ## Enemy Camps
 
@@ -113,37 +141,49 @@ Plugin-based ECS architecture — each gameplay system is a self-contained Bevy 
 
 ```
 src/
-├── main.rs        Entry point, plugin registration
-├── components.rs  All ECS components and resources
-├── ground.rs      Procedural terrain with biome generation
-├── camera.rs      RTS camera (pan, zoom, rotate)
-├── units.rs       Player unit spawning and movement
-├── buildings.rs   Building placement, construction, training, tower combat
-├── selection.rs   Click, box, and shift selection + right-click commands
-├── ui.rs          HUD: resource bar, selection panel, context-sensitive action bar
-├── model_assets.rs Loads KayKit 3D models (trees, rocks, bushes, grass)
-├── resources.rs   Biome-based resource node spawning, auto-gathering, and decoration scatter
-├── mobs.rs        Enemy camps, patrol / aggro / chase AI
-├── combat.rs      Melee and ranged attacks, auto-targeting, death
-├── pathvis.rs     Dashed path lines with destination ring
-└── vfx.rs         Projectiles, melee flashes, impact effects
+├── main.rs          Entry point, plugin registration
+├── blueprints.rs    Entity blueprint registry (stats, costs, visuals for all entities)
+├── components.rs    All ECS components and resources
+├── ground.rs        Procedural terrain with biome generation
+├── camera.rs        RTS camera (pan, zoom, rotate)
+├── lighting.rs      Scene lighting setup
+├── units.rs         Player unit spawning and movement
+├── buildings.rs     Building placement, construction, training, upgrades, demolish
+├── selection.rs     Click, box, and shift selection + right-click commands
+├── ui.rs            HUD: resource bar, selection panel, context-sensitive action bar
+├── model_assets.rs  Loads KayKit 3D models (trees, rocks, bushes, grass)
+├── resources.rs     Biome-based resource node spawning, auto-gathering, and decoration scatter
+├── mobs.rs          Enemy camps, patrol / aggro / chase AI
+├── combat.rs        Melee and ranged attacks, auto-targeting, death
+├── fog.rs           Fog of war system
+├── fog_material.rs  Custom fog shader material
+├── hover_material.rs Custom hover effect material
+├── minimap.rs       Interactive minimap UI
+├── pathvis.rs       Dashed path lines with destination ring
+├── vfx.rs           Projectiles, melee flashes, impact effects
+└── debug.rs         Debug tweaks and development tools
 ```
 
 | Plugin | Description |
 |---|---|
+| `BlueprintPlugin` | Unified entity blueprint registry — stats, costs, visuals, abilities, upgrades for all 26 entity types |
 | `GroundPlugin` | Generates 500x500 heightmap mesh with biome-based vertex colors, inserts BiomeMap |
 | `CameraPlugin` | WASD pan, scroll zoom, Q/E orbit camera |
-| `UnitsPlugin` | Spawns 2 starting workers, handles movement and avoidance |
-| `BuildingsPlugin` | Building placement preview, construction progress, unit training queues, tower auto-attack |
+| `LightingPlugin` | Scene lighting with directional and ambient light |
+| `UnitsPlugin` | Spawns 3 starting workers, handles movement and avoidance |
+| `BuildingsPlugin` | Building placement preview, construction progress, unit training queues, tower auto-attack, upgrades, demolish |
 | `SelectionPlugin` | Click/box/shift selection for units and buildings, right-click move and attack |
 | `UiPlugin` | Resource bar, selection panel, context-sensitive action bar with build/train buttons |
 | `ModelAssetsPlugin` | Loads KayKit Forest Nature Pack 3D models (trees, dead trees, rocks, bushes, grass) |
 | `ResourcesPlugin` | Procedural biome-based resource node spawning with 3D models, auto-gather + deposit loop, biome-aware decoration scatter |
 | `MobsPlugin` | Spawns 4 enemy camps with patrol, aggro, chase, and return AI |
 | `CombatPlugin` | Melee/ranged attacks, auto-acquire targets, death cleanup |
+| `FogPlugin` | Texture-based fog of war with per-entity vision ranges |
+| `MinimapPlugin` | Interactive 200x200 minimap with real-time entity tracking |
 | `PathVisPlugin` | Terrain-following dashed path lines with destination ring |
 | `VfxPlugin` | Projectile flight, melee flash, impact flash |
+| `DebugPlugin` | JSON-based debug tweaks and development tools |
 
 ## Tech Stack
 
-- **Rust** / **Bevy 0.18** / **noise 0.9** (fBm Perlin terrain + biome generation)
+- **Rust** / **Bevy 0.18** / **noise 0.9** (fBm Perlin terrain + biome generation) / **bevy_mod_outline 0.12** (selection highlighting)

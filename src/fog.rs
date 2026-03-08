@@ -1,5 +1,6 @@
 use bevy::image::ImageSampler;
 use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
@@ -163,6 +164,8 @@ fn spawn_fog_overlay(
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(material),
         Transform::default(),
+        NotShadowCaster,
+        NotShadowReceiver,
     ));
 
     commands.insert_resource(FogVisibilityTexture(vis_handle));

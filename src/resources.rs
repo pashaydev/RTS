@@ -11,11 +11,11 @@ pub struct ResourcesPlugin;
 impl Plugin for ResourcesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlayerResources>()
-            .add_systems(Startup, create_resource_node_materials)
+            .add_systems(Startup, (create_resource_node_materials, create_carry_visual_assets))
             .add_systems(PostStartup, (spawn_resource_nodes, spawn_decorations))
             .add_systems(
                 Update,
-                (auto_gather_nearby, gather_resources, deplete_resource_nodes),
+                (worker_ai_system, deplete_resource_nodes, update_carry_visuals).chain(),
             );
     }
 }
@@ -416,74 +416,413 @@ fn spawn_decorations(
     }
 }
 
-fn auto_gather_nearby(
+fn create_carry_visual_assets(
     mut commands: Commands,
-    units: Query<
-        (Entity, &Transform, &EntityKind),
-        (With<Unit>, Without<MoveTarget>, Without<GatherTarget>),
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    use std::collections::HashMap;
+
+    let cube_mesh = meshes.add(Cuboid::new(0.3, 0.3, 0.3));
+    let sphere_mesh = meshes.add(Sphere::new(0.2));
+
+    let mut mats = HashMap::new();
+    for rt in [ResourceType::Wood, ResourceType::Copper, ResourceType::Iron, ResourceType::Gold, ResourceType::Oil] {
+        let color = rt.carry_color();
+        let mat = materials.add(StandardMaterial {
+            base_color: color,
+            ..default()
+        });
+        mats.insert(rt, mat);
+    }
+
+    commands.insert_resource(CarryVisualAssets {
+        cube_mesh,
+        sphere_mesh,
+        materials: mats,
+    });
+
+    // Storage pile assets
+    let pile_cube = meshes.add(Cuboid::new(0.4, 0.4, 0.4));
+    let pile_sphere = meshes.add(Sphere::new(0.25));
+    let pile_cylinder = meshes.add(Cylinder::new(0.2, 0.5));
+
+    let mut pile_mats = HashMap::new();
+    for rt in [ResourceType::Wood, ResourceType::Copper, ResourceType::Iron, ResourceType::Gold, ResourceType::Oil] {
+        let color = rt.carry_color();
+        let mat = materials.add(StandardMaterial {
+            base_color: color,
+            ..default()
+        });
+        pile_mats.insert(rt, mat);
+    }
+
+    commands.insert_resource(StoragePileAssets {
+        cube_mesh: pile_cube,
+        sphere_mesh: pile_sphere,
+        cylinder_mesh: pile_cylinder,
+        materials: pile_mats,
+    });
+}
+
+fn worker_ai_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut player_res: ResMut<PlayerResources>,
+    vfx_assets: Option<Res<VfxAssets>>,
+    mut workers: Query<
+        (Entity, &Transform, &mut WorkerTask, &mut Carrying, &GatherSpeed, &CarryCapacity, &EntityKind),
+        With<Unit>,
     >,
-    nodes: Query<(Entity, &Transform), With<ResourceNode>>,
+    mut nodes: Query<(&Transform, &mut ResourceNode), Without<Unit>>,
+    deposit_points: Query<(Entity, &Transform, &BuildingState), (With<DepositPoint>, Without<Unit>)>,
+    mut inventories: Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>,
+    all_nodes: Query<(Entity, &Transform), (With<ResourceNode>, Without<Unit>)>,
+    construction_sites: Query<(Entity, &Transform, &BuildingState), (With<Building>, Without<Unit>, Without<ResourceNode>)>,
 ) {
     let gather_range = 3.0;
+    let deposit_range = 4.0;
+    let auto_scan_range = 3.0;
 
-    for (unit_entity, unit_tf, unit_kind) in &units {
-        if *unit_kind != EntityKind::Worker {
+    for (entity, tf, mut task, mut carrying, speed, capacity, kind) in &mut workers {
+        if *kind != EntityKind::Worker {
             continue;
         }
 
-        for (node_entity, node_tf) in &nodes {
-            let dist = unit_tf.translation.distance(node_tf.translation);
-            if dist < gather_range {
-                commands
-                    .entity(unit_entity)
-                    .insert(GatherTarget(node_entity));
-                break;
+        match *task {
+            WorkerTask::Idle => {
+                // If carrying resources, find depot to deposit
+                if carrying.amount > 0 {
+                    if let Some(depot) = find_nearest_deposit(&tf.translation, &deposit_points) {
+                        let depot_pos = deposit_points.get(depot).unwrap().1.translation;
+                        commands.entity(entity).insert(MoveTarget(depot_pos));
+                        *task = WorkerTask::ReturningToDeposit { depot, gather_node: None };
+                    }
+                    continue;
+                }
+                // Scan for nearby resource to auto-gather
+                let mut closest_dist = f32::MAX;
+                let mut closest_node = None;
+                for (node_entity, node_tf) in &all_nodes {
+                    let dist = tf.translation.distance(node_tf.translation);
+                    if dist < auto_scan_range && dist < closest_dist {
+                        closest_dist = dist;
+                        closest_node = Some(node_entity);
+                    }
+                }
+                if let Some(node) = closest_node {
+                    *task = WorkerTask::MovingToResource(node);
+                } else {
+                    // No nearby resource — check for nearby construction sites
+                    let auto_build_range = 10.0;
+                    let mut closest_site = None;
+                    let mut closest_site_dist = f32::MAX;
+                    for (site_entity, site_tf, site_state) in &construction_sites {
+                        if *site_state != BuildingState::UnderConstruction {
+                            continue;
+                        }
+                        let dist = tf.translation.distance(site_tf.translation);
+                        if dist < auto_build_range && dist < closest_site_dist {
+                            closest_site_dist = dist;
+                            closest_site = Some(site_entity);
+                        }
+                    }
+                    if let Some(site) = closest_site {
+                        *task = WorkerTask::MovingToBuild(site);
+                    }
+                }
+            }
+
+            WorkerTask::MovingToResource(node) => {
+                // Check node still exists and has resources
+                let Ok((node_tf, node_data)) = nodes.get(node) else {
+                    commands.entity(entity).remove::<MoveTarget>();
+                    *task = WorkerTask::Idle;
+                    continue;
+                };
+                if node_data.amount_remaining == 0 {
+                    commands.entity(entity).remove::<MoveTarget>();
+                    *task = WorkerTask::Idle;
+                    continue;
+                }
+
+                let dist = tf.translation.distance(node_tf.translation);
+                if dist <= gather_range {
+                    commands.entity(entity).remove::<MoveTarget>();
+                    *task = WorkerTask::Gathering(node);
+                } else {
+                    // Ensure we have a MoveTarget to the node
+                    commands.entity(entity).insert(MoveTarget(node_tf.translation));
+                }
+            }
+
+            WorkerTask::Gathering(node) => {
+                let Ok((node_tf, mut node_data)) = nodes.get_mut(node) else {
+                    // Node gone
+                    commands.entity(entity).remove::<MoveTarget>();
+                    if carrying.amount > 0 {
+                        if let Some(depot) = find_nearest_deposit(&tf.translation, &deposit_points) {
+                            let depot_pos = deposit_points.get(depot).unwrap().1.translation;
+                            commands.entity(entity).insert(MoveTarget(depot_pos));
+                            *task = WorkerTask::ReturningToDeposit { depot, gather_node: None };
+                        } else {
+                            *task = WorkerTask::Idle;
+                        }
+                    } else {
+                        *task = WorkerTask::Idle;
+                    }
+                    continue;
+                };
+
+                if node_data.amount_remaining == 0 {
+                    if carrying.amount > 0 {
+                        if let Some(depot) = find_nearest_deposit(&tf.translation, &deposit_points) {
+                            let depot_pos = deposit_points.get(depot).unwrap().1.translation;
+                            commands.entity(entity).insert(MoveTarget(depot_pos));
+                            *task = WorkerTask::ReturningToDeposit { depot, gather_node: None };
+                        } else {
+                            *task = WorkerTask::Idle;
+                        }
+                    } else {
+                        *task = WorkerTask::Idle;
+                    }
+                    continue;
+                }
+
+                // If pushed away by avoidance, go back
+                let dist = tf.translation.distance(node_tf.translation);
+                if dist > gather_range {
+                    *task = WorkerTask::MovingToResource(node);
+                    continue;
+                }
+
+                // Remove any stale MoveTarget
+                commands.entity(entity).remove::<MoveTarget>();
+
+                // Gather tick
+                let rt = node_data.resource_type;
+                let unit_weight = rt.weight();
+                let amount = (speed.0 * time.delta_secs()) as u32;
+                let amount = amount.max(1).min(node_data.amount_remaining);
+
+                let new_weight = carrying.weight + amount as f32 * unit_weight;
+                if new_weight > capacity.0 {
+                    // Fill remaining capacity
+                    let remaining_capacity = capacity.0 - carrying.weight;
+                    let can_carry = (remaining_capacity / unit_weight).floor() as u32;
+                    if can_carry > 0 {
+                        let actual = can_carry.min(node_data.amount_remaining);
+                        node_data.amount_remaining -= actual;
+                        carrying.amount += actual;
+                        carrying.weight += actual as f32 * unit_weight;
+                        carrying.resource_type = Some(rt);
+                    }
+
+                    // Full — go deposit
+                    if let Some(depot) = find_nearest_deposit(&tf.translation, &deposit_points) {
+                        let depot_pos = deposit_points.get(depot).unwrap().1.translation;
+                        commands.entity(entity).insert(MoveTarget(depot_pos));
+                        *task = WorkerTask::ReturningToDeposit { depot, gather_node: Some(node) };
+                    }
+                } else {
+                    node_data.amount_remaining -= amount;
+                    carrying.amount += amount;
+                    carrying.weight += amount as f32 * unit_weight;
+                    carrying.resource_type = Some(rt);
+                }
+            }
+
+            WorkerTask::ReturningToDeposit { depot, gather_node } => {
+                // Check depot still exists
+                let Ok((depot_tf, _)) = inventories.get(depot) else {
+                    // Try find another depot
+                    commands.entity(entity).remove::<MoveTarget>();
+                    if let Some(new_depot) = find_nearest_deposit(&tf.translation, &deposit_points) {
+                        let depot_pos = deposit_points.get(new_depot).unwrap().1.translation;
+                        commands.entity(entity).insert(MoveTarget(depot_pos));
+                        *task = WorkerTask::ReturningToDeposit { depot: new_depot, gather_node };
+                    } else {
+                        *task = WorkerTask::Idle;
+                    }
+                    continue;
+                };
+
+                let dist = tf.translation.distance(depot_tf.translation);
+                if dist <= deposit_range {
+                    *task = WorkerTask::Depositing { depot, gather_node };
+                } else {
+                    // Ensure MoveTarget
+                    commands.entity(entity).insert(MoveTarget(depot_tf.translation));
+                }
+            }
+
+            WorkerTask::Depositing { depot, gather_node } => {
+                // Transfer resources
+                if let Some(rt) = carrying.resource_type {
+                    player_res.add(rt, carrying.amount);
+
+                    // Track in storage inventory
+                    if let Ok((_, inventory)) = inventories.get_mut(depot) {
+                        if let Some(mut inv) = inventory {
+                            match rt {
+                                ResourceType::Wood => inv.wood += carrying.amount,
+                                ResourceType::Copper => inv.copper += carrying.amount,
+                                ResourceType::Iron => inv.iron += carrying.amount,
+                                ResourceType::Gold => inv.gold += carrying.amount,
+                                ResourceType::Oil => inv.oil += carrying.amount,
+                            }
+                        }
+                    }
+                }
+
+                // Spawn deposit VFX
+                if let Some(ref vfx) = vfx_assets {
+                    if let Ok((depot_tf, _)) = inventories.get(depot) {
+                        let deposit_pos = depot_tf.translation + Vec3::Y * 2.0;
+                        for i in 0..4 {
+                            let angle = std::f32::consts::TAU * (i as f32 / 4.0);
+                            let offset = Vec3::new(angle.cos() * 0.5, 0.5, angle.sin() * 0.5);
+                            commands.spawn((
+                                VfxFlash {
+                                    timer: Timer::from_seconds(0.3, TimerMode::Once),
+                                    start_scale: 0.15,
+                                    end_scale: 0.0,
+                                },
+                                Mesh3d(vfx.sphere_mesh.clone()),
+                                MeshMaterial3d(vfx.deposit_material.clone()),
+                                Transform::from_translation(deposit_pos + offset)
+                                    .with_scale(Vec3::splat(0.15)),
+                            ));
+                        }
+                    }
+                }
+
+                // Clear carrying
+                carrying.amount = 0;
+                carrying.weight = 0.0;
+                carrying.resource_type = None;
+                commands.entity(entity).remove::<MoveTarget>();
+
+                // Return to gather node if it still has resources
+                if let Some(gn) = gather_node {
+                    if let Ok((_, node_data)) = nodes.get(gn) {
+                        if node_data.amount_remaining > 0 {
+                            *task = WorkerTask::MovingToResource(gn);
+                            continue;
+                        }
+                    }
+                }
+                *task = WorkerTask::Idle;
+            }
+
+            WorkerTask::MovingToBuild(building) => {
+                // Check building still exists and is under construction
+                let Ok((_, build_tf, build_state)) = construction_sites.get(building) else {
+                    commands.entity(entity).remove::<MoveTarget>();
+                    *task = WorkerTask::Idle;
+                    continue;
+                };
+                if *build_state != BuildingState::UnderConstruction {
+                    commands.entity(entity).remove::<MoveTarget>();
+                    *task = WorkerTask::Idle;
+                    continue;
+                }
+
+                let dist = tf.translation.distance(build_tf.translation);
+                if dist <= 4.0 {
+                    commands.entity(entity).remove::<MoveTarget>();
+                    *task = WorkerTask::Building(building);
+                } else {
+                    commands.entity(entity).insert(MoveTarget(build_tf.translation));
+                }
+            }
+
+            WorkerTask::Building(building) => {
+                let Ok((_, build_tf, build_state)) = construction_sites.get(building) else {
+                    commands.entity(entity).remove::<MoveTarget>();
+                    *task = WorkerTask::Idle;
+                    continue;
+                };
+                if *build_state != BuildingState::UnderConstruction {
+                    commands.entity(entity).remove::<MoveTarget>();
+                    *task = WorkerTask::Idle;
+                    continue;
+                }
+
+                let dist = tf.translation.distance(build_tf.translation);
+                if dist > 4.0 {
+                    *task = WorkerTask::MovingToBuild(building);
+                } else {
+                    commands.entity(entity).remove::<MoveTarget>();
+                }
             }
         }
     }
 }
 
-fn gather_resources(
+fn find_nearest_deposit(
+    pos: &Vec3,
+    deposit_points: &Query<(Entity, &Transform, &BuildingState), (With<DepositPoint>, Without<Unit>)>,
+) -> Option<Entity> {
+    let mut closest_dist = f32::MAX;
+    let mut closest = None;
+    for (entity, tf, state) in deposit_points {
+        if *state != BuildingState::Complete {
+            continue;
+        }
+        let dist = pos.distance(tf.translation);
+        if dist < closest_dist {
+            closest_dist = dist;
+            closest = Some(entity);
+        }
+    }
+    closest
+}
+
+fn update_carry_visuals(
     mut commands: Commands,
-    time: Res<Time>,
-    mut player_res: ResMut<PlayerResources>,
-    mut units: Query<(Entity, &Transform, &GatherTarget, &mut Carrying, &GatherSpeed), With<Unit>>,
-    mut nodes: Query<(&Transform, &mut ResourceNode), Without<Unit>>,
+    carry_assets: Option<Res<CarryVisualAssets>>,
+    mut workers: Query<
+        (Entity, &Carrying, &CarryCapacity, Option<&CarryVisual>),
+        (With<Unit>, With<GatherSpeed>),
+    >,
 ) {
-    let carry_capacity = 20;
-    let gather_range = 3.0;
+    let Some(assets) = carry_assets else { return };
 
-    for (unit_entity, unit_tf, gather_target, mut carrying, speed) in &mut units {
-        let Ok((node_tf, mut node)) = nodes.get_mut(gather_target.0) else {
-            commands.entity(unit_entity).remove::<GatherTarget>();
-            continue;
-        };
+    for (entity, carrying, capacity, carry_visual) in &mut workers {
+        if carrying.amount > 0 && carry_visual.is_none() {
+            // Spawn carry visual
+            if let Some(rt) = carrying.resource_type {
+                let mesh = match rt {
+                    ResourceType::Wood => assets.cube_mesh.clone(),
+                    _ => assets.sphere_mesh.clone(),
+                };
+                let mat = assets.materials.get(&rt).cloned().unwrap_or_default();
+                let scale_factor = 0.5 + 0.5 * (carrying.weight / capacity.0).min(1.0);
 
-        if node.amount_remaining == 0 {
-            commands.entity(unit_entity).remove::<GatherTarget>();
-            continue;
-        }
-
-        // Only gather when close enough to the resource node
-        let dist = unit_tf.translation.distance(node_tf.translation);
-        if dist > gather_range {
-            continue;
-        }
-
-        let rt = node.resource_type;
-
-        let amount = (speed.0 * time.delta_secs()) as u32;
-        let amount = amount.max(1).min(node.amount_remaining);
-        node.amount_remaining -= amount;
-        carrying.amount += amount;
-        carrying.resource_type = Some(rt);
-
-        if carrying.amount >= carry_capacity {
-            if let Some(crt) = carrying.resource_type {
-                player_res.add(crt, carrying.amount);
+                let child = commands
+                    .spawn((
+                        Mesh3d(mesh),
+                        MeshMaterial3d(mat),
+                        Transform::from_translation(Vec3::new(0.0, 0.8, -0.3))
+                            .with_scale(Vec3::splat(scale_factor)),
+                    ))
+                    .id();
+                commands.entity(entity).add_child(child);
+                commands.entity(entity).insert(CarryVisual(child));
             }
-            carrying.amount = 0;
-            carrying.resource_type = None;
+        } else if carrying.amount == 0 {
+            if let Some(visual) = carry_visual {
+                commands.entity(visual.0).despawn();
+                commands.entity(entity).remove::<CarryVisual>();
+            }
+        } else if let Some(visual) = carry_visual {
+            // Update scale based on current weight
+            let scale_factor = 0.5 + 0.5 * (carrying.weight / capacity.0).min(1.0);
+            commands.entity(visual.0).insert(
+                Transform::from_translation(Vec3::new(0.0, 0.8, -0.3))
+                    .with_scale(Vec3::splat(scale_factor)),
+            );
         }
     }
 }

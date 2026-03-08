@@ -23,6 +23,26 @@ impl ResourceType {
             Self::Oil => "Oil",
         }
     }
+
+    pub fn weight(self) -> f32 {
+        match self {
+            Self::Wood => 1.0,
+            Self::Copper => 1.5,
+            Self::Iron => 2.0,
+            Self::Gold => 2.5,
+            Self::Oil => 1.2,
+        }
+    }
+
+    pub fn carry_color(self) -> Color {
+        match self {
+            Self::Wood => Color::srgb(0.55, 0.35, 0.15),
+            Self::Copper => Color::srgb(0.72, 0.45, 0.2),
+            Self::Iron => Color::srgb(0.55, 0.55, 0.58),
+            Self::Gold => Color::srgb(0.95, 0.8, 0.2),
+            Self::Oil => Color::srgb(0.08, 0.08, 0.1),
+        }
+    }
 }
 
 // ── Unit markers ──
@@ -41,7 +61,11 @@ pub struct Hovered;
 pub struct PickRadius(pub f32);
 
 #[derive(Resource, Default)]
-pub struct UiClickedThisFrame(pub bool);
+pub struct UiClickedThisFrame(pub u8);
+
+/// Set to true when a mouse press starts on UI; cleared on mouse release.
+#[derive(Resource, Default)]
+pub struct UiPressActive(pub bool);
 
 #[derive(Component)]
 pub struct HoverRing;
@@ -77,12 +101,22 @@ impl Default for Health {
 
 // ── Gathering ──
 
-#[derive(Component)]
-pub struct GatherTarget(pub Entity);
+#[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
+pub enum WorkerTask {
+    #[default]
+    Idle,
+    MovingToResource(Entity),
+    Gathering(Entity),
+    ReturningToDeposit { depot: Entity, gather_node: Option<Entity> },
+    Depositing { depot: Entity, gather_node: Option<Entity> },
+    MovingToBuild(Entity),
+    Building(Entity),
+}
 
 #[derive(Component)]
 pub struct Carrying {
     pub amount: u32,
+    pub weight: f32,
     pub resource_type: Option<ResourceType>,
 }
 
@@ -90,6 +124,7 @@ impl Default for Carrying {
     fn default() -> Self {
         Self {
             amount: 0,
+            weight: 0.0,
             resource_type: None,
         }
     }
@@ -97,6 +132,72 @@ impl Default for Carrying {
 
 #[derive(Component)]
 pub struct GatherSpeed(pub f32);
+
+#[derive(Component)]
+pub struct CarryCapacity(pub f32);
+
+#[derive(Component)]
+pub struct DepositPoint;
+
+#[derive(Component)]
+pub struct StorageInventory {
+    pub wood: u32,
+    pub copper: u32,
+    pub iron: u32,
+    pub gold: u32,
+    pub oil: u32,
+    pub capacity: u32,
+    pub last_total: u32,
+}
+
+impl Default for StorageInventory {
+    fn default() -> Self {
+        Self {
+            wood: 0, copper: 0, iron: 0, gold: 0, oil: 0,
+            capacity: 500,
+            last_total: 0,
+        }
+    }
+}
+
+impl StorageInventory {
+    pub fn total(&self) -> u32 {
+        self.wood + self.copper + self.iron + self.gold + self.oil
+    }
+
+    pub fn get(&self, rt: ResourceType) -> u32 {
+        match rt {
+            ResourceType::Wood => self.wood,
+            ResourceType::Copper => self.copper,
+            ResourceType::Iron => self.iron,
+            ResourceType::Gold => self.gold,
+            ResourceType::Oil => self.oil,
+        }
+    }
+}
+
+#[derive(Component)]
+pub struct CarryVisual(pub Entity);
+
+#[derive(Component)]
+pub struct ResourcePileVisuals {
+    pub entities: Vec<Entity>,
+}
+
+#[derive(Resource)]
+pub struct CarryVisualAssets {
+    pub cube_mesh: Handle<Mesh>,
+    pub sphere_mesh: Handle<Mesh>,
+    pub materials: std::collections::HashMap<ResourceType, Handle<StandardMaterial>>,
+}
+
+#[derive(Resource)]
+pub struct StoragePileAssets {
+    pub cube_mesh: Handle<Mesh>,
+    pub sphere_mesh: Handle<Mesh>,
+    pub cylinder_mesh: Handle<Mesh>,
+    pub materials: std::collections::HashMap<ResourceType, Handle<StandardMaterial>>,
+}
 
 // ── Resource nodes ──
 
@@ -164,6 +265,27 @@ impl PlayerResources {
         self.iron -= iron;
         self.gold -= gold;
         self.oil -= oil;
+    }
+}
+
+#[derive(Resource)]
+pub struct LastPlayerResources {
+    pub wood: u32,
+    pub copper: u32,
+    pub iron: u32,
+    pub gold: u32,
+    pub oil: u32,
+}
+
+impl Default for LastPlayerResources {
+    fn default() -> Self {
+        Self {
+            wood: 300,
+            copper: 60,
+            iron: 20,
+            gold: 0,
+            oil: 0,
+        }
     }
 }
 
@@ -362,10 +484,32 @@ pub struct VfxFlash {
 #[derive(Resource)]
 pub struct VfxAssets {
     pub sphere_mesh: Handle<Mesh>,
+    pub cube_mesh: Handle<Mesh>,
     pub melee_material: Handle<StandardMaterial>,
     pub projectile_material: Handle<StandardMaterial>,
     pub impact_material: Handle<StandardMaterial>,
+    pub deposit_material: Handle<StandardMaterial>,
+    pub dust_material: Handle<StandardMaterial>,
+    pub resource_particle_materials: std::collections::HashMap<ResourceType, Handle<StandardMaterial>>,
 }
+
+#[derive(Component)]
+pub struct GatherParticle {
+    pub timer: Timer,
+    pub velocity: Vec3,
+}
+
+#[derive(Component)]
+pub struct FootstepDust {
+    pub timer: Timer,
+    pub velocity: Vec3,
+}
+
+#[derive(Component)]
+pub struct GatherParticleTimer(pub Timer);
+
+#[derive(Component)]
+pub struct FootstepTimer(pub Timer);
 
 // ── Icon assets ──
 
@@ -491,6 +635,9 @@ pub struct ConstructionProgress {
     pub timer: Timer,
 }
 
+#[derive(Component, Default)]
+pub struct ConstructionWorkers(pub u8);
+
 #[derive(Component)]
 pub struct TrainingQueue {
     pub queue: Vec<EntityKind>,
@@ -611,6 +758,29 @@ pub struct TrainingProgressBar;
 
 #[derive(Component)]
 pub struct ConstructionProgressBar;
+
+#[derive(Component)]
+pub struct ConstructionWorkerCountText;
+
+#[derive(Component)]
+pub struct UpgradeProgressBar;
+
+#[derive(Component)]
+pub struct ToggleAutoAttackButton;
+
+#[derive(Component)]
+pub struct CancelTrainButton(pub usize);
+
+#[derive(Component)]
+pub struct ActionTooltip;
+
+#[derive(Component)]
+pub struct ActionTooltipTrigger {
+    pub text: String,
+}
+
+#[derive(Component)]
+pub struct BuildingHpBarFill;
 
 #[derive(Resource, Default)]
 pub struct RallyPointMode(pub bool);

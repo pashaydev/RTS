@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy_mod_outline::{OutlineStencil, OutlineVolume};
 use std::collections::HashMap;
 
 use crate::components::*;
@@ -134,7 +135,7 @@ pub struct MovementStats {
 #[derive(Clone, Debug)]
 pub struct GatheringStats {
     pub gather_speed: f32,
-    pub carry_capacity: u32,
+    pub carry_weight_capacity: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -397,7 +398,7 @@ pub fn build_registry() -> BlueprintRegistry {
             aggro_range: None, is_ranged: false, projectile_speed: None,
         }),
         movement: Some(MovementStats { speed: 5.0, y_offset: 0.8 }),
-        gathering: Some(GatheringStats { gather_speed: 5.0, carry_capacity: 20 }),
+        gathering: Some(GatheringStats { gather_speed: 5.0, carry_weight_capacity: 20.0 }),
         vision: Some(VisionStats { range: 15.0 }),
         cost: ResourceCost { wood: 30, ..Default::default() },
         train_time_secs: 5.0,
@@ -816,7 +817,7 @@ pub fn build_registry() -> BlueprintRegistry {
         cost: ResourceCost { wood: 60, copper: 10, ..Default::default() },
         train_time_secs: 0.0,
         building: Some(BuildingData {
-            construction_time_secs: 8.0, half_height: 0.75,
+            construction_time_secs: 8.0, half_height: 0.15,
             trains: vec![],
             prerequisite: Some(EntityKind::Base),
             level_upgrades: vec![
@@ -834,9 +835,9 @@ pub fn build_registry() -> BlueprintRegistry {
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 3.0, y: 1.5, z: 3.0 },
-            color: Color::srgb(0.5, 0.4, 0.25),
-            selected_color: Color::srgb(0.5, 0.4, 0.25),
+            mesh_kind: MeshKind::Cuboid { x: 4.0, y: 0.3, z: 3.5 },
+            color: Color::srgb(0.45, 0.32, 0.18),
+            selected_color: Color::srgb(0.45, 0.32, 0.18),
             selected_emissive: LinearRgba::NONE,
             scale: 1.0,
         },
@@ -1186,6 +1187,12 @@ pub fn spawn_from_blueprint(
         MeshMaterial3d(mat_handle),
         Transform::from_translation(Vec3::new(pos.x, y, pos.z))
             .with_scale(Vec3::splat(bp.visual.scale)),
+        OutlineVolume {
+            visible: false,
+            colour: Color::NONE,
+            width: 3.0,
+        },
+        OutlineStencil::default(),
     ));
 
     // Category markers
@@ -1199,15 +1206,22 @@ pub fn spawn_from_blueprint(
         EntityCategory::Building => {
             entity_cmds.insert((Building, BuildingLevel(1)));
             if let Some(ref bd) = bp.building {
+                let mut construction_timer = Timer::from_seconds(bd.construction_time_secs, TimerMode::Once);
+                construction_timer.pause();
                 entity_cmds.insert((
                     BuildingState::UnderConstruction,
                     ConstructionProgress {
-                        timer: Timer::from_seconds(bd.construction_time_secs, TimerMode::Once),
+                        timer: construction_timer,
                     },
+                    ConstructionWorkers::default(),
                 ));
             }
             if kind == EntityKind::Tower {
                 entity_cmds.insert(TowerAutoAttackEnabled(true));
+            }
+            // Base and Storage are deposit points
+            if kind == EntityKind::Base || kind == EntityKind::Storage {
+                entity_cmds.insert((DepositPoint, StorageInventory::default()));
             }
         }
     }
@@ -1232,7 +1246,10 @@ pub fn spawn_from_blueprint(
 
     // Movement
     if let Some(ref movement) = bp.movement {
-        entity_cmds.insert(UnitSpeed(movement.speed));
+        entity_cmds.insert((
+            UnitSpeed(movement.speed),
+            FootstepTimer(Timer::from_seconds(0.4, TimerMode::Repeating)),
+        ));
     }
 
     // Gathering
@@ -1240,6 +1257,9 @@ pub fn spawn_from_blueprint(
         entity_cmds.insert((
             GatherSpeed(gathering.gather_speed),
             Carrying::default(),
+            CarryCapacity(gathering.carry_weight_capacity),
+            WorkerTask::Idle,
+            GatherParticleTimer(Timer::from_seconds(0.3, TimerMode::Repeating)),
         ));
     }
 
@@ -1316,13 +1336,168 @@ pub fn build_visual_cache(
     cache
 }
 
+// ── Storage building visual parts ──
+
+#[derive(Resource)]
+pub struct StorageBuildingParts {
+    pub post_mesh: Handle<Mesh>,
+    pub post_material: Handle<StandardMaterial>,
+    pub beam_mesh: Handle<Mesh>,
+    pub beam_material: Handle<StandardMaterial>,
+    pub roof_mesh: Handle<Mesh>,
+    pub roof_material: Handle<StandardMaterial>,
+    pub back_wall_mesh: Handle<Mesh>,
+    pub wall_material: Handle<StandardMaterial>,
+    pub side_wall_mesh: Handle<Mesh>,
+}
+
+fn create_storage_parts(
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) -> StorageBuildingParts {
+    // Dark wooden posts
+    let post_mesh = meshes.add(Cuboid::new(0.2, 2.0, 0.2));
+    let post_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.3, 0.2, 0.1),
+        ..default()
+    });
+
+    // Horizontal beams connecting posts at the top
+    let beam_mesh = meshes.add(Cuboid::new(4.2, 0.15, 0.15));
+    let beam_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.35, 0.22, 0.12),
+        ..default()
+    });
+
+    // Slanted roof (thatch/wood) — a flat tilted slab
+    let roof_mesh = meshes.add(Cuboid::new(4.6, 0.12, 4.0));
+    let roof_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.55, 0.4, 0.2),
+        ..default()
+    });
+
+    // Back wall — partial wall on the back side
+    let back_wall_mesh = meshes.add(Cuboid::new(4.2, 1.2, 0.12));
+    let wall_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.4, 0.28, 0.15),
+        ..default()
+    });
+
+    // Side walls — partial walls on left and right
+    let side_wall_mesh = meshes.add(Cuboid::new(0.12, 1.2, 3.5));
+
+    StorageBuildingParts {
+        post_mesh,
+        post_material,
+        beam_mesh,
+        beam_material,
+        roof_mesh,
+        roof_material,
+        back_wall_mesh,
+        wall_material,
+        side_wall_mesh,
+    }
+}
+
+fn attach_storage_parts(
+    mut commands: Commands,
+    new_storages: Query<(Entity, &EntityKind), Added<Building>>,
+    parts: Res<StorageBuildingParts>,
+) {
+    for (entity, kind) in &new_storages {
+        if *kind != EntityKind::Storage {
+            continue;
+        }
+
+        // 4 corner posts
+        let post_positions = [
+            Vec3::new(-1.8, 1.0, -1.5),
+            Vec3::new(1.8, 1.0, -1.5),
+            Vec3::new(-1.8, 1.3, 1.5),  // back posts taller for roof slope
+            Vec3::new(1.8, 1.3, 1.5),
+        ];
+        let post_scales = [
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1.0, 1.3, 1.0),
+            Vec3::new(1.0, 1.3, 1.0),
+        ];
+
+        for (i, &pos) in post_positions.iter().enumerate() {
+            let child = commands.spawn((
+                Mesh3d(parts.post_mesh.clone()),
+                MeshMaterial3d(parts.post_material.clone()),
+                Transform::from_translation(pos)
+                    .with_scale(post_scales[i]),
+            )).id();
+            commands.entity(entity).add_child(child);
+        }
+
+        // Cross beams at top (front and back)
+        let front_beam = commands.spawn((
+            Mesh3d(parts.beam_mesh.clone()),
+            MeshMaterial3d(parts.beam_material.clone()),
+            Transform::from_translation(Vec3::new(0.0, 1.9, -1.5)),
+        )).id();
+        commands.entity(entity).add_child(front_beam);
+
+        let back_beam = commands.spawn((
+            Mesh3d(parts.beam_mesh.clone()),
+            MeshMaterial3d(parts.beam_material.clone()),
+            Transform::from_translation(Vec3::new(0.0, 2.5, 1.5)),
+        )).id();
+        commands.entity(entity).add_child(back_beam);
+
+        // Side beams (depth-wise)
+        let side_beam_mesh = parts.beam_mesh.clone();
+        for x in [-1.8_f32, 1.8] {
+            let child = commands.spawn((
+                Mesh3d(side_beam_mesh.clone()),
+                MeshMaterial3d(parts.beam_material.clone()),
+                Transform::from_translation(Vec3::new(x, 2.2, 0.0))
+                    .with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2))
+                    .with_scale(Vec3::new(0.85, 1.0, 1.0)),
+            )).id();
+            commands.entity(entity).add_child(child);
+        }
+
+        // Slanted roof — tilted forward (higher at back, lower at front)
+        let roof = commands.spawn((
+            Mesh3d(parts.roof_mesh.clone()),
+            MeshMaterial3d(parts.roof_material.clone()),
+            Transform::from_translation(Vec3::new(0.0, 2.35, 0.0))
+                .with_rotation(Quat::from_rotation_x(-0.12)),
+        )).id();
+        commands.entity(entity).add_child(roof);
+
+        // Back wall (partial)
+        let back_wall = commands.spawn((
+            Mesh3d(parts.back_wall_mesh.clone()),
+            MeshMaterial3d(parts.wall_material.clone()),
+            Transform::from_translation(Vec3::new(0.0, 0.75, 1.5)),
+        )).id();
+        commands.entity(entity).add_child(back_wall);
+
+        // Side walls (partial, half-height)
+        for x in [-1.8_f32, 1.8] {
+            let child = commands.spawn((
+                Mesh3d(parts.side_wall_mesh.clone()),
+                MeshMaterial3d(parts.wall_material.clone()),
+                Transform::from_translation(Vec3::new(x, 0.75, 0.0)),
+            )).id();
+            commands.entity(entity).add_child(child);
+        }
+    }
+}
+
 // ── Plugin ──
 
 pub struct BlueprintPlugin;
 
 impl Plugin for BlueprintPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PreStartup, setup_blueprints);
+        app.add_systems(PreStartup, setup_blueprints)
+            .add_systems(Update, attach_storage_parts);
     }
 }
 
@@ -1333,6 +1508,8 @@ fn setup_blueprints(
 ) {
     let registry = build_registry();
     let cache = build_visual_cache(&registry, &mut meshes, &mut materials);
+    let storage_parts = create_storage_parts(&mut meshes, &mut materials);
     commands.insert_resource(registry);
     commands.insert_resource(cache);
+    commands.insert_resource(storage_parts);
 }
