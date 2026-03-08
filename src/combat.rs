@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, IsRanged};
 use crate::components::*;
-use crate::ground::terrain_height;
+use crate::ground::HeightMap;
 
 pub struct CombatPlugin;
 
@@ -61,6 +61,7 @@ fn player_auto_acquire_target(
 fn approach_attack_target(
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
+    height_map: Res<HeightMap>,
     mut attackers: Query<
         (&mut Transform, &AttackTarget, &UnitSpeed, &AttackRange, Option<&EntityKind>),
     >,
@@ -87,7 +88,7 @@ fn approach_attack_target(
             } else {
                 0.8
             };
-            tf.translation.y = terrain_height(tf.translation.x, tf.translation.z) + y_off;
+            tf.translation.y = height_map.sample(tf.translation.x, tf.translation.z) + y_off;
         }
     }
 }

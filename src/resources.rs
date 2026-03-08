@@ -3,7 +3,7 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::blueprints::EntityKind;
 use crate::components::*;
-use crate::ground::{terrain_height, MAP_SIZE};
+use crate::ground::{HeightMap, MAP_SIZE};
 use rand::Rng;
 
 pub struct ResourcesPlugin;
@@ -153,6 +153,7 @@ fn spawn_resource_nodes(
     node_mats: Res<ResourceNodeMaterials>,
     biome_map: Res<BiomeMap>,
     model_assets: Res<ModelAssets>,
+    height_map: Res<HeightMap>,
 ) {
     let wood_mesh = meshes.add(Cuboid::new(0.6, 2.5, 0.6));
     let ore_mesh = meshes.add(Cuboid::new(1.0, 0.8, 1.0));
@@ -216,7 +217,7 @@ fn spawn_resource_nodes(
                             },
                             PickRadius(3.0 * scale_factor),
                             SceneRoot(scene_handle),
-                            Transform::from_translation(Vec3::new(x, terrain_height(x, z), z))
+                            Transform::from_translation(Vec3::new(x, height_map.sample(x, z), z))
                                 .with_rotation(Quat::from_rotation_y(y_rotation))
                                 .with_scale(Vec3::splat(scale_factor)),
                         ));
@@ -235,14 +236,14 @@ fn spawn_resource_nodes(
                             },
                             PickRadius(1.8 * scale_factor),
                             SceneRoot(scene_handle),
-                            Transform::from_translation(Vec3::new(x, terrain_height(x, z), z))
+                            Transform::from_translation(Vec3::new(x, height_map.sample(x, z), z))
                                 .with_rotation(Quat::from_rotation_y(y_rotation))
                                 .with_scale(Vec3::splat(scale_factor)),
                         ));
                     }
                     // Oil + fallbacks → primitive mesh
                     else {
-                        let y = terrain_height(x, z) + half_h;
+                        let y = height_map.sample(x, z) + half_h;
                         commands.spawn((
                             ResourceNode {
                                 resource_type: rt,
@@ -281,14 +282,14 @@ fn spawn_resource_nodes(
                                 SceneRoot(scene_handle),
                                 Transform::from_translation(Vec3::new(
                                     offset_x,
-                                    terrain_height(offset_x, offset_z),
+                                    height_map.sample(offset_x, offset_z),
                                     offset_z,
                                 ))
                                 .with_rotation(Quat::from_rotation_y(y_rotation))
                                 .with_scale(Vec3::splat(scale_factor)),
                             ));
                         } else {
-                            let y = terrain_height(offset_x, offset_z) + half_h;
+                            let y = height_map.sample(offset_x, offset_z) + half_h;
                             commands.spawn((
                                 ResourceNode {
                                     resource_type: rt,
@@ -335,6 +336,7 @@ fn spawn_decorations(
     mut commands: Commands,
     biome_map: Res<BiomeMap>,
     model_assets: Res<ModelAssets>,
+    height_map: Res<HeightMap>,
 ) {
     let mut rng = rand::rng();
     let deco_noise = Fbm::<Perlin>::new(777).set_octaves(2);
@@ -396,7 +398,7 @@ fn spawn_decorations(
                 // Small random offset so decorations don't align to a grid
                 let ox = x + rng.random_range(-2.0_f32..2.0);
                 let oz = z + rng.random_range(-2.0_f32..2.0);
-                let y = terrain_height(ox, oz);
+                let y = height_map.sample(ox, oz);
                 let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
                 let scale = rng.random_range(scale_min..scale_max);
 

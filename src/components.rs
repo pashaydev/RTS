@@ -624,6 +624,10 @@ pub struct SelectionBox;
 #[derive(Component)]
 pub struct Building;
 
+/// Radius from building center that the building claims on the ground.
+#[derive(Component)]
+pub struct BuildingFootprint(pub f32);
+
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BuildingState {
     UnderConstruction,

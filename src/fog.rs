@@ -7,7 +7,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, T
 
 use crate::components::*;
 use crate::fog_material::{FogOfWarMaterial, FogSettings};
-use crate::ground::{terrain_height, GRID_SIZE, HALF_MAP, MAP_SIZE};
+use crate::ground::{HeightMap, GRID_SIZE, HALF_MAP, MAP_SIZE};
 
 /// Resource holding the handle to the GPU visibility texture.
 #[derive(Resource)]
@@ -106,6 +106,7 @@ fn spawn_fog_overlay(
     mut meshes: ResMut<Assets<Mesh>>,
     mut fog_materials: ResMut<Assets<FogOfWarMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    height_map: Res<HeightMap>,
 ) {
     let grid_size = GRID_SIZE;
     let step = MAP_SIZE / (grid_size - 1) as f32;
@@ -118,7 +119,7 @@ fn spawn_fog_overlay(
         for ix in 0..grid_size {
             let x = -HALF_MAP + ix as f32 * step;
             let z = -HALF_MAP + iz as f32 * step;
-            let y = terrain_height(x, z) + 1.5;
+            let y = height_map.sample(x, z) + 1.5;
 
             positions.push([x, y, z]);
             normals.push([0.0, 1.0, 0.0]);

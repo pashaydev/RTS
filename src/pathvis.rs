@@ -3,39 +3,7 @@ use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 use crate::components::*;
-use crate::ground::{terrain_height, GRID_SIZE, HALF_MAP, MAP_SIZE};
-
-/// Sample the terrain mesh surface height using bilinear interpolation between
-/// grid vertices — matches what the GPU actually renders, unlike raw noise sampling.
-fn mesh_surface_height(x: f32, z: f32) -> f32 {
-    let step = MAP_SIZE / (GRID_SIZE - 1) as f32;
-
-    // Convert world coords to grid-space (floating point grid indices)
-    let gx = (x + HALF_MAP) / step;
-    let gz = (z + HALF_MAP) / step;
-
-    let ix = (gx.floor() as usize).min(GRID_SIZE - 2);
-    let iz = (gz.floor() as usize).min(GRID_SIZE - 2);
-
-    let fx = gx - ix as f32;
-    let fz = gz - iz as f32;
-
-    // Get heights at the 4 grid corners (these are exact — mesh vertices use terrain_height)
-    let x0 = -HALF_MAP + ix as f32 * step;
-    let x1 = x0 + step;
-    let z0 = -HALF_MAP + iz as f32 * step;
-    let z1 = z0 + step;
-
-    let h00 = terrain_height(x0, z0);
-    let h10 = terrain_height(x1, z0);
-    let h01 = terrain_height(x0, z1);
-    let h11 = terrain_height(x1, z1);
-
-    // Bilinear interpolation (matches GPU triangle interpolation closely)
-    let h0 = h00 + (h10 - h00) * fx;
-    let h1 = h01 + (h11 - h01) * fx;
-    h0 + (h1 - h0) * fz
-}
+use crate::ground::HeightMap;
 
 pub struct PathVisPlugin;
 
@@ -90,6 +58,7 @@ fn create_path_vis_assets(
 fn spawn_path_visualization(
     mut commands: Commands,
     path_assets: Res<PathVisAssets>,
+    height_map: Res<HeightMap>,
     mut units: Query<
         (Entity, &Transform, &MoveTarget, Option<&mut PathVisEntities>),
         With<Unit>,
@@ -157,7 +126,7 @@ fn spawn_path_visualization(
 
                 let px = pos.x + dir_norm.x * t;
                 let pz = pos.z + dir_norm.z * t;
-                let py = mesh_surface_height(px, pz) + 0.35;
+                let py = height_map.sample(px, pz) + 0.35;
 
                 // Scale up toward the destination for a tapered trail
                 let frac = t / dist;
@@ -179,7 +148,7 @@ fn spawn_path_visualization(
         }
 
         // Ring at destination
-        let ring_y = mesh_surface_height(target.x, target.z) + 0.3;
+        let ring_y = height_map.sample(target.x, target.z) + 0.3;
         let ring_id = commands
             .spawn((
                 PathRing { owner: entity },

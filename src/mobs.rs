@@ -2,13 +2,13 @@ use bevy::prelude::*;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
 use crate::components::*;
-use crate::ground::terrain_height;
+use crate::ground::HeightMap;
 
 pub struct MobsPlugin;
 
 impl Plugin for MobsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_mob_camps)
+        app.add_systems(PostStartup, spawn_mob_camps)
             .add_systems(
                 Update,
                 (mob_patrol, mob_aggro, mob_chase, mob_return).chain(),
@@ -28,6 +28,7 @@ fn spawn_mob_camps(
     mut commands: Commands,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
+    height_map: Res<HeightMap>,
 ) {
     let camps = [
         CampSpawn {
@@ -67,7 +68,7 @@ fn spawn_mob_camps(
 
         let center = Vec3::new(
             camp.center.x,
-            terrain_height(camp.center.x, camp.center.z),
+            height_map.sample(camp.center.x, camp.center.z),
             camp.center.z,
         );
 
@@ -78,7 +79,7 @@ fn spawn_mob_camps(
             let x = center.x + angle.cos() * offset_r;
             let z = center.z + angle.sin() * offset_r;
 
-            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(x, 0.0, z), &registry, None);
+            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(x, 0.0, z), &registry, None, &height_map);
 
             // Override patrol center
             commands.entity(entity).insert(PatrolState {
@@ -93,7 +94,7 @@ fn spawn_mob_camps(
         if camp.has_boss {
             let combat = bp.combat.as_ref().unwrap();
 
-            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(center.x, 0.0, center.z), &registry, None);
+            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(center.x, 0.0, center.z), &registry, None, &height_map);
 
             // Apply boss modifiers
             commands.entity(entity).insert((
@@ -107,7 +108,7 @@ fn spawn_mob_camps(
                 },
                 Transform::from_translation(Vec3::new(
                     center.x,
-                    terrain_height(center.x, center.z) + y_off * 1.5,
+                    height_map.sample(center.x, center.z) + y_off * 1.5,
                     center.z,
                 )).with_scale(Vec3::splat(1.5)),
                 PatrolState {
@@ -124,6 +125,7 @@ fn spawn_mob_camps(
 fn mob_patrol(
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
+    height_map: Res<HeightMap>,
     mut mobs: Query<
         (&mut Transform, &mut PatrolState, &UnitSpeed, &EntityKind),
         (With<Mob>, Without<AttackTarget>),
@@ -158,7 +160,7 @@ fn mob_patrol(
                         let step = dir.normalize() * speed.0 * 0.5 * time.delta_secs();
                         tf.translation += step;
                         tf.translation.y =
-                            terrain_height(tf.translation.x, tf.translation.z) + y_off;
+                            height_map.sample(tf.translation.x, tf.translation.z) + y_off;
                     }
                 }
             }
@@ -175,7 +177,7 @@ fn mob_patrol(
                     let step = dir.normalize() * speed.0 * time.delta_secs();
                     tf.translation += step;
                     tf.translation.y =
-                        terrain_height(tf.translation.x, tf.translation.z) + y_off;
+                        height_map.sample(tf.translation.x, tf.translation.z) + y_off;
                 }
             }
             _ => {}
@@ -218,6 +220,7 @@ fn mob_aggro(
 fn mob_chase(
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
+    height_map: Res<HeightMap>,
     mut mobs: Query<
         (
             &mut Transform,
@@ -252,7 +255,7 @@ fn mob_chase(
             tf.translation += step;
             let y_off = registry.get(*kind).movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8);
             tf.translation.y =
-                terrain_height(tf.translation.x, tf.translation.z) + y_off;
+                height_map.sample(tf.translation.x, tf.translation.z) + y_off;
         }
     }
 }

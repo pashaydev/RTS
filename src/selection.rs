@@ -5,7 +5,7 @@ use bevy_mod_outline::OutlineVolume;
 
 use crate::blueprints::{EntityKind, EntityVisualCache};
 use crate::components::*;
-use crate::ground::terrain_height;
+use crate::ground::HeightMap;
 use crate::hover_material::{HoverRingMaterial, HoverRingSettings};
 use crate::minimap::{MinimapInteraction, MinimapSet};
 
@@ -588,6 +588,7 @@ fn update_hover_ring(
     existing_rings: Query<(Entity, &MeshMaterial3d<HoverRingMaterial>), With<HoverRing>>,
     ring_assets: Res<HoverRingAssets>,
     mut hover_materials: ResMut<Assets<HoverRingMaterial>>,
+    height_map: Res<HeightMap>,
     time: Res<Time>,
 ) {
     // Despawn old rings
@@ -608,7 +609,7 @@ fn update_hover_ring(
             HoverRing,
             Mesh3d(ring_assets.mesh.clone()),
             MeshMaterial3d(mat),
-            Transform::from_translation(Vec3::new(pos.x, terrain_height(pos.x, pos.z) + 0.1, pos.z)),
+            Transform::from_translation(Vec3::new(pos.x, height_map.sample(pos.x, pos.z) + 0.1, pos.z)),
             NotShadowCaster,
             NotShadowReceiver
         ));

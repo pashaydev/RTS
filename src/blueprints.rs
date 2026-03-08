@@ -3,7 +3,7 @@ use bevy_mod_outline::{AsyncSceneInheritOutline, OutlineStencil, OutlineVolume};
 use std::collections::HashMap;
 
 use crate::components::*;
-use crate::ground::terrain_height;
+use crate::ground::HeightMap;
 use crate::model_assets::BuildingModelAssets;
 
 // ── EntityKind — unified type enum ──
@@ -1174,6 +1174,7 @@ pub fn spawn_from_blueprint(
     pos: Vec3,
     registry: &BlueprintRegistry,
     building_models: Option<&BuildingModelAssets>,
+    height_map: &HeightMap,
 ) -> Entity {
     let bp = registry.get(kind);
 
@@ -1189,7 +1190,7 @@ pub fn spawn_from_blueprint(
     } else {
         bp.building.as_ref().map(|b| b.half_height).unwrap_or(0.0)
     };
-    let y = terrain_height(pos.x, pos.z) + y_off + building_y;
+    let y = height_map.sample(pos.x, pos.z) + y_off + building_y;
 
     let pick_radius = bp.visual.mesh_kind.pick_radius() * bp.visual.scale;
 
@@ -1236,7 +1237,11 @@ pub fn spawn_from_blueprint(
             entity_cmds.insert(Mob);
         }
         EntityCategory::Building => {
-            entity_cmds.insert((Building, BuildingLevel(1)));
+            let footprint = match kind {
+                EntityKind::Base | EntityKind::Storage => BuildingFootprint(7.0),
+                _ => BuildingFootprint(2.5),
+            };
+            entity_cmds.insert((Building, BuildingLevel(1), footprint));
             if let Some(ref bd) = bp.building {
                 let mut construction_timer = Timer::from_seconds(bd.construction_time_secs, TimerMode::Once);
                 construction_timer.pause();
@@ -1304,7 +1309,7 @@ pub fn spawn_from_blueprint(
     if let Some(ref _ai) = bp.mob_ai {
         entity_cmds.insert(PatrolState {
             state: PatrolStateKind::Idle,
-            center: Vec3::new(pos.x, terrain_height(pos.x, pos.z), pos.z),
+            center: Vec3::new(pos.x, height_map.sample(pos.x, pos.z), pos.z),
             radius: bp.mob_ai.as_ref().unwrap().patrol_radius,
             patrol_target: None,
         });

@@ -119,6 +119,7 @@ fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>) {
     // ── Bottom panel — selection info bar ──
     commands.spawn((
         SelectionInfoPanel,
+        Interaction::None,
         Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(10.0),
@@ -799,6 +800,7 @@ fn spawn_units_action_bar(
             padding: UiRect::all(Val::Px(8.0)),
             ..default()
         })
+        .insert(Interaction::None)
         .id();
     commands.entity(parent).add_child(container);
 
@@ -922,6 +924,7 @@ fn spawn_building_action_bar(
             ..default()
         })
         .insert(BackgroundColor(Color::srgba(0.08, 0.08, 0.12, 0.9)))
+        .insert(Interaction::None)
         .id();
     commands.entity(parent).add_child(container);
 
@@ -1426,6 +1429,7 @@ fn spawn_construction_action_bar(
             ..default()
         })
         .insert(BackgroundColor(Color::srgba(0.08, 0.08, 0.12, 0.9)))
+        .insert(Interaction::None)
         .id();
     commands.entity(parent).add_child(container);
 

@@ -8,6 +8,37 @@ pub const MAP_SIZE: f32 = 500.0;
 pub const HALF_MAP: f32 = 250.0;
 
 pub const GRID_SIZE: usize = 201; // 200x200 cells
+
+/// Pre-computed grid of terrain heights that matches the rendered mesh exactly.
+/// Use `sample(x, z)` for bilinear interpolation between grid vertices.
+#[derive(Resource)]
+pub struct HeightMap {
+    pub heights: Vec<f32>,
+    pub grid_size: usize,
+    pub step: f32,
+}
+
+impl HeightMap {
+    /// Sample terrain height at any world position using bilinear interpolation
+    /// of the actual mesh grid vertices.
+    pub fn sample(&self, x: f32, z: f32) -> f32 {
+        let gx = (x + HALF_MAP) / self.step;
+        let gz = (z + HALF_MAP) / self.step;
+        let ix = (gx.floor().max(0.0) as usize).min(self.grid_size - 2);
+        let iz = (gz.floor().max(0.0) as usize).min(self.grid_size - 2);
+        let fx = (gx - ix as f32).clamp(0.0, 1.0);
+        let fz = (gz - iz as f32).clamp(0.0, 1.0);
+
+        let h00 = self.heights[iz * self.grid_size + ix];
+        let h10 = self.heights[iz * self.grid_size + ix + 1];
+        let h01 = self.heights[(iz + 1) * self.grid_size + ix];
+        let h11 = self.heights[(iz + 1) * self.grid_size + ix + 1];
+
+        let h0 = h00 + (h10 - h00) * fx;
+        let h1 = h01 + (h11 - h01) * fx;
+        h0 + (h1 - h0) * fz
+    }
+}
 const NOISE_SCALE: f64 = 0.008;
 const AMPLITUDE: f32 = 10.0;
 
@@ -183,6 +214,9 @@ fn spawn_ground(
         }
     }
 
+    // Build HeightMap from the same grid heights used by the mesh
+    let grid_heights: Vec<f32> = positions.iter().map(|p| p[1]).collect();
+
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
@@ -203,6 +237,11 @@ fn spawn_ground(
         })),
         Transform::from_translation(Vec3::ZERO),
     ));
+    commands.insert_resource(HeightMap {
+        heights: grid_heights,
+        grid_size: GRID_SIZE,
+        step,
+    });
 
     // Insert BiomeMap resource
     commands.insert_resource(BiomeMap {

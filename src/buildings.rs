@@ -6,8 +6,15 @@ use bevy::window::PrimaryWindow;
 use bevy_mod_outline::AsyncSceneInheritOutline;
 use crate::blueprints::{BlueprintRegistry, EntityCategory, EntityKind, EntityVisualCache, LevelBonus, spawn_from_blueprint};
 use crate::components::*;
-use crate::ground::terrain_height;
+use crate::ground::HeightMap;
 use crate::model_assets::BuildingModelAssets;
+
+fn footprint_for_kind(kind: EntityKind) -> f32 {
+    match kind {
+        EntityKind::Base | EntityKind::Storage => 7.0,
+        _ => 2.5,
+    }
+}
 
 pub struct BuildingsPlugin;
 
@@ -99,8 +106,9 @@ fn update_placement_preview(
         (&mut Transform, &mut MeshMaterial3d<StandardMaterial>),
         With<GhostBuilding>,
     >,
-    existing_buildings: Query<&Transform, (With<Building>, Without<GhostBuilding>)>,
+    existing_buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<GhostBuilding>)>,
     biome_map: Option<Res<BiomeMap>>,
+    height_map: Res<HeightMap>,
 ) {
     let PlacementMode::Placing(kind) = placement.mode else {
         return;
@@ -108,6 +116,7 @@ fn update_placement_preview(
 
     let bp = registry.get(kind);
     let half_h = bp.building.as_ref().map(|b| b.half_height).unwrap_or(1.0);
+    let new_footprint = footprint_for_kind(kind);
 
     // Spawn ghost if it doesn't exist
     if placement.preview_entity.is_none() {
@@ -134,7 +143,7 @@ fn update_placement_preview(
         return;
     };
 
-    let y = terrain_height(world_pos.x, world_pos.z) + half_h;
+    let y = height_map.sample(world_pos.x, world_pos.z) + half_h;
     ghost_tf.translation = Vec3::new(world_pos.x, y, world_pos.z);
 
     let mut valid = true;
@@ -145,8 +154,9 @@ fn update_placement_preview(
         }
     }
 
-    for building_tf in &existing_buildings {
-        if building_tf.translation.distance(ghost_tf.translation) < 5.0 {
+    for (building_tf, existing_footprint) in &existing_buildings {
+        let min_dist = existing_footprint.0 + new_footprint;
+        if building_tf.translation.distance(ghost_tf.translation) < min_dist {
             valid = false;
             break;
         }
@@ -174,14 +184,17 @@ fn confirm_placement(
     cache: Res<EntityVisualCache>,
     ghost_mats: Res<BuildingGhostMaterials>,
     building_models: Option<Res<BuildingModelAssets>>,
+    height_map: Res<HeightMap>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    existing_buildings: Query<&Transform, (With<Building>, Without<GhostBuilding>)>,
+    existing_buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<GhostBuilding>)>,
     biome_map: Option<Res<BiomeMap>>,
 ) {
     let PlacementMode::Placing(kind) = placement.mode else {
         return;
     };
+
+    let new_footprint = footprint_for_kind(kind);
 
     // Phase 1: awaiting initial mouse release
     if placement.awaiting_release {
@@ -191,9 +204,9 @@ fn confirm_placement(
             if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) {
                 let on_water = biome_map.as_ref()
                     .map_or(false, |bm| bm.get_biome(world_pos.x, world_pos.z) == Biome::Water);
-                let too_close = existing_buildings.iter().any(|building_tf| {
+                let too_close = existing_buildings.iter().any(|(building_tf, existing_fp)| {
                     let check_pos = Vec3::new(world_pos.x, building_tf.translation.y, world_pos.z);
-                    building_tf.translation.distance(check_pos) < 5.0
+                    building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
                 });
                 let half_map = 250.0;
                 let out_of_bounds = world_pos.x.abs() > half_map - 5.0
@@ -239,9 +252,9 @@ fn confirm_placement(
             return;
         }
     }
-    for building_tf in &existing_buildings {
+    for (building_tf, existing_fp) in &existing_buildings {
         let check_pos = Vec3::new(world_pos.x, building_tf.translation.y, world_pos.z);
-        if building_tf.translation.distance(check_pos) < 5.0 {
+        if building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint {
             return;
         }
     }
@@ -266,7 +279,7 @@ fn confirm_placement(
     // Spawn building using blueprint
     let bp = registry.get(kind);
     let is_gltf = bp.visual.mesh_kind.is_gltf();
-    let entity_id = spawn_from_blueprint(&mut commands, &cache, kind, world_pos, &registry, building_models.as_deref());
+    let entity_id = spawn_from_blueprint(&mut commands, &cache, kind, world_pos, &registry, building_models.as_deref(), &height_map);
 
     // Override material with under_construction (only for non-GLTF buildings)
     if !is_gltf {
@@ -454,6 +467,7 @@ fn training_queue_system(
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
+    height_map: Res<HeightMap>,
     mut buildings: Query<(&Transform, &EntityKind, &mut TrainingQueue, Option<&RallyPoint>), With<Building>>,
 ) {
     for (transform, _kind, mut queue, rally_point) in &mut buildings {
@@ -473,7 +487,7 @@ fn training_queue_system(
             if timer.is_finished() {
                 let unit_kind = queue.queue.remove(0);
                 let spawn_pos = transform.translation + Vec3::new(3.0, 0.0, 3.0);
-                let unit_entity = spawn_from_blueprint(&mut commands, &cache, unit_kind, spawn_pos, &registry, None);
+                let unit_entity = spawn_from_blueprint(&mut commands, &cache, unit_kind, spawn_pos, &registry, None, &height_map);
 
                 // If building has a rally point, send the unit there
                 if let Some(rally) = rally_point {
@@ -954,16 +968,15 @@ fn sync_storage_on_spend(
 fn update_storage_piles(
     mut commands: Commands,
     pile_assets: Option<Res<StoragePileAssets>>,
-    building_models: Option<Res<BuildingModelAssets>>,
-    registry: Res<BlueprintRegistry>,
+    height_map: Res<HeightMap>,
     mut storages: Query<
-        (Entity, &Transform, &EntityKind, &mut StorageInventory, Option<&ResourcePileVisuals>),
+        (Entity, &Transform, &mut StorageInventory, Option<&ResourcePileVisuals>),
         (With<Building>, With<DepositPoint>),
     >,
 ) {
     let Some(assets) = pile_assets else { return };
 
-    for (entity, transform, kind, mut inventory, pile_visuals) in &mut storages {
+    for (entity, transform, mut inventory, pile_visuals) in &mut storages {
         let new_total = inventory.total();
         if new_total == inventory.last_total {
             continue;
@@ -978,24 +991,15 @@ fn update_storage_piles(
         }
 
         let mut pile_entities = Vec::new();
-        let bp = registry.get(*kind);
-        let base_y = if bp.visual.mesh_kind.is_gltf() {
-            let height = building_models.as_ref()
-                .and_then(|m| m.calibration.get(kind))
-                .map(|c| c.building_height)
-                .unwrap_or(3.0);
-            height + 0.5
-        } else {
-            transform.scale.y + 0.5
-        };
 
-        // Positions for each resource type on the building top
+        // Place piles in a ring on the ground around the building
+        let radius = 4.0;
         let positions = [
-            (ResourceType::Wood, Vec3::new(-0.8, base_y, -0.8)),
-            (ResourceType::Copper, Vec3::new(0.8, base_y, -0.8)),
-            (ResourceType::Iron, Vec3::new(-0.8, base_y, 0.8)),
-            (ResourceType::Gold, Vec3::new(0.8, base_y, 0.8)),
-            (ResourceType::Oil, Vec3::new(0.0, base_y, 0.0)),
+            (ResourceType::Wood,   Vec2::new(radius, 0.0)),               // East
+            (ResourceType::Copper, Vec2::new(0.0, radius)),               // North
+            (ResourceType::Iron,   Vec2::new(-radius, 0.0)),              // West
+            (ResourceType::Gold,   Vec2::new(0.0, -radius)),              // South
+            (ResourceType::Oil,    Vec2::new(radius * 0.707, radius * 0.707)), // NE
         ];
 
         for (rt, offset) in positions {
@@ -1005,6 +1009,7 @@ fn update_storage_piles(
             }
 
             let scale = (amount as f32 / 100.0).min(1.0) * 0.8 + 0.2;
+            let half_pile_height = scale * 0.5;
             let (mesh, mat) = match rt {
                 ResourceType::Wood => (assets.cube_mesh.clone(), assets.materials.get(&rt).cloned().unwrap_or_default()),
                 ResourceType::Gold => (assets.sphere_mesh.clone(), assets.materials.get(&rt).cloned().unwrap_or_default()),
@@ -1012,11 +1017,15 @@ fn update_storage_piles(
                 _ => (assets.cube_mesh.clone(), assets.materials.get(&rt).cloned().unwrap_or_default()),
             };
 
+            let world_x = transform.translation.x + offset.x;
+            let world_z = transform.translation.z + offset.y;
+            let ground_y = height_map.sample(world_x, world_z);
+
             let pile = commands
                 .spawn((
                     Mesh3d(mesh),
                     MeshMaterial3d(mat),
-                    Transform::from_translation(transform.translation + offset)
+                    Transform::from_translation(Vec3::new(world_x, ground_y + half_pile_height, world_z))
                         .with_scale(Vec3::splat(scale)),
                 ))
                 .id();

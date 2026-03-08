@@ -2,14 +2,14 @@ use bevy::prelude::*;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
 use crate::components::*;
-use crate::ground::terrain_height;
+use crate::ground::HeightMap;
 use crate::model_assets::BuildingModelAssets;
 
 pub struct UnitsPlugin;
 
 impl Plugin for UnitsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_units)
+        app.add_systems(PostStartup, spawn_units)
             .add_systems(
                 Update,
                 (steer_avoidance, move_units).chain(),
@@ -28,10 +28,11 @@ fn spawn_units(
     registry: Res<BlueprintRegistry>,
     building_models: Option<Res<BuildingModelAssets>>,
     mut completed_buildings: ResMut<CompletedBuildings>,
+    height_map: Res<HeightMap>,
 ) {
     // Spawn a pre-built Base at the origin
     let base_pos = Vec3::new(0.0, 0.0, 0.0);
-    let base_entity = spawn_from_blueprint(&mut commands, &cache, EntityKind::Base, base_pos, &registry, building_models.as_deref());
+    let base_entity = spawn_from_blueprint(&mut commands, &cache, EntityKind::Base, base_pos, &registry, building_models.as_deref(), &height_map);
 
     // Override: mark it as already complete (remove construction state)
     commands.entity(base_entity).remove::<ConstructionProgress>();
@@ -53,7 +54,7 @@ fn spawn_units(
         Vec3::new(0.0, 0.0, -3.0),
     ];
     for pos in worker_positions {
-        spawn_from_blueprint(&mut commands, &cache, EntityKind::Worker, pos, &registry, None);
+        spawn_from_blueprint(&mut commands, &cache, EntityKind::Worker, pos, &registry, None, &height_map);
     }
 }
 
@@ -95,6 +96,7 @@ fn move_units(
     mut commands: Commands,
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
+    height_map: Res<HeightMap>,
     mut query: Query<(Entity, &mut Transform, &MoveTarget, &UnitSpeed, &EntityKind, Option<&Carrying>, Option<&CarryCapacity>), With<Unit>>,
 ) {
     for (entity, mut transform, target, unit_speed, kind, carrying, capacity) in &mut query {
@@ -121,7 +123,7 @@ fn move_units(
             transform.translation += step;
         }
         // Snap Y to terrain
-        transform.translation.y = terrain_height(transform.translation.x, transform.translation.z) + y_offset_for(*kind, &registry);
+        transform.translation.y = height_map.sample(transform.translation.x, transform.translation.z) + y_offset_for(*kind, &registry);
     }
 }
 

@@ -209,7 +209,7 @@ fn load_building_model_assets_eager(asset_server: &AssetServer) -> BuildingModel
 
     let mut calibration = HashMap::new();
     calibration.insert(EntityKind::Base, BuildingModelCalibration {
-        scale: 3.0, y_offset: 0.0, building_height: 8.0,
+        scale: 3.0, y_offset: 0.0, building_height: 4.0,
     });
     calibration.insert(EntityKind::Barracks, BuildingModelCalibration {
         scale: 3.0, y_offset: 0.0, building_height: 7.0,
