@@ -8,6 +8,7 @@ use crate::components::*;
 use crate::ground::HeightMap;
 use crate::hover_material::{HoverRingMaterial, HoverRingSettings};
 use crate::minimap::{MinimapInteraction, MinimapSet};
+use crate::theme;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SelectionSet;
@@ -95,7 +96,7 @@ fn ray_sphere_dist(ray: &Ray3d, center: Vec3, radius: f32) -> Option<f32> {
 /// and one of the marker components. Returns the closest hit entity.
 fn pick_nearest(
     ray: &Ray3d,
-    pickables: &Query<(Entity, &GlobalTransform, &PickRadius)>,
+    pickables: &Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     units: &Query<Entity, With<Unit>>,
     buildings: &Query<Entity, With<Building>>,
     mobs: &Query<Entity, With<Mob>>,
@@ -103,7 +104,11 @@ fn pick_nearest(
 ) -> Option<Entity> {
     let mut best: Option<(Entity, f32)> = None;
 
-    for (entity, gt, pick_r) in pickables {
+    for (entity, gt, pick_r, inherited_vis) in pickables {
+        // Skip entities hidden by fog of war
+        if !inherited_vis.get() {
+            continue;
+        }
         // Only pick entities that are units, buildings, mobs, or resource nodes
         if !units.contains(entity)
             && !buildings.contains(entity)
@@ -137,7 +142,7 @@ struct PickResult {
 /// Pick the best entity for click selection — prioritizes units > buildings > resources > mobs.
 fn pick_for_click(
     ray: &Ray3d,
-    pickables: &Query<(Entity, &GlobalTransform, &PickRadius)>,
+    pickables: &Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     units: &Query<Entity, With<Unit>>,
     buildings: &Query<Entity, With<Building>>,
     mobs: &Query<Entity, With<Mob>>,
@@ -145,7 +150,11 @@ fn pick_for_click(
 ) -> Option<PickResult> {
     let mut hits: Vec<(Entity, f32, bool, bool, bool, bool)> = Vec::new();
 
-    for (entity, gt, pick_r) in pickables {
+    for (entity, gt, pick_r, inherited_vis) in pickables {
+        // Skip entities hidden by fog of war
+        if !inherited_vis.get() {
+            continue;
+        }
         let is_unit = units.contains(entity);
         let is_building = buildings.contains(entity);
         let is_mob = mobs.contains(entity);
@@ -222,12 +231,12 @@ fn setup_hover_assets(
             border_radius: BorderRadius::all(Val::Px(4.0)),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.05, 0.05, 0.1, 0.85)),
+        BackgroundColor(theme::BG_PANEL),
         Visibility::Hidden,
         GlobalTransform::default(),
         Text::new(""),
-        TextFont { font_size: 13.0, ..default() },
-        TextColor(Color::srgba(0.9, 0.9, 0.85, 1.0)),
+        TextFont { font_size: 12.0, ..default() },
+        TextColor(theme::TEXT_PRIMARY),
     ));
 }
 
@@ -242,8 +251,8 @@ fn spawn_selection_box(mut commands: Commands) {
             height: Val::Px(0.0),
             ..default()
         },
-        BackgroundColor(Color::srgba(0.2, 0.4, 1.0, 0.2)),
-        BorderColor::all(Color::srgba(0.3, 0.5, 1.0, 0.8)),
+        BackgroundColor(Color::srgba(0.29, 0.62, 1.0, 0.15)),
+        BorderColor::all(Color::srgba(0.29, 0.62, 1.0, 0.6)),
         Visibility::Hidden,
         GlobalTransform::default(),
 
@@ -330,7 +339,7 @@ fn update_hover(
     mut commands: Commands,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    pickables: Query<(Entity, &GlobalTransform, &PickRadius)>,
+    pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     units: Query<Entity, With<Unit>>,
     buildings: Query<Entity, With<Building>>,
     mobs: Query<Entity, With<Mob>>,
@@ -380,7 +389,7 @@ fn handle_click_select(
     placement: Res<BuildingPlacementState>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    pickables: Query<(Entity, &GlobalTransform, &PickRadius)>,
+    pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     entity_queries: (
         Query<Entity, With<Unit>>,
         Query<Entity, With<Building>>,
@@ -690,7 +699,7 @@ fn handle_right_click_move(
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
     selected_units: Query<(Entity, &EntityKind), (With<Unit>, With<Selected>)>,
-    pickables: Query<(Entity, &GlobalTransform, &PickRadius)>,
+    pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     mobs: Query<Entity, With<Mob>>,
     resource_nodes: Query<Entity, With<ResourceNode>>,
     construction_q: Query<(Entity, &GlobalTransform), (With<Building>, With<ConstructionProgress>)>,
@@ -729,7 +738,10 @@ fn handle_right_click_move(
     let mut best_resource: Option<(Entity, f32)> = None;
     let mut best_construction: Option<(Entity, f32)> = None;
 
-    for (entity, gt, pick_r) in &pickables {
+    for (entity, gt, pick_r, inherited_vis) in &pickables {
+        if !inherited_vis.get() {
+            continue;
+        }
         let center = gt.translation();
         if let Some(dist) = ray_sphere_dist(&ray, center, pick_r.0) {
             if mobs.contains(entity) {
@@ -758,7 +770,7 @@ fn handle_right_click_move(
             }
         }
     } else if let Some((construction_entity, _)) = best_construction {
-        let construction_pos = pickables.get(construction_entity).map(|(_, gt, _)| gt.translation());
+        let construction_pos = pickables.get(construction_entity).map(|(_, gt, _, _)| gt.translation());
         for (entity, kind) in &units_vec {
             if *kind == EntityKind::Worker {
                 commands
@@ -775,7 +787,7 @@ fn handle_right_click_move(
         }
     } else if let Some((resource_entity, _)) = best_resource {
         // Only workers can gather; non-workers move to the resource instead
-        let resource_pos = pickables.get(resource_entity).map(|(_, gt, _)| gt.translation());
+        let resource_pos = pickables.get(resource_entity).map(|(_, gt, _, _)| gt.translation());
         for (entity, kind) in &units_vec {
             if *kind == EntityKind::Worker {
                 commands

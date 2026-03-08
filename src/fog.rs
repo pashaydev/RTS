@@ -305,6 +305,29 @@ fn fog_hide_enemies(
             Without<Projectile>,
         ),
     >,
+    mut saplings: Query<
+        (&Transform, &mut Visibility),
+        (
+            With<Sapling>,
+            Without<Mob>,
+            Without<ResourceNode>,
+            Without<Decoration>,
+            Without<Projectile>,
+            Without<VfxFlash>,
+        ),
+    >,
+    mut growing_trees: Query<
+        (&Transform, &mut Visibility),
+        (
+            With<GrowingTree>,
+            Without<Mob>,
+            Without<ResourceNode>,
+            Without<Decoration>,
+            Without<Projectile>,
+            Without<VfxFlash>,
+            Without<Sapling>,
+        ),
+    >,
 ) {
     let mob_t = fog_settings.mob_threshold;
     let obj_t = fog_settings.object_threshold;
@@ -349,6 +372,24 @@ fn fog_hide_enemies(
     for (tf, mut vis) in vfx.iter_mut() {
         let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
         *vis = if v >= vfx_t {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    for (tf, mut vis) in saplings.iter_mut() {
+        let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
+        *vis = if v >= obj_t {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+
+    for (tf, mut vis) in growing_trees.iter_mut() {
+        let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
+        *vis = if v >= obj_t {
             Visibility::Inherited
         } else {
             Visibility::Hidden

@@ -532,11 +532,28 @@ pub struct IconAssets {
     pub soldier: Handle<Image>,
     pub archer: Handle<Image>,
     pub tank: Handle<Image>,
+    // Additional buildings
+    pub mage_tower: Handle<Image>,
+    pub temple: Handle<Image>,
+    pub stable: Handle<Image>,
+    pub siege_works: Handle<Image>,
+    // Additional units
+    pub knight: Handle<Image>,
+    pub mage: Handle<Image>,
+    pub priest: Handle<Image>,
+    pub cavalry: Handle<Image>,
+    // Siege
+    pub catapult: Handle<Image>,
+    pub battering_ram: Handle<Image>,
     // Mobs
     pub goblin: Handle<Image>,
     pub skeleton: Handle<Image>,
     pub orc: Handle<Image>,
     pub demon: Handle<Image>,
+    // Summons
+    pub skeleton_minion: Handle<Image>,
+    pub spirit_wolf: Handle<Image>,
+    pub fire_elemental: Handle<Image>,
 }
 
 impl IconAssets {
@@ -563,13 +580,70 @@ impl IconAssets {
             EntityKind::Soldier => self.soldier.clone(),
             EntityKind::Archer => self.archer.clone(),
             EntityKind::Tank => self.tank.clone(),
+            EntityKind::Knight => self.knight.clone(),
+            EntityKind::Mage => self.mage.clone(),
+            EntityKind::Priest => self.priest.clone(),
+            EntityKind::Cavalry => self.cavalry.clone(),
+            // Siege
+            EntityKind::Catapult => self.catapult.clone(),
+            EntityKind::BatteringRam => self.battering_ram.clone(),
+            // Buildings
+            EntityKind::MageTower => self.mage_tower.clone(),
+            EntityKind::Temple => self.temple.clone(),
+            EntityKind::Stable => self.stable.clone(),
+            EntityKind::SiegeWorks => self.siege_works.clone(),
             // Mobs
             EntityKind::Goblin => self.goblin.clone(),
             EntityKind::Skeleton => self.skeleton.clone(),
             EntityKind::Orc => self.orc.clone(),
             EntityKind::Demon => self.demon.clone(),
-            // Fallback — use worker icon for new types without icons yet
-            _ => self.worker.clone(),
+            // Summons
+            EntityKind::SkeletonMinion => self.skeleton_minion.clone(),
+            EntityKind::SpiritWolf => self.spirit_wolf.clone(),
+            EntityKind::FireElemental => self.fire_elemental.clone(),
+        }
+    }
+}
+
+// ── Tree growth ──
+
+#[derive(Component)]
+pub struct Sapling {
+    pub timer: Timer,
+    pub target_scale: f32,
+}
+
+#[derive(Component)]
+pub struct GrowingTree {
+    pub stage: u8,
+    pub timer: Timer,
+    pub target_scale: f32,
+}
+
+#[derive(Component)]
+pub struct MatureTree;
+
+#[derive(Resource)]
+pub struct TreeGrowthConfig {
+    pub spawn_timer: Timer,
+    pub sapling_duration: f32,
+    pub growth_stage_duration: f32,
+    pub max_saplings: u32,
+    pub max_growing: u32,
+    pub spawn_radius: f32,
+    pub mature_wood_amount: u32,
+}
+
+impl Default for TreeGrowthConfig {
+    fn default() -> Self {
+        Self {
+            spawn_timer: Timer::from_seconds(5.0, TimerMode::Repeating),
+            sapling_duration: 30.0,
+            growth_stage_duration: 20.0,
+            max_saplings: 30,
+            max_growing: 30,
+            spawn_radius: 15.0,
+            mature_wood_amount: 200,
         }
     }
 }
@@ -912,3 +986,7 @@ pub fn fan_params(index: usize, total: usize) -> (f32, f32) {
     let y_offset = centered.abs() * 20.0;
     (rotation_deg, y_offset)
 }
+
+/// Marker for standard (non-ghost) buttons that receive hover/press visuals.
+#[derive(Component)]
+pub struct StandardButton;

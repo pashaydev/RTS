@@ -26,10 +26,23 @@ impl Plugin for ModelAssetsPlugin {
             soldier: asset_server.load("icons/units/soldier.png"),
             archer: asset_server.load("icons/units/archer.png"),
             tank: asset_server.load("icons/units/tank.png"),
+            mage_tower: asset_server.load("icons/buildings/mage_tower.png"),
+            temple: asset_server.load("icons/buildings/temple.png"),
+            stable: asset_server.load("icons/buildings/stable.png"),
+            siege_works: asset_server.load("icons/buildings/siege_works.png"),
+            knight: asset_server.load("icons/units/knight.png"),
+            mage: asset_server.load("icons/units/mage.png"),
+            priest: asset_server.load("icons/units/priest.png"),
+            cavalry: asset_server.load("icons/units/cavalry.png"),
+            catapult: asset_server.load("icons/units/catapult.png"),
+            battering_ram: asset_server.load("icons/units/battering_ram.png"),
             goblin: asset_server.load("icons/mobs/goblin.png"),
             skeleton: asset_server.load("icons/mobs/skeleton.png"),
             orc: asset_server.load("icons/mobs/orc.png"),
             demon: asset_server.load("icons/mobs/demon.png"),
+            skeleton_minion: asset_server.load("icons/summons/skeleton_minion.png"),
+            spirit_wolf: asset_server.load("icons/summons/spirit_wolf.png"),
+            fire_elemental: asset_server.load("icons/summons/fire_elemental.png"),
         };
         app.insert_resource(icons);
 
@@ -289,49 +302,47 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
 
     let mut calibration = HashMap::new();
 
-    let pi = std::f32::consts::PI;
-
     // Player units
     calibration.insert(EntityKind::Worker, CharacterModelCalibration {
-        scale: 0.6, y_offset: -0.8, facing_rotation: pi,
+        scale: 0.3, y_offset: -0.8, facing_rotation: 0.0,
     });
     calibration.insert(EntityKind::Soldier, CharacterModelCalibration {
-        scale: 0.7, y_offset: -0.9, facing_rotation: pi,
+        scale: 0.35, y_offset: -0.9, facing_rotation: 0.0,
     });
     calibration.insert(EntityKind::Archer, CharacterModelCalibration {
-        scale: 0.6, y_offset: -0.75, facing_rotation: pi,
+        scale: 0.3, y_offset: -0.75, facing_rotation: 0.0,
     });
     calibration.insert(EntityKind::Tank, CharacterModelCalibration {
-        scale: 0.85, y_offset: -1.25, facing_rotation: pi,
+        scale: 0.42, y_offset: -1.25, facing_rotation: 0.0,
     });
     calibration.insert(EntityKind::Knight, CharacterModelCalibration {
-        scale: 0.8, y_offset: -1.2, facing_rotation: pi,
+        scale: 0.4, y_offset: -1.2, facing_rotation: 0.0,
     });
     calibration.insert(EntityKind::Mage, CharacterModelCalibration {
-        scale: 0.6, y_offset: -0.8, facing_rotation: pi,
+        scale: 0.3, y_offset: -0.8, facing_rotation: 0.0,
     });
     calibration.insert(EntityKind::Priest, CharacterModelCalibration {
-        scale: 0.6, y_offset: -0.8, facing_rotation: pi,
+        scale: 0.3, y_offset: -0.8, facing_rotation: 0.0,
     });
     calibration.insert(EntityKind::Cavalry, CharacterModelCalibration {
-        scale: 0.7, y_offset: -1.1, facing_rotation: pi,
+        scale: 0.35, y_offset: -1.1, facing_rotation: 0.0,
     });
     // Mobs
     calibration.insert(EntityKind::Goblin, CharacterModelCalibration {
-        scale: 0.55, y_offset: -0.65, facing_rotation: pi,
+        scale: 0.28, y_offset: -0.65, facing_rotation: 0.0,
     });
     calibration.insert(EntityKind::Skeleton, CharacterModelCalibration {
-        scale: 0.6, y_offset: -0.78, facing_rotation: pi,
+        scale: 0.3, y_offset: -0.78, facing_rotation: 0.0,
     });
     calibration.insert(EntityKind::Orc, CharacterModelCalibration {
-        scale: 0.75, y_offset: -1.05, facing_rotation: pi,
+        scale: 0.38, y_offset: -1.05, facing_rotation: 0.0,
     });
     calibration.insert(EntityKind::Demon, CharacterModelCalibration {
-        scale: 0.85, y_offset: -1.15, facing_rotation: pi,
+        scale: 0.42, y_offset: -1.15, facing_rotation: 0.0,
     });
     // Summons
     calibration.insert(EntityKind::SkeletonMinion, CharacterModelCalibration {
-        scale: 0.55, y_offset: -0.7, facing_rotation: pi,
+        scale: 0.28, y_offset: -0.7, facing_rotation: 0.0,
     });
 
     UnitModelAssets { scenes, calibration }

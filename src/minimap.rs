@@ -6,6 +6,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
 
 use crate::components::*;
+use crate::theme;
 use crate::ground::{HALF_MAP, MAP_SIZE};
 
 const MINIMAP_TEX_SIZE: usize = 200;
@@ -165,8 +166,8 @@ fn setup_minimap(
                 border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.05, 0.05, 0.1, 0.85)),
-            BorderColor::all(Color::srgba(0.3, 0.35, 0.5, 0.8)),
+            BackgroundColor(theme::BG_PANEL),
+            BorderColor::all(theme::BORDER_SUBTLE),
         ))
         .with_children(|parent| {
             parent.spawn((

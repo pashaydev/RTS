@@ -16,6 +16,7 @@ mod model_assets;
 mod pathvis;
 mod resources;
 mod selection;
+mod theme;
 mod ui;
 mod units;
 mod vfx;

@@ -11,11 +11,16 @@ pub struct ResourcesPlugin;
 impl Plugin for ResourcesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PlayerResources>()
+            .init_resource::<TreeGrowthConfig>()
             .add_systems(Startup, (create_resource_node_materials, create_carry_visual_assets))
             .add_systems(PostStartup, (spawn_resource_nodes, spawn_decorations))
             .add_systems(
                 Update,
                 (worker_ai_system, deplete_resource_nodes, update_carry_visuals).chain(),
+            )
+            .add_systems(
+                Update,
+                (spawn_saplings_system, grow_saplings_system, grow_trees_system),
             );
     }
 }
@@ -52,7 +57,7 @@ fn create_resource_node_materials(
 fn biome_spawn_threshold(biome: Biome) -> f32 {
     match biome {
         Biome::Forest => 0.1,
-        Biome::Desert => 0.3,
+        Biome::Desert => 0.2,
         Biome::Mud => 0.3,
         Biome::Water => 0.4,
         Biome::Mountain => 0.35,
@@ -77,7 +82,7 @@ fn primary_resource_for(
         )),
         Biome::Desert => Some((
             ResourceType::Copper,
-            400,
+            500,
             ore_mesh.clone(),
             mats.copper.clone(),
             0.4,
@@ -132,6 +137,13 @@ fn secondary_resource_for(
             400,
             ore_mesh.clone(),
             mats.iron.clone(),
+            0.4,
+        )),
+        Biome::Forest => Some((
+            ResourceType::Copper,
+            200,
+            ore_mesh.clone(),
+            mats.copper.clone(),
             0.4,
         )),
         _ => None,
@@ -215,6 +227,7 @@ fn spawn_resource_nodes(
                                 resource_type: rt,
                                 amount_remaining: amount,
                             },
+                            MatureTree,
                             PickRadius(3.0 * scale_factor),
                             SceneRoot(scene_handle),
                             Transform::from_translation(Vec3::new(x, height_map.sample(x, z), z))
@@ -833,6 +846,140 @@ fn deplete_resource_nodes(mut commands: Commands, nodes: Query<(Entity, &Resourc
     for (entity, node) in &nodes {
         if node.amount_remaining == 0 {
             commands.entity(entity).despawn();
+        }
+    }
+}
+
+// ── Tree Growth Systems ──
+
+fn spawn_saplings_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut config: ResMut<TreeGrowthConfig>,
+    biome_map: Res<BiomeMap>,
+    height_map: Res<HeightMap>,
+    model_assets: Res<ModelAssets>,
+    mature_trees: Query<&Transform, With<MatureTree>>,
+    saplings: Query<&Sapling>,
+    growing: Query<&GrowingTree>,
+) {
+    config.spawn_timer.tick(time.delta());
+    if !config.spawn_timer.just_finished() {
+        return;
+    }
+
+    let sapling_count = saplings.iter().count() as u32;
+    let _growing_count = growing.iter().count() as u32;
+    if sapling_count >= config.max_saplings {
+        return;
+    }
+
+    if model_assets.trees.is_empty() {
+        return;
+    }
+
+    let mut rng = rand::rng();
+    let trees: Vec<Vec3> = mature_trees.iter().map(|t| t.translation).collect();
+    if trees.is_empty() {
+        return;
+    }
+
+    // Try to spawn a few saplings near random existing trees
+    let spawns_per_tick = 3u32.min(config.max_saplings - sapling_count);
+    for _ in 0..spawns_per_tick {
+        let parent_pos = trees[rng.random_range(0..trees.len())];
+        let angle = rng.random_range(0.0..std::f32::consts::TAU);
+        let dist = rng.random_range(4.0..config.spawn_radius);
+        let x = parent_pos.x + angle.cos() * dist;
+        let z = parent_pos.z + angle.sin() * dist;
+
+        // Only spawn in forest biome
+        if biome_map.get_biome(x, z) != Biome::Forest {
+            continue;
+        }
+
+        // Don't spawn too close to center
+        if (x * x + z * z).sqrt() < 20.0 {
+            continue;
+        }
+
+        let scene_handle = model_assets.trees[rng.random_range(0..model_assets.trees.len())].clone();
+        let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
+        let target_scale = rng.random_range(0.8_f32..1.2);
+        let initial_scale = 0.15;
+
+        commands.spawn((
+            Sapling {
+                timer: Timer::from_seconds(config.sapling_duration, TimerMode::Once),
+                target_scale,
+            },
+            SceneRoot(scene_handle),
+            Transform::from_translation(Vec3::new(x, height_map.sample(x, z), z))
+                .with_rotation(Quat::from_rotation_y(y_rotation))
+                .with_scale(Vec3::splat(initial_scale)),
+        ));
+    }
+}
+
+fn grow_saplings_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<TreeGrowthConfig>,
+    mut saplings: Query<(Entity, &mut Sapling, &mut Transform)>,
+) {
+    for (entity, mut sapling, mut tf) in &mut saplings {
+        sapling.timer.tick(time.delta());
+        let progress = sapling.timer.fraction();
+        // Lerp scale from 0.15 to 0.4
+        let scale = 0.15 + progress * 0.25;
+        tf.scale = Vec3::splat(scale);
+
+        if sapling.timer.is_finished() {
+            commands.entity(entity).remove::<Sapling>();
+            commands.entity(entity).insert(GrowingTree {
+                stage: 0,
+                timer: Timer::from_seconds(config.growth_stage_duration, TimerMode::Once),
+                target_scale: sapling.target_scale,
+            });
+        }
+    }
+}
+
+fn grow_trees_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    config: Res<TreeGrowthConfig>,
+    mut growing: Query<(Entity, &mut GrowingTree, &mut Transform)>,
+) {
+    for (entity, mut tree, mut tf) in &mut growing {
+        tree.timer.tick(time.delta());
+        let progress = tree.timer.fraction();
+
+        // Stage scale ranges: 0→(0.4..0.6), 1→(0.6..0.8), 2→(0.8..target)
+        let (from, to) = match tree.stage {
+            0 => (0.4, 0.6),
+            1 => (0.6, 0.8),
+            _ => (0.8, tree.target_scale),
+        };
+        let scale = from + progress * (to - from);
+        tf.scale = Vec3::splat(scale);
+
+        if tree.timer.is_finished() {
+            if tree.stage >= 2 {
+                // Promote to mature tree
+                commands.entity(entity).remove::<GrowingTree>();
+                commands.entity(entity).insert((
+                    MatureTree,
+                    ResourceNode {
+                        resource_type: ResourceType::Wood,
+                        amount_remaining: config.mature_wood_amount,
+                    },
+                    PickRadius(3.0 * tree.target_scale),
+                ));
+            } else {
+                tree.stage += 1;
+                tree.timer = Timer::from_seconds(config.growth_stage_duration, TimerMode::Once);
+            }
         }
     }
 }

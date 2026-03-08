@@ -8,7 +8,10 @@ use std::collections::BTreeMap;
 use crate::fog::FogTweakSettings;
 use crate::fog_material::FogOfWarMaterial;
 use bevy::light::{FogVolume, VolumetricFog};
-use crate::lighting::{AtmosphericFogVolume, DayCycle, LightingOverrides, SunLight};
+use crate::lighting::{
+    AtmosphericFogVolume, DayCycle, EntityClusterLight, EntityLightConfig, EntityLightGrid,
+    LightingOverrides, SunLight,
+};
 use crate::components::{FogOverlay, UiClickedThisFrame, UiPressActive};
 
 const DEBUG_CONFIG_PATH: &str = "config/debug_tweaks.json";
@@ -38,6 +41,7 @@ impl Plugin for DebugPlugin {
                     update_save_button_feedback,
                     apply_saved_config,
                     sync_lighting_tweaks,
+                    sync_entity_light_tweaks,
                     sync_fog_tweaks,
                     rebuild_tweak_panel,
                     update_tweak_visuals,
@@ -1480,6 +1484,40 @@ fn sync_lighting_tweaks(
             }
         }
     }
+}
+
+// ── Sync: Entity Lights ↔ DebugTweaks ──
+
+fn sync_entity_light_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    mut config: ResMut<EntityLightConfig>,
+    mut grid: ResMut<EntityLightGrid>,
+    cluster_lights: Query<&EntityClusterLight>,
+) {
+    if let Some(v) = tweaks.get_bool("Entity Lights", "Enabled") {
+        config.enabled = v;
+    }
+    if let Some(v) = tweaks.get_float("Entity Lights", "Cell Size") {
+        grid.cell_size = v;
+    }
+    if let Some(v) = tweaks.get_float("Entity Lights", "Max Lights") {
+        grid.max_lights = v as usize;
+    }
+    if let Some(v) = tweaks.get_float("Entity Lights", "Building Intensity") {
+        config.building_base_intensity = v;
+    }
+    if let Some(v) = tweaks.get_float("Entity Lights", "Unit Intensity") {
+        config.unit_base_intensity = v;
+    }
+    if let Some(v) = tweaks.get_float("Entity Lights", "Night Factor") {
+        config.night_factor = v;
+    }
+    if let Some(v) = tweaks.get_float("Entity Lights", "Day Factor") {
+        config.day_factor = v;
+    }
+
+    let count = cluster_lights.iter().count();
+    tweaks.set_readonly_if_changed("Entity Lights", "Active Lights", &count.to_string());
 }
 
 // ── Sync: Fog ↔ DebugTweaks ──
