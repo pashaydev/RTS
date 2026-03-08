@@ -790,6 +790,29 @@ pub struct BuildingHpBarFill;
 #[derive(Component)]
 pub struct BuildingSceneChild;
 
+/// Marker for the child entity holding a unit/mob character GLTF scene.
+#[derive(Component)]
+pub struct UnitSceneChild;
+
+/// Tracks which animation state a unit is currently playing.
+#[derive(Component)]
+pub struct AnimationController {
+    pub current_state: AnimState,
+}
+
+/// Reference to the entity that owns the AnimationPlayer (deep in the GLTF hierarchy).
+#[derive(Component)]
+pub struct AnimPlayerRef(pub Entity);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
+pub enum AnimState {
+    #[default]
+    Idle,
+    Walk,
+    Attack,
+    Die,
+}
+
 #[derive(Resource, Default)]
 pub struct RallyPointMode(pub bool);
 

@@ -15,3 +15,12 @@ Thumbs.db
 
 # Bevy
 /assets/cache/
+
+
+# Assets
+*.blend
+*.blend1
+*.mtl
+*.obj
+*.bin
+*.fbx

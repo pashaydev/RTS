@@ -508,20 +508,22 @@ fn handle_click_select(
 fn update_entity_visuals(
     mut commands: Commands,
     cache: Res<EntityVisualCache>,
-    added_selected: Query<(Entity, &EntityKind), Added<Selected>>,
+    added_selected: Query<(Entity, &EntityKind, Has<Mesh3d>), Added<Selected>>,
     mut removed_selected: RemovedComponents<Selected>,
-    added_hovered: Query<(Entity, &EntityKind), Added<Hovered>>,
+    added_hovered: Query<(Entity, &EntityKind, Has<Mesh3d>), Added<Hovered>>,
     mut removed_hovered: RemovedComponents<Hovered>,
-    all_entities: Query<(Entity, &EntityKind, Has<Selected>, Has<Hovered>)>,
+    all_entities: Query<(Entity, &EntityKind, Has<Selected>, Has<Hovered>, Has<Mesh3d>)>,
     mut outlines: Query<&mut OutlineVolume>,
 ) {
     // Outline colors
     let outline_selected = Color::srgb(0.2, 1.0, 0.3);
     let outline_hovered = Color::srgb(0.3, 0.8, 1.0);
 
-    for (entity, kind) in &added_selected {
-        if let Some(mat) = cache.materials_selected.get(kind) {
-            commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+    for (entity, kind, has_mesh) in &added_selected {
+        if has_mesh {
+            if let Some(mat) = cache.materials_selected.get(kind) {
+                commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+            }
         }
         if let Ok(mut outline) = outlines.get_mut(entity) {
             outline.visible = true;
@@ -531,10 +533,12 @@ fn update_entity_visuals(
     }
 
     for entity in removed_selected.read() {
-        if let Ok((_, kind, _, has_hovered)) = all_entities.get(entity) {
+        if let Ok((_, kind, _, has_hovered, has_mesh)) = all_entities.get(entity) {
             if has_hovered {
-                if let Some(mat) = cache.materials_hovered.get(kind) {
-                    commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                if has_mesh {
+                    if let Some(mat) = cache.materials_hovered.get(kind) {
+                        commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                    }
                 }
                 if let Ok(mut outline) = outlines.get_mut(entity) {
                     outline.visible = true;
@@ -542,8 +546,10 @@ fn update_entity_visuals(
                     outline.width = 3.0;
                 }
             } else {
-                if let Some(mat) = cache.materials_default.get(kind) {
-                    commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                if has_mesh {
+                    if let Some(mat) = cache.materials_default.get(kind) {
+                        commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                    }
                 }
                 if let Ok(mut outline) = outlines.get_mut(entity) {
                     outline.visible = false;
@@ -552,11 +558,13 @@ fn update_entity_visuals(
         }
     }
 
-    for (entity, kind) in &added_hovered {
-        if let Ok((_, _, has_selected, _)) = all_entities.get(entity) {
+    for (entity, kind, has_mesh) in &added_hovered {
+        if let Ok((_, _, has_selected, _, _)) = all_entities.get(entity) {
             if !has_selected {
-                if let Some(mat) = cache.materials_hovered.get(kind) {
-                    commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                if has_mesh {
+                    if let Some(mat) = cache.materials_hovered.get(kind) {
+                        commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                    }
                 }
                 if let Ok(mut outline) = outlines.get_mut(entity) {
                     outline.visible = true;
@@ -568,10 +576,12 @@ fn update_entity_visuals(
     }
 
     for entity in removed_hovered.read() {
-        if let Ok((_, kind, has_selected, _)) = all_entities.get(entity) {
+        if let Ok((_, kind, has_selected, _, has_mesh)) = all_entities.get(entity) {
             if !has_selected {
-                if let Some(mat) = cache.materials_default.get(kind) {
-                    commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                if has_mesh {
+                    if let Some(mat) = cache.materials_default.get(kind) {
+                        commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                    }
                 }
                 if let Ok(mut outline) = outlines.get_mut(entity) {
                     outline.visible = false;

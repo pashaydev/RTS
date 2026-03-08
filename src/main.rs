@@ -1,3 +1,4 @@
+mod animation;
 mod blueprints;
 mod buildings;
 mod camera;
@@ -51,6 +52,7 @@ fn main() {
             combat::CombatPlugin,
             fog::FogPlugin,
         ))
+        .add_plugins(animation::AnimationPlugin)
         .add_plugins(minimap::MinimapPlugin)
         .run();
 }

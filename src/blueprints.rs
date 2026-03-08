@@ -1,10 +1,10 @@
 use bevy::prelude::*;
-use bevy_mod_outline::{AsyncSceneInheritOutline, OutlineStencil, OutlineVolume};
+use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline, OutlineStencil, OutlineVolume};
 use std::collections::HashMap;
 
 use crate::components::*;
 use crate::ground::HeightMap;
-use crate::model_assets::BuildingModelAssets;
+use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 
 // ── EntityKind — unified type enum ──
 
@@ -225,6 +225,7 @@ pub enum MeshKind {
     Cuboid { x: f32, y: f32, z: f32 },
     Cylinder { radius: f32, height: f32 },
     GltfScene { pick_radius: f32 },
+    GltfCharacter { pick_radius: f32 },
 }
 
 impl MeshKind {
@@ -235,13 +236,18 @@ impl MeshKind {
             MeshKind::Cuboid { x, y, z } => (x * x + y * y + z * z).sqrt() / 2.0,
             MeshKind::Cylinder { radius, height } => (radius * radius + (height / 2.0).powi(2)).sqrt(),
             MeshKind::GltfScene { pick_radius } => return pick_radius,
+            MeshKind::GltfCharacter { pick_radius } => return pick_radius,
         };
         // 30% buffer for easier clicking
         r * 1.3
     }
 
     pub fn is_gltf(&self) -> bool {
-        matches!(self, MeshKind::GltfScene { .. })
+        matches!(self, MeshKind::GltfScene { .. } | MeshKind::GltfCharacter { .. })
+    }
+
+    pub fn is_gltf_character(&self) -> bool {
+        matches!(self, MeshKind::GltfCharacter { .. })
     }
 }
 
@@ -411,7 +417,7 @@ pub fn build_registry() -> BlueprintRegistry {
         train_time_secs: 5.0,
         building: None, mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.3, length: 1.0 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
             color: Color::srgb(0.9, 0.8, 0.2),
             selected_color: Color::srgb(1.0, 1.0, 0.4),
             selected_emissive: LinearRgba::new(0.3, 0.3, 0.0, 1.0),
@@ -434,7 +440,7 @@ pub fn build_registry() -> BlueprintRegistry {
         train_time_secs: 8.0,
         building: None, mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.35, length: 1.2 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
             color: Color::srgb(0.8, 0.15, 0.15),
             selected_color: Color::srgb(1.0, 0.3, 0.3),
             selected_emissive: LinearRgba::new(0.3, 0.05, 0.05, 1.0),
@@ -463,7 +469,7 @@ pub fn build_registry() -> BlueprintRegistry {
         train_time_secs: 7.0,
         building: None, mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.25, length: 1.0 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
             color: Color::srgb(0.15, 0.7, 0.2),
             selected_color: Color::srgb(0.3, 1.0, 0.4),
             selected_emissive: LinearRgba::new(0.05, 0.3, 0.05, 1.0),
@@ -486,7 +492,7 @@ pub fn build_registry() -> BlueprintRegistry {
         train_time_secs: 15.0,
         building: None, mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.5, length: 1.5 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
             color: Color::srgb(0.35, 0.35, 0.4),
             selected_color: Color::srgb(0.6, 0.6, 0.65),
             selected_emissive: LinearRgba::new(0.1, 0.1, 0.12, 1.0),
@@ -509,7 +515,7 @@ pub fn build_registry() -> BlueprintRegistry {
         train_time_secs: 12.0,
         building: None, mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.4, length: 1.4 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
             color: Color::srgb(0.7, 0.7, 0.75),
             selected_color: Color::srgb(0.9, 0.9, 0.95),
             selected_emissive: LinearRgba::new(0.2, 0.2, 0.25, 1.0),
@@ -537,7 +543,7 @@ pub fn build_registry() -> BlueprintRegistry {
         train_time_secs: 15.0,
         building: None, mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.28, length: 1.0 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
             color: Color::srgb(0.3, 0.2, 0.7),
             selected_color: Color::srgb(0.5, 0.4, 1.0),
             selected_emissive: LinearRgba::new(0.1, 0.05, 0.3, 1.0),
@@ -565,7 +571,7 @@ pub fn build_registry() -> BlueprintRegistry {
         train_time_secs: 12.0,
         building: None, mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.28, length: 1.0 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
             color: Color::srgb(0.9, 0.85, 0.6),
             selected_color: Color::srgb(1.0, 0.95, 0.7),
             selected_emissive: LinearRgba::new(0.3, 0.28, 0.1, 1.0),
@@ -593,7 +599,7 @@ pub fn build_registry() -> BlueprintRegistry {
         train_time_secs: 10.0,
         building: None, mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.4, length: 1.3 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
             color: Color::srgb(0.55, 0.4, 0.25),
             selected_color: Color::srgb(0.75, 0.6, 0.4),
             selected_emissive: LinearRgba::new(0.15, 0.1, 0.05, 1.0),
@@ -1022,7 +1028,7 @@ pub fn build_registry() -> BlueprintRegistry {
         building: None,
         mob_ai: Some(MobAiData { patrol_radius: 12.0 }),
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.25, length: 0.8 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
             color: Color::srgb(0.3, 0.6, 0.15),
             selected_color: Color::srgb(0.3, 0.6, 0.15),
             selected_emissive: LinearRgba::NONE,
@@ -1044,7 +1050,7 @@ pub fn build_registry() -> BlueprintRegistry {
         building: None,
         mob_ai: Some(MobAiData { patrol_radius: 15.0 }),
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.28, length: 1.0 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
             color: Color::srgb(0.85, 0.82, 0.75),
             selected_color: Color::srgb(0.85, 0.82, 0.75),
             selected_emissive: LinearRgba::NONE,
@@ -1066,7 +1072,7 @@ pub fn build_registry() -> BlueprintRegistry {
         building: None,
         mob_ai: Some(MobAiData { patrol_radius: 18.0 }),
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.4, length: 1.3 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
             color: Color::srgb(0.4, 0.3, 0.15),
             selected_color: Color::srgb(0.4, 0.3, 0.15),
             selected_emissive: LinearRgba::NONE,
@@ -1088,7 +1094,7 @@ pub fn build_registry() -> BlueprintRegistry {
         building: None,
         mob_ai: Some(MobAiData { patrol_radius: 20.0 }),
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.45, length: 1.4 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 2.0 },
             color: Color::srgb(0.6, 0.1, 0.1),
             selected_color: Color::srgb(0.6, 0.1, 0.1),
             selected_emissive: LinearRgba::NONE,
@@ -1111,7 +1117,7 @@ pub fn build_registry() -> BlueprintRegistry {
         cost: ResourceCost::default(), train_time_secs: 0.0,
         building: None, mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.22, length: 0.8 },
+            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.3 },
             color: Color::srgb(0.75, 0.72, 0.65),
             selected_color: Color::srgb(0.85, 0.82, 0.75),
             selected_emissive: LinearRgba::new(0.1, 0.1, 0.08, 1.0),
@@ -1174,6 +1180,7 @@ pub fn spawn_from_blueprint(
     pos: Vec3,
     registry: &BlueprintRegistry,
     building_models: Option<&BuildingModelAssets>,
+    unit_models: Option<&UnitModelAssets>,
     height_map: &HeightMap,
 ) -> Entity {
     let bp = registry.get(kind);
@@ -1181,12 +1188,13 @@ pub fn spawn_from_blueprint(
     let mesh_handle = cache.meshes.get(&kind).expect("Missing mesh for entity kind").clone();
     let mat_handle = cache.materials_default.get(&kind).expect("Missing material for entity kind").clone();
 
-    let is_gltf_building = bp.visual.mesh_kind.is_gltf();
+    let is_gltf = bp.visual.mesh_kind.is_gltf();
+    let is_gltf_character = bp.visual.mesh_kind.is_gltf_character();
 
     // Compute Y position
     let y_off = bp.movement.as_ref().map(|m| m.y_offset).unwrap_or(0.0);
-    let building_y = if is_gltf_building {
-        0.0 // GLTF models sit at ground level
+    let building_y = if is_gltf && !is_gltf_character {
+        0.0 // GLTF building models sit at ground level
     } else {
         bp.building.as_ref().map(|b| b.half_height).unwrap_or(0.0)
     };
@@ -1194,8 +1202,8 @@ pub fn spawn_from_blueprint(
 
     let pick_radius = bp.visual.mesh_kind.pick_radius() * bp.visual.scale;
 
-    let mut entity_cmds = if is_gltf_building {
-        // GLTF buildings: no Mesh3d/MeshMaterial3d on parent
+    let mut entity_cmds = if is_gltf {
+        // GLTF buildings/characters: no Mesh3d/MeshMaterial3d on parent
         commands.spawn((
             kind,
             bp.faction,
@@ -1325,7 +1333,7 @@ pub fn spawn_from_blueprint(
     let entity_id = entity_cmds.id();
 
     // Spawn GLTF scene child for buildings with GltfScene mesh kind
-    if is_gltf_building {
+    if !is_gltf_character && bp.visual.mesh_kind.is_gltf() {
         if let Some(models) = building_models {
             if let Some(scene_handle) = models.scenes.get(&(kind, 1)) {
                 let cal = models.calibration.get(&kind);
@@ -1334,9 +1342,32 @@ pub fn spawn_from_blueprint(
                 let child = commands.spawn((
                     SceneRoot(scene_handle.clone()),
                     BuildingSceneChild,
+                    InheritOutline,
                     AsyncSceneInheritOutline::default(),
                     Transform::from_scale(Vec3::splat(scale))
                         .with_translation(Vec3::new(0.0, y_off, 0.0)),
+                )).id();
+                commands.entity(entity_id).add_child(child);
+            }
+        }
+    }
+
+    // Spawn GLTF scene child for character models
+    if is_gltf_character {
+        if let Some(models) = unit_models {
+            if let Some(scene_handle) = models.scenes.get(&kind) {
+                let cal = models.calibration.get(&kind);
+                let scale = cal.map(|c| c.scale).unwrap_or(2.0);
+                let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
+                let facing = cal.map(|c| c.facing_rotation).unwrap_or(0.0);
+                let child = commands.spawn((
+                    SceneRoot(scene_handle.clone()),
+                    UnitSceneChild,
+                    InheritOutline,
+                    AsyncSceneInheritOutline::default(),
+                    Transform::from_scale(Vec3::splat(scale))
+                        .with_translation(Vec3::new(0.0, y_off, 0.0))
+                        .with_rotation(Quat::from_rotation_y(facing)),
                 )).id();
                 commands.entity(entity_id).add_child(child);
             }
@@ -1361,6 +1392,7 @@ pub fn build_visual_cache(
             MeshKind::Cuboid { x, y, z } => meshes.add(Cuboid::new(x, y, z)),
             MeshKind::Cylinder { radius, height } => meshes.add(Cylinder::new(radius, height)),
             MeshKind::GltfScene { .. } => meshes.add(Cuboid::new(4.0, 0.3, 4.0)),
+            MeshKind::GltfCharacter { .. } => meshes.add(Cuboid::new(0.5, 0.1, 0.5)),
         };
 
         let mat_default = materials.add(StandardMaterial {

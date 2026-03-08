@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
 use crate::components::*;
 use crate::ground::HeightMap;
+use crate::model_assets::UnitModelAssets;
 
 pub struct MobsPlugin;
 
@@ -28,6 +29,7 @@ fn spawn_mob_camps(
     mut commands: Commands,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
+    unit_models: Option<Res<UnitModelAssets>>,
     height_map: Res<HeightMap>,
 ) {
     let camps = [
@@ -79,7 +81,7 @@ fn spawn_mob_camps(
             let x = center.x + angle.cos() * offset_r;
             let z = center.z + angle.sin() * offset_r;
 
-            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(x, 0.0, z), &registry, None, &height_map);
+            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(x, 0.0, z), &registry, None, unit_models.as_deref(), &height_map);
 
             // Override patrol center
             commands.entity(entity).insert(PatrolState {
@@ -94,7 +96,7 @@ fn spawn_mob_camps(
         if camp.has_boss {
             let combat = bp.combat.as_ref().unwrap();
 
-            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(center.x, 0.0, center.z), &registry, None, &height_map);
+            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(center.x, 0.0, center.z), &registry, None, unit_models.as_deref(), &height_map);
 
             // Apply boss modifiers
             commands.entity(entity).insert((

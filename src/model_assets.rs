@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use crate::blueprints::EntityKind;
-use crate::components::{IconAssets, ModelAssets};
+use crate::components::{AnimState, IconAssets, ModelAssets};
 
 pub struct ModelAssetsPlugin;
 
@@ -37,7 +37,11 @@ impl Plugin for ModelAssetsPlugin {
         let building_models = load_building_model_assets_eager(&asset_server);
         app.insert_resource(building_models);
 
-        app.add_systems(Startup, load_model_assets);
+        // Load unit/mob character model assets eagerly
+        let unit_models = load_unit_model_assets_eager(&asset_server);
+        app.insert_resource(unit_models);
+
+        app.add_systems(Startup, (load_model_assets, load_animation_assets));
     }
 }
 
@@ -237,4 +241,148 @@ fn load_building_model_assets_eager(asset_server: &AssetServer) -> BuildingModel
     });
 
     BuildingModelAssets { scenes, calibration }
+}
+
+// ── Unit/Mob Character Model Assets ──
+
+pub struct CharacterModelCalibration {
+    pub scale: f32,
+    pub y_offset: f32,
+    pub facing_rotation: f32, // radians around Y axis
+}
+
+#[derive(Resource)]
+pub struct UnitModelAssets {
+    pub scenes: HashMap<EntityKind, Handle<Scene>>,
+    pub calibration: HashMap<EntityKind, CharacterModelCalibration>,
+}
+
+const ADVENTURERS_PATH: &str = "KayKit_Adventurers/Characters/gltf";
+const SKELETONS_PATH: &str = "KayKit_Skeletons/characters/gltf";
+
+fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
+    let mut scenes = HashMap::new();
+
+    // Player units
+    let unit_mappings: &[(EntityKind, &str, &str)] = &[
+        (EntityKind::Worker,    ADVENTURERS_PATH, "Barbarian.glb"),
+        (EntityKind::Soldier,   ADVENTURERS_PATH, "Knight.glb"),
+        (EntityKind::Archer,    ADVENTURERS_PATH, "Ranger.glb"),
+        (EntityKind::Tank,      ADVENTURERS_PATH, "Barbarian.glb"),
+        (EntityKind::Knight,    ADVENTURERS_PATH, "Knight.glb"),
+        (EntityKind::Mage,      ADVENTURERS_PATH, "Mage.glb"),
+        (EntityKind::Priest,    ADVENTURERS_PATH, "Rogue_Hooded.glb"),
+        (EntityKind::Cavalry,   ADVENTURERS_PATH, "Rogue.glb"),
+        // Mobs
+        (EntityKind::Goblin,    SKELETONS_PATH, "Skeleton_Rogue.glb"),
+        (EntityKind::Skeleton,  SKELETONS_PATH, "Skeleton_Warrior.glb"),
+        (EntityKind::Orc,       SKELETONS_PATH, "Skeleton_Minion.glb"),
+        (EntityKind::Demon,     SKELETONS_PATH, "Skeleton_Mage.glb"),
+        // Summons
+        (EntityKind::SkeletonMinion, SKELETONS_PATH, "Skeleton_Minion.glb"),
+    ];
+
+    for (kind, base_path, filename) in unit_mappings {
+        let handle = asset_server.load(format!("{base_path}/{filename}#Scene0"));
+        scenes.insert(*kind, handle);
+    }
+
+    let mut calibration = HashMap::new();
+
+    let pi = std::f32::consts::PI;
+
+    // Player units
+    calibration.insert(EntityKind::Worker, CharacterModelCalibration {
+        scale: 0.6, y_offset: -0.8, facing_rotation: pi,
+    });
+    calibration.insert(EntityKind::Soldier, CharacterModelCalibration {
+        scale: 0.7, y_offset: -0.9, facing_rotation: pi,
+    });
+    calibration.insert(EntityKind::Archer, CharacterModelCalibration {
+        scale: 0.6, y_offset: -0.75, facing_rotation: pi,
+    });
+    calibration.insert(EntityKind::Tank, CharacterModelCalibration {
+        scale: 0.85, y_offset: -1.25, facing_rotation: pi,
+    });
+    calibration.insert(EntityKind::Knight, CharacterModelCalibration {
+        scale: 0.8, y_offset: -1.2, facing_rotation: pi,
+    });
+    calibration.insert(EntityKind::Mage, CharacterModelCalibration {
+        scale: 0.6, y_offset: -0.8, facing_rotation: pi,
+    });
+    calibration.insert(EntityKind::Priest, CharacterModelCalibration {
+        scale: 0.6, y_offset: -0.8, facing_rotation: pi,
+    });
+    calibration.insert(EntityKind::Cavalry, CharacterModelCalibration {
+        scale: 0.7, y_offset: -1.1, facing_rotation: pi,
+    });
+    // Mobs
+    calibration.insert(EntityKind::Goblin, CharacterModelCalibration {
+        scale: 0.55, y_offset: -0.65, facing_rotation: pi,
+    });
+    calibration.insert(EntityKind::Skeleton, CharacterModelCalibration {
+        scale: 0.6, y_offset: -0.78, facing_rotation: pi,
+    });
+    calibration.insert(EntityKind::Orc, CharacterModelCalibration {
+        scale: 0.75, y_offset: -1.05, facing_rotation: pi,
+    });
+    calibration.insert(EntityKind::Demon, CharacterModelCalibration {
+        scale: 0.85, y_offset: -1.15, facing_rotation: pi,
+    });
+    // Summons
+    calibration.insert(EntityKind::SkeletonMinion, CharacterModelCalibration {
+        scale: 0.55, y_offset: -0.7, facing_rotation: pi,
+    });
+
+    UnitModelAssets { scenes, calibration }
+}
+
+// ── Animation Assets ──
+
+const ANIM_BASE_PATH: &str = "KayKit_Character_Animations/Animations/gltf/Rig_Medium";
+
+#[derive(Resource)]
+pub struct AnimationAssets {
+    pub clips: HashMap<AnimState, Vec<Handle<AnimationClip>>>,
+    pub graph: Handle<AnimationGraph>,
+    pub node_indices: HashMap<AnimState, AnimationNodeIndex>,
+}
+
+fn load_animation_assets(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut graphs: ResMut<Assets<AnimationGraph>>,
+) {
+    // Load specific animation clips from the GLB files
+    // Each GLB contains multiple animations; we load by label
+    let idle_clip: Handle<AnimationClip> = asset_server.load(format!("{ANIM_BASE_PATH}/Rig_Medium_General.glb#Animation0"));
+    let walk_clip: Handle<AnimationClip> = asset_server.load(format!("{ANIM_BASE_PATH}/Rig_Medium_MovementBasic.glb#Animation0"));
+    let attack_clip: Handle<AnimationClip> = asset_server.load(format!("{ANIM_BASE_PATH}/Rig_Medium_CombatMelee.glb#Animation0"));
+    let die_clip: Handle<AnimationClip> = asset_server.load(format!("{ANIM_BASE_PATH}/Rig_Medium_General.glb#Animation1"));
+
+    let mut graph = AnimationGraph::new();
+    let idle_node = graph.add_clip(idle_clip.clone(), 1.0, graph.root);
+    let walk_node = graph.add_clip(walk_clip.clone(), 1.0, graph.root);
+    let attack_node = graph.add_clip(attack_clip.clone(), 1.0, graph.root);
+    let die_node = graph.add_clip(die_clip.clone(), 1.0, graph.root);
+
+    let graph_handle = graphs.add(graph);
+
+    let mut clips = HashMap::new();
+    clips.insert(AnimState::Idle, vec![idle_clip]);
+    clips.insert(AnimState::Walk, vec![walk_clip]);
+    clips.insert(AnimState::Attack, vec![attack_clip]);
+    clips.insert(AnimState::Die, vec![die_clip]);
+
+    let mut node_indices = HashMap::new();
+    node_indices.insert(AnimState::Idle, idle_node);
+    node_indices.insert(AnimState::Walk, walk_node);
+    node_indices.insert(AnimState::Attack, attack_node);
+    node_indices.insert(AnimState::Die, die_node);
+
+    commands.insert_resource(AnimationAssets {
+        clips,
+        graph: graph_handle,
+        node_indices,
+    });
 }

@@ -3,11 +3,11 @@ use std::time::Duration;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use bevy_mod_outline::AsyncSceneInheritOutline;
+use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
 use crate::blueprints::{BlueprintRegistry, EntityCategory, EntityKind, EntityVisualCache, LevelBonus, spawn_from_blueprint};
 use crate::components::*;
 use crate::ground::HeightMap;
-use crate::model_assets::BuildingModelAssets;
+use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 
 fn footprint_for_kind(kind: EntityKind) -> f32 {
     match kind {
@@ -279,7 +279,7 @@ fn confirm_placement(
     // Spawn building using blueprint
     let bp = registry.get(kind);
     let is_gltf = bp.visual.mesh_kind.is_gltf();
-    let entity_id = spawn_from_blueprint(&mut commands, &cache, kind, world_pos, &registry, building_models.as_deref(), &height_map);
+    let entity_id = spawn_from_blueprint(&mut commands, &cache, kind, world_pos, &registry, building_models.as_deref(), None, &height_map);
 
     // Override material with under_construction (only for non-GLTF buildings)
     if !is_gltf {
@@ -467,6 +467,7 @@ fn training_queue_system(
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
+    unit_models: Option<Res<UnitModelAssets>>,
     height_map: Res<HeightMap>,
     mut buildings: Query<(&Transform, &EntityKind, &mut TrainingQueue, Option<&RallyPoint>), With<Building>>,
 ) {
@@ -487,7 +488,7 @@ fn training_queue_system(
             if timer.is_finished() {
                 let unit_kind = queue.queue.remove(0);
                 let spawn_pos = transform.translation + Vec3::new(3.0, 0.0, 3.0);
-                let unit_entity = spawn_from_blueprint(&mut commands, &cache, unit_kind, spawn_pos, &registry, None, &height_map);
+                let unit_entity = spawn_from_blueprint(&mut commands, &cache, unit_kind, spawn_pos, &registry, None, unit_models.as_deref(), &height_map);
 
                 // If building has a rally point, send the unit there
                 if let Some(rally) = rally_point {
@@ -634,6 +635,7 @@ fn building_upgrade_system(
                     let child = commands.spawn((
                         SceneRoot(new_scene.clone()),
                         BuildingSceneChild,
+                        InheritOutline,
                         AsyncSceneInheritOutline::default(),
                         Transform::from_scale(Vec3::splat(scale))
                             .with_translation(Vec3::new(0.0, y_off, 0.0)),

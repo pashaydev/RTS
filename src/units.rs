@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
 use crate::components::*;
 use crate::ground::HeightMap;
-use crate::model_assets::BuildingModelAssets;
+use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 
 pub struct UnitsPlugin;
 
@@ -27,12 +27,13 @@ fn spawn_units(
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
     building_models: Option<Res<BuildingModelAssets>>,
+    unit_models: Option<Res<UnitModelAssets>>,
     mut completed_buildings: ResMut<CompletedBuildings>,
     height_map: Res<HeightMap>,
 ) {
     // Spawn a pre-built Base at the origin
     let base_pos = Vec3::new(0.0, 0.0, 0.0);
-    let base_entity = spawn_from_blueprint(&mut commands, &cache, EntityKind::Base, base_pos, &registry, building_models.as_deref(), &height_map);
+    let base_entity = spawn_from_blueprint(&mut commands, &cache, EntityKind::Base, base_pos, &registry, building_models.as_deref(), None, &height_map);
 
     // Override: mark it as already complete (remove construction state)
     commands.entity(base_entity).remove::<ConstructionProgress>();
@@ -54,7 +55,7 @@ fn spawn_units(
         Vec3::new(0.0, 0.0, -3.0),
     ];
     for pos in worker_positions {
-        spawn_from_blueprint(&mut commands, &cache, EntityKind::Worker, pos, &registry, None, &height_map);
+        spawn_from_blueprint(&mut commands, &cache, EntityKind::Worker, pos, &registry, None, unit_models.as_deref(), &height_map);
     }
 }
 
