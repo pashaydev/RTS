@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::blueprints::EntityKind;
 
@@ -72,6 +73,15 @@ pub struct UiPressActive(pub bool);
 #[derive(Resource, Default)]
 pub struct CursorOverUi(pub bool);
 
+/// Active command mode for hotkey-based unit commands (A-click, P-click).
+#[derive(Resource, Default, PartialEq, Eq, Debug, Clone, Copy)]
+pub enum CommandMode {
+    #[default]
+    Normal,
+    AttackMove,
+    Patrol,
+}
+
 #[derive(Component)]
 pub struct HoverRing;
 
@@ -119,6 +129,8 @@ pub enum WorkerTask {
     WaitingForStorage { depot: Entity, gather_node: Option<Entity> },
     MovingToBuild(Entity),
     Building(Entity),
+    /// Worker is assigned to a processor building (visual work loop)
+    AssignedToBuilding(Entity),
 }
 
 #[derive(Component)]
@@ -221,11 +233,43 @@ pub struct ResourceProcessor {
     pub buffer: u32,
     /// Max buffer size
     pub buffer_capacity: u32,
+    /// Each worker adds this fraction of base rate (default 0.5 = 50%)
+    pub worker_rate_bonus: f32,
 }
 
 /// Worker assigned to work inside a resource processing building
 #[derive(Component, Clone, Copy, PartialEq, Debug)]
 pub struct AssignedToProcessor(pub Entity);
+
+/// Sub-state for workers assigned to processor buildings (visual work loop)
+#[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
+pub enum ProcessorWorkerState {
+    #[default]
+    Idle,
+    MovingToNode(Entity),
+    Harvesting { node: Entity, timer_secs: f32 },
+    ReturningToBuilding,
+    Depositing { timer_secs: f32 },
+}
+
+/// Config for resource respawn around processing buildings
+#[derive(Component)]
+pub struct ResourceRespawnConfig {
+    pub resource_types: Vec<ResourceType>,
+    pub respawn_timer: Timer,
+    pub respawn_radius: f32,
+    pub max_nodes: u8,
+    pub amount_per_node: u32,
+}
+
+/// Growing resource node (ore/oil emerging near a processing building)
+#[derive(Component)]
+pub struct GrowingResource {
+    pub timer: Timer,
+    pub target_scale: f32,
+    pub resource_type: ResourceType,
+    pub amount: u32,
+}
 
 #[derive(Component)]
 pub struct CarryVisual(pub Entity);
@@ -248,6 +292,62 @@ pub struct StoragePileAssets {
     pub sphere_mesh: Handle<Mesh>,
     pub cylinder_mesh: Handle<Mesh>,
     pub materials: std::collections::HashMap<ResourceType, Handle<StandardMaterial>>,
+}
+
+// ── Carried resource totals (cached per-faction sum of workers' carried resources) ──
+
+#[derive(Resource, Default)]
+pub struct CarriedResourceTotals {
+    pub per_faction: std::collections::HashMap<Faction, PlayerResources>,
+}
+
+impl CarriedResourceTotals {
+    pub fn get(&self, faction: &Faction) -> &PlayerResources {
+        static DEFAULT: std::sync::LazyLock<PlayerResources> = std::sync::LazyLock::new(PlayerResources::empty);
+        self.per_faction.get(faction).unwrap_or(&DEFAULT)
+    }
+}
+
+/// Queue of pending carry-drain requests, consumed each frame.
+#[derive(Resource, Default)]
+pub struct PendingCarriedDrains {
+    pub drains: Vec<SpendFromCarried>,
+}
+
+/// Queued request to drain resources from workers' carried amounts.
+pub struct SpendFromCarried {
+    pub faction: Faction,
+    pub wood: u32,
+    pub copper: u32,
+    pub iron: u32,
+    pub gold: u32,
+    pub oil: u32,
+}
+
+impl SpendFromCarried {
+    pub fn has_deficit(&self) -> bool {
+        self.wood > 0 || self.copper > 0 || self.iron > 0 || self.gold > 0 || self.oil > 0
+    }
+
+    pub fn get(&self, rt: ResourceType) -> u32 {
+        match rt {
+            ResourceType::Wood => self.wood,
+            ResourceType::Copper => self.copper,
+            ResourceType::Iron => self.iron,
+            ResourceType::Gold => self.gold,
+            ResourceType::Oil => self.oil,
+        }
+    }
+
+    pub fn sub(&mut self, rt: ResourceType, amount: u32) {
+        match rt {
+            ResourceType::Wood => self.wood = self.wood.saturating_sub(amount),
+            ResourceType::Copper => self.copper = self.copper.saturating_sub(amount),
+            ResourceType::Iron => self.iron = self.iron.saturating_sub(amount),
+            ResourceType::Gold => self.gold = self.gold.saturating_sub(amount),
+            ResourceType::Oil => self.oil = self.oil.saturating_sub(amount),
+        }
+    }
 }
 
 // ── Resource nodes ──
@@ -546,6 +646,200 @@ impl TeamConfig {
                 .map(|(&f, _)| f)
                 .collect(),
             None => vec![*faction],
+        }
+    }
+}
+
+/// Which factions are AI-controlled (not human players).
+#[derive(Resource)]
+pub struct AiControlledFactions {
+    pub factions: HashSet<Faction>,
+}
+
+impl Default for AiControlledFactions {
+    fn default() -> Self {
+        let mut factions = HashSet::new();
+        factions.insert(Faction::Player2);
+        factions.insert(Faction::Player3);
+        factions.insert(Faction::Player4);
+        Self { factions }
+    }
+}
+
+/// AI difficulty level — affects tick speed, resource bonuses, and thresholds.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum AiDifficulty {
+    Easy,
+    #[default]
+    Medium,
+    Hard,
+}
+
+impl AiDifficulty {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Easy => "Easy",
+            Self::Medium => "Medium",
+            Self::Hard => "Hard",
+        }
+    }
+
+    pub fn tick_multiplier(&self) -> f32 {
+        match self {
+            Self::Easy => 1.5,
+            Self::Medium => 1.0,
+            Self::Hard => 0.75,
+        }
+    }
+
+    pub fn resource_bonus(&self) -> f32 {
+        match self {
+            Self::Easy => 0.0,
+            Self::Medium => 0.0,
+            Self::Hard => 0.15,
+        }
+    }
+
+    pub fn attack_threshold_offset(&self) -> i32 {
+        match self {
+            Self::Easy => 4,
+            Self::Medium => 0,
+            Self::Hard => -2,
+        }
+    }
+
+    pub fn max_concurrent_builds(&self) -> usize {
+        match self {
+            Self::Easy => 2,
+            Self::Medium => 3,
+            Self::Hard => 4,
+        }
+    }
+
+    pub fn worker_offset(&self) -> i32 {
+        match self {
+            Self::Easy => -2,
+            Self::Medium => 0,
+            Self::Hard => 2,
+        }
+    }
+}
+
+/// AI personality — governs build order & army composition.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum AiPersonality {
+    #[default]
+    Balanced,
+    Aggressive,
+    Defensive,
+    Economic,
+    Supportive,
+}
+
+impl AiPersonality {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Balanced => "Balanced",
+            Self::Aggressive => "Aggressive",
+            Self::Defensive => "Defensive",
+            Self::Economic => "Economic",
+            Self::Supportive => "Supportive",
+        }
+    }
+}
+
+/// Relation of an AI faction to the human player.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum AiRelation {
+    Friendly,
+    #[default]
+    Enemy,
+}
+
+/// A single ally notification event.
+#[derive(Clone, Debug)]
+pub struct AllyNotification {
+    pub message: String,
+    pub world_pos: Option<Vec3>,
+    pub timestamp: f32,
+    pub kind: AllyNotifyKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum AllyNotifyKind {
+    UnderAttack,
+    Attacking,
+    NeedHelp,
+    ReadyToAttack,
+    EnemySpotted,
+}
+
+impl AllyNotifyKind {
+    pub fn color(&self) -> Color {
+        match self {
+            Self::UnderAttack | Self::NeedHelp => Color::srgb(1.0, 0.6, 0.2),
+            Self::Attacking | Self::ReadyToAttack => Color::srgb(0.3, 0.8, 1.0),
+            Self::EnemySpotted => Color::srgb(0.9, 0.9, 0.3),
+        }
+    }
+}
+
+/// Active ally notifications (displayed as toasts).
+#[derive(Resource, Default)]
+pub struct AllyNotifications {
+    pub active: Vec<AllyNotification>,
+    pub last_per_kind: std::collections::HashMap<AllyNotifyKind, f32>,
+}
+
+impl AllyNotifications {
+    pub fn push(&mut self, kind: AllyNotifyKind, message: String, world_pos: Option<Vec3>, game_time: f32) {
+        // Throttle: max 1 per kind per 10s
+        if let Some(&last) = self.last_per_kind.get(&kind) {
+            if game_time - last < 10.0 {
+                return;
+            }
+        }
+        self.last_per_kind.insert(kind, game_time);
+        self.active.push(AllyNotification {
+            message,
+            world_pos,
+            timestamp: game_time,
+            kind,
+        });
+        // Keep max 5
+        while self.active.len() > 5 {
+            self.active.remove(0);
+        }
+    }
+}
+
+/// Per-faction AI settings (public interface for debug panel).
+#[derive(Resource, Default)]
+pub struct AiFactionSettings {
+    pub settings: std::collections::HashMap<Faction, AiFactionConfig>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AiFactionConfig {
+    pub difficulty: AiDifficulty,
+    pub personality: AiPersonality,
+    pub relation: AiRelation,
+    pub phase_name: String,
+    pub posture_name: String,
+    pub attack_squad_size: usize,
+    pub defense_squad_size: usize,
+}
+
+impl Default for AiFactionConfig {
+    fn default() -> Self {
+        Self {
+            difficulty: AiDifficulty::Medium,
+            personality: AiPersonality::Balanced,
+            relation: AiRelation::Enemy,
+            phase_name: "EarlyGame".to_string(),
+            posture_name: "Normal".to_string(),
+            attack_squad_size: 0,
+            defense_squad_size: 0,
         }
     }
 }
@@ -908,6 +1202,26 @@ pub struct Boss;
 #[derive(Component)]
 pub struct SelectionInfoPanel;
 
+/// Single source of truth for which UI mode is active.
+/// Both the selection info panel and the action bar read this.
+#[derive(Resource, Clone, PartialEq, Debug)]
+pub enum UiMode {
+    /// Default: no selection, show building grid
+    Idle,
+    /// One or more own units selected
+    SelectedUnits(Vec<Entity>),
+    /// One own building selected
+    SelectedBuilding(Entity),
+    /// Placing a building from a card/grid
+    PlacingBuilding(EntityKind),
+}
+
+impl Default for UiMode {
+    fn default() -> Self {
+        UiMode::Idle
+    }
+}
+
 #[derive(Component)]
 pub struct UnitCardGrid;
 
@@ -1068,6 +1382,12 @@ pub struct CancelDemolishButton;
 pub struct DemolishConfirmPanel;
 
 #[derive(Component)]
+pub struct AssignWorkerButton;
+
+#[derive(Component)]
+pub struct UnassignWorkerButton;
+
+#[derive(Component)]
 pub struct TrainingQueueDisplay;
 
 #[derive(Component)]
@@ -1148,11 +1468,7 @@ pub struct GhostValid(pub bool);
 #[derive(Component)]
 pub struct GhostMaterialApplied;
 
-// ── Card-Hand UI components ──
-
-#[derive(Component)]
-#[allow(dead_code)]
-pub struct CardHand;
+// ── Build Card (legacy, kept for grid button compatibility) ──
 
 #[derive(Component)]
 pub struct BuildCard {
@@ -1162,141 +1478,86 @@ pub struct BuildCard {
     pub enabled: bool,
 }
 
-#[derive(Component)]
-pub struct CardAnimState {
-    pub offset_y: f32,
-    pub scale: f32,
-    pub rotation_deg: f32,
-    pub opacity: f32,
-    pub target_offset_y: f32,
-    pub target_scale: f32,
-    pub target_rotation_deg: f32,
-    pub target_opacity: f32,
-    /// Per-card sine offset for idle breathing animation
-    pub idle_phase: f32,
-    /// Current pseudo-3D tilt (degrees)
-    pub tilt_x_deg: f32,
-    /// Target tilt toward cursor (degrees)
-    pub target_tilt_x_deg: f32,
-    /// Accumulated time for glow pulsing
-    pub glow_pulse: f32,
-}
-
-impl CardAnimState {
-    pub fn new(rotation_deg: f32, offset_y: f32, index: usize) -> Self {
-        Self {
-            offset_y: -250.0,
-            scale: 0.2,
-            rotation_deg,
-            opacity: 0.0,
-            target_offset_y: offset_y,
-            target_scale: 0.58,
-            target_rotation_deg: rotation_deg,
-            target_opacity: 1.0,
-            idle_phase: index as f32 * 1.3,
-            tilt_x_deg: 0.0,
-            target_tilt_x_deg: 0.0,
-            glow_pulse: 0.0,
-        }
-    }
-}
-
-#[derive(Component)]
-pub struct CardDragState {
-    pub dragging: bool,
-    pub screen_pos: Vec2,
-    pub velocity: Vec2,
-    pub pickup_origin: Vec2,
-    pub drag_distance: f32,
-}
-
-impl Default for CardDragState {
-    fn default() -> Self {
-        Self {
-            dragging: false,
-            screen_pos: Vec2::ZERO,
-            velocity: Vec2::ZERO,
-            pickup_origin: Vec2::ZERO,
-            drag_distance: 0.0,
-        }
-    }
-}
-
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum CardTier {
-    Common,
-    Uncommon,
-    Rare,
-    Epic,
-}
-
-impl CardTier {
-    pub fn from_total_cost(total: u32) -> Self {
-        match total {
-            0..100 => CardTier::Common,
-            100..250 => CardTier::Uncommon,
-            250..500 => CardTier::Rare,
-            _ => CardTier::Epic,
-        }
-    }
-}
-
-#[derive(Component)]
-pub struct CardBorderGlow;
-
-#[derive(Component)]
-pub struct CardShineEffect;
-
-#[derive(Component)]
-pub struct CardIconContainer;
-
-#[derive(Component)]
-pub struct CardDealIn {
-    pub delay_timer: Timer,
-    pub anim_timer: Timer,
-    pub started: bool,
-}
-
-#[derive(Component)]
-pub struct CardPlayOut {
-    pub timer: Timer,
-}
-
-#[derive(Component)]
-pub struct CardSpringBack {
-    pub timer: Timer,
-}
-
-#[derive(Component)]
-pub struct CardGlow;
-
-#[derive(Component)]
-pub struct CardCostEntry {
-    pub resource_type: ResourceType,
-    pub amount: u32,
-}
-
-#[derive(Component)]
-pub struct CardNameText;
-
-#[derive(Component)]
-pub struct CardTooltip;
-
-/// Returns (rotation_deg, y_offset) for a card at `index` out of `total` in the fan arc.
-pub fn fan_params(index: usize, total: usize) -> (f32, f32) {
-    if total <= 1 {
-        return (0.0, 0.0);
-    }
-    let t = index as f32 / (total - 1) as f32;
-    let centered = t - 0.5;
-    let rotation_deg = centered * 22.0;
-    let y_offset = centered.abs() * 40.0;
-    (rotation_deg, y_offset)
-}
-
 /// Marker for standard (non-ghost) buttons that receive hover/press visuals.
 #[derive(Component)]
 pub struct StandardButton;
+
+/// Smooth lerp-based button animation state (replaces instant StandardButton color swaps).
+#[derive(Component)]
+pub struct ButtonAnimState {
+    pub bg_current: [f32; 4],
+    pub bg_target: [f32; 4],
+    pub scale_current: f32,
+    pub scale_target: f32,
+}
+
+impl ButtonAnimState {
+    pub fn new(rest_bg: [f32; 4]) -> Self {
+        Self {
+            bg_current: rest_bg,
+            bg_target: rest_bg,
+            scale_current: 1.0,
+            scale_target: 1.0,
+        }
+    }
+}
+
+/// Which visual style a ButtonAnimState button uses.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub enum ButtonStyle {
+    /// Filled background (train buttons)
+    Filled,
+    /// Ghost/outline style (upgrade, rally, demolish)
+    Ghost,
+    /// Destructive ghost (demolish)
+    Destructive,
+}
+
+/// Marks an action bar child for fade-out removal.
+#[derive(Component)]
+pub struct ActionBarFadeOut {
+    pub timer: Timer,
+    pub initial_offset: f32,
+}
+
+/// Marks an action bar child for fade-in entrance.
+#[derive(Component)]
+pub struct ActionBarFadeIn {
+    pub timer: Timer,
+    pub delay: Timer,
+    pub started: bool,
+}
+
+// ── Generic UI Animations ──
+
+/// Fades a UI node in over its duration (opacity 0 → 1).
+#[derive(Component)]
+pub struct UiFadeIn {
+    pub timer: Timer,
+}
+
+/// Fades a UI node out over its duration (opacity 1 → 0), then despawns.
+#[derive(Component)]
+pub struct UiFadeOut {
+    pub timer: Timer,
+}
+
+/// Slides a UI node in from an offset over its duration.
+#[derive(Component)]
+pub struct UiSlideIn {
+    pub offset: Vec2,
+    pub timer: Timer,
+}
+
+/// Queue count badge on a train button.
+#[derive(Component)]
+pub struct TrainButtonQueueBadge(pub EntityKind);
+
+/// Tracks what text entity belongs to a train button's cost text (for coloring).
+#[derive(Component)]
+pub struct TrainCostText {
+    pub kind: EntityKind,
+}
 
 // ── Attention & Damage Popup components ──
 

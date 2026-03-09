@@ -22,6 +22,7 @@ impl Plugin for SelectionPlugin {
             .init_resource::<InspectedEnemy>()
             .init_resource::<UiClickedThisFrame>()
             .init_resource::<UiPressActive>()
+            .init_resource::<CommandMode>()
             .add_systems(Startup, (spawn_selection_box, setup_hover_assets))
             .add_systems(First, reset_ui_clicked)
             .add_systems(
@@ -48,6 +49,7 @@ impl Plugin for SelectionPlugin {
                 (
                     update_entity_visuals,
                     handle_right_click_move,
+                    handle_unit_command_hotkeys,
                 )
                     .after(SelectionSet),
             )
@@ -731,6 +733,8 @@ fn handle_right_click_move(
     mobs: Query<Entity, With<Mob>>,
     resource_nodes: Query<Entity, With<ResourceNode>>,
     construction_q: Query<(Entity, &GlobalTransform), (With<Building>, With<ConstructionProgress>)>,
+    processor_buildings: Query<(Entity, &ResourceProcessor, &BuildingState, &Faction), With<Building>>,
+    assigned_workers: Query<&AssignedToProcessor, With<Unit>>,
     minimap_interaction: Res<MinimapInteraction>,
     ui_clicked: Res<UiClickedThisFrame>,
     ui_press: Res<UiPressActive>,
@@ -767,6 +771,7 @@ fn handle_right_click_move(
     let mut best_mob: Option<(Entity, f32)> = None;
     let mut best_resource: Option<(Entity, f32)> = None;
     let mut best_construction: Option<(Entity, f32)> = None;
+    let mut best_processor: Option<(Entity, f32)> = None;
 
     for (entity, gt, pick_r, inherited_vis) in &pickables {
         if !inherited_vis.get() {
@@ -781,6 +786,10 @@ fn handle_right_click_move(
             } else if construction_q.contains(entity) {
                 if best_construction.is_none() || dist < best_construction.unwrap().1 {
                     best_construction = Some((entity, dist));
+                }
+            } else if processor_buildings.contains(entity) {
+                if best_processor.is_none() || dist < best_processor.unwrap().1 {
+                    best_processor = Some((entity, dist));
                 }
             } else if resource_nodes.contains(entity) {
                 if best_resource.is_none() || dist < best_resource.unwrap().1 {
@@ -797,6 +806,20 @@ fn handle_right_click_move(
                 .insert(AttackTarget(mob_entity));
             if *kind == EntityKind::Worker {
                 ec.insert(WorkerTask::Idle);
+            }
+        }
+    } else if let Some((proc_entity, _)) = best_processor {
+        // Right-click on a processor building with workers selected → assign them
+        if let Ok((_, processor, state, proc_faction)) = processor_buildings.get(proc_entity) {
+            if *state == BuildingState::Complete && *proc_faction == active_player.0 && processor.max_workers > 0 {
+                let current_count = assigned_workers.iter().filter(|a| a.0 == proc_entity).count();
+                let mut assigned = 0;
+                for (entity, kind) in &units_vec {
+                    if *kind == EntityKind::Worker && current_count + assigned < processor.max_workers as usize {
+                        crate::resources::assign_worker_to_processor(&mut commands, *entity, proc_entity);
+                        assigned += 1;
+                    }
+                }
             }
         }
     } else if let Some((construction_entity, _)) = best_construction {
@@ -894,4 +917,144 @@ fn handle_right_click_move(
             }
         }
     }
+}
+
+/// Hotkey-based unit commands:
+/// - `A` → enter attack-move mode (next left-click issues attack-move)
+/// - `P` → enter patrol mode (next left-click issues patrol to position)
+/// - `H` → hold position (instant, clears move/attack targets)
+/// - `S` → stop (instant, clears all orders)
+/// - `Escape` → cancel command mode
+///
+/// In attack-move/patrol mode, left-click on ground executes the command.
+fn handle_unit_command_hotkeys(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut cmd_mode: ResMut<CommandMode>,
+    camera_q: Query<(&Camera, &GlobalTransform)>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
+    active_player: Res<ActivePlayer>,
+    minimap_interaction: Res<MinimapInteraction>,
+    ui_clicked: Res<UiClickedThisFrame>,
+    ui_press: Res<UiPressActive>,
+    placement: Res<BuildingPlacementState>,
+) {
+    // Don't process hotkeys during building placement
+    if matches!(placement.mode, PlacementMode::Placing(_)) {
+        return;
+    }
+
+    let has_selected = selected_units.iter().any(|(_, _, f)| *f == active_player.0);
+
+    // Escape cancels command mode
+    if keys.just_pressed(KeyCode::Escape) && *cmd_mode != CommandMode::Normal {
+        *cmd_mode = CommandMode::Normal;
+        return;
+    }
+
+    // H = Hold position (instant)
+    if keys.just_pressed(KeyCode::KeyH) && has_selected {
+        for (entity, _, faction) in &selected_units {
+            if *faction != active_player.0 { continue; }
+            commands.entity(entity)
+                .remove::<MoveTarget>()
+                .remove::<AttackTarget>()
+                .remove::<PatrolState>();
+        }
+        *cmd_mode = CommandMode::Normal;
+        return;
+    }
+
+    // S = Stop (instant)
+    if keys.just_pressed(KeyCode::KeyS) && has_selected {
+        for (entity, kind, faction) in &selected_units {
+            if *faction != active_player.0 { continue; }
+            commands.entity(entity)
+                .remove::<MoveTarget>()
+                .remove::<AttackTarget>()
+                .remove::<PatrolState>();
+            if *kind == EntityKind::Worker {
+                commands.entity(entity).insert(WorkerTask::Idle);
+            }
+        }
+        *cmd_mode = CommandMode::Normal;
+        return;
+    }
+
+    // A = Attack-move mode
+    if keys.just_pressed(KeyCode::KeyA) && has_selected {
+        *cmd_mode = CommandMode::AttackMove;
+        return;
+    }
+
+    // P = Patrol mode
+    if keys.just_pressed(KeyCode::KeyP) && has_selected {
+        *cmd_mode = CommandMode::Patrol;
+        return;
+    }
+
+    // Execute command on left-click when in a command mode
+    if *cmd_mode == CommandMode::Normal {
+        return;
+    }
+
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    if minimap_interaction.clicked || ui_clicked.0 > 0 || ui_press.0 {
+        return;
+    }
+
+    let Ok(window) = windows.single() else { return; };
+    let Some(cursor) = window.cursor_position() else { return; };
+    let Ok((camera, cam_gt)) = camera_q.single() else { return; };
+    let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else { return; };
+    let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) else { return; };
+    let point = ray.get_point(dist);
+
+    let units_vec: Vec<(Entity, EntityKind)> = selected_units.iter()
+        .filter(|(_, _, f)| **f == active_player.0)
+        .map(|(e, k, _)| (e, *k))
+        .collect();
+
+    if units_vec.is_empty() {
+        *cmd_mode = CommandMode::Normal;
+        return;
+    }
+
+    match *cmd_mode {
+        CommandMode::AttackMove => {
+            // Move to position but auto-engage enemies along the way
+            let n = units_vec.len();
+            let spacing = 1.5;
+            let radius = if n > 1 { (spacing * n as f32 / std::f32::consts::TAU).max(1.0) } else { 0.0 };
+            for (i, (entity, kind)) in units_vec.iter().enumerate() {
+                let offset = if n > 1 {
+                    let angle = i as f32 / n as f32 * std::f32::consts::TAU;
+                    Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius)
+                } else {
+                    Vec3::ZERO
+                };
+                let mut ec = commands.entity(*entity);
+                ec.remove::<PatrolState>()
+                    .insert(MoveTarget(point + offset));
+                if *kind == EntityKind::Worker {
+                    ec.insert(WorkerTask::ManualMove);
+                }
+            }
+        }
+        CommandMode::Patrol => {
+            for (entity, _kind) in &units_vec {
+                commands.entity(*entity)
+                    .remove::<AttackTarget>()
+                    .insert(MoveTarget(point));
+            }
+        }
+        CommandMode::Normal => {}
+    }
+
+    *cmd_mode = CommandMode::Normal;
 }

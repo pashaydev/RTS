@@ -1,0 +1,64 @@
+use bevy::prelude::*;
+
+use crate::components::*;
+use crate::theme;
+
+pub fn hp_color(current: f32, max: f32) -> Color {
+    let pct = (current / max).clamp(0.0, 1.0);
+    if pct > 0.6 {
+        theme::HP_HIGH
+    } else if pct > 0.3 {
+        theme::HP_MID
+    } else {
+        theme::HP_LOW
+    }
+}
+
+pub fn spawn_hp_bar(commands: &mut Commands, parent: Entity, tracked_entity: Entity, health: &Health, width: f32) {
+    let pct = (health.current / health.max).clamp(0.0, 1.0) * 100.0;
+    let bar_color = hp_color(health.current, health.max);
+
+    let bg = commands
+        .spawn((
+            Node {
+                width: Val::Px(width),
+                height: Val::Px(6.0),
+                border_radius: BorderRadius::all(Val::Px(3.0)),
+                ..default()
+            },
+            BackgroundColor(theme::HP_BAR_BG),
+        ))
+        .id();
+    commands.entity(parent).add_child(bg);
+
+    let fill = commands
+        .spawn((
+            HpBarFill(tracked_entity),
+            Node {
+                width: Val::Percent(pct),
+                height: Val::Percent(100.0),
+                border_radius: BorderRadius::all(Val::Px(3.0)),
+                ..default()
+            },
+            BackgroundColor(bar_color),
+            BoxShadow::new(
+                bar_color.with_alpha(0.4),
+                Val::Px(0.0),
+                Val::Px(0.0),
+                Val::Px(0.0),
+                Val::Px(4.0),
+            ),
+        ))
+        .id();
+    commands.entity(bg).add_child(fill);
+}
+
+pub fn format_cost(cost: &crate::blueprints::ResourceCost) -> String {
+    let mut parts = Vec::new();
+    if cost.wood > 0 { parts.push(format!("W:{}", cost.wood)); }
+    if cost.copper > 0 { parts.push(format!("C:{}", cost.copper)); }
+    if cost.iron > 0 { parts.push(format!("I:{}", cost.iron)); }
+    if cost.gold > 0 { parts.push(format!("G:{}", cost.gold)); }
+    if cost.oil > 0 { parts.push(format!("O:{}", cost.oil)); }
+    parts.join(" ")
+}

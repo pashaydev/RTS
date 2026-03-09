@@ -183,6 +183,31 @@ impl ResourceCost {
         res.subtract(self.wood, self.copper, self.iron, self.gold, self.oil);
     }
 
+    /// Check if stored + carried resources are enough to afford this cost.
+    pub fn can_afford_with_carried(&self, stored: &PlayerResources, carried: &PlayerResources) -> bool {
+        stored.wood + carried.wood >= self.wood
+            && stored.copper + carried.copper >= self.copper
+            && stored.iron + carried.iron >= self.iron
+            && stored.gold + carried.gold >= self.gold
+            && stored.oil + carried.oil >= self.oil
+    }
+
+    /// Deduct from stored first, return the deficit that must come from carried workers.
+    /// Returns (wood, copper, iron, gold, oil) deficits.
+    pub fn deduct_with_carried(&self, stored: &mut PlayerResources) -> (u32, u32, u32, u32, u32) {
+        let def_w = self.wood.saturating_sub(stored.wood);
+        let def_c = self.copper.saturating_sub(stored.copper);
+        let def_i = self.iron.saturating_sub(stored.iron);
+        let def_g = self.gold.saturating_sub(stored.gold);
+        let def_o = self.oil.saturating_sub(stored.oil);
+        stored.wood = stored.wood.saturating_sub(self.wood);
+        stored.copper = stored.copper.saturating_sub(self.copper);
+        stored.iron = stored.iron.saturating_sub(self.iron);
+        stored.gold = stored.gold.saturating_sub(self.gold);
+        stored.oil = stored.oil.saturating_sub(self.oil);
+        (def_w, def_c, def_i, def_g, def_o)
+    }
+
     pub fn cost_entries(&self) -> Vec<(ResourceType, u32)> {
         let mut entries = Vec::new();
         if self.wood > 0 { entries.push((ResourceType::Wood, self.wood)); }
@@ -213,6 +238,12 @@ pub enum LevelBonus {
     GatherAura { speed_bonus: f32, range: f32 },
     HealAura { heal_per_sec: f32, range: f32 },
     UnlocksTraining(Vec<EntityKind>),
+    ProcessorUpgrade {
+        harvest_rate_boost: f32,
+        radius_boost: f32,
+        extra_worker_slots: u8,
+        unlock_resources: Vec<ResourceType>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -738,13 +769,13 @@ pub fn build_registry() -> BlueprintRegistry {
         train_time_secs: 0.0,
         building: Some(BuildingData {
             construction_time_secs: 12.0, half_height: 1.25,
-            trains: vec![EntityKind::Worker, EntityKind::Soldier, EntityKind::Archer],
+            trains: vec![EntityKind::Worker, EntityKind::Soldier],
             prerequisite: Some(EntityKind::Base),
             level_upgrades: vec![
                 BuildingLevelData {
                     cost: ResourceCost { wood: 120, copper: 60, iron: 30, ..Default::default() },
                     time_secs: 15.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.1, dmg_mult: 1.1 },
+                    bonus: LevelBonus::UnlocksTraining(vec![EntityKind::Archer]),
                 },
                 BuildingLevelData {
                     cost: ResourceCost { wood: 200, copper: 100, iron: 60, ..Default::default() },
@@ -783,12 +814,12 @@ pub fn build_registry() -> BlueprintRegistry {
                 BuildingLevelData {
                     cost: ResourceCost { wood: 100, copper: 80, iron: 60, ..Default::default() },
                     time_secs: 18.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::TrainTimeMultiplier(0.8),
+                    bonus: LevelBonus::TrainTimeMultiplier(0.75),
                 },
                 BuildingLevelData {
                     cost: ResourceCost { wood: 160, copper: 120, iron: 100, gold: 20, ..Default::default() },
                     time_secs: 28.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.2, dmg_mult: 1.2 },
+                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.3, dmg_mult: 1.3 },
                 },
             ],
         }),
@@ -972,18 +1003,18 @@ pub fn build_registry() -> BlueprintRegistry {
         train_time_secs: 0.0,
         building: Some(BuildingData {
             construction_time_secs: 14.0, half_height: 1.25,
-            trains: vec![EntityKind::Cavalry, EntityKind::Knight],
+            trains: vec![EntityKind::Cavalry],
             prerequisite: Some(EntityKind::Base),
             level_upgrades: vec![
                 BuildingLevelData {
                     cost: ResourceCost { wood: 100, copper: 40, iron: 30, ..Default::default() },
                     time_secs: 16.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::TrainTimeMultiplier(0.85),
+                    bonus: LevelBonus::UnlocksTraining(vec![EntityKind::Knight]),
                 },
                 BuildingLevelData {
                     cost: ResourceCost { wood: 160, copper: 60, iron: 50, gold: 20, ..Default::default() },
                     time_secs: 25.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.15, dmg_mult: 1.15 },
+                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.2, dmg_mult: 1.2 },
                 },
             ],
         }),
@@ -1058,18 +1089,28 @@ pub fn build_registry() -> BlueprintRegistry {
                 BuildingLevelData {
                     cost: ResourceCost { wood: 80, copper: 30, ..Default::default() },
                     time_secs: 10.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::GatherAura { speed_bonus: 0.25, range: 20.0 },
+                    bonus: LevelBonus::ProcessorUpgrade {
+                        harvest_rate_boost: 1.5,
+                        radius_boost: 5.0,
+                        extra_worker_slots: 1,
+                        unlock_resources: vec![],
+                    },
                 },
                 BuildingLevelData {
                     cost: ResourceCost { wood: 120, copper: 40, iron: 20, ..Default::default() },
                     time_secs: 15.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::GatherAura { speed_bonus: 0.50, range: 25.0 },
+                    bonus: LevelBonus::ProcessorUpgrade {
+                        harvest_rate_boost: 1.5,
+                        radius_boost: 5.0,
+                        extra_worker_slots: 1,
+                        unlock_resources: vec![],
+                    },
                 },
             ],
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 2.5, y: 2.0, z: 2.5 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
             color: Color::srgb(0.55, 0.35, 0.15),
             selected_color: Color::srgb(0.7, 0.45, 0.2),
             selected_emissive: LinearRgba::new(0.3, 0.2, 0.05, 1.0),
@@ -1097,18 +1138,28 @@ pub fn build_registry() -> BlueprintRegistry {
                 BuildingLevelData {
                     cost: ResourceCost { wood: 60, copper: 60, iron: 30, ..Default::default() },
                     time_secs: 12.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::GatherAura { speed_bonus: 0.20, range: 18.0 },
+                    bonus: LevelBonus::ProcessorUpgrade {
+                        harvest_rate_boost: 1.0,
+                        radius_boost: 3.0,
+                        extra_worker_slots: 1,
+                        unlock_resources: vec![ResourceType::Iron],
+                    },
                 },
                 BuildingLevelData {
                     cost: ResourceCost { wood: 100, copper: 80, iron: 50, gold: 20, ..Default::default() },
                     time_secs: 20.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::GatherAura { speed_bonus: 0.40, range: 25.0 },
+                    bonus: LevelBonus::ProcessorUpgrade {
+                        harvest_rate_boost: 1.5,
+                        radius_boost: 5.0,
+                        extra_worker_slots: 1,
+                        unlock_resources: vec![ResourceType::Gold],
+                    },
                 },
             ],
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 2.5, y: 2.4, z: 2.5 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
             color: Color::srgb(0.45, 0.4, 0.35),
             selected_color: Color::srgb(0.55, 0.5, 0.45),
             selected_emissive: LinearRgba::new(0.15, 0.12, 0.08, 1.0),
@@ -1136,18 +1187,28 @@ pub fn build_registry() -> BlueprintRegistry {
                 BuildingLevelData {
                     cost: ResourceCost { wood: 80, copper: 40, iron: 30, ..Default::default() },
                     time_secs: 12.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::GatherAura { speed_bonus: 0.20, range: 18.0 },
+                    bonus: LevelBonus::ProcessorUpgrade {
+                        harvest_rate_boost: 1.0,
+                        radius_boost: 4.0,
+                        extra_worker_slots: 0,
+                        unlock_resources: vec![],
+                    },
                 },
                 BuildingLevelData {
                     cost: ResourceCost { wood: 120, copper: 60, iron: 50, gold: 10, ..Default::default() },
                     time_secs: 18.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::GatherAura { speed_bonus: 0.40, range: 25.0 },
+                    bonus: LevelBonus::ProcessorUpgrade {
+                        harvest_rate_boost: 1.5,
+                        radius_boost: 2.0,
+                        extra_worker_slots: 0,
+                        unlock_resources: vec![],
+                    },
                 },
             ],
         }),
         mob_ai: None,
         visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 2.0, y: 3.0, z: 2.0 },
+            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
             color: Color::srgb(0.15, 0.15, 0.15),
             selected_color: Color::srgb(0.25, 0.25, 0.25),
             selected_emissive: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
@@ -1440,6 +1501,14 @@ pub fn spawn_from_blueprint_with_faction(
                             max_workers: 3,
                             buffer: 0,
                             buffer_capacity: 50,
+                            worker_rate_bonus: 0.5,
+                        },
+                        ResourceRespawnConfig {
+                            resource_types: vec![ResourceType::Wood],
+                            respawn_timer: Timer::from_seconds(30.0, TimerMode::Repeating),
+                            respawn_radius: 15.0,
+                            max_nodes: 5,
+                            amount_per_node: 200,
                         },
                     ));
                 }
@@ -1448,12 +1517,20 @@ pub fn spawn_from_blueprint_with_faction(
                         DepositPoint,
                         StorageInventory { capacity: 200, ..default() },
                         ResourceProcessor {
-                            resource_types: vec![ResourceType::Copper, ResourceType::Iron, ResourceType::Gold],
+                            resource_types: vec![ResourceType::Copper],
                             harvest_radius: 12.0,
                             harvest_rate: 2.0,
-                            max_workers: 3,
+                            max_workers: 4,
                             buffer: 0,
                             buffer_capacity: 40,
+                            worker_rate_bonus: 0.5,
+                        },
+                        ResourceRespawnConfig {
+                            resource_types: vec![ResourceType::Copper],
+                            respawn_timer: Timer::from_seconds(45.0, TimerMode::Repeating),
+                            respawn_radius: 12.0,
+                            max_nodes: 4,
+                            amount_per_node: 300,
                         },
                     ));
                 }
@@ -1468,6 +1545,14 @@ pub fn spawn_from_blueprint_with_faction(
                             max_workers: 0, // Fully automated
                             buffer: 0,
                             buffer_capacity: 30,
+                            worker_rate_bonus: 0.0,
+                        },
+                        ResourceRespawnConfig {
+                            resource_types: vec![ResourceType::Oil],
+                            respawn_timer: Timer::from_seconds(60.0, TimerMode::Repeating),
+                            respawn_radius: 12.0,
+                            max_nodes: 3,
+                            amount_per_node: 500,
                         },
                     ));
                 }

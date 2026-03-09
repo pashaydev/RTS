@@ -217,7 +217,7 @@ fn save_game(
     mut save_req: ResMut<SaveRequested>,
     mut status: ResMut<SaveLoadStatus>,
     id_counter: Res<GameIdCounter>,
-    player_resources: Res<PlayerResources>,
+    player_resources: Option<Res<PlayerResources>>,
     fog: Res<FogOfWarMap>,
     // Entity query — split into multiple queries to stay under tuple limit
     entity_q: Query<(
@@ -251,6 +251,13 @@ fn save_game(
         return;
     }
     save_req.0 = false;
+
+    let Some(player_resources) = player_resources else {
+        warn!("Cannot save: PlayerResources resource does not exist");
+        status.message = "Save failed: missing PlayerResources".to_string();
+        status.timer = 5.0;
+        return;
+    };
 
     let entity_to_gid: HashMap<Entity, u64> =
         id_lookup.iter().map(|(e, gid)| (e, gid.0)).collect();
@@ -447,6 +454,11 @@ fn serialize_worker_task(
             gather_node_id: gather_node.and_then(|gn| lookup.get(&gn).copied()),
             ..default()
         },
+        WorkerTask::AssignedToBuilding(e) => SavedWorkerTask {
+            variant: "AssignedToBuilding".into(),
+            target_id: lookup.get(e).copied(),
+            ..default()
+        },
     }
 }
 
@@ -455,7 +467,7 @@ fn serialize_worker_task(
 fn load_game(
     mut load_req: ResMut<LoadRequested>,
     mut commands: Commands,
-    mut player_resources: ResMut<PlayerResources>,
+    mut player_resources: Option<ResMut<PlayerResources>>,
     mut fog: ResMut<FogOfWarMap>,
     mut id_counter: ResMut<GameIdCounter>,
     mut status: ResMut<SaveLoadStatus>,
@@ -472,6 +484,13 @@ fn load_game(
         return;
     }
     load_req.0 = false;
+
+    let Some(mut player_resources) = player_resources else {
+        warn!("Cannot load: PlayerResources resource does not exist");
+        status.message = "Load failed: missing PlayerResources".to_string();
+        status.timer = 5.0;
+        return;
+    };
 
     let json = match std::fs::read_to_string(SAVE_PATH) {
         Ok(s) => s,

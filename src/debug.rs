@@ -12,7 +12,7 @@ use crate::lighting::{
     LightingOverrides, SunLight,
 };
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
-use crate::components::{ActivePlayer, Faction, Health, InspectedEnemy, RtsCamera, Selected, TeamConfig, UiClickedThisFrame, UiPressActive, UnitSpeed};
+use crate::components::{ActivePlayer, AiControlledFactions, AiDifficulty, AiFactionSettings, AiPersonality, Faction, Health, InspectedEnemy, RtsCamera, Selected, TeamConfig, UiClickedThisFrame, UiPressActive, UnitSpeed};
 use crate::ground::HeightMap;
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 use bevy::window::PrimaryWindow;
@@ -59,6 +59,7 @@ impl Plugin for DebugPlugin {
                     sync_entity_selected_tweaks,
                     sync_save_load_tweaks,
                     sync_player_control_tweaks,
+                    sync_ai_debug_tweaks,
                     rebuild_tweak_panel,
                     update_tweak_visuals,
                     block_input_over_debug_panel,
@@ -1908,6 +1909,7 @@ pub struct DebugSpawnState {
 const SPAWN_FOLDER: &str = "Entities/Spawn";
 const SELECTED_FOLDER: &str = "Entities/Selected";
 const PLAYER_FOLDER: &str = "Game/Player Control";
+const AI_FOLDER: &str = "Game/AI Settings";
 const SAVE_FOLDER: &str = "Game/Save & Load";
 
 fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
@@ -1931,6 +1933,20 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_cycle_enum(PLAYER_FOLDER, "Active Player", vec!["Player 1".to_string(), "Player 2".to_string(), "Player 3".to_string(), "Player 4".to_string()], 0);
     tweaks.add_readonly(PLAYER_FOLDER, "AI Status", "P2: AI, P3: AI, P4: AI");
     tweaks.add_cycle_enum(PLAYER_FOLDER, "Team Mode", vec!["2v2 (P1+P2 vs P3+P4)".to_string(), "FFA (all vs all)".to_string(), "1v3 (P1 vs rest)".to_string()], 0);
+
+    // AI Settings folder
+    tweaks.add_bool(AI_FOLDER, "P2 AI Enabled", true);
+    tweaks.add_bool(AI_FOLDER, "P3 AI Enabled", true);
+    tweaks.add_bool(AI_FOLDER, "P4 AI Enabled", true);
+    tweaks.add_cycle_enum(AI_FOLDER, "P2 Difficulty", vec!["Easy".to_string(), "Medium".to_string(), "Hard".to_string()], 1);
+    tweaks.add_cycle_enum(AI_FOLDER, "P3 Difficulty", vec!["Easy".to_string(), "Medium".to_string(), "Hard".to_string()], 1);
+    tweaks.add_cycle_enum(AI_FOLDER, "P4 Difficulty", vec!["Easy".to_string(), "Medium".to_string(), "Hard".to_string()], 1);
+    tweaks.add_cycle_enum(AI_FOLDER, "P2 Personality", vec!["Balanced".to_string(), "Aggressive".to_string(), "Defensive".to_string(), "Economic".to_string(), "Supportive".to_string()], 0);
+    tweaks.add_cycle_enum(AI_FOLDER, "P3 Personality", vec!["Balanced".to_string(), "Aggressive".to_string(), "Defensive".to_string(), "Economic".to_string(), "Supportive".to_string()], 0);
+    tweaks.add_cycle_enum(AI_FOLDER, "P4 Personality", vec!["Balanced".to_string(), "Aggressive".to_string(), "Defensive".to_string(), "Economic".to_string(), "Supportive".to_string()], 0);
+    tweaks.add_readonly(AI_FOLDER, "P2 State", "--");
+    tweaks.add_readonly(AI_FOLDER, "P3 State", "--");
+    tweaks.add_readonly(AI_FOLDER, "P4 State", "--");
 
     // Save & Load folder
     tweaks.add_button(SAVE_FOLDER, "Save Game");
@@ -2218,5 +2234,82 @@ fn sync_player_control_tweaks(
     };
     if team_config.teams != new_teams {
         team_config.teams = new_teams;
+    }
+}
+
+fn sync_ai_debug_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    mut ai_controlled: ResMut<AiControlledFactions>,
+    mut ai_settings: ResMut<AiFactionSettings>,
+) {
+    // AI enable/disable toggles
+    let factions = [
+        ("P2 AI Enabled", Faction::Player2),
+        ("P3 AI Enabled", Faction::Player3),
+        ("P4 AI Enabled", Faction::Player4),
+    ];
+    for (label, faction) in &factions {
+        if let Some(enabled) = tweaks.get_bool(AI_FOLDER, label) {
+            if enabled {
+                ai_controlled.factions.insert(*faction);
+            } else {
+                ai_controlled.factions.remove(faction);
+            }
+        }
+    }
+
+    // Difficulty per faction
+    let diff_factions = [
+        ("P2 Difficulty", Faction::Player2),
+        ("P3 Difficulty", Faction::Player3),
+        ("P4 Difficulty", Faction::Player4),
+    ];
+    for (label, faction) in &diff_factions {
+        if let Some(selected) = tweaks.get_cycle_selected(AI_FOLDER, label) {
+            let difficulty = match selected {
+                0 => AiDifficulty::Easy,
+                2 => AiDifficulty::Hard,
+                _ => AiDifficulty::Medium,
+            };
+            let config = ai_settings.settings.entry(*faction).or_default();
+            config.difficulty = difficulty;
+        }
+    }
+
+    // Personality per faction
+    let pers_factions = [
+        ("P2 Personality", Faction::Player2),
+        ("P3 Personality", Faction::Player3),
+        ("P4 Personality", Faction::Player4),
+    ];
+    for (label, faction) in &pers_factions {
+        if let Some(selected) = tweaks.get_cycle_selected(AI_FOLDER, label) {
+            let personality = match selected {
+                1 => AiPersonality::Aggressive,
+                2 => AiPersonality::Defensive,
+                3 => AiPersonality::Economic,
+                4 => AiPersonality::Supportive,
+                _ => AiPersonality::Balanced,
+            };
+            let config = ai_settings.settings.entry(*faction).or_default();
+            config.personality = personality;
+        }
+    }
+
+    // Update readonly state displays
+    let state_factions = [
+        ("P2 State", Faction::Player2),
+        ("P3 State", Faction::Player3),
+        ("P4 State", Faction::Player4),
+    ];
+    for (label, faction) in &state_factions {
+        if let Some(config) = ai_settings.settings.get(faction) {
+            let status = format!(
+                "{} {} | Atk:{} Def:{}",
+                config.phase_name, config.posture_name,
+                config.attack_squad_size, config.defense_squad_size
+            );
+            tweaks.set_readonly_if_changed(AI_FOLDER, label, &status);
+        }
     }
 }

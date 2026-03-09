@@ -35,6 +35,12 @@ impl Plugin for BuildingsPlugin {
                     tower_auto_attack,
                     training_queue_system,
                     update_completed_buildings_tracker,
+                )
+                    .chain(),
+            )
+            .add_systems(
+                Update,
+                (
                     building_upgrade_system,
                     demolish_system,
                     building_scale_anim_system,
@@ -42,8 +48,7 @@ impl Plugin for BuildingsPlugin {
                     level_indicator_system,
                     sync_storage_on_spend,
                     update_storage_piles,
-                )
-                    .chain(),
+                ),
             );
     }
 }
@@ -250,18 +255,23 @@ fn confirm_placement(
     mouse: Res<ButtonInput<MouseButton>>,
     mut placement: ResMut<BuildingPlacementState>,
     mut all_resources: ResMut<AllPlayerResources>,
-    all_completed: Res<AllCompletedBuildings>,
     active_player: Res<ActivePlayer>,
+    carried_totals: Res<CarriedResourceTotals>,
+    mut pending_drains: ResMut<PendingCarriedDrains>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
     ghost_mats: Res<BuildingGhostMaterials>,
-    building_models: Option<Res<BuildingModelAssets>>,
     height_map: Res<HeightMap>,
+    extras: (
+        Res<AllCompletedBuildings>,
+        Option<Res<BuildingModelAssets>>,
+        Option<Res<BiomeMap>>,
+    ),
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
     existing_buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<GhostBuilding>)>,
-    biome_map: Option<Res<BiomeMap>>,
 ) {
+    let (all_completed, building_models, biome_map) = extras;
     let PlacementMode::Placing(kind) = placement.mode else {
         return;
     };
@@ -337,15 +347,20 @@ fn confirm_placement(
         return;
     }
 
-    // Check affordability
+    // Check affordability (stored + carried)
     let player_res = all_resources.get(&faction);
-    if !bp.cost.can_afford(player_res) {
+    let carried = carried_totals.get(&faction);
+    if !bp.cost.can_afford_with_carried(player_res, carried) {
         return;
     }
 
-    // Deduct resources
+    // Deduct from stored first, queue carried drain for any deficit
     let player_res_mut = all_resources.get_mut(&faction);
-    bp.cost.deduct(player_res_mut);
+    let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(player_res_mut);
+    let drain = SpendFromCarried { faction, wood: dw, copper: dc, iron: di, gold: dg, oil: do_ };
+    if drain.has_deficit() {
+        pending_drains.drains.push(drain);
+    }
 
     // Despawn ghost
     if let Some(ghost) = placement.preview_entity {
@@ -406,6 +421,7 @@ fn construction_progress_system(
         &mut Transform,
     )>,
     workers: Query<&WorkerTask, With<Unit>>,
+    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
     for (entity, kind, mut state, mut progress, mut transform) in &mut buildings {
         if *state != BuildingState::UnderConstruction {
@@ -467,6 +483,14 @@ fn construction_progress_system(
                     });
                 }
             }
+
+            // Log construction complete event
+            event_log.push(
+                time.elapsed_secs(),
+                format!("{} construction complete", kind.display_name()),
+                crate::ui::event_log_widget::EventCategory::Construction,
+                Some(transform.translation),
+            );
         }
     }
 }
@@ -553,6 +577,7 @@ fn training_queue_system(
     unit_models: Option<Res<UnitModelAssets>>,
     height_map: Res<HeightMap>,
     mut buildings: Query<(&Transform, &EntityKind, &mut TrainingQueue, Option<&RallyPoint>, &Faction), With<Building>>,
+    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
     for (transform, _kind, mut queue, rally_point, building_faction) in &mut buildings {
         if queue.queue.is_empty() {
@@ -572,6 +597,14 @@ fn training_queue_system(
                 let unit_kind = queue.queue.remove(0);
                 let spawn_pos = transform.translation + Vec3::new(3.0, 0.0, 3.0);
                 let unit_entity = spawn_from_blueprint_with_faction(&mut commands, &cache, unit_kind, spawn_pos, &registry, None, unit_models.as_deref(), &height_map, *building_faction);
+
+                // Log training complete
+                event_log.push(
+                    time.elapsed_secs(),
+                    format!("{} trained", unit_kind.display_name()),
+                    crate::ui::event_log_widget::EventCategory::Training,
+                    Some(spawn_pos),
+                );
 
                 // If building has a rally point, send the unit there
                 if let Some(rally) = rally_point {
@@ -616,7 +649,9 @@ pub fn start_upgrade(
     kind: EntityKind,
     registry: &BlueprintRegistry,
     player_res: &mut PlayerResources,
-    _faction: Faction,
+    faction: Faction,
+    carried: &PlayerResources,
+    pending_drains: &mut PendingCarriedDrains,
 ) -> bool {
     // Must be below max level (3)
     if current_level >= 3 {
@@ -637,13 +672,17 @@ pub fn start_upgrade(
 
     let level_data = &bd.level_upgrades[upgrade_index];
 
-    // Check affordability
-    if !level_data.cost.can_afford(player_res) {
+    // Check affordability (stored + carried)
+    if !level_data.cost.can_afford_with_carried(player_res, carried) {
         return false;
     }
 
-    // Deduct resources
-    level_data.cost.deduct(player_res);
+    // Deduct from stored first, queue carried drain for deficit
+    let (dw, dc, di, dg, do_) = level_data.cost.deduct_with_carried(player_res);
+    let drain = SpendFromCarried { faction, wood: dw, copper: dc, iron: di, gold: dg, oil: do_ };
+    if drain.has_deficit() {
+        pending_drains.drains.push(drain);
+    }
 
     // Insert UpgradeProgress component
     commands.entity(entity).insert(UpgradeProgress {
@@ -670,11 +709,13 @@ fn building_upgrade_system(
         Option<&mut AttackRange>,
         Option<&mut AttackDamage>,
         Option<&mut StorageInventory>,
+        Option<&mut ResourceProcessor>,
+        Option<&mut ResourceRespawnConfig>,
     ), With<Building>>,
     children_q: Query<&Children>,
     scene_child_q: Query<Entity, With<BuildingSceneChild>>,
 ) {
-    for (entity, kind, mut level, mut upgrade, transform, vision, attack_range, attack_damage, storage_inv) in &mut buildings {
+    for (entity, kind, mut level, mut upgrade, transform, vision, attack_range, attack_damage, storage_inv, processor, respawn_config) in &mut buildings {
         upgrade.timer.tick(time.delta());
 
         if !upgrade.timer.is_finished() {
@@ -789,7 +830,31 @@ fn building_upgrade_system(
                 });
             }
             LevelBonus::UnlocksTraining(_kinds) => {
-                // Could extend the TrainingQueue's available units — handled at UI level
+                // Handled at UI level — train button filtering checks building level
+            }
+            LevelBonus::ProcessorUpgrade { harvest_rate_boost, radius_boost, extra_worker_slots, ref unlock_resources } => {
+                if let Some(mut proc) = processor {
+                    proc.harvest_rate += harvest_rate_boost;
+                    proc.harvest_radius += radius_boost;
+                    proc.max_workers += extra_worker_slots;
+                    for rt in unlock_resources {
+                        if !proc.resource_types.contains(rt) {
+                            proc.resource_types.push(*rt);
+                        }
+                    }
+                }
+                if let Some(mut rc) = respawn_config {
+                    for rt in unlock_resources {
+                        if !rc.resource_types.contains(rt) {
+                            rc.resource_types.push(*rt);
+                        }
+                    }
+                    // Increase max nodes on upgrade
+                    rc.max_nodes = (rc.max_nodes + 2).min(12);
+                    // Reduce respawn timer slightly
+                    let current_secs = rc.respawn_timer.duration().as_secs_f32();
+                    rc.respawn_timer = Timer::from_seconds((current_secs * 0.75).max(10.0), TimerMode::Repeating);
+                }
             }
         }
 

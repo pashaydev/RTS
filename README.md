@@ -25,9 +25,9 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 - **Fog of War** — Texture-based fog of war with per-entity vision ranges, edge glow, noise overlay, and explored/unexplored tinting
 - **Save/Load** — JSON game state serialization with stable entity IDs, cross-reference resolution, and resource node position matching
 - **Minimap** — Interactive minimap with real-time unit and building positions, camera viewport indicator
-- **Controls** — Click, box-select, shift-toggle selection; formation movement; right-click attack targeting; building placement
-- **Camera** — WASD pan, Q/E rotate, scroll zoom
-- **UI** — Top resource bar, selection panel, context-sensitive action bar with card-hand building UI (dynamic states: enabled / can't afford with per-resource red highlights / locked with hover tooltips), train buttons, building info, training queue with progress bars
+- **Controls** — Click, box-select, shift-toggle selection; formation movement; right-click smart commands; hotkey-based unit orders (A-move, Patrol, Hold, Stop); Ctrl+1-9 control groups
+- **Camera** — WASD pan, Q/E rotate, scroll zoom, edge-scroll
+- **UI** — Widget-based HUD system with 12x8 snap-to-grid layout, closable/pinnable panels (F1-F10 toggles), resource bar, selection panel, building grid, production queue, army overview, tech tree, control groups, event log
 - **Pathfinding** — Thin dashed lines with destination ring, terrain-following
 - **Debug Tools** — F3 debug panel with organized sections (Visuals, Entities, Game), real-time tweaking of lighting/fog/shader parameters, entity spawning/manipulation, save/load controls, JSON config persistence
 
@@ -47,19 +47,69 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 
 ## Controls
 
+### Camera
+
 | Input | Action |
 |---|---|
-| W A S D | Pan camera |
-| Q / E | Rotate camera |
+| W / A / S / D | Pan camera forward / left / back / right |
+| Arrow keys | Pan camera (alternative) |
+| Q / E | Rotate camera left / right |
 | Scroll wheel | Zoom in / out |
+| +/- keys | Zoom in / out (alternative) |
+| Screen edges | Auto-pan when cursor reaches edge |
+
+### Selection
+
+| Input | Action |
+|---|---|
 | Left click | Select unit or building |
-| Left drag | Box select units |
+| Left drag | Box-select multiple units |
 | Shift + click | Add / remove from selection |
-| Right click ground | Move selected units (formation) |
-| Right click mob | Attack target with selected units |
-| Bottom buttons | Place buildings (when nothing selected) or train units (when building selected) |
-| Escape / Right click | Cancel building placement |
-| F3 | Toggle debug panel |
+| Ctrl + 1-9 | Assign selected units to control group |
+| Shift + 1-9 | Add selected units to control group |
+| 1-9 | Recall (select) control group |
+
+### Unit Commands
+
+| Input | Action |
+|---|---|
+| Right click ground | Move selected units (formation spread) |
+| Right click enemy | Attack target |
+| Right click resource | Gather (workers) / move (combat units) |
+| Right click construction | Assign workers to build |
+| Right click processor | Assign workers to processor building |
+| A + left click | Attack-move to location (engage enemies on the way) |
+| P + left click | Patrol to location |
+| H | Hold position (stop and clear orders) |
+| S | Stop (clear all orders, workers go idle) |
+| Escape | Cancel attack-move / patrol mode |
+
+### Building
+
+| Input | Action |
+|---|---|
+| Click building button | Enter placement mode |
+| Left click (placing) | Confirm building placement |
+| Right click / Escape | Cancel building placement |
+| Click rally point button | Enter rally point mode |
+| Left click (rally mode) | Set rally point for trained units |
+| Right click (rally mode) | Cancel rally point mode |
+
+### UI Widgets
+
+| Input | Action |
+|---|---|
+| F1 | Toggle Resources panel |
+| F2 | Toggle Army Overview panel |
+| F3 | Toggle Debug panel |
+| F4 | Toggle Actions panel |
+| F5 | Toggle Minimap panel |
+| F6 | Toggle Production Queue panel |
+| F7 | Toggle Tech Tree panel |
+| F8 | Toggle Control Groups panel |
+| F9 | Toggle Event Log panel |
+| F10 | Toggle Debug widget |
+| Click minimap | Pan camera to location |
 
 ## How to Play
 
@@ -157,12 +207,27 @@ src/
 ├── lighting.rs       Day/night cycle, sun/ambient/sky animation, volumetric fog, entity lights
 ├── units.rs          Player unit spawning and movement
 ├── buildings.rs      Building placement, construction, training, upgrades, demolish
-├── selection.rs      Click, box, and shift selection + right-click commands
-├── ui.rs             HUD: resource bar, selection panel, context-sensitive action bar
+├── selection.rs      Click, box, shift selection + right-click commands + hotkey orders
+├── ui/
+│   ├── mod.rs                    UiPlugin, spawn_hud, compute_ui_mode
+│   ├── widget_framework.rs       Widget/GridSlot/WidgetRegistry types, spawn_widget_frame()
+│   ├── widget_toolbar.rs         Top toolbar with F1-F10 toggle buttons
+│   ├── resources_widget.rs       Resource display (wood, copper, iron, gold, oil)
+│   ├── selection_widget.rs       Selection panel (unit/building detail cards)
+│   ├── actions_widget.rs         Action bar + categorized building grid
+│   ├── production_queue_widget.rs Global training queue overview
+│   ├── army_overview_widget.rs   Unit counts + idle worker badges
+│   ├── tech_tree_widget.rs       Building prerequisite tree (built/available/locked)
+│   ├── group_hotkeys_widget.rs   Ctrl+1-9 control groups display + keybinds
+│   ├── event_log_widget.rs       Combat/construction/training event log
+│   ├── animations.rs             UiFadeIn, UiFadeOut, UiSlideIn systems
+│   ├── buttons.rs                All button handlers (build, train, upgrade, demolish, etc.)
+│   ├── notifications.rs          Ally notification toasts
+│   └── shared.rs                 Shared helpers (hp_color, spawn_hp_bar, format_cost)
 ├── model_assets.rs   Loads KayKit 3D models (characters, trees, rocks, props)
-├── resources.rs      Biome-based resource node spawning, auto-gathering, tree growth, decoration scatter
+├── resources.rs      Biome-based resource node spawning, auto-gathering, tree growth
 ├── mobs.rs           Enemy camps, patrol / aggro / chase AI
-├── combat.rs         Melee and ranged attacks, auto-targeting, death
+├── combat.rs         Melee and ranged attacks, auto-targeting, death + event logging
 ├── fog.rs            Fog of war system
 ├── fog_material.rs   Custom fog shader material
 ├── hover_material.rs Custom hover effect material
@@ -183,8 +248,8 @@ src/
 | `LightingPlugin` | Day/night cycle with keyframed sun/ambient/sky, volumetric atmospheric fog, dynamic entity cluster lights |
 | `UnitsPlugin` | Spawns 3 starting workers, handles movement and avoidance |
 | `BuildingsPlugin` | Building placement preview, construction progress, unit training queues, tower auto-attack, upgrades, demolish |
-| `SelectionPlugin` | Click/box/shift selection for units and buildings, right-click move and attack |
-| `UiPlugin` | Resource bar, selection panel, context-sensitive action bar with build/train buttons |
+| `SelectionPlugin` | Click/box/shift selection, right-click smart commands, hotkey orders (A/P/H/S), control groups |
+| `UiPlugin` | Widget-based HUD — 12x8 grid layout with closable/pinnable panels, building grid, production queue, army overview, tech tree, event log |
 | `ModelAssetsPlugin` | Loads KayKit 3D models — Forest Nature Pack, Adventurers, Skeletons, Character Animations |
 | `ResourcesPlugin` | Procedural biome-based resource node spawning with 3D models, auto-gather + deposit loop, tree growth, biome-aware decoration scatter |
 | `MobsPlugin` | Spawns 4 enemy camps with patrol, aggro, chase, and return AI |

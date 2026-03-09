@@ -214,14 +214,29 @@ fn load_building_model_assets_eager(asset_server: &AssetServer) -> BuildingModel
             "Temple_FirstAge_Level3",
         ]),
         (EntityKind::Stable, &[
-            "Houses_FirstAge_1_Level1",
-            "Houses_FirstAge_1_Level2",
-            "Houses_FirstAge_1_Level3",
+            "Farm_FirstAge_Level1",
+            "Farm_FirstAge_Level2",
+            "Farm_FirstAge_Level3",
         ]),
         (EntityKind::SiegeWorks, &[
             "Archery_FirstAge_Level1",
             "Archery_FirstAge_Level2",
             "Archery_FirstAge_Level3",
+        ]),
+        (EntityKind::Sawmill, &[
+            "Windmill_FirstAge",
+            "Windmill_FirstAge",
+            "Windmill_FirstAge",
+        ]),
+        (EntityKind::Mine, &[
+            "Mine",
+            "Mine",
+            "Mine",
+        ]),
+        (EntityKind::OilRig, &[
+            "Port_FirstAge_Level1",
+            "Port_FirstAge_Level2",
+            "Port_FirstAge_Level3",
         ]),
     ];
 
@@ -260,6 +275,15 @@ fn load_building_model_assets_eager(asset_server: &AssetServer) -> BuildingModel
     });
     calibration.insert(EntityKind::SiegeWorks, BuildingModelCalibration {
         scale: 3.0, y_offset: 0.0, building_height: 7.0,
+    });
+    calibration.insert(EntityKind::Sawmill, BuildingModelCalibration {
+        scale: 2.5, y_offset: 0.0, building_height: 6.0,
+    });
+    calibration.insert(EntityKind::Mine, BuildingModelCalibration {
+        scale: 3.0, y_offset: 0.0, building_height: 4.0,
+    });
+    calibration.insert(EntityKind::OilRig, BuildingModelCalibration {
+        scale: 2.5, y_offset: 0.0, building_height: 5.0,
     });
 
     BuildingModelAssets { scenes, calibration }

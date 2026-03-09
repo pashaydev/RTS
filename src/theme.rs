@@ -49,3 +49,21 @@ pub const HP_BAR_BG: Color = Color::srgba(0.08, 0.08, 0.08, 0.9);
 pub const HP_HIGH: Color = SUCCESS;
 pub const HP_MID: Color = WARNING;
 pub const HP_LOW: Color = DESTRUCTIVE;
+
+// ── Stat colors ──
+pub const STAT_DMG: Color = Color::srgb(0.85, 0.35, 0.30);
+pub const STAT_RNG: Color = Color::srgb(0.40, 0.70, 0.95);
+pub const STAT_SPD: Color = Color::srgb(0.40, 0.80, 0.45);
+
+// ── Panel accents ──
+pub const PANEL_ACCENT_FRIENDLY: Color = Color::srgba(0.29, 0.62, 1.0, 0.6);
+pub const PANEL_ACCENT_ENEMY: Color = Color::srgba(0.80, 0.27, 0.27, 0.6);
+pub const PANEL_ACCENT_CONSTRUCTION: Color = Color::srgba(1.0, 0.65, 0.15, 0.6);
+pub const ICON_FRAME_BG: Color = Color::srgba(0.16, 0.16, 0.18, 0.95);
+
+// ── Button animation colors ──
+pub const BTN_HOVER_BRIGHT: Color = Color::srgba(0.25, 0.25, 0.25, 0.94);
+pub const BTN_GHOST_HOVER_BG: Color = Color::srgba(0.29, 0.62, 1.0, 0.08);
+pub const BTN_GHOST_PRESS_BG: Color = Color::srgba(0.29, 0.62, 1.0, 0.14);
+#[allow(dead_code)]
+pub const DEMOLISH_HOVER: Color = Color::srgb(0.95, 0.35, 0.35);

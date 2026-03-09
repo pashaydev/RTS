@@ -193,9 +193,6 @@ fn camera_zoom_input(
             };
             cam.target_distance *= 1.0 - scroll * ZOOM_SENSITIVITY;
         }
-    } else {
-        // Drain scroll events so they don't queue up
-        scroll_events.read().last();
     }
 
     let key_zoom_speed = 2.0 * time.delta_secs();

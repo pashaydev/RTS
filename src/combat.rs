@@ -206,10 +206,12 @@ fn execute_ranged_attacks(
 
 fn handle_death(
     mut commands: Commands,
-    dead: Query<(Entity, &Health, Option<&Building>, Option<&Selected>)>,
+    dead: Query<(Entity, &Health, Option<&Building>, Option<&Selected>, Option<&EntityKind>, Option<&Transform>)>,
     mut attackers_with_target: Query<(Entity, &AttackTarget, Option<&mut PatrolState>)>,
+    time: Res<Time>,
+    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
-    for (dead_entity, health, opt_building, opt_selected) in &dead {
+    for (dead_entity, health, _opt_building, opt_selected, opt_kind, opt_transform) in &dead {
         if health.current > 0.0 {
             continue;
         }
@@ -222,6 +224,16 @@ fn handle_death(
                 }
             }
         }
+
+        // Log death event
+        let name = opt_kind.map_or("Unit", |k| k.display_name());
+        let pos = opt_transform.map(|t| t.translation);
+        event_log.push(
+            time.elapsed_secs(),
+            format!("{} destroyed", name),
+            crate::ui::event_log_widget::EventCategory::Combat,
+            pos,
+        );
 
         // Clear selection if selected
         if opt_selected.is_some() {
