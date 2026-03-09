@@ -1,17 +1,19 @@
 use std::time::Duration;
 
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
-use crate::blueprints::{BlueprintRegistry, EntityCategory, EntityKind, EntityVisualCache, LevelBonus, spawn_from_blueprint};
+use crate::blueprints::{BlueprintRegistry, EntityCategory, EntityKind, EntityVisualCache, LevelBonus, spawn_from_blueprint_with_faction};
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 
-fn footprint_for_kind(kind: EntityKind) -> f32 {
+pub fn footprint_for_kind(kind: EntityKind) -> f32 {
     match kind {
         EntityKind::Base | EntityKind::Storage => 7.0,
+        EntityKind::Sawmill | EntityKind::Mine | EntityKind::OilRig => 4.0,
         _ => 2.5,
     }
 }
@@ -21,13 +23,12 @@ pub struct BuildingsPlugin;
 impl Plugin for BuildingsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BuildingPlacementState>()
-            .init_resource::<CompletedBuildings>()
-            .init_resource::<LastPlayerResources>()
             .add_systems(Startup, create_ghost_materials)
             .add_systems(
                 Update,
                 (
                     update_placement_preview,
+                    apply_ghost_materials,
                     confirm_placement,
                     cancel_placement,
                     construction_progress_system,
@@ -100,12 +101,11 @@ fn update_placement_preview(
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
     ghost_mats: Res<BuildingGhostMaterials>,
+    building_models: Option<Res<BuildingModelAssets>>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut ghosts: Query<
-        (&mut Transform, &mut MeshMaterial3d<StandardMaterial>),
-        With<GhostBuilding>,
-    >,
+    mut ghosts: Query<&mut Transform, With<GhostBuilding>>,
+    mut ghost_valid_q: Query<&mut GhostValid, With<GhostBuilding>>,
     existing_buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<GhostBuilding>)>,
     biome_map: Option<Res<BiomeMap>>,
     height_map: Res<HeightMap>,
@@ -115,20 +115,51 @@ fn update_placement_preview(
     };
 
     let bp = registry.get(kind);
-    let half_h = bp.building.as_ref().map(|b| b.half_height).unwrap_or(1.0);
+    let is_gltf = bp.visual.mesh_kind.is_gltf();
+    let half_h = if is_gltf { 0.0 } else { bp.building.as_ref().map(|b| b.half_height).unwrap_or(1.0) };
     let new_footprint = footprint_for_kind(kind);
 
     // Spawn ghost if it doesn't exist
     if placement.preview_entity.is_none() {
-        let mesh = cache.meshes.get(&kind).expect("Missing mesh").clone();
-        let ghost = commands
-            .spawn((
+        let ghost = if is_gltf {
+            // Use actual GLTF building model for the ghost
+            let mut ghost_cmds = commands.spawn((
                 GhostBuilding,
+                GhostValid(true),
+                Transform::from_translation(Vec3::new(0.0, -100.0, 0.0)),
+                Visibility::default(),
+                NotShadowCaster,
+                NotShadowReceiver,
+            ));
+            // Attach the GLTF scene as a child
+            if let Some(ref models) = building_models {
+                if let Some(scene_handle) = models.scenes.get(&(kind, 1)) {
+                    let cal = models.calibration.get(&kind);
+                    let scale = cal.map(|c| c.scale).unwrap_or(1.0);
+                    let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
+                    ghost_cmds.with_child((
+                        SceneRoot(scene_handle.clone()),
+                        Transform::from_scale(Vec3::splat(scale))
+                            .with_translation(Vec3::new(0.0, y_off, 0.0)),
+                        NotShadowCaster,
+                        NotShadowReceiver,
+                    ));
+                }
+            }
+            ghost_cmds.id()
+        } else {
+            // Non-GLTF: use cache mesh with ghost material directly
+            let mesh = cache.meshes.get(&kind).expect("Missing mesh").clone();
+            commands.spawn((
+                GhostBuilding,
+                GhostValid(true),
                 Mesh3d(mesh),
                 MeshMaterial3d(ghost_mats.ghost_valid.clone()),
                 Transform::from_translation(Vec3::new(0.0, -100.0, 0.0)),
-            ))
-            .id();
+                NotShadowCaster,
+                NotShadowReceiver,
+            )).id()
+        };
         placement.preview_entity = Some(ghost);
     }
 
@@ -139,7 +170,7 @@ fn update_placement_preview(
     let Some(ghost_entity) = placement.preview_entity else {
         return;
     };
-    let Ok((mut ghost_tf, mut ghost_mat)) = ghosts.get_mut(ghost_entity) else {
+    let Ok(mut ghost_tf) = ghosts.get_mut(ghost_entity) else {
         return;
     };
 
@@ -167,19 +198,60 @@ fn update_placement_preview(
         valid = false;
     }
 
-    *ghost_mat = if valid {
-        MeshMaterial3d(ghost_mats.ghost_valid.clone())
-    } else {
-        MeshMaterial3d(ghost_mats.ghost_invalid.clone())
-    };
+    if let Ok(mut gv) = ghost_valid_q.get_mut(ghost_entity) {
+        gv.0 = valid;
+    }
+}
+
+/// Overrides materials on all mesh descendants of ghost buildings to ghost_valid/ghost_invalid.
+fn apply_ghost_materials(
+    mut commands: Commands,
+    ghost_mats: Res<BuildingGhostMaterials>,
+    ghosts: Query<(Entity, &GhostValid), With<GhostBuilding>>,
+    children_q: Query<&Children>,
+    mesh_q: Query<Entity, (With<Mesh3d>, Without<GhostMaterialApplied>)>,
+    mut applied_q: Query<(Entity, &mut MeshMaterial3d<StandardMaterial>), With<GhostMaterialApplied>>,
+) {
+    for (ghost_entity, ghost_valid) in &ghosts {
+        let mat = if ghost_valid.0 {
+            ghost_mats.ghost_valid.clone()
+        } else {
+            ghost_mats.ghost_invalid.clone()
+        };
+
+        // Walk all descendants and apply ghost material to mesh entities
+        let mut stack = vec![ghost_entity];
+        while let Some(entity) = stack.pop() {
+            // New mesh entities that haven't been tagged yet
+            if mesh_q.get(entity).is_ok() {
+                commands.entity(entity).insert((
+                    MeshMaterial3d(mat.clone()),
+                    GhostMaterialApplied,
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                ));
+            }
+            // Already-tagged mesh entities: update material if validity changed
+            if let Ok((_, mut existing_mat)) = applied_q.get_mut(entity) {
+                existing_mat.0 = mat.clone();
+            }
+            // Recurse into children
+            if let Ok(children) = children_q.get(entity) {
+                for child in children {
+                    stack.push(*child);
+                }
+            }
+        }
+    }
 }
 
 fn confirm_placement(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
     mut placement: ResMut<BuildingPlacementState>,
-    mut player_res: ResMut<PlayerResources>,
-    completed: Res<CompletedBuildings>,
+    mut all_resources: ResMut<AllPlayerResources>,
+    all_completed: Res<AllCompletedBuildings>,
+    active_player: Res<ActivePlayer>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
     ghost_mats: Res<BuildingGhostMaterials>,
@@ -233,11 +305,13 @@ fn confirm_placement(
 
     let bp = registry.get(kind);
 
+    let faction = active_player.0;
+
     // Check prerequisite
     let prereq_met = if let Some(ref bd) = bp.building {
         match bd.prerequisite {
             None => true,
-            Some(prereq_kind) => completed.has(prereq_kind),
+            Some(prereq_kind) => all_completed.has(&faction, prereq_kind),
         }
     } else {
         true
@@ -264,12 +338,14 @@ fn confirm_placement(
     }
 
     // Check affordability
-    if !bp.cost.can_afford(&player_res) {
+    let player_res = all_resources.get(&faction);
+    if !bp.cost.can_afford(player_res) {
         return;
     }
 
     // Deduct resources
-    bp.cost.deduct(&mut player_res);
+    let player_res_mut = all_resources.get_mut(&faction);
+    bp.cost.deduct(player_res_mut);
 
     // Despawn ghost
     if let Some(ghost) = placement.preview_entity {
@@ -279,7 +355,7 @@ fn confirm_placement(
     // Spawn building using blueprint
     let bp = registry.get(kind);
     let is_gltf = bp.visual.mesh_kind.is_gltf();
-    let entity_id = spawn_from_blueprint(&mut commands, &cache, kind, world_pos, &registry, building_models.as_deref(), None, &height_map);
+    let entity_id = spawn_from_blueprint_with_faction(&mut commands, &cache, kind, world_pos, &registry, building_models.as_deref(), None, &height_map, faction);
 
     // Override material with under_construction (only for non-GLTF buildings)
     if !is_gltf {
@@ -400,6 +476,7 @@ fn construction_progress_system(
 fn tower_auto_attack(
     mut commands: Commands,
     time: Res<Time>,
+    teams: Res<TeamConfig>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut towers: Query<
         (
@@ -410,14 +487,15 @@ fn tower_auto_attack(
             &AttackDamage,
             &AttackRange,
             Option<&TowerAutoAttackEnabled>,
+            &Faction,
         ),
         With<Building>,
     >,
-    mobs: Query<(Entity, &Transform), With<Mob>>,
+    hostiles: Query<(Entity, &Transform, &Faction), Or<(With<Mob>, With<Unit>)>>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (tower_tf, kind, state, mut cooldown, damage, range, auto_attack) in &mut towers {
+    for (tower_tf, kind, state, mut cooldown, damage, range, auto_attack, tower_faction) in &mut towers {
         if *kind != EntityKind::Tower || *state != BuildingState::Complete {
             continue;
         }
@@ -435,19 +513,22 @@ fn tower_auto_attack(
         }
 
         let mut closest_dist = f32::MAX;
-        let mut closest_mob = None;
-        for (mob_entity, mob_tf) in &mobs {
-            let dist = tower_tf.translation.distance(mob_tf.translation);
+        let mut closest_target = None;
+        for (target_entity, target_tf, target_faction) in &hostiles {
+            if !teams.is_hostile(tower_faction, target_faction) {
+                continue;
+            }
+            let dist = tower_tf.translation.distance(target_tf.translation);
             if dist < range.0 && dist < closest_dist {
                 closest_dist = dist;
-                closest_mob = Some(mob_entity);
+                closest_target = Some(target_entity);
             }
         }
 
-        if let Some(mob_entity) = closest_mob {
+        if let Some(target_entity) = closest_target {
             commands.spawn((
                 Projectile {
-                    target: mob_entity,
+                    target: target_entity,
                     speed: 20.0,
                     damage: damage.0,
                 },
@@ -455,6 +536,8 @@ fn tower_auto_attack(
                 MeshMaterial3d(vfx.projectile_material.clone()),
                 Transform::from_translation(tower_tf.translation + Vec3::Y * 3.0)
                     .with_scale(Vec3::splat(0.2)),
+                NotShadowCaster,
+                NotShadowReceiver,
             ));
         }
     }
@@ -469,9 +552,9 @@ fn training_queue_system(
     cache: Res<EntityVisualCache>,
     unit_models: Option<Res<UnitModelAssets>>,
     height_map: Res<HeightMap>,
-    mut buildings: Query<(&Transform, &EntityKind, &mut TrainingQueue, Option<&RallyPoint>), With<Building>>,
+    mut buildings: Query<(&Transform, &EntityKind, &mut TrainingQueue, Option<&RallyPoint>, &Faction), With<Building>>,
 ) {
-    for (transform, _kind, mut queue, rally_point) in &mut buildings {
+    for (transform, _kind, mut queue, rally_point, building_faction) in &mut buildings {
         if queue.queue.is_empty() {
             continue;
         }
@@ -488,7 +571,7 @@ fn training_queue_system(
             if timer.is_finished() {
                 let unit_kind = queue.queue.remove(0);
                 let spawn_pos = transform.translation + Vec3::new(3.0, 0.0, 3.0);
-                let unit_entity = spawn_from_blueprint(&mut commands, &cache, unit_kind, spawn_pos, &registry, None, unit_models.as_deref(), &height_map);
+                let unit_entity = spawn_from_blueprint_with_faction(&mut commands, &cache, unit_kind, spawn_pos, &registry, None, unit_models.as_deref(), &height_map, *building_faction);
 
                 // If building has a rally point, send the unit there
                 if let Some(rally) = rally_point {
@@ -504,21 +587,22 @@ fn training_queue_system(
 // ── Track completed buildings ──
 
 fn update_completed_buildings_tracker(
-    mut completed: ResMut<CompletedBuildings>,
-    buildings: Query<(&EntityKind, &BuildingState), With<Building>>,
+    mut all_completed: ResMut<AllCompletedBuildings>,
+    buildings: Query<(&EntityKind, &BuildingState, &Faction), With<Building>>,
 ) {
-    let mut new_completed = Vec::new();
+    let mut per_faction: std::collections::HashMap<Faction, Vec<EntityKind>> = std::collections::HashMap::new();
 
-    for (kind, state) in &buildings {
+    for (kind, state, faction) in &buildings {
         if *state == BuildingState::Complete && kind.category() == EntityCategory::Building {
-            if !new_completed.contains(kind) {
-                new_completed.push(*kind);
+            let list = per_faction.entry(*faction).or_default();
+            if !list.contains(kind) {
+                list.push(*kind);
             }
         }
     }
 
-    if completed.completed != new_completed {
-        completed.completed = new_completed;
+    if all_completed.per_faction != per_faction {
+        all_completed.per_faction = per_faction;
     }
 }
 
@@ -532,6 +616,7 @@ pub fn start_upgrade(
     kind: EntityKind,
     registry: &BlueprintRegistry,
     player_res: &mut PlayerResources,
+    _faction: Faction,
 ) -> bool {
     // Must be below max level (3)
     if current_level >= 3 {
@@ -584,11 +669,12 @@ fn building_upgrade_system(
         Option<&mut VisionRange>,
         Option<&mut AttackRange>,
         Option<&mut AttackDamage>,
+        Option<&mut StorageInventory>,
     ), With<Building>>,
     children_q: Query<&Children>,
     scene_child_q: Query<Entity, With<BuildingSceneChild>>,
 ) {
-    for (entity, kind, mut level, mut upgrade, transform, vision, attack_range, attack_damage) in &mut buildings {
+    for (entity, kind, mut level, mut upgrade, transform, vision, attack_range, attack_damage, storage_inv) in &mut buildings {
         upgrade.timer.tick(time.delta());
 
         if !upgrade.timer.is_finished() {
@@ -687,6 +773,14 @@ fn building_upgrade_system(
                     gather_speed_bonus: *speed_bonus,
                     range: *range,
                 });
+                // Increase storage capacity on upgrade (L2: 800, L3: 1200)
+                if let Some(mut inv) = storage_inv {
+                    inv.capacity = match new_level {
+                        2 => 800,
+                        3 => 1200,
+                        _ => inv.capacity,
+                    };
+                }
             }
             LevelBonus::HealAura { heal_per_sec, range } => {
                 commands.entity(entity).insert(HealingAura {
@@ -716,6 +810,8 @@ fn building_upgrade_system(
                     MeshMaterial3d(vfx.impact_material.clone()),
                     Transform::from_translation(center + offset)
                         .with_scale(Vec3::splat(0.8)),
+                    NotShadowCaster,
+                    NotShadowReceiver,
                 ));
             }
         }
@@ -739,16 +835,16 @@ fn demolish_system(
     mut commands: Commands,
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
-    mut player_res: ResMut<PlayerResources>,
-    mut completed: ResMut<CompletedBuildings>,
+    mut all_resources: ResMut<AllPlayerResources>,
     mut buildings: Query<(
         Entity,
         &EntityKind,
         &mut Transform,
         &mut DemolishAnimation,
+        &Faction,
     ), With<Building>>,
 ) {
-    for (entity, kind, mut transform, mut demolish) in &mut buildings {
+    for (entity, kind, mut transform, mut demolish, faction) in &mut buildings {
         demolish.timer.tick(time.delta());
 
         let fraction = demolish.timer.fraction();
@@ -759,14 +855,12 @@ fn demolish_system(
             // Refund 50% of building cost
             let bp = registry.get(*kind);
             let cost = &bp.cost;
-            player_res.wood += cost.wood / 2;
-            player_res.copper += cost.copper / 2;
-            player_res.iron += cost.iron / 2;
-            player_res.gold += cost.gold / 2;
-            player_res.oil += cost.oil / 2;
-
-            // Remove from completed buildings
-            completed.completed.retain(|k| k != kind);
+            let res = all_resources.get_mut(faction);
+            res.wood += cost.wood / 2;
+            res.copper += cost.copper / 2;
+            res.iron += cost.iron / 2;
+            res.gold += cost.gold / 2;
+            res.oil += cost.oil / 2;
 
             // Despawn
             commands.entity(entity).despawn();
@@ -800,15 +894,16 @@ fn building_scale_anim_system(
 
 fn healing_aura_system(
     time: Res<Time>,
-    auras: Query<(&Transform, &HealingAura, &BuildingState), With<Building>>,
+    teams: Res<TeamConfig>,
+    auras: Query<(&Transform, &HealingAura, &BuildingState, &Faction), With<Building>>,
     mut healable: Query<(&Transform, &mut Health, &Faction), Without<Building>>,
 ) {
-    for (aura_tf, aura, state) in &auras {
+    for (aura_tf, aura, state, aura_faction) in &auras {
         if *state != BuildingState::Complete {
             continue;
         }
         for (unit_tf, mut health, faction) in &mut healable {
-            if *faction != Faction::Player {
+            if !teams.is_allied(aura_faction, faction) {
                 continue;
             }
             let dist = aura_tf.translation.distance(unit_tf.translation);
@@ -903,6 +998,8 @@ fn level_indicator_system(
                     transform.translation.z,
                 ))
                 .with_scale(Vec3::splat(1.0)),
+                NotShadowCaster,
+                NotShadowReceiver,
             ));
         }
     }
@@ -911,58 +1008,67 @@ fn level_indicator_system(
 // ── Sync Storage on Spend ──
 
 fn sync_storage_on_spend(
-    player_res: Res<PlayerResources>,
-    mut last_res: ResMut<LastPlayerResources>,
-    mut storages: Query<&mut StorageInventory, (With<Building>, With<DepositPoint>)>,
+    all_resources: Res<AllPlayerResources>,
+    mut storages: Query<(&Faction, &mut StorageInventory), (With<Building>, With<DepositPoint>)>,
 ) {
-    let resource_types = [
-        ResourceType::Wood,
-        ResourceType::Copper,
-        ResourceType::Iron,
-        ResourceType::Gold,
-        ResourceType::Oil,
-    ];
+    // For each faction, sum up all storage inventories per resource type.
+    // If the total exceeds AllPlayerResources (meaning player spent some),
+    // drain from the largest inventory first.
+    use std::collections::HashMap;
 
-    for rt in resource_types {
-        let current = player_res.get(rt);
-        let last = match rt {
-            ResourceType::Wood => last_res.wood,
-            ResourceType::Copper => last_res.copper,
-            ResourceType::Iron => last_res.iron,
-            ResourceType::Gold => last_res.gold,
-            ResourceType::Oil => last_res.oil,
-        };
-
-        if current < last {
-            let spent = last - current;
-            let mut remaining = spent;
-
-            for mut inv in &mut storages {
-                if remaining == 0 {
-                    break;
-                }
-                let share = inv.get(rt);
-                let deduct = share.min(remaining);
-                if deduct > 0 {
-                    match rt {
-                        ResourceType::Wood => inv.wood -= deduct,
-                        ResourceType::Copper => inv.copper -= deduct,
-                        ResourceType::Iron => inv.iron -= deduct,
-                        ResourceType::Gold => inv.gold -= deduct,
-                        ResourceType::Oil => inv.oil -= deduct,
-                    }
-                    remaining -= deduct;
-                }
-            }
-        }
+    // Collect per-faction storage totals
+    let mut faction_totals: HashMap<Faction, [u32; 5]> = HashMap::new();
+    for (faction, inv) in &storages {
+        let totals = faction_totals.entry(*faction).or_insert([0; 5]);
+        totals[0] += inv.wood;
+        totals[1] += inv.copper;
+        totals[2] += inv.iron;
+        totals[3] += inv.gold;
+        totals[4] += inv.oil;
     }
 
-    // Update last values
-    last_res.wood = player_res.wood;
-    last_res.copper = player_res.copper;
-    last_res.iron = player_res.iron;
-    last_res.gold = player_res.gold;
-    last_res.oil = player_res.oil;
+    // For each faction, check if inventories exceed player resources
+    for (faction, totals) in &faction_totals {
+        let player_res = all_resources.get(faction);
+        let excess = [
+            totals[0].saturating_sub(player_res.wood),
+            totals[1].saturating_sub(player_res.copper),
+            totals[2].saturating_sub(player_res.iron),
+            totals[3].saturating_sub(player_res.gold),
+            totals[4].saturating_sub(player_res.oil),
+        ];
+
+        if excess.iter().all(|&e| e == 0) {
+            continue;
+        }
+
+        // Drain excess from inventories (proportionally)
+        let mut remaining = excess;
+        for (f, mut inv) in &mut storages {
+            if f != faction {
+                continue;
+            }
+            let drain_wood = remaining[0].min(inv.wood);
+            inv.wood -= drain_wood;
+            remaining[0] -= drain_wood;
+
+            let drain_copper = remaining[1].min(inv.copper);
+            inv.copper -= drain_copper;
+            remaining[1] -= drain_copper;
+
+            let drain_iron = remaining[2].min(inv.iron);
+            inv.iron -= drain_iron;
+            remaining[2] -= drain_iron;
+
+            let drain_gold = remaining[3].min(inv.gold);
+            inv.gold -= drain_gold;
+            remaining[3] -= drain_gold;
+
+            let drain_oil = remaining[4].min(inv.oil);
+            inv.oil -= drain_oil;
+            remaining[4] -= drain_oil;
+        }
+    }
 }
 
 // ── Storage Pile Visuals ──
@@ -1029,6 +1135,8 @@ fn update_storage_piles(
                     MeshMaterial3d(mat),
                     Transform::from_translation(Vec3::new(world_x, ground_y + half_pile_height, world_z))
                         .with_scale(Vec3::splat(scale)),
+                    NotShadowCaster,
+                    NotShadowReceiver,
                 ))
                 .id();
             pile_entities.push(pile);

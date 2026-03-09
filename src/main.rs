@@ -1,4 +1,6 @@
+mod ai;
 mod animation;
+mod attention;
 mod blueprints;
 mod buildings;
 mod camera;
@@ -15,17 +17,20 @@ mod mobs;
 mod model_assets;
 mod pathvis;
 mod resources;
+mod save;
 mod selection;
 mod theme;
 mod ui;
 mod units;
 mod vfx;
 
+use bevy::ecs::error;
 use bevy::prelude::*;
 use bevy_mod_outline::OutlinePlugin;
 
 fn main() {
     App::new()
+        .set_error_handler(error::warn)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "RTS Prototype".to_string(),
@@ -53,7 +58,10 @@ fn main() {
             combat::CombatPlugin,
             fog::FogPlugin,
         ))
+        .add_plugins(save::SavePlugin)
         .add_plugins(animation::AnimationPlugin)
         .add_plugins(minimap::MinimapPlugin)
+        .add_plugins(attention::AttentionPlugin)
+        .add_plugins(ai::AiPlugin)
         .run();
 }

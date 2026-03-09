@@ -8,7 +8,8 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 
 - **World** — 500x500 procedural terrain with Perlin noise heightmap (fBm, 4 octaves) and 5 distinct biomes (Forest, Desert, Mud, Water, Mountain) using moisture/temperature noise layers
 - **Biomes** — Each biome has unique vertex coloring, biome-appropriate resource distribution, and scattered decorations (grass, bushes, rocks, dead trees)
-- **3D Assets** — KayKit Forest Nature Pack: low-poly trees for wood nodes, rocks for ore nodes, and decorative props placed via noise-based scatter
+- **3D Assets** — KayKit Forest Nature Pack (trees, rocks, props), KayKit Adventurers (Barbarian, Knight, Ranger, Mage, Rogue characters), KayKit Skeletons (Skeleton Warrior, Rogue, Minion, Mage), and KayKit Character Animations (shared Idle/Walk/Attack/Die animation sets)
+- **Animation** — Skeletal GLTF character animations with state machine (Idle, Walk, Attack, Die), 200ms blended transitions, and smooth directional facing via slerp
 - **Buildings** — 9 building types with placement preview, construction timer, prerequisite system, and 3-level upgrade system with unique bonuses per level
 - **Units** — 8 types: Worker, Soldier, Archer (ranged), Tank, Knight, Mage, Priest, Cavalry — trained from buildings. Soldiers can upgrade to Knights
 - **Siege** — 2 siege units: Catapult (long-range AoE) and Battering Ram (melee anti-structure)
@@ -17,12 +18,18 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 - **Enemies** — 4 mob camps (Goblin, Skeleton, Orc, Demon) with patrol AI, aggro detection, and boss variants
 - **Combat** — Melee and ranged attacks, auto-targeting idle units, projectiles, hit-flash VFX, tower auto-attack
 - **Economy** — 5 resource types (Wood, Copper, Iron, Gold, Oil) procedurally distributed across biomes with auto-gathering workers
-- **Fog of War** — Texture-based fog of war with per-entity vision ranges
-- **Minimap** — Interactive minimap with real-time unit and building positions
+- **Tree Growth** — Saplings spawn and grow through stages into harvestable mature trees over time
+- **Day/Night Cycle** — 600-second animated cycle (Dawn/Day/Dusk/Night) with keyframed sun illuminance, color, pitch, ambient light, and sky color
+- **Volumetric Fog** — Atmospheric fog volume on camera with density and color animated per time-of-day phase
+- **Entity Lights** — Dynamic point lights spawned at entity clusters (buildings and units), intensity scales with day/night cycle (full at night, 30% during day)
+- **Fog of War** — Texture-based fog of war with per-entity vision ranges, edge glow, noise overlay, and explored/unexplored tinting
+- **Save/Load** — JSON game state serialization with stable entity IDs, cross-reference resolution, and resource node position matching
+- **Minimap** — Interactive minimap with real-time unit and building positions, camera viewport indicator
 - **Controls** — Click, box-select, shift-toggle selection; formation movement; right-click attack targeting; building placement
 - **Camera** — WASD pan, Q/E rotate, scroll zoom
 - **UI** — Top resource bar, selection panel, context-sensitive action bar with card-hand building UI (dynamic states: enabled / can't afford with per-resource red highlights / locked with hover tooltips), train buttons, building info, training queue with progress bars
 - **Pathfinding** — Thin dashed lines with destination ring, terrain-following
+- **Debug Tools** — F3 debug panel with organized sections (Visuals, Entities, Game), real-time tweaking of lighting/fog/shader parameters, entity spawning/manipulation, save/load controls, JSON config persistence
 
 ## Getting Started
 
@@ -52,6 +59,7 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 | Right click mob | Attack target with selected units |
 | Bottom buttons | Place buildings (when nothing selected) or train units (when building selected) |
 | Escape / Right click | Cancel building placement |
+| F3 | Toggle debug panel |
 
 ## How to Play
 
@@ -88,9 +96,9 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 | Barracks | 80W 40C 20I | 12s | Base | Trains Workers, Soldiers, Archers |
 | Workshop | 60W 60C 40I 10G | 18s | Base | Trains Tanks |
 | Tower | 40W 30C 30I | 10s | Base | Auto-attacks nearby mobs (range 15) |
-| Storage | 60W 10C | 8s | Base | Gather aura for nearby workers |
+| Storage | 60W 10C | 8s | Base | Resource depot; gather aura at level 1+ |
 | Mage Tower | 60W 30I 40G | 20s | Base | Trains Mages, Priests |
-| Temple | 80W 20C 50G | 22s | Base | Trains Priests, healing aura |
+| Temple | 80W 20C 50G | 22s | Base | Trains Priests; healing aura at level 1+ |
 | Stable | 70W 30C 20I | 14s | Base | Trains Cavalry, Knights |
 | Siege Works | 80W 60I 20G | 20s | Base | Trains Catapults, Battering Rams |
 
@@ -141,27 +149,30 @@ Plugin-based ECS architecture — each gameplay system is a self-contained Bevy 
 
 ```
 src/
-├── main.rs          Entry point, plugin registration
-├── blueprints.rs    Entity blueprint registry (stats, costs, visuals for all entities)
-├── components.rs    All ECS components and resources
-├── ground.rs        Procedural terrain with biome generation
-├── camera.rs        RTS camera (pan, zoom, rotate)
-├── lighting.rs      Scene lighting setup
-├── units.rs         Player unit spawning and movement
-├── buildings.rs     Building placement, construction, training, upgrades, demolish
-├── selection.rs     Click, box, and shift selection + right-click commands
-├── ui.rs            HUD: resource bar, selection panel, context-sensitive action bar
-├── model_assets.rs  Loads KayKit 3D models (trees, rocks, bushes, grass)
-├── resources.rs     Biome-based resource node spawning, auto-gathering, and decoration scatter
-├── mobs.rs          Enemy camps, patrol / aggro / chase AI
-├── combat.rs        Melee and ranged attacks, auto-targeting, death
-├── fog.rs           Fog of war system
-├── fog_material.rs  Custom fog shader material
+├── main.rs           Entry point, plugin registration
+├── blueprints.rs     Entity blueprint registry (stats, costs, visuals for all entities)
+├── components.rs     All ECS components and resources
+├── ground.rs         Procedural terrain with biome generation
+├── camera.rs         RTS camera (pan, zoom, rotate)
+├── lighting.rs       Day/night cycle, sun/ambient/sky animation, volumetric fog, entity lights
+├── units.rs          Player unit spawning and movement
+├── buildings.rs      Building placement, construction, training, upgrades, demolish
+├── selection.rs      Click, box, and shift selection + right-click commands
+├── ui.rs             HUD: resource bar, selection panel, context-sensitive action bar
+├── model_assets.rs   Loads KayKit 3D models (characters, trees, rocks, props)
+├── resources.rs      Biome-based resource node spawning, auto-gathering, tree growth, decoration scatter
+├── mobs.rs           Enemy camps, patrol / aggro / chase AI
+├── combat.rs         Melee and ranged attacks, auto-targeting, death
+├── fog.rs            Fog of war system
+├── fog_material.rs   Custom fog shader material
 ├── hover_material.rs Custom hover effect material
-├── minimap.rs       Interactive minimap UI
-├── pathvis.rs       Dashed path lines with destination ring
-├── vfx.rs           Projectiles, melee flashes, impact effects
-└── debug.rs         Debug tweaks and development tools
+├── minimap.rs        Interactive minimap UI
+├── pathvis.rs        Dashed path lines with destination ring
+├── vfx.rs            Projectiles, melee flashes, impact effects
+├── animation.rs      Skeletal GLTF animation state machine and directional facing
+├── save.rs           JSON game state serialization and deserialization
+├── theme.rs          UI color tokens and design constants
+└── debug.rs          Debug panel with visual/entity/save tweaks
 ```
 
 | Plugin | Description |
@@ -169,21 +180,23 @@ src/
 | `BlueprintPlugin` | Unified entity blueprint registry — stats, costs, visuals, abilities, upgrades for all 26 entity types |
 | `GroundPlugin` | Generates 500x500 heightmap mesh with biome-based vertex colors, inserts BiomeMap |
 | `CameraPlugin` | WASD pan, scroll zoom, Q/E orbit camera |
-| `LightingPlugin` | Scene lighting with directional and ambient light |
+| `LightingPlugin` | Day/night cycle with keyframed sun/ambient/sky, volumetric atmospheric fog, dynamic entity cluster lights |
 | `UnitsPlugin` | Spawns 3 starting workers, handles movement and avoidance |
 | `BuildingsPlugin` | Building placement preview, construction progress, unit training queues, tower auto-attack, upgrades, demolish |
 | `SelectionPlugin` | Click/box/shift selection for units and buildings, right-click move and attack |
 | `UiPlugin` | Resource bar, selection panel, context-sensitive action bar with build/train buttons |
-| `ModelAssetsPlugin` | Loads KayKit Forest Nature Pack 3D models (trees, dead trees, rocks, bushes, grass) |
-| `ResourcesPlugin` | Procedural biome-based resource node spawning with 3D models, auto-gather + deposit loop, biome-aware decoration scatter |
+| `ModelAssetsPlugin` | Loads KayKit 3D models — Forest Nature Pack, Adventurers, Skeletons, Character Animations |
+| `ResourcesPlugin` | Procedural biome-based resource node spawning with 3D models, auto-gather + deposit loop, tree growth, biome-aware decoration scatter |
 | `MobsPlugin` | Spawns 4 enemy camps with patrol, aggro, chase, and return AI |
 | `CombatPlugin` | Melee/ranged attacks, auto-acquire targets, death cleanup |
-| `FogPlugin` | Texture-based fog of war with per-entity vision ranges |
-| `MinimapPlugin` | Interactive 200x200 minimap with real-time entity tracking |
+| `FogPlugin` | Texture-based fog of war with per-entity vision ranges, edge glow, noise overlay |
+| `MinimapPlugin` | Interactive 200x200 minimap with real-time entity tracking and camera viewport |
 | `PathVisPlugin` | Terrain-following dashed path lines with destination ring |
 | `VfxPlugin` | Projectile flight, melee flash, impact flash |
-| `DebugPlugin` | JSON-based debug tweaks and development tools |
+| `AnimationPlugin` | GLTF skeletal animation discovery, state-driven playback (Idle/Walk/Attack/Die), smooth directional facing |
+| `SavePlugin` | JSON save/load with stable entity IDs, two-pass world reconstruction, resource node position matching |
+| `DebugPlugin` | F3 debug panel — organized Visuals/Entities/Game sections, real-time parameter tweaking, entity spawn/manipulate tools, JSON config persistence |
 
 ## Tech Stack
 
-- **Rust** / **Bevy 0.18** / **noise 0.9** (fBm Perlin terrain + biome generation) / **bevy_mod_outline 0.12** (selection highlighting)
+- **Rust** / **Bevy 0.18** / **noise 0.9** (fBm Perlin terrain + biome generation) / **bevy_mod_outline 0.12** (selection highlighting) / **serde + serde_json** (save system + debug config) / **rand 0.9** (procedural scatter)

@@ -193,18 +193,16 @@ fn mob_aggro(
         (Entity, &Transform, &AggroRange),
         (With<Mob>, Without<AttackTarget>),
     >,
-    players: Query<(Entity, &Transform), (With<Unit>, With<Faction>)>,
-    factions: Query<&Faction>,
+    players: Query<(Entity, &Transform, &Faction), With<Unit>>,
 ) {
     for (mob_entity, mob_tf, aggro) in &mobs {
         let mut closest_dist = f32::MAX;
         let mut closest_player = None;
 
-        for (player_entity, player_tf) in &players {
-            if let Ok(faction) = factions.get(player_entity) {
-                if *faction != Faction::Player {
-                    continue;
-                }
+        for (player_entity, player_tf, faction) in &players {
+            // Mobs aggro on all player factions (not neutral)
+            if *faction == Faction::Neutral {
+                continue;
             }
             let dist = mob_tf.translation.distance(player_tf.translation);
             if dist < aggro.0 && dist < closest_dist {

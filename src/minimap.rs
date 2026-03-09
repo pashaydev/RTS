@@ -192,6 +192,8 @@ fn update_minimap_texture(
     minimap_tex: Res<MinimapTexture>,
     mut images: ResMut<Assets<Image>>,
     fog_map: Option<Res<FogOfWarMap>>,
+    active_player: Res<ActivePlayer>,
+    teams: Res<TeamConfig>,
     units: Query<(&Transform, &Faction), With<Unit>>,
     buildings: Query<(&Transform, &Faction), With<Building>>,
     mobs: Query<&Transform, With<Mob>>,
@@ -298,21 +300,41 @@ fn update_minimap_texture(
         draw_dot(&mut buf, px, py, 1, [220, 40, 40, 255]);
     }
 
-    // Draw buildings
+    // Draw buildings (allied = always visible, enemy = fog-check)
     for (tf, faction) in &buildings {
+        if !teams.is_allied(&active_player.0, faction) {
+            if let Some(ref fog) = fog_map {
+                if fog.get_visibility(tf.translation.x, tf.translation.z) < 0.6 {
+                    continue;
+                }
+            }
+        }
         let color = match faction {
-            Faction::Player => [60, 120, 255, 255],
-            Faction::Enemy => [220, 40, 40, 255],
+            Faction::Player1 => [60, 120, 255, 255],
+            Faction::Player2 => [255, 80, 50, 255],
+            Faction::Player3 => [180, 80, 230, 255],
+            Faction::Player4 => [50, 200, 80, 255],
+            Faction::Neutral => [220, 40, 40, 255],
         };
         let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z);
         draw_dot(&mut buf, px, py, 2, color);
     }
 
-    // Draw units
+    // Draw units (allied = always visible, enemy = fog-check)
     for (tf, faction) in &units {
+        if !teams.is_allied(&active_player.0, faction) {
+            if let Some(ref fog) = fog_map {
+                if fog.get_visibility(tf.translation.x, tf.translation.z) < 0.6 {
+                    continue;
+                }
+            }
+        }
         let color = match faction {
-            Faction::Player => [50, 220, 50, 255],
-            Faction::Enemy => [220, 40, 40, 255],
+            Faction::Player1 => [50, 220, 50, 255],
+            Faction::Player2 => [255, 100, 50, 255],
+            Faction::Player3 => [180, 100, 255, 255],
+            Faction::Player4 => [50, 255, 80, 255],
+            Faction::Neutral => [220, 40, 40, 255],
         };
         let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z);
         draw_dot(&mut buf, px, py, 1, color);

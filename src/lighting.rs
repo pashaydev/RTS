@@ -27,43 +27,43 @@ fn register_lighting_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
     let cycle = DayCycle::default();
 
     // Time of Day folder
-    tweaks.add_float("Time of Day", "Cycle Duration", cycle.cycle_duration, 10.0, 3600.0, 10.0);
-    tweaks.add_float("Time of Day", "Time", cycle.time, 0.0, 1.0, 0.01);
-    tweaks.add_bool("Time of Day", "Paused", cycle.paused);
-    tweaks.add_readonly("Time of Day", "Phase", &format!("{:?}", cycle.phase));
+    tweaks.add_float("Visuals/Time of Day", "Cycle Duration", cycle.cycle_duration, 10.0, 3600.0, 10.0);
+    tweaks.add_float("Visuals/Time of Day", "Time", cycle.time, 0.0, 1.0, 0.01);
+    tweaks.add_bool("Visuals/Time of Day", "Paused", cycle.paused);
+    tweaks.add_readonly("Visuals/Time of Day", "Phase", &format!("{:?}", cycle.phase));
 
     // Sunlight folder
-    tweaks.add_bool("Sunlight", "Override", false);
-    tweaks.add_float("Sunlight", "Illuminance", 6000.0, 0.0, 15000.0, 100.0);
-    tweaks.add_float("Sunlight", "Color R", 0.85, 0.0, 1.0, 0.01);
-    tweaks.add_float("Sunlight", "Color G", 0.80, 0.0, 1.0, 0.01);
-    tweaks.add_float("Sunlight", "Color B", 0.70, 0.0, 1.0, 0.01);
-    tweaks.add_float("Sunlight", "Pitch", -0.8, -1.5, 0.0, 0.01);
-    tweaks.add_float("Sunlight", "Yaw", SUN_YAW, -3.14, 3.14, 0.01);
-    tweaks.add_bool("Sunlight", "Shadows", true);
+    tweaks.add_bool("Visuals/Sunlight", "Override", false);
+    tweaks.add_float("Visuals/Sunlight", "Illuminance", 6000.0, 0.0, 15000.0, 100.0);
+    tweaks.add_float("Visuals/Sunlight", "Color R", 0.85, 0.0, 1.0, 0.01);
+    tweaks.add_float("Visuals/Sunlight", "Color G", 0.80, 0.0, 1.0, 0.01);
+    tweaks.add_float("Visuals/Sunlight", "Color B", 0.70, 0.0, 1.0, 0.01);
+    tweaks.add_float("Visuals/Sunlight", "Pitch", -0.8, -1.5, 0.0, 0.01);
+    tweaks.add_float("Visuals/Sunlight", "Yaw", SUN_YAW, -3.14, 3.14, 0.01);
+    tweaks.add_bool("Visuals/Sunlight", "Shadows", true);
 
     // Ambient Light folder
-    tweaks.add_bool("Ambient Light", "Override", false);
-    tweaks.add_float("Ambient Light", "Brightness", 300.0, 0.0, 1000.0, 5.0);
-    tweaks.add_float("Ambient Light", "Color R", 0.9, 0.0, 1.0, 0.01);
-    tweaks.add_float("Ambient Light", "Color G", 0.85, 0.0, 1.0, 0.01);
-    tweaks.add_float("Ambient Light", "Color B", 0.80, 0.0, 1.0, 0.01);
+    tweaks.add_bool("Visuals/Ambient Light", "Override", false);
+    tweaks.add_float("Visuals/Ambient Light", "Brightness", 300.0, 0.0, 1000.0, 5.0);
+    tweaks.add_float("Visuals/Ambient Light", "Color R", 0.9, 0.0, 1.0, 0.01);
+    tweaks.add_float("Visuals/Ambient Light", "Color G", 0.85, 0.0, 1.0, 0.01);
+    tweaks.add_float("Visuals/Ambient Light", "Color B", 0.80, 0.0, 1.0, 0.01);
 
     // Sky Color folder
-    tweaks.add_bool("Sky Color", "Override", false);
-    tweaks.add_float("Sky Color", "Color R", 0.6, 0.0, 1.0, 0.01);
-    tweaks.add_float("Sky Color", "Color G", 0.65, 0.0, 1.0, 0.01);
-    tweaks.add_float("Sky Color", "Color B", 0.75, 0.0, 1.0, 0.01);
+    tweaks.add_bool("Visuals/Sky Color", "Override", false);
+    tweaks.add_float("Visuals/Sky Color", "Color R", 0.6, 0.0, 1.0, 0.01);
+    tweaks.add_float("Visuals/Sky Color", "Color G", 0.65, 0.0, 1.0, 0.01);
+    tweaks.add_float("Visuals/Sky Color", "Color B", 0.75, 0.0, 1.0, 0.01);
 
     // Entity Lights folder
-    tweaks.add_bool("Entity Lights", "Enabled", true);
-    tweaks.add_float("Entity Lights", "Cell Size", 15.0, 5.0, 30.0, 1.0);
-    tweaks.add_float("Entity Lights", "Max Lights", 64.0, 8.0, 128.0, 4.0);
-    tweaks.add_float("Entity Lights", "Building Intensity", 150000.0, 0.0, 500000.0, 5000.0);
-    tweaks.add_float("Entity Lights", "Unit Intensity", 80000.0, 0.0, 300000.0, 5000.0);
-    tweaks.add_float("Entity Lights", "Night Factor", 1.0, 0.0, 1.0, 0.05);
-    tweaks.add_float("Entity Lights", "Day Factor", 0.3, 0.0, 1.0, 0.05);
-    tweaks.add_readonly("Entity Lights", "Active Lights", "0");
+    tweaks.add_bool("Visuals/Entity Lights", "Enabled", true);
+    tweaks.add_float("Visuals/Entity Lights", "Cell Size", 15.0, 5.0, 30.0, 1.0);
+    tweaks.add_float("Visuals/Entity Lights", "Max Lights", 64.0, 8.0, 128.0, 4.0);
+    tweaks.add_float("Visuals/Entity Lights", "Building Intensity", 150000.0, 0.0, 500000.0, 5000.0);
+    tweaks.add_float("Visuals/Entity Lights", "Unit Intensity", 80000.0, 0.0, 300000.0, 5000.0);
+    tweaks.add_float("Visuals/Entity Lights", "Night Factor", 1.0, 0.0, 1.0, 0.05);
+    tweaks.add_float("Visuals/Entity Lights", "Day Factor", 0.3, 0.0, 1.0, 0.05);
+    tweaks.add_readonly("Visuals/Entity Lights", "Active Lights", "0");
 }
 
 // ── Day/Night Cycle ──

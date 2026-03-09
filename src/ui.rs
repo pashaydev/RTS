@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::buildings;
 use crate::components::*;
-use crate::theme;
+use crate::theme::{self, BG_TRANSPARENT};
 
 pub struct UiPlugin;
 
@@ -20,7 +20,12 @@ impl Plugin for UiPlugin {
                     update_hp_bars,
                     handle_unit_card_click,
                     clear_stale_inspected,
-                    update_action_bar,
+                ),
+            )
+            .add_systems(Update, update_action_bar)
+            .add_systems(
+                Update,
+                (
                     handle_build_buttons,
                     handle_train_buttons,
                 ),
@@ -51,13 +56,30 @@ impl Plugin for UiPlugin {
                 (
                     card_deal_in_system,
                     card_hover_system,
+                    card_tilt_update_system,
+                    card_drag_pickup_system,
+                    card_drag_follow_system,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    card_drag_gap_system,
+                    card_drag_release_system,
                     card_play_out_system,
                     card_placement_mode_system,
                     card_spring_back_system,
                     card_anim_lerp_system,
                     update_card_states,
                     card_tooltip_system,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
                     card_glow_system,
+                    card_border_glow_system,
+                    card_shine_sweep_system,
                 ),
             );
     }
@@ -78,7 +100,7 @@ fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>) {
             border_radius: BorderRadius::all(Val::Px(6.0)),
             ..default()
         })
-        .insert(BackgroundColor(theme::BG_PANEL))
+        .insert(BackgroundColor(theme::BG_TRANSPARENT))
         .with_children(|panel| {
             let resource_types = [
                 ResourceType::Wood,
@@ -139,11 +161,16 @@ fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>) {
     ));
 
     // ── Bottom panel — context-sensitive action bar ──
+    // Offset right padding to avoid overlapping the minimap (180+margin ~200px)
     commands
         .spawn(Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(10.0),
             width: Val::Percent(100.0),
+            padding: UiRect {
+                right: Val::Px(210.0),
+                ..default()
+            },
             justify_content: JustifyContent::Center,
             ..default()
         })
@@ -162,9 +189,11 @@ fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>) {
 }
 
 fn update_resource_texts(
-    player_res: Res<PlayerResources>,
+    all_resources: Res<AllPlayerResources>,
+    active_player: Res<ActivePlayer>,
     mut text_q: Query<(&mut Text, &ResourceText)>,
 ) {
+    let player_res = all_resources.get(&active_player.0);
     for (mut text, rt_marker) in &mut text_q {
         let rt = rt_marker.0;
         let val = player_res.get(rt);
@@ -518,6 +547,8 @@ fn spawn_unit_mini_card(
 fn rebuild_selection_panel(
     mut commands: Commands,
     inspected: Res<InspectedEnemy>,
+    active_player: Res<ActivePlayer>,
+    teams: Res<TeamConfig>,
     icons: Res<IconAssets>,
     panel_q: Query<Entity, With<SelectionInfoPanel>>,
     children_q: Query<&Children>,
@@ -535,6 +566,9 @@ fn rebuild_selection_panel(
         (&EntityKind, &Health, &AttackDamage, &AttackRange, &UnitSpeed, &AggroRange, Has<Boss>),
         With<Mob>,
     >,
+    faction_q: Query<&Faction>,
+    inspected_unit_q: Query<(&EntityKind, &Health, &AttackDamage, &AttackRange, &UnitSpeed), With<Unit>>,
+    inspected_building_q: Query<(&EntityKind, &BuildingState, &Health), With<Building>>,
 ) {
     let has_new = !added_selected.is_empty();
     let has_removed = removed_selected.read().count() > 0;
@@ -550,13 +584,17 @@ fn rebuild_selection_panel(
 
     if let Ok(children) = children_q.get(panel_entity) {
         for child in children.iter() {
-            commands.entity(child).despawn();
+            commands.entity(child).try_despawn();
         }
     }
 
     let unit_count = selected_units.iter().count();
     let building_count = selected_buildings.iter().count();
-    let has_inspected = inspected.entity.and_then(|e| mob_query.get(e).ok()).is_some();
+    let has_inspected_mob = inspected.entity.and_then(|e| mob_query.get(e).ok()).is_some();
+    let has_inspected_player = inspected.entity.map_or(false, |e| {
+        inspected_unit_q.get(e).is_ok() || inspected_building_q.get(e).is_ok()
+    });
+    let has_inspected = has_inspected_mob || has_inspected_player;
 
     if unit_count == 0 && building_count == 0 && !has_inspected {
         commands.entity(panel_entity).insert(Visibility::Hidden);
@@ -635,9 +673,19 @@ fn rebuild_selection_panel(
         }
     }
 
-    // Enemy inspect section
-    if let Some(enemy_entity) = inspected.entity {
-        if let Ok((kind, health, dmg, rng, spd, aggro, is_boss)) = mob_query.get(enemy_entity) {
+    // Inspect section (mobs, enemy/allied player entities)
+    if let Some(inspected_entity) = inspected.entity {
+        // Determine relationship label
+        let relationship = faction_q.get(inspected_entity).map(|f| {
+            if teams.is_allied(&active_player.0, f) { "Allied" } else { "Enemy" }
+        }).unwrap_or("Neutral");
+        let relationship_color = if relationship == "Allied" {
+            Color::srgb(0.3, 0.8, 0.3)
+        } else {
+            Color::srgb(1.0, 0.3, 0.3)
+        };
+
+        if let Ok((kind, health, dmg, rng, spd, aggro, is_boss)) = mob_query.get(inspected_entity) {
             if unit_count + building_count > 0 {
                 let divider = commands
                     .spawn((
@@ -654,9 +702,42 @@ fn rebuild_selection_panel(
             }
 
             spawn_enemy_detail_card(
-                &mut commands, panel_entity, enemy_entity,
+                &mut commands, panel_entity, inspected_entity,
                 *kind, is_boss, health, dmg, rng, spd, aggro, &icons,
             );
+        } else if let Ok((kind, health, dmg, rng, spd)) = inspected_unit_q.get(inspected_entity) {
+            // Inspected player unit (ally or enemy)
+            if unit_count + building_count > 0 {
+                let divider = commands.spawn((
+                    Node { width: Val::Px(1.0), height: Val::Px(50.0), margin: UiRect::axes(Val::Px(6.0), Val::Px(0.0)), ..default() },
+                    BackgroundColor(theme::SEPARATOR),
+                )).id();
+                commands.entity(panel_entity).add_child(divider);
+            }
+            // Reuse friendly detail card but add relationship label
+            spawn_friendly_detail_card(&mut commands, panel_entity, inspected_entity, *kind, health, dmg, rng, spd, &icons);
+            let label = commands.spawn((
+                Text::new(relationship),
+                TextFont { font_size: 11.0, ..default() },
+                TextColor(relationship_color),
+            )).id();
+            commands.entity(panel_entity).add_child(label);
+        } else if let Ok((kind, state, health)) = inspected_building_q.get(inspected_entity) {
+            // Inspected player building (ally or enemy)
+            if unit_count + building_count > 0 {
+                let divider = commands.spawn((
+                    Node { width: Val::Px(1.0), height: Val::Px(50.0), margin: UiRect::axes(Val::Px(6.0), Val::Px(0.0)), ..default() },
+                    BackgroundColor(theme::SEPARATOR),
+                )).id();
+                commands.entity(panel_entity).add_child(divider);
+            }
+            spawn_building_detail_card(&mut commands, panel_entity, inspected_entity, *kind, *state, health, &icons);
+            let label = commands.spawn((
+                Text::new(relationship),
+                TextFont { font_size: 11.0, ..default() },
+                TextColor(relationship_color),
+            )).id();
+            commands.entity(panel_entity).add_child(label);
         }
     }
 }
@@ -695,9 +776,15 @@ fn handle_unit_card_click(
 fn clear_stale_inspected(
     mut inspected: ResMut<InspectedEnemy>,
     mob_query: Query<Entity, With<Mob>>,
+    unit_query: Query<Entity, With<Unit>>,
+    building_query: Query<Entity, With<Building>>,
 ) {
     if let Some(e) = inspected.entity {
-        if mob_query.get(e).is_err() {
+        // Entity is valid if it's a mob, unit, or building that still exists
+        let exists = mob_query.get(e).is_ok()
+            || unit_query.get(e).is_ok()
+            || building_query.get(e).is_ok();
+        if !exists {
             inspected.entity = None;
         }
     }
@@ -710,20 +797,20 @@ fn update_action_bar(
         (Entity, &EntityKind, &BuildingState, &BuildingLevel, Option<&UpgradeProgress>, Option<&ConstructionProgress>, Option<&TrainingQueue>, Option<&StorageInventory>, Option<&Health>, Option<&TowerAutoAttackEnabled>),
         (With<Building>, With<Selected>),
     >,
-    completed: Res<CompletedBuildings>,
+    player_state: (Res<AllCompletedBuildings>, Res<ActivePlayer>, Res<AllPlayerResources>),
     registry: Res<BlueprintRegistry>,
-    player_res: Res<PlayerResources>,
     action_bar: Query<(Entity, Option<&Children>), With<ActionBarInner>>,
     added_selected: Query<Entity, Added<Selected>>,
     mut removed_selected: RemovedComponents<Selected>,
     changed_buildings: Query<Entity, Or<(Changed<BuildingState>, Changed<BuildingLevel>, Changed<UpgradeProgress>, Changed<TowerAutoAttackEnabled>)>>,
     mut last_queue_len: Local<usize>,
-    icons: Res<IconAssets>,
-    placement: Res<BuildingPlacementState>,
+    ui_state: (Res<IconAssets>, Res<BuildingPlacementState>, Res<RallyPointMode>),
     existing_cards: Query<Entity, With<BuildCard>>,
     confirm_panels: Query<Entity, With<DemolishConfirmPanel>>,
-    rally_mode: Res<RallyPointMode>,
 ) {
+    let (all_completed, active_player, all_resources) = player_state;
+    let (icons, placement, rally_mode) = ui_state;
+
     // Don't rebuild while a demolish confirm panel is open
     if !confirm_panels.is_empty() {
         return;
@@ -732,7 +819,7 @@ fn update_action_bar(
     let has_new = !added_selected.is_empty();
     let has_removed = removed_selected.read().count() > 0;
     let has_building_change = !changed_buildings.is_empty();
-    let completed_changed = completed.is_changed();
+    let completed_changed = all_completed.is_changed();
     let rally_changed = rally_mode.is_changed();
 
     // Detect queue length changes (timer ticks don't count — those are handled by update_training_queue_display)
@@ -764,16 +851,17 @@ fn update_action_bar(
 
     if let Some(children) = bar_children {
         for child in children.iter() {
-            commands.entity(child).despawn();
+            commands.entity(child).try_despawn();
         }
     }
 
     if let Ok((_entity, kind, state, level, upgrade_progress, construction, training_queue, storage_inv, health, auto_attack)) = selected_buildings.single() {
         if *state == BuildingState::Complete {
+            let player_res = all_resources.get(&active_player.0);
             spawn_building_action_bar(
                 &mut commands, bar_entity, *kind, level.0, upgrade_progress,
                 training_queue, storage_inv, health, auto_attack,
-                &icons, &registry, &player_res, &rally_mode,
+                &icons, &registry, player_res, &rally_mode,
             );
         } else {
             // Under construction — show progress + name + demolish (cancel)
@@ -782,7 +870,8 @@ fn update_action_bar(
     } else if selected_units.iter().count() > 0 {
         spawn_units_action_bar(&mut commands, bar_entity, &selected_units);
     } else {
-        spawn_card_hand(&mut commands, bar_entity, &completed, &icons, &registry);
+        let completed = all_completed.completed_for(&active_player.0);
+        spawn_card_hand(&mut commands, bar_entity, completed, &icons, &registry);
     }
 }
 
@@ -874,12 +963,14 @@ fn spawn_units_action_bar(
                     if let Some(state) = worker_state {
                         let state_text = match state {
                             WorkerTask::Idle => "Idle",
+                            WorkerTask::ManualMove => "Moving",
                             WorkerTask::MovingToResource(_) => "Moving to resource",
                             WorkerTask::Gathering(_) => "Gathering",
                             WorkerTask::ReturningToDeposit { .. } => "Returning to depot",
                             WorkerTask::Depositing { .. } => "Depositing",
                             WorkerTask::MovingToBuild(_) => "Moving to build",
                             WorkerTask::Building(_) => "Building",
+                            WorkerTask::WaitingForStorage { .. } => "Storage full!",
                         };
                         let state_label = commands
                             .spawn((
@@ -1646,29 +1737,33 @@ fn format_cost(cost: &crate::blueprints::ResourceCost) -> String {
 fn spawn_card_hand(
     commands: &mut Commands,
     parent: Entity,
-    completed: &CompletedBuildings,
+    completed: &[EntityKind],
     icons: &IconAssets,
     registry: &BlueprintRegistry,
 ) {
     let building_kinds = registry.building_kinds();
-    let total = building_kinds.len();
-
-    for (i, kind) in building_kinds.iter().enumerate() {
+    // Filter to only buildings whose prerequisites are met
+    let available: Vec<EntityKind> = building_kinds.iter().copied().filter(|kind| {
         let bp = registry.get(*kind);
         let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
-        let enabled = match prereq {
+        match prereq {
             None => true,
-            Some(prereq_kind) => completed.has(prereq_kind),
-        };
+            Some(prereq_kind) => completed.contains(&prereq_kind),
+        }
+    }).collect();
+    let total = available.len();
+
+    for (i, kind) in available.iter().enumerate() {
+        let bp = registry.get(*kind);
+        let enabled = true;
 
         let (rot_deg, y_off) = fan_params(i, total);
         let label = kind.display_name();
 
-        let bg_color = if enabled {
-            Color::srgba(0.12, 0.13, 0.16, 0.94)
-        } else {
-            Color::srgba(0.12, 0.12, 0.12, 0.5)
-        };
+        let total_cost = bp.cost.wood + bp.cost.copper + bp.cost.iron + bp.cost.gold + bp.cost.oil;
+        let tier = CardTier::from_total_cost(total_cost);
+        let tier_color = tier_accent_color(tier);
+        let tier_srgba = tier_color.to_srgba();
 
         let text_color = if enabled {
             theme::TEXT_PRIMARY
@@ -1682,7 +1777,9 @@ fn spawn_card_hand(
             Color::srgba(0.33, 0.33, 0.33, 0.5)
         };
 
-        let margin_left = if i == 0 { 0.0 } else { -8.0 };
+        // More overlap when there are many cards to keep the hand compact
+        let overlap = if total > 8 { -30.0 } else if total > 5 { -25.0 } else { -20.0 };
+        let margin_left = if i == 0 { 0.0 } else { overlap };
 
         let card = commands
             .spawn((
@@ -1694,47 +1791,102 @@ fn spawn_card_hand(
                 },
                 BuildButton(*kind),
                 Button,
-                CardAnimState::new(rot_deg, y_off),
+                CardAnimState::new(rot_deg, y_off, i),
+                CardDragState::default(),
+                tier,
                 CardDealIn {
-                    delay_timer: Timer::from_seconds(i as f32 * 0.08, TimerMode::Once),
-                    anim_timer: Timer::from_seconds(0.25, TimerMode::Once),
+                    delay_timer: Timer::from_seconds(i as f32 * 0.10, TimerMode::Once),
+                    anim_timer: Timer::from_seconds(0.45, TimerMode::Once),
                     started: false,
                 },
                 Node {
-                    width: Val::Px(90.0),
-                    height: Val::Px(130.0),
+                    width: Val::Px(100.0),
+                    height: Val::Px(140.0),
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
-                    justify_content: JustifyContent::Center,
-                    row_gap: Val::Px(6.0),
+                    justify_content: JustifyContent::FlexStart,
+                    padding: UiRect::top(Val::Px(3.0)),
+                    row_gap: Val::Px(4.0),
                     margin: UiRect {
                         left: Val::Px(margin_left),
-                        bottom: Val::Px(-200.0),
+                        bottom: Val::Px(-250.0),
                         ..default()
                     },
-                    border_radius: BorderRadius::all(Val::Px(8.0)),
+                    border: UiRect::all(Val::Px(1.5)),
+                    border_radius: BorderRadius::all(Val::Px(10.0)),
+                    overflow: Overflow::clip(),
                     ..default()
                 },
-                BackgroundColor(bg_color),
-                Transform::from_scale(Vec3::splat(0.5))
+                BorderColor::all(Color::srgba(tier_srgba.red, tier_srgba.green, tier_srgba.blue, 0.35)),
+                BackgroundColor(theme::CARD_BG_BOTTOM),
+                Transform::from_scale(Vec3::splat(0.2))
                     .with_rotation(Quat::from_rotation_z(rot_deg.to_radians())),
                 ZIndex(i as i32),
+                BoxShadow::new(
+                    Color::srgba(0.0, 0.0, 0.0, 0.6),
+                    Val::Px(0.0),
+                    Val::Px(4.0),
+                    Val::Px(0.0),
+                    Val::Px(12.0),
+                ),
             ))
             .with_children(|card_node| {
-                // Icon
+                // Tier accent strip at top
                 card_node.spawn((
-                    ImageNode::new(icons.entity_icon(*kind)),
                     Node {
-                        width: Val::Px(48.0),
-                        height: Val::Px(48.0),
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(0.0),
+                        top: Val::Px(0.0),
+                        width: Val::Percent(100.0),
+                        height: Val::Px(3.0),
                         ..default()
                     },
+                    BackgroundColor(tier_color),
                 ));
-                // Name
+                // Gradient overlay (lighter top half)
+                card_node.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(0.0),
+                        top: Val::Px(0.0),
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(50.0),
+                        border_radius: BorderRadius {
+                            top_left: Val::Px(10.0),
+                            top_right: Val::Px(10.0),
+                            bottom_left: Val::Px(0.0),
+                            bottom_right: Val::Px(0.0),
+                        },
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.18, 0.19, 0.23, 0.5)),
+                ));
+                // Icon container (52x52 with 48x48 image)
+                card_node.spawn((
+                    CardIconContainer,
+                    Node {
+                        width: Val::Px(52.0),
+                        height: Val::Px(52.0),
+                        margin: UiRect::top(Val::Px(10.0)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                )).with_children(|icon_container| {
+                    icon_container.spawn((
+                        ImageNode::new(icons.entity_icon(*kind)),
+                        Node {
+                            width: Val::Px(48.0),
+                            height: Val::Px(48.0),
+                            ..default()
+                        },
+                    ));
+                });
+                // Name (uppercase, 12px)
                 card_node.spawn((
                     CardNameText,
-                    Text::new(label),
-                    TextFont { font_size: 13.0, ..default() },
+                    Text::new(label.to_uppercase()),
+                    TextFont { font_size: 12.0, ..default() },
                     TextColor(text_color),
                 ));
                 // Cost row
@@ -1752,7 +1904,7 @@ fn spawn_card_hand(
                             spawn_cost_entry(row, icons, rt, amount, cost_color);
                         }
                     });
-                // Glow overlay
+                // Glow overlay (tier-colored)
                 card_node.spawn((
                     CardGlow,
                     Node {
@@ -1761,10 +1913,39 @@ fn spawn_card_hand(
                         top: Val::Px(0.0),
                         width: Val::Percent(100.0),
                         height: Val::Percent(100.0),
-                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        border_radius: BorderRadius::all(Val::Px(10.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.29, 0.62, 1.0, 0.0)),
+                    BackgroundColor(Color::srgba(tier_srgba.red, tier_srgba.green, tier_srgba.blue, 0.0)),
+                ));
+                // Border glow overlay
+                card_node.spawn((
+                    CardBorderGlow,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(0.0),
+                        top: Val::Px(0.0),
+                        width: Val::Percent(100.0),
+                        height: Val::Percent(100.0),
+                        border: UiRect::all(Val::Px(2.0)),
+                        border_radius: BorderRadius::all(Val::Px(10.0)),
+                        ..default()
+                    },
+                    BorderColor::all(Color::srgba(tier_srgba.red, tier_srgba.green, tier_srgba.blue, 0.0)),
+                    BackgroundColor(Color::NONE),
+                ));
+                // Shine sweep effect
+                card_node.spawn((
+                    CardShineEffect,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Percent(-30.0),
+                        top: Val::Px(0.0),
+                        width: Val::Percent(30.0),
+                        height: Val::Percent(100.0),
+                        ..default()
+                    },
+                    BackgroundColor(theme::CARD_SHINE),
                 ));
                 // Tooltip wrapper
                 card_node
@@ -1834,14 +2015,14 @@ fn spawn_cost_entry(
             entry.spawn((
                 ImageNode::new(icons.resource_icon(rt)),
                 Node {
-                    width: Val::Px(12.0),
-                    height: Val::Px(12.0),
+                    width: Val::Px(14.0),
+                    height: Val::Px(14.0),
                     ..default()
                 },
             ));
             entry.spawn((
                 Text::new(format!("{}", amount)),
-                TextFont { font_size: 9.0, ..default() },
+                TextFont { font_size: 10.0, ..default() },
                 TextColor(color),
             ));
         });
@@ -1915,15 +2096,19 @@ fn format_cost_from_blueprint(bp: &crate::blueprints::Blueprint) -> String {
 }
 
 fn handle_build_buttons(
-    mut commands: Commands,
-    interactions: Query<(Entity, &Interaction, &BuildButton, Option<&BuildCard>), Changed<Interaction>>,
+    interactions: Query<(Entity, &Interaction, &BuildButton, Option<&BuildCard>, Option<&CardDragState>), Changed<Interaction>>,
     mut placement: ResMut<BuildingPlacementState>,
-    completed: Res<CompletedBuildings>,
-    player_res: Res<PlayerResources>,
+    all_completed: Res<AllCompletedBuildings>,
+    all_resources: Res<AllPlayerResources>,
+    active_player: Res<ActivePlayer>,
     registry: Res<BlueprintRegistry>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
 ) {
-    for (entity, interaction, build_btn, card) in &interactions {
+    for (_entity, interaction, build_btn, card, _drag) in &interactions {
+        // Skip cards — they use the drag system for placement
+        if card.is_some() {
+            continue;
+        }
         if *interaction == Interaction::Pressed {
             ui_clicked.0 = 2;
             let kind = build_btn.0;
@@ -1932,7 +2117,7 @@ fn handle_build_buttons(
             let prereq_met = if let Some(ref bd) = bp.building {
                 match bd.prerequisite {
                     None => true,
-                    Some(prereq_kind) => completed.has(prereq_kind),
+                    Some(prereq_kind) => all_completed.has(&active_player.0, prereq_kind),
                 }
             } else {
                 true
@@ -1941,14 +2126,9 @@ fn handle_build_buttons(
                 continue;
             }
 
-            if !bp.cost.can_afford(&player_res) {
+            let player_res = all_resources.get(&active_player.0);
+            if !bp.cost.can_afford(player_res) {
                 continue;
-            }
-
-            if card.is_some() {
-                commands.entity(entity).insert(CardPlayOut {
-                    timer: Timer::from_seconds(0.3, TimerMode::Once),
-                });
             }
 
             placement.mode = PlacementMode::Placing(kind);
@@ -1959,7 +2139,8 @@ fn handle_build_buttons(
 
 fn handle_train_buttons(
     interactions: Query<(&Interaction, &TrainButton), Changed<Interaction>>,
-    mut player_res: ResMut<PlayerResources>,
+    mut all_resources: ResMut<AllPlayerResources>,
+    active_player: Res<ActivePlayer>,
     selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
     mut queues: Query<&mut TrainingQueue>,
     registry: Res<BlueprintRegistry>,
@@ -1973,13 +2154,15 @@ fn handle_train_buttons(
 
         let kind = train_btn.0;
         let bp = registry.get(kind);
-        if !bp.cost.can_afford(&player_res) {
+        let player_res = all_resources.get(&active_player.0);
+        if !bp.cost.can_afford(player_res) {
             continue;
         }
 
         for building_entity in &selected_buildings {
             if let Ok(mut queue) = queues.get_mut(building_entity) {
-                bp.cost.deduct(&mut player_res);
+                let player_res_mut = all_resources.get_mut(&active_player.0);
+                bp.cost.deduct(player_res_mut);
                 queue.queue.push(kind);
                 break;
             }
@@ -1992,9 +2175,10 @@ fn handle_train_buttons(
 fn handle_upgrade_button(
     mut commands: Commands,
     interactions: Query<&Interaction, (Changed<Interaction>, With<UpgradeButton>)>,
-    mut player_res: ResMut<PlayerResources>,
+    mut all_resources: ResMut<AllPlayerResources>,
+    active_player: Res<ActivePlayer>,
     selected_buildings: Query<
-        (Entity, &EntityKind, &BuildingLevel, &BuildingState),
+        (Entity, &EntityKind, &BuildingLevel, &BuildingState, &Faction),
         (With<Building>, With<Selected>, Without<UpgradeProgress>),
     >,
     registry: Res<BlueprintRegistry>,
@@ -2006,17 +2190,19 @@ fn handle_upgrade_button(
         }
         ui_clicked.0 = 2;
 
-        if let Ok((entity, kind, level, state)) = selected_buildings.single() {
+        if let Ok((entity, kind, level, state, faction)) = selected_buildings.single() {
             if *state != BuildingState::Complete {
                 continue;
             }
+            let player_res = all_resources.get_mut(&active_player.0);
             buildings::start_upgrade(
                 &mut commands,
                 entity,
                 level.0,
                 *kind,
                 &registry,
-                &mut player_res,
+                player_res,
+                *faction,
             );
         }
     }
@@ -2149,7 +2335,8 @@ fn handle_demolish_confirm(
         (Entity, &Transform, &BuildingState),
         (With<Building>, With<Selected>),
     >,
-    mut player_res: ResMut<PlayerResources>,
+    mut all_resources: ResMut<AllPlayerResources>,
+    active_player: Res<ActivePlayer>,
     registry: Res<BlueprintRegistry>,
     building_kinds: Query<&EntityKind, With<Building>>,
     confirm_panels: Query<Entity, With<DemolishConfirmPanel>>,
@@ -2167,13 +2354,14 @@ fn handle_demolish_confirm(
                 // Cancel construction — refund 100%
                 if let Ok(kind) = building_kinds.get(entity) {
                     let bp = registry.get(*kind);
+                    let player_res = all_resources.get_mut(&active_player.0);
                     player_res.wood += bp.cost.wood;
                     player_res.copper += bp.cost.copper;
                     player_res.iron += bp.cost.iron;
                     player_res.gold += bp.cost.gold;
                     player_res.oil += bp.cost.oil;
                 }
-                commands.entity(entity).despawn();
+                commands.entity(entity).try_despawn();
             } else {
                 buildings::start_demolish(&mut commands, entity, transform);
             }
@@ -2181,7 +2369,7 @@ fn handle_demolish_confirm(
 
         // Remove confirm panel
         for panel in &confirm_panels {
-            commands.entity(panel).despawn();
+            commands.entity(panel).try_despawn();
         }
     }
 
@@ -2192,7 +2380,7 @@ fn handle_demolish_confirm(
         }
         ui_clicked.0 = 2;
         for panel in &confirm_panels {
-            commands.entity(panel).despawn();
+            commands.entity(panel).try_despawn();
         }
     }
 }
@@ -2325,7 +2513,8 @@ fn handle_cancel_train(
     selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
     mut queues: Query<&mut TrainingQueue>,
     registry: Res<BlueprintRegistry>,
-    mut player_res: ResMut<PlayerResources>,
+    mut all_resources: ResMut<AllPlayerResources>,
+    active_player: Res<ActivePlayer>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
 ) {
     for (interaction, cancel_btn) in &interactions {
@@ -2341,6 +2530,7 @@ fn handle_cancel_train(
                     let removed_kind = queue.queue.remove(idx);
                     // Refund cost
                     let bp = registry.get(removed_kind);
+                    let player_res = all_resources.get_mut(&active_player.0);
                     player_res.wood += bp.cost.wood;
                     player_res.copper += bp.cost.copper;
                     player_res.iron += bp.cost.iron;
@@ -2416,7 +2606,7 @@ fn show_action_tooltips(
                 if let Some(children) = children {
                     for child in children.iter() {
                         if existing_tooltips.get(child).is_ok() {
-                            commands.entity(child).despawn();
+                            commands.entity(child).try_despawn();
                         }
                     }
                 }
@@ -2432,6 +2622,25 @@ fn ease_out_cubic(t: f32) -> f32 {
     1.0 - inv * inv * inv
 }
 
+fn ease_out_elastic(t: f32) -> f32 {
+    if t <= 0.0 { return 0.0; }
+    if t >= 1.0 { return 1.0; }
+    let p = 0.35;
+    let s = p / 4.0;
+    (2.0_f32.powf(-10.0 * t) * ((t - s) * std::f32::consts::TAU / p).sin()) + 1.0
+}
+
+fn tier_accent_color(tier: CardTier) -> Color {
+    match tier {
+        CardTier::Common => theme::TIER_COMMON,
+        CardTier::Uncommon => theme::TIER_UNCOMMON,
+        CardTier::Rare => theme::TIER_RARE,
+        CardTier::Epic => theme::TIER_EPIC,
+    }
+}
+
+
+
 fn card_deal_in_system(
     time: Res<Time>,
     mut cards: Query<(&mut CardDealIn, &mut CardAnimState, &mut Node, &mut Transform)>,
@@ -2444,13 +2653,15 @@ fn card_deal_in_system(
         deal.started = true;
         deal.anim_timer.tick(time.delta());
 
-        let t = ease_out_cubic(deal.anim_timer.fraction());
+        let t_raw = deal.anim_timer.fraction();
+        let t_elastic = ease_out_elastic(t_raw);
+        let t_opacity = ease_out_cubic(t_raw.min(0.5) * 2.0); // Fade in faster
 
-        let start_y = -200.0_f32;
+        let start_y = -250.0_f32;
         let target_y = anim.target_offset_y;
-        anim.offset_y = start_y + (target_y - start_y) * t;
-        anim.scale = 0.5 + 0.5 * t;
-        anim.opacity = t;
+        anim.offset_y = start_y + (target_y - start_y) * t_elastic;
+        anim.scale = 0.2 + (0.58 - 0.2) * t_elastic;
+        anim.opacity = t_opacity;
 
         node.margin.bottom = Val::Px(-anim.offset_y);
         tf.scale = Vec3::splat(anim.scale);
@@ -2459,38 +2670,63 @@ fn card_deal_in_system(
 }
 
 fn card_hover_system(
-    completed: Res<CompletedBuildings>,
-    registry: Res<BlueprintRegistry>,
-    mut cards: Query<
-        (&Interaction, &BuildCard, &mut CardAnimState),
-        (Changed<Interaction>, Without<CardPlayOut>),
-    >,
+    read_cards: Query<(&Interaction, &BuildCard, &CardDragState), Without<CardPlayOut>>,
+    mut write_cards: Query<(&BuildCard, &mut CardAnimState, &CardDragState), Without<CardPlayOut>>,
 ) {
-    for (interaction, card, mut anim) in &mut cards {
-        let bp = registry.get(card.building_kind);
-        let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
-        let prereq_met = match prereq {
-            None => true,
-            Some(prereq_kind) => completed.has(prereq_kind),
-        };
-        if !prereq_met {
-            continue;
-        }
-        let (rest_rot, rest_y) = fan_params(card.index, card.total);
+    // Pass 1: find hovered card index
+    let mut hovered_index: Option<usize> = None;
+    let mut pressed_index: Option<usize> = None;
+    for (interaction, card, drag) in &read_cards {
+        if drag.dragging { continue; }
         match interaction {
-            Interaction::Hovered => {
-                anim.target_offset_y = rest_y - 30.0;
-                anim.target_scale = 1.12;
-                anim.target_rotation_deg = 0.0;
-            }
             Interaction::Pressed => {
-                anim.target_scale = 1.05;
+                pressed_index = Some(card.index);
+                hovered_index = Some(card.index);
             }
-            Interaction::None => {
+            Interaction::Hovered => {
+                if hovered_index.is_none() {
+                    hovered_index = Some(card.index);
+                }
+            }
+            Interaction::None => {}
+        }
+    }
+
+    // Pass 2: update all cards based on hover context
+    for (card, mut anim, drag) in &mut write_cards {
+        if drag.dragging { continue; }
+        let (rest_rot, rest_y) = fan_params(card.index, card.total);
+
+        if let Some(hi) = hovered_index {
+            let dist = (card.index as i32 - hi as i32).unsigned_abs() as usize;
+            if dist == 0 {
+                // Hovered/pressed card — lifts up, scales bigger
+                anim.target_offset_y = rest_y - 35.0;
+                anim.target_scale = if pressed_index.is_some() { 0.95 } else { 1.05 };
+                anim.target_rotation_deg = 0.0;
+            } else if dist == 1 {
+                // Immediate neighbors — push apart harder
+                let push_dir = if (card.index as i32) < (hi as i32) { -1.0 } else { 1.0 };
+                anim.target_rotation_deg = rest_rot + push_dir * 16.0;
+                anim.target_scale = 0.63;
                 anim.target_offset_y = rest_y;
-                anim.target_scale = 1.0;
+            } else if dist == 2 {
+                // Second neighbors — gentle push
+                let push_dir = if (card.index as i32) < (hi as i32) { -1.0 } else { 1.0 };
+                anim.target_rotation_deg = rest_rot + push_dir * 6.0;
+                anim.target_scale = 0.54;
+                anim.target_offset_y = rest_y;
+            } else {
+                // Far cards — shrink slightly for contrast
+                anim.target_offset_y = rest_y;
+                anim.target_scale = 0.54;
                 anim.target_rotation_deg = rest_rot;
             }
+        } else {
+            // No hover — all cards at rest
+            anim.target_offset_y = rest_y;
+            anim.target_scale = 0.58;
+            anim.target_rotation_deg = rest_rot;
         }
     }
 }
@@ -2503,8 +2739,11 @@ fn card_play_out_system(
     for (entity, mut play, mut anim) in &mut cards {
         play.timer.tick(time.delta());
         let t = play.timer.fraction();
-        anim.scale = 1.0 + 0.4 * t;
-        anim.opacity = 1.0 - t;
+        // Spiral zoom: grow + spin + fly up + fade
+        anim.scale = 0.58 + 0.6 * t;
+        anim.offset_y = anim.offset_y - 120.0 * time.delta_secs();
+        anim.rotation_deg += 180.0 * time.delta_secs();
+        anim.opacity = (1.0 - t * t).max(0.0); // Quadratic fade
         if play.timer.is_finished() {
             commands.entity(entity).remove::<CardPlayOut>();
         }
@@ -2529,7 +2768,7 @@ fn card_placement_mode_system(
             for (_entity, card, mut anim) in &mut cards {
                 let (rot, y_off) = fan_params(card.index, card.total);
                 anim.target_offset_y = y_off;
-                anim.target_scale = 1.0;
+                anim.target_scale = 0.58;
                 anim.target_rotation_deg = rot;
                 anim.target_opacity = 1.0;
             }
@@ -2565,47 +2804,71 @@ fn card_spring_back_system(
 
 fn card_anim_lerp_system(
     time: Res<Time>,
-    completed: Res<CompletedBuildings>,
+    all_completed: Res<AllCompletedBuildings>,
+    active_player: Res<ActivePlayer>,
     registry: Res<BlueprintRegistry>,
     mut cards: Query<
-        (&mut CardAnimState, &mut Node, &mut Transform, &mut BackgroundColor, &BuildCard),
+        (&mut CardAnimState, &mut Node, &mut Transform, &mut BackgroundColor, &BuildCard, &Interaction, &mut ZIndex, &CardDragState),
         Without<CardDealIn>,
     >,
 ) {
     let dt = time.delta_secs();
-    let speed = 12.0;
+    let speed = 16.0;
     let alpha = 1.0 - (-speed * dt).exp();
 
-    for (mut anim, mut node, mut tf, mut bg, card) in &mut cards {
+    let completed = all_completed.completed_for(&active_player.0);
+    for (mut anim, mut node, mut tf, mut bg, card, interaction, mut z_index, drag) in &mut cards {
+        if drag.dragging { continue; }
+
         anim.offset_y += (anim.target_offset_y - anim.offset_y) * alpha;
         anim.scale += (anim.target_scale - anim.scale) * alpha;
         anim.rotation_deg += (anim.target_rotation_deg - anim.rotation_deg) * alpha;
         anim.opacity += (anim.target_opacity - anim.opacity) * alpha;
+        anim.tilt_x_deg += (anim.target_tilt_x_deg - anim.tilt_x_deg) * alpha;
 
-        node.margin.bottom = Val::Px(-anim.offset_y);
-        tf.scale = Vec3::splat(anim.scale);
-        tf.rotation = Quat::from_rotation_z(anim.rotation_deg.to_radians());
+        // Apply idle breathing as visual-only offset (only when at rest)
+        let mut display_y = anim.offset_y;
+        let mut display_scale = anim.scale;
+        if *interaction == Interaction::None {
+            let t = time.elapsed_secs();
+            let phase = anim.idle_phase;
+            display_y += (t * 0.8 * std::f32::consts::TAU + phase).sin() * 2.0;
+            display_scale += (t * 1.2 * std::f32::consts::TAU + phase * 0.7).sin() * 0.008;
+        }
+
+        node.margin.bottom = Val::Px(-display_y);
+        tf.scale = Vec3::splat(display_scale);
+        // Combine Z rotation (fan) with X rotation (tilt)
+        tf.rotation = Quat::from_rotation_z(anim.rotation_deg.to_radians())
+            * Quat::from_rotation_x(anim.tilt_x_deg.to_radians());
+
+        // Hovered card renders on top
+        *z_index = match interaction {
+            Interaction::Hovered | Interaction::Pressed => ZIndex(100),
+            Interaction::None => ZIndex(card.index as i32),
+        };
 
         let bp = registry.get(card.building_kind);
         let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
         let prereq_met = match prereq {
             None => true,
-            Some(prereq_kind) => completed.has(prereq_kind),
+            Some(prereq_kind) => completed.contains(&prereq_kind),
         };
         let base = if card.enabled {
-            Color::srgba(0.12, 0.13, 0.16, 0.94 * anim.opacity)
+            Color::srgba(0.10, 0.11, 0.14, 0.96 * anim.opacity)
         } else if prereq_met {
-            Color::srgba(0.12, 0.13, 0.16, 0.78 * anim.opacity)
+            Color::srgba(0.10, 0.11, 0.14, 0.78 * anim.opacity)
         } else {
-            Color::srgba(0.12, 0.12, 0.12, 0.5 * anim.opacity)
+            Color::srgba(0.09, 0.09, 0.09, 0.5 * anim.opacity)
         };
         *bg = BackgroundColor(base);
     }
 }
 
 fn update_card_states(
-    completed: Res<CompletedBuildings>,
-    player_res: Res<PlayerResources>,
+    all_completed: Res<AllCompletedBuildings>,
+    all_resources: Res<AllPlayerResources>,
+    active_player: Res<ActivePlayer>,
     registry: Res<BlueprintRegistry>,
     mut cards: Query<(&mut BuildCard, &Children)>,
     mut name_texts: Query<&mut TextColor, (With<CardNameText>, Without<CardCostEntry>)>,
@@ -2614,6 +2877,8 @@ fn update_card_states(
     tooltip_wrappers: Query<&Children, With<CardTooltip>>,
     mut texts: Query<&mut Text>,
 ) {
+    let completed = all_completed.completed_for(&active_player.0);
+    let player_res = all_resources.get(&active_player.0);
     for (mut card, card_children) in &mut cards {
         let kind = card.building_kind;
         let bp = registry.get(kind);
@@ -2621,10 +2886,10 @@ fn update_card_states(
         let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
         let prereq_met = match prereq {
             None => true,
-            Some(prereq_kind) => completed.has(prereq_kind),
+            Some(prereq_kind) => completed.contains(&prereq_kind),
         };
 
-        let can_afford = bp.cost.can_afford(&player_res);
+        let can_afford = bp.cost.can_afford(player_res);
         card.enabled = prereq_met && can_afford;
 
         let tooltip_text = if !prereq_met {
@@ -2695,35 +2960,292 @@ fn card_tooltip_system(
 
 fn card_glow_system(
     time: Res<Time>,
-    completed: Res<CompletedBuildings>,
+    all_completed: Res<AllCompletedBuildings>,
+    active_player: Res<ActivePlayer>,
     registry: Res<BlueprintRegistry>,
-    cards: Query<(&Interaction, &BuildCard, &Children), Without<CardPlayOut>>,
+    cards: Query<(&Interaction, &BuildCard, &Children, &CardTier), Without<CardPlayOut>>,
     mut glows: Query<&mut BackgroundColor, With<CardGlow>>,
 ) {
     let speed = 12.0;
     let alpha = 1.0 - (-speed * time.delta_secs()).exp();
 
-    for (interaction, card, children) in &cards {
+    let completed = all_completed.completed_for(&active_player.0);
+    for (interaction, card, children, tier) in &cards {
         let bp = registry.get(card.building_kind);
         let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
         let prereq_met = match prereq {
             None => true,
-            Some(prereq_kind) => completed.has(prereq_kind),
+            Some(prereq_kind) => completed.contains(&prereq_kind),
         };
         if !prereq_met {
             continue;
         }
         let target_opacity = match interaction {
-            Interaction::Hovered | Interaction::Pressed => 0.15,
+            Interaction::Hovered | Interaction::Pressed => 0.18,
             Interaction::None => 0.0,
         };
 
+        let tc = tier_accent_color(*tier).to_srgba();
         for child in children.iter() {
             if let Ok(mut glow_bg) = glows.get_mut(child) {
                 let current = glow_bg.0.to_srgba();
                 let new_a = current.alpha + (target_opacity - current.alpha) * alpha;
-                *glow_bg = BackgroundColor(Color::srgba(0.29, 0.62, 1.0, new_a));
+                *glow_bg = BackgroundColor(Color::srgba(tc.red, tc.green, tc.blue, new_a));
             }
         }
+    }
+}
+
+// Breathing is applied directly in card_anim_lerp_system as a visual offset,
+// not by modifying targets (which causes fighting with hover system).
+
+// ── Pseudo-3D Tilt System ──
+fn card_tilt_update_system(
+    windows: Query<&Window>,
+    mut cards: Query<(&Interaction, &mut CardAnimState, &CardDragState), (With<BuildCard>, Without<CardPlayOut>)>,
+) {
+    let Ok(window) = windows.single() else { return; };
+    let cursor_pos = window.cursor_position().unwrap_or(Vec2::new(-1000.0, -1000.0));
+    let window_center_x = window.width() / 2.0;
+
+    for (interaction, mut anim, drag) in &mut cards {
+        if drag.dragging {
+            anim.target_tilt_x_deg = 0.0;
+            continue;
+        }
+        match interaction {
+            Interaction::Hovered | Interaction::Pressed => {
+                // Use cursor position relative to window center as proxy
+                let rel_x = ((cursor_pos.x - window_center_x) / (window.width() * 0.3)).clamp(-1.0, 1.0);
+                anim.target_tilt_x_deg = rel_x * 4.0; // Subtle tilt to avoid hitbox shifting
+            }
+            Interaction::None => {
+                anim.target_tilt_x_deg = 0.0;
+            }
+        }
+    }
+}
+
+// ── Border Glow System ──
+fn card_border_glow_system(
+    time: Res<Time>,
+    mut cards: Query<(&Interaction, &Children, &CardTier, &mut CardAnimState), (With<BuildCard>, Without<CardPlayOut>)>,
+    mut border_glows: Query<&mut BorderColor, With<CardBorderGlow>>,
+) {
+    let dt = time.delta_secs();
+    let speed = 10.0;
+    let alpha = 1.0 - (-speed * dt).exp();
+    let t = time.elapsed_secs();
+
+    for (interaction, children, tier, mut anim) in &mut cards {
+        anim.glow_pulse += dt;
+        let tc = tier_accent_color(*tier).to_srgba();
+
+        let target_a = match interaction {
+            Interaction::Hovered | Interaction::Pressed => {
+                let pulse = (t * 4.0).sin() * 0.15;
+                (0.7 + pulse).clamp(0.0, 1.0)
+            }
+            Interaction::None => 0.0,
+        };
+
+        for child in children.iter() {
+            if let Ok(mut border) = border_glows.get_mut(child) {
+                let current_a = border.top.to_srgba().alpha;
+                let new_a = current_a + (target_a - current_a) * alpha;
+                let c = Color::srgba(tc.red, tc.green, tc.blue, new_a);
+                *border = BorderColor::all(c);
+            }
+        }
+    }
+}
+
+// ── Shine Sweep System ──
+fn card_shine_sweep_system(
+    time: Res<Time>,
+    cards: Query<(&Interaction, &Children), (With<BuildCard>, Without<CardPlayOut>)>,
+    mut shines: Query<&mut Node, With<CardShineEffect>>,
+) {
+    let t = time.elapsed_secs();
+
+    for (interaction, children) in &cards {
+        let is_hovered = matches!(interaction, Interaction::Hovered | Interaction::Pressed);
+
+        for child in children.iter() {
+            if let Ok(mut node) = shines.get_mut(child) {
+                if is_hovered {
+                    // Sweep cycle: 0.6s sweep + 1.9s pause = 2.5s total
+                    let cycle = t % 2.5;
+                    if cycle < 0.6 {
+                        let sweep_t = cycle / 0.6;
+                        // Move from -30% to 130%
+                        let left_pct = -30.0 + sweep_t * 160.0;
+                        node.left = Val::Percent(left_pct);
+                    } else {
+                        node.left = Val::Percent(-30.0); // Hidden
+                    }
+                } else {
+                    node.left = Val::Percent(-30.0); // Hidden when not hovered
+                }
+            }
+        }
+    }
+}
+
+// ── Drag & Drop Systems ──
+
+fn card_drag_pickup_system(
+    mut cards: Query<(&Interaction, &BuildCard, &mut CardDragState)>,
+    windows: Query<&Window>,
+) {
+    let Ok(window) = windows.single() else { return; };
+    let cursor_pos = window.cursor_position().unwrap_or(Vec2::ZERO);
+
+    for (interaction, card, mut drag) in &mut cards {
+        if !card.enabled { continue; }
+        if *interaction == Interaction::Pressed && !drag.dragging {
+            drag.dragging = true;
+            drag.screen_pos = cursor_pos;
+            drag.pickup_origin = cursor_pos;
+            drag.velocity = Vec2::ZERO;
+            drag.drag_distance = 0.0;
+        }
+    }
+}
+
+fn card_drag_follow_system(
+    time: Res<Time>,
+    windows: Query<&Window>,
+    mut cards: Query<(&mut CardDragState, &mut CardAnimState, &mut Node, &mut ZIndex), With<BuildCard>>,
+) {
+    let Ok(window) = windows.single() else { return; };
+    let cursor_pos = window.cursor_position().unwrap_or(Vec2::ZERO);
+    let dt = time.delta_secs();
+
+    for (mut drag, mut anim, mut node, mut z_index) in &mut cards {
+        if !drag.dragging { continue; }
+
+        // Track total distance from pickup origin
+        drag.drag_distance = (cursor_pos - drag.pickup_origin).length();
+        drag.screen_pos = cursor_pos;
+
+        // Only switch to absolute positioning once past drag threshold
+        if drag.drag_distance < 5.0 {
+            continue;
+        }
+
+        // Position card absolutely
+        node.position_type = PositionType::Absolute;
+        node.left = Val::Px(cursor_pos.x - 50.0);
+        node.top = Val::Px(cursor_pos.y - 70.0);
+        node.margin = UiRect::ZERO;
+
+        // Rotation based on frame-to-frame movement
+        let vel_x = cursor_pos.x - drag.pickup_origin.x;
+        let vel_rot = (vel_x * 0.03).clamp(-12.0, 12.0);
+        anim.rotation_deg = vel_rot;
+        anim.scale = 1.05;
+        anim.opacity = 0.92;
+        anim.tilt_x_deg = 0.0;
+        *z_index = ZIndex(200);
+    }
+}
+
+fn card_drag_gap_system(
+    cards: Query<(&BuildCard, &CardDragState)>,
+    mut other_cards: Query<(&BuildCard, &mut CardAnimState, &CardDragState), Without<CardPlayOut>>,
+) {
+    // Find dragged card index
+    let mut dragged_index: Option<usize> = None;
+    for (card, drag) in &cards {
+        if drag.dragging && drag.drag_distance > 5.0 {
+            dragged_index = Some(card.index);
+            break;
+        }
+    }
+
+    if let Some(di) = dragged_index {
+        // Recompute fan positions as if dragged card removed
+        for (card, mut anim, drag) in &mut other_cards {
+            if drag.dragging { continue; }
+            let adjusted_index = if card.index > di { card.index - 1 } else { card.index };
+            let adjusted_total = card.total - 1;
+            if adjusted_total > 0 {
+                let (rot, y_off) = fan_params(adjusted_index, adjusted_total);
+                anim.target_rotation_deg = rot;
+                anim.target_offset_y = y_off;
+            }
+        }
+    }
+}
+
+fn card_drag_release_system(
+    mut commands: Commands,
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window>,
+    mut cards: Query<(Entity, &BuildCard, &mut CardDragState, &mut CardAnimState, &mut Node)>,
+    mut placement: ResMut<BuildingPlacementState>,
+    all_resources: Res<AllPlayerResources>,
+    active_player: Res<ActivePlayer>,
+    registry: Res<BlueprintRegistry>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+) {
+    if !mouse.just_released(MouseButton::Left) { return; }
+    let Ok(window) = windows.single() else { return; };
+    let window_height = window.height();
+
+    for (entity, card, mut drag, mut anim, mut node) in &mut cards {
+        if !drag.dragging { continue; }
+        drag.dragging = false;
+
+        // Reset positioning
+        node.position_type = PositionType::Relative;
+        node.left = Val::Auto;
+        node.top = Val::Auto;
+        let overlap = if card.total > 8 { -30.0 } else if card.total > 5 { -25.0 } else { -20.0 };
+        let margin_left = if card.index == 0 { 0.0 } else { overlap };
+        node.margin = UiRect {
+            left: Val::Px(margin_left),
+            bottom: Val::Px(-anim.offset_y),
+            ..default()
+        };
+
+        let kind = card.building_kind;
+        let bp = registry.get(kind);
+        let player_res = all_resources.get(&active_player.0);
+        let can_afford = bp.cost.can_afford(player_res);
+
+        if drag.drag_distance < 5.0 {
+            // Click — enter placement mode
+            if can_afford {
+                ui_clicked.0 = 2;
+                commands.entity(entity).insert(CardPlayOut {
+                    timer: Timer::from_seconds(0.35, TimerMode::Once),
+                });
+                placement.mode = PlacementMode::Placing(kind);
+                placement.awaiting_release = true;
+            }
+        } else if drag.screen_pos.y < window_height * 0.7 && can_afford {
+            // Released in upper 70% — place building
+            ui_clicked.0 = 2;
+            commands.entity(entity).insert(CardPlayOut {
+                timer: Timer::from_seconds(0.35, TimerMode::Once),
+            });
+            placement.mode = PlacementMode::Placing(kind);
+            placement.awaiting_release = false;
+        } else {
+            // Spring back to fan
+            let (rot, y_off) = fan_params(card.index, card.total);
+            anim.target_offset_y = y_off;
+            anim.target_scale = 0.58;
+            anim.target_rotation_deg = rot;
+            anim.target_opacity = 1.0;
+            commands.entity(entity).insert(CardSpringBack {
+                timer: Timer::from_seconds(0.3, TimerMode::Once),
+            });
+        }
+
+        drag.velocity = Vec2::ZERO;
+        drag.drag_distance = 0.0;
     }
 }

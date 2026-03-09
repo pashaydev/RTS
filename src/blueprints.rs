@@ -8,7 +8,9 @@ use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 
 // ── EntityKind — unified type enum ──
 
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
 pub enum EntityKind {
     // Player Units
     Worker,
@@ -34,6 +36,9 @@ pub enum EntityKind {
     Temple,
     Stable,
     SiegeWorks,
+    Sawmill,
+    Mine,
+    OilRig,
 
     // Mobs
     Goblin,
@@ -66,7 +71,8 @@ impl EntityKind {
 
             Self::Base | Self::Barracks | Self::Workshop | Self::Tower
             | Self::Storage | Self::MageTower | Self::Temple
-            | Self::Stable | Self::SiegeWorks => EntityCategory::Building,
+            | Self::Stable | Self::SiegeWorks
+            | Self::Sawmill | Self::Mine | Self::OilRig => EntityCategory::Building,
 
             Self::Goblin | Self::Skeleton | Self::Orc | Self::Demon => EntityCategory::Mob,
 
@@ -95,6 +101,9 @@ impl EntityKind {
             Self::Temple => "Temple",
             Self::Stable => "Stable",
             Self::SiegeWorks => "Siege Works",
+            Self::Sawmill => "Sawmill",
+            Self::Mine => "Mine",
+            Self::OilRig => "Oil Rig",
             Self::Goblin => "Goblin",
             Self::Skeleton => "Skeleton",
             Self::Orc => "Orc",
@@ -104,6 +113,18 @@ impl EntityKind {
             Self::FireElemental => "Fire Elemental",
         }
     }
+
+    pub const ALL: &'static [EntityKind] = &[
+        EntityKind::Worker, EntityKind::Soldier, EntityKind::Archer, EntityKind::Tank,
+        EntityKind::Knight, EntityKind::Mage, EntityKind::Priest, EntityKind::Cavalry,
+        EntityKind::Catapult, EntityKind::BatteringRam,
+        EntityKind::Base, EntityKind::Barracks, EntityKind::Workshop, EntityKind::Tower,
+        EntityKind::Storage, EntityKind::MageTower, EntityKind::Temple, EntityKind::Stable,
+        EntityKind::SiegeWorks,
+        EntityKind::Sawmill, EntityKind::Mine, EntityKind::OilRig,
+        EntityKind::Goblin, EntityKind::Skeleton, EntityKind::Orc, EntityKind::Demon,
+        EntityKind::SkeletonMinion, EntityKind::SpiritWolf, EntityKind::FireElemental,
+    ];
 
     pub fn is_building(self) -> bool {
         self.category() == EntityCategory::Building
@@ -377,6 +398,9 @@ impl BlueprintRegistry {
             EntityKind::Workshop,
             EntityKind::Tower,
             EntityKind::Storage,
+            EntityKind::Sawmill,
+            EntityKind::Mine,
+            EntityKind::OilRig,
             EntityKind::MageTower,
             EntityKind::Temple,
             EntityKind::Stable,
@@ -405,7 +429,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Worker, Blueprint {
         kind: EntityKind::Worker,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 100.0, damage: 3.0, attack_range: 1.5, attack_cooldown_secs: 1.5,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -428,7 +452,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Soldier, Blueprint {
         kind: EntityKind::Soldier,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 100.0, damage: 12.0, attack_range: 2.0, attack_cooldown_secs: 1.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -457,7 +481,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Archer, Blueprint {
         kind: EntityKind::Archer,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 100.0, damage: 8.0, attack_range: 12.0, attack_cooldown_secs: 1.5,
             aggro_range: None, is_ranged: true, projectile_speed: Some(15.0),
@@ -480,7 +504,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Tank, Blueprint {
         kind: EntityKind::Tank,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 100.0, damage: 18.0, attack_range: 2.5, attack_cooldown_secs: 2.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -503,7 +527,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Knight, Blueprint {
         kind: EntityKind::Knight,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 200.0, damage: 18.0, attack_range: 2.5, attack_cooldown_secs: 0.8,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -531,7 +555,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Mage, Blueprint {
         kind: EntityKind::Mage,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 70.0, damage: 15.0, attack_range: 14.0, attack_cooldown_secs: 2.0,
             aggro_range: None, is_ranged: true, projectile_speed: Some(12.0),
@@ -559,7 +583,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Priest, Blueprint {
         kind: EntityKind::Priest,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 80.0, damage: 6.0, attack_range: 10.0, attack_cooldown_secs: 2.0,
             aggro_range: None, is_ranged: true, projectile_speed: Some(10.0),
@@ -587,7 +611,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Cavalry, Blueprint {
         kind: EntityKind::Cavalry,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 150.0, damage: 14.0, attack_range: 2.0, attack_cooldown_secs: 0.9,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -612,7 +636,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Catapult, Blueprint {
         kind: EntityKind::Catapult,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 150.0, damage: 40.0, attack_range: 25.0, attack_cooldown_secs: 5.0,
             aggro_range: None, is_ranged: true, projectile_speed: Some(8.0),
@@ -639,7 +663,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::BatteringRam, Blueprint {
         kind: EntityKind::BatteringRam,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 200.0, damage: 50.0, attack_range: 2.0, attack_cooldown_secs: 4.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -664,7 +688,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Base, Blueprint {
         kind: EntityKind::Base,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 500.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -703,7 +727,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Barracks, Blueprint {
         kind: EntityKind::Barracks,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 350.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -742,7 +766,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Workshop, Blueprint {
         kind: EntityKind::Workshop,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 400.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -781,7 +805,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Tower, Blueprint {
         kind: EntityKind::Tower,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 200.0, damage: 10.0, attack_range: 15.0, attack_cooldown_secs: 2.0,
             aggro_range: None, is_ranged: true, projectile_speed: Some(20.0),
@@ -820,7 +844,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Storage, Blueprint {
         kind: EntityKind::Storage,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 200.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -859,7 +883,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::MageTower, Blueprint {
         kind: EntityKind::MageTower,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 300.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -898,7 +922,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Temple, Blueprint {
         kind: EntityKind::Temple,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 250.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -937,7 +961,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Stable, Blueprint {
         kind: EntityKind::Stable,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 300.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -976,7 +1000,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::SiegeWorks, Blueprint {
         kind: EntityKind::SiegeWorks,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 350.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -1013,11 +1037,130 @@ pub fn build_registry() -> BlueprintRegistry {
         children: vec![], abilities: vec![], upgrades: vec![],
     });
 
+    // ── Resource Processing Buildings ──
+
+    blueprints.insert(EntityKind::Sawmill, Blueprint {
+        kind: EntityKind::Sawmill,
+        faction: Faction::Player1,
+        combat: Some(CombatStats {
+            hp: 150.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
+            aggro_range: None, is_ranged: false, projectile_speed: None,
+        }),
+        movement: None, gathering: None,
+        vision: Some(VisionStats { range: 10.0 }),
+        cost: ResourceCost { wood: 60, copper: 20, ..Default::default() },
+        train_time_secs: 0.0,
+        building: Some(BuildingData {
+            construction_time_secs: 12.0, half_height: 1.0,
+            trains: vec![],
+            prerequisite: Some(EntityKind::Base),
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 80, copper: 30, ..Default::default() },
+                    time_secs: 10.0, scale_multiplier: 1.08,
+                    bonus: LevelBonus::GatherAura { speed_bonus: 0.25, range: 20.0 },
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 120, copper: 40, iron: 20, ..Default::default() },
+                    time_secs: 15.0, scale_multiplier: 1.12,
+                    bonus: LevelBonus::GatherAura { speed_bonus: 0.50, range: 25.0 },
+                },
+            ],
+        }),
+        mob_ai: None,
+        visual: VisualDef {
+            mesh_kind: MeshKind::Cuboid { x: 2.5, y: 2.0, z: 2.5 },
+            color: Color::srgb(0.55, 0.35, 0.15),
+            selected_color: Color::srgb(0.7, 0.45, 0.2),
+            selected_emissive: LinearRgba::new(0.3, 0.2, 0.05, 1.0),
+            scale: 1.0,
+        },
+        children: vec![], abilities: vec![], upgrades: vec![],
+    });
+
+    blueprints.insert(EntityKind::Mine, Blueprint {
+        kind: EntityKind::Mine,
+        faction: Faction::Player1,
+        combat: Some(CombatStats {
+            hp: 200.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
+            aggro_range: None, is_ranged: false, projectile_speed: None,
+        }),
+        movement: None, gathering: None,
+        vision: Some(VisionStats { range: 10.0 }),
+        cost: ResourceCost { wood: 80, copper: 40, iron: 10, ..Default::default() },
+        train_time_secs: 0.0,
+        building: Some(BuildingData {
+            construction_time_secs: 15.0, half_height: 1.2,
+            trains: vec![],
+            prerequisite: Some(EntityKind::Base),
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 60, copper: 60, iron: 30, ..Default::default() },
+                    time_secs: 12.0, scale_multiplier: 1.08,
+                    bonus: LevelBonus::GatherAura { speed_bonus: 0.20, range: 18.0 },
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 100, copper: 80, iron: 50, gold: 20, ..Default::default() },
+                    time_secs: 20.0, scale_multiplier: 1.12,
+                    bonus: LevelBonus::GatherAura { speed_bonus: 0.40, range: 25.0 },
+                },
+            ],
+        }),
+        mob_ai: None,
+        visual: VisualDef {
+            mesh_kind: MeshKind::Cuboid { x: 2.5, y: 2.4, z: 2.5 },
+            color: Color::srgb(0.45, 0.4, 0.35),
+            selected_color: Color::srgb(0.55, 0.5, 0.45),
+            selected_emissive: LinearRgba::new(0.15, 0.12, 0.08, 1.0),
+            scale: 1.0,
+        },
+        children: vec![], abilities: vec![], upgrades: vec![],
+    });
+
+    blueprints.insert(EntityKind::OilRig, Blueprint {
+        kind: EntityKind::OilRig,
+        faction: Faction::Player1,
+        combat: Some(CombatStats {
+            hp: 150.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
+            aggro_range: None, is_ranged: false, projectile_speed: None,
+        }),
+        movement: None, gathering: None,
+        vision: Some(VisionStats { range: 10.0 }),
+        cost: ResourceCost { wood: 60, copper: 30, iron: 20, ..Default::default() },
+        train_time_secs: 0.0,
+        building: Some(BuildingData {
+            construction_time_secs: 14.0, half_height: 1.5,
+            trains: vec![],
+            prerequisite: Some(EntityKind::Base),
+            level_upgrades: vec![
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 80, copper: 40, iron: 30, ..Default::default() },
+                    time_secs: 12.0, scale_multiplier: 1.08,
+                    bonus: LevelBonus::GatherAura { speed_bonus: 0.20, range: 18.0 },
+                },
+                BuildingLevelData {
+                    cost: ResourceCost { wood: 120, copper: 60, iron: 50, gold: 10, ..Default::default() },
+                    time_secs: 18.0, scale_multiplier: 1.12,
+                    bonus: LevelBonus::GatherAura { speed_bonus: 0.40, range: 25.0 },
+                },
+            ],
+        }),
+        mob_ai: None,
+        visual: VisualDef {
+            mesh_kind: MeshKind::Cuboid { x: 2.0, y: 3.0, z: 2.0 },
+            color: Color::srgb(0.15, 0.15, 0.15),
+            selected_color: Color::srgb(0.25, 0.25, 0.25),
+            selected_emissive: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
+            scale: 1.0,
+        },
+        children: vec![], abilities: vec![], upgrades: vec![],
+    });
+
     // ── Mobs ──
 
     blueprints.insert(EntityKind::Goblin, Blueprint {
         kind: EntityKind::Goblin,
-        faction: Faction::Enemy,
+        faction: Faction::Neutral,
         combat: Some(CombatStats {
             hp: 50.0, damage: 5.0, attack_range: 1.5, attack_cooldown_secs: 1.2,
             aggro_range: Some(15.0), is_ranged: false, projectile_speed: None,
@@ -1039,7 +1182,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Skeleton, Blueprint {
         kind: EntityKind::Skeleton,
-        faction: Faction::Enemy,
+        faction: Faction::Neutral,
         combat: Some(CombatStats {
             hp: 80.0, damage: 10.0, attack_range: 1.8, attack_cooldown_secs: 1.2,
             aggro_range: Some(18.0), is_ranged: false, projectile_speed: None,
@@ -1061,7 +1204,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Orc, Blueprint {
         kind: EntityKind::Orc,
-        faction: Faction::Enemy,
+        faction: Faction::Neutral,
         combat: Some(CombatStats {
             hp: 120.0, damage: 15.0, attack_range: 2.0, attack_cooldown_secs: 1.2,
             aggro_range: Some(20.0), is_ranged: false, projectile_speed: None,
@@ -1083,7 +1226,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::Demon, Blueprint {
         kind: EntityKind::Demon,
-        faction: Faction::Enemy,
+        faction: Faction::Neutral,
         combat: Some(CombatStats {
             hp: 200.0, damage: 25.0, attack_range: 2.2, attack_cooldown_secs: 1.2,
             aggro_range: Some(25.0), is_ranged: false, projectile_speed: None,
@@ -1107,7 +1250,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::SkeletonMinion, Blueprint {
         kind: EntityKind::SkeletonMinion,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 40.0, damage: 6.0, attack_range: 1.5, attack_cooldown_secs: 1.0,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -1128,7 +1271,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::SpiritWolf, Blueprint {
         kind: EntityKind::SpiritWolf,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 60.0, damage: 8.0, attack_range: 1.8, attack_cooldown_secs: 0.8,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -1149,7 +1292,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
     blueprints.insert(EntityKind::FireElemental, Blueprint {
         kind: EntityKind::FireElemental,
-        faction: Faction::Player,
+        faction: Faction::Player1,
         combat: Some(CombatStats {
             hp: 80.0, damage: 12.0, attack_range: 3.0, attack_cooldown_secs: 1.5,
             aggro_range: None, is_ranged: false, projectile_speed: None,
@@ -1173,6 +1316,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
 // ── Spawn from blueprint ──
 
+/// Spawn with default faction from blueprint (backward compat).
 pub fn spawn_from_blueprint(
     commands: &mut Commands,
     cache: &EntityVisualCache,
@@ -1182,6 +1326,22 @@ pub fn spawn_from_blueprint(
     building_models: Option<&BuildingModelAssets>,
     unit_models: Option<&UnitModelAssets>,
     height_map: &HeightMap,
+) -> Entity {
+    let bp = registry.get(kind);
+    spawn_from_blueprint_with_faction(commands, cache, kind, pos, registry, building_models, unit_models, height_map, bp.faction)
+}
+
+/// Spawn an entity from a blueprint with an explicit faction.
+pub fn spawn_from_blueprint_with_faction(
+    commands: &mut Commands,
+    cache: &EntityVisualCache,
+    kind: EntityKind,
+    pos: Vec3,
+    registry: &BlueprintRegistry,
+    building_models: Option<&BuildingModelAssets>,
+    unit_models: Option<&UnitModelAssets>,
+    height_map: &HeightMap,
+    faction: Faction,
 ) -> Entity {
     let bp = registry.get(kind);
 
@@ -1206,7 +1366,7 @@ pub fn spawn_from_blueprint(
         // GLTF buildings/characters: no Mesh3d/MeshMaterial3d on parent
         commands.spawn((
             kind,
-            bp.faction,
+            faction,
             PickRadius(pick_radius),
             Transform::from_translation(Vec3::new(pos.x, y, pos.z))
                 .with_scale(Vec3::splat(bp.visual.scale)),
@@ -1221,7 +1381,7 @@ pub fn spawn_from_blueprint(
     } else {
         commands.spawn((
             kind,
-            bp.faction,
+            faction,
             PickRadius(pick_radius),
             Mesh3d(mesh_handle),
             MeshMaterial3d(mat_handle),
@@ -1242,14 +1402,11 @@ pub fn spawn_from_blueprint(
             entity_cmds.insert(Unit);
         }
         EntityCategory::Mob => {
-            entity_cmds.insert(Mob);
+            entity_cmds.insert((Mob, FogHideable::Mob));
         }
         EntityCategory::Building => {
-            let footprint = match kind {
-                EntityKind::Base | EntityKind::Storage => BuildingFootprint(7.0),
-                _ => BuildingFootprint(2.5),
-            };
-            entity_cmds.insert((Building, BuildingLevel(1), footprint));
+            let footprint = crate::buildings::footprint_for_kind(kind);
+            entity_cmds.insert((Building, BuildingLevel(1), BuildingFootprint(footprint)));
             if let Some(ref bd) = bp.building {
                 let mut construction_timer = Timer::from_seconds(bd.construction_time_secs, TimerMode::Once);
                 construction_timer.pause();
@@ -1264,9 +1421,57 @@ pub fn spawn_from_blueprint(
             if kind == EntityKind::Tower {
                 entity_cmds.insert(TowerAutoAttackEnabled(true));
             }
-            // Base and Storage are deposit points
-            if kind == EntityKind::Base || kind == EntityKind::Storage {
-                entity_cmds.insert((DepositPoint, StorageInventory::default()));
+            // Base and Storage are deposit points with different capacities
+            if kind == EntityKind::Base {
+                entity_cmds.insert((DepositPoint, StorageInventory { capacity: 300, ..default() }));
+            } else if kind == EntityKind::Storage {
+                entity_cmds.insert((DepositPoint, StorageInventory { capacity: 500, ..default() }));
+            }
+            // Resource processing buildings
+            match kind {
+                EntityKind::Sawmill => {
+                    entity_cmds.insert((
+                        DepositPoint,
+                        StorageInventory { capacity: 200, ..default() },
+                        ResourceProcessor {
+                            resource_types: vec![ResourceType::Wood],
+                            harvest_radius: 15.0,
+                            harvest_rate: 3.0,
+                            max_workers: 3,
+                            buffer: 0,
+                            buffer_capacity: 50,
+                        },
+                    ));
+                }
+                EntityKind::Mine => {
+                    entity_cmds.insert((
+                        DepositPoint,
+                        StorageInventory { capacity: 200, ..default() },
+                        ResourceProcessor {
+                            resource_types: vec![ResourceType::Copper, ResourceType::Iron, ResourceType::Gold],
+                            harvest_radius: 12.0,
+                            harvest_rate: 2.0,
+                            max_workers: 3,
+                            buffer: 0,
+                            buffer_capacity: 40,
+                        },
+                    ));
+                }
+                EntityKind::OilRig => {
+                    entity_cmds.insert((
+                        DepositPoint,
+                        StorageInventory { capacity: 150, ..default() },
+                        ResourceProcessor {
+                            resource_types: vec![ResourceType::Oil],
+                            harvest_radius: 12.0,
+                            harvest_rate: 1.5,
+                            max_workers: 0, // Fully automated
+                            buffer: 0,
+                            buffer_capacity: 30,
+                        },
+                    ));
+                }
+                _ => {}
             }
         }
     }

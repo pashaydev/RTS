@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
+use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint_with_faction};
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
@@ -9,7 +9,11 @@ pub struct UnitsPlugin;
 
 impl Plugin for UnitsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostStartup, spawn_units)
+        app.init_resource::<ActivePlayer>()
+            .init_resource::<AllPlayerResources>()
+            .init_resource::<AllCompletedBuildings>()
+            .init_resource::<TeamConfig>()
+            .add_systems(PostStartup, spawn_all_players)
             .add_systems(
                 Update,
                 (steer_avoidance, move_units).chain(),
@@ -22,40 +26,52 @@ pub fn y_offset_for(kind: EntityKind, registry: &BlueprintRegistry) -> f32 {
     bp.movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8)
 }
 
-fn spawn_units(
+fn spawn_all_players(
     mut commands: Commands,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
     building_models: Option<Res<BuildingModelAssets>>,
     unit_models: Option<Res<UnitModelAssets>>,
-    mut completed_buildings: ResMut<CompletedBuildings>,
+    mut all_completed: ResMut<AllCompletedBuildings>,
+    mut all_resources: ResMut<AllPlayerResources>,
     height_map: Res<HeightMap>,
 ) {
-    // Spawn a pre-built Base at the origin
-    let base_pos = Vec3::new(0.0, 0.0, 0.0);
-    let base_entity = spawn_from_blueprint(&mut commands, &cache, EntityKind::Base, base_pos, &registry, building_models.as_deref(), None, &height_map);
+    for &(faction, (sx, sz)) in &SPAWN_POSITIONS {
+        let base_pos = Vec3::new(sx, 0.0, sz);
+        let base_entity = spawn_from_blueprint_with_faction(
+            &mut commands, &cache, EntityKind::Base, base_pos,
+            &registry, building_models.as_deref(), None, &height_map, faction,
+        );
 
-    // Override: mark it as already complete (remove construction state)
-    commands.entity(base_entity).remove::<ConstructionProgress>();
-    commands.entity(base_entity).insert(BuildingState::Complete);
-    commands.entity(base_entity).insert(TrainingQueue {
-        queue: vec![],
-        timer: None,
-    });
+        // Mark as already complete
+        commands.entity(base_entity).remove::<ConstructionProgress>();
+        commands.entity(base_entity).insert(BuildingState::Complete);
+        commands.entity(base_entity).insert(TrainingQueue {
+            queue: vec![],
+            timer: None,
+        });
 
-    // Register Base as completed
-    if !completed_buildings.completed.contains(&EntityKind::Base) {
-        completed_buildings.completed.push(EntityKind::Base);
-    }
+        // Register Base as completed for this faction
+        let completed = all_completed.per_faction.entry(faction).or_default();
+        if !completed.contains(&EntityKind::Base) {
+            completed.push(EntityKind::Base);
+        }
 
-    // Spawn 3 workers near the base
-    let worker_positions = [
-        Vec3::new(3.0, 0.0, 0.0),
-        Vec3::new(-3.0, 0.0, 2.0),
-        Vec3::new(0.0, 0.0, -3.0),
-    ];
-    for pos in worker_positions {
-        spawn_from_blueprint(&mut commands, &cache, EntityKind::Worker, pos, &registry, None, unit_models.as_deref(), &height_map);
+        // Initialize resources for this faction
+        all_resources.resources.insert(faction, PlayerResources::default());
+
+        // Spawn 3 workers near the base
+        let worker_offsets = [
+            Vec3::new(3.0, 0.0, 0.0),
+            Vec3::new(-3.0, 0.0, 2.0),
+            Vec3::new(0.0, 0.0, -3.0),
+        ];
+        for offset in worker_offsets {
+            spawn_from_blueprint_with_faction(
+                &mut commands, &cache, EntityKind::Worker, base_pos + offset,
+                &registry, None, unit_models.as_deref(), &height_map, faction,
+            );
+        }
     }
 }
 

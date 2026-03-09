@@ -1,53 +1,83 @@
 {
-  "Ambient Light": {
-    "Brightness": 189.8053,
-    "Color B": 0.4326843,
-    "Color G": 0.39085537,
-    "Color R": 0.5326843,
+  "Entities/Selected": {
+    "Set HP %": 100.0,
+    "Set Speed": 5.0
+  },
+  "Entities/Spawn": {
+    "Click to Place": false
+  },
+  "Game/Player Control": {},
+  "Game/Save & Load": {},
+  "Visuals/Ambient Light": {
+    "Brightness": 291.2242,
+    "Color B": 0.77806056,
+    "Color G": 0.82074744,
+    "Color R": 0.87074745,
     "Override": false
   },
-  "FoW Gameplay": {
-    "Decay Value": 0.5,
+  "Visuals/Entity Lights": {
+    "Building Intensity": 150000.0,
+    "Cell Size": 15.0,
+    "Day Factor": 0.3,
+    "Enabled": true,
+    "Max Lights": 64.0,
+    "Night Factor": 1.0,
+    "Unit Intensity": 80000.0
+  },
+  "Visuals/FoW Fog Noise": {
+    "Contrast": 0.2,
+    "Octaves": 4.0,
+    "Scale": 5.0,
+    "Speed": 0.01,
+    "Tendril Scale": 6.0,
+    "Tendril Strength": 0.3,
+    "Warp": 0.8,
+    "Warp Speed": 0.5
+  },
+  "Visuals/FoW Gameplay": {
+    "Enable LOS": 1.0,
+    "LOS Ray Count": 48.0,
     "Mob Threshold": 0.8,
     "Object Threshold": 0.4,
+    "Transition Speed": 4.0,
     "VFX Threshold": 0.3
   },
-  "FoW Shader": {
-    "Edge Glow Intensity": 0.0,
-    "Edge Glow Width": 0.14,
-    "Explored Tint A": 0.15,
-    "Explored Tint B": 0.0,
-    "Explored Tint G": 0.0,
-    "Explored Tint R": 0.0,
-    "Fog Color A": 0.21,
-    "Fog Color B": 0.72999996,
-    "Fog Color G": 0.66999996,
-    "Fog Color R": 0.089999996,
-    "Glow Color A": 0.0,
-    "Glow Color B": 0.0,
-    "Glow Color G": 0.0,
-    "Glow Color R": 0.0,
-    "Noise Scale": 12.5
+  "Visuals/FoW Shader": {
+    "Edge Glow Intensity": 1.4,
+    "Edge Glow Width": 0.22999999,
+    "Explored Tint A": 0.16,
+    "Explored Tint B": 1.0,
+    "Explored Tint G": 0.97999996,
+    "Explored Tint R": 1.0,
+    "Fog Color A": 0.29999998,
+    "Fog Color B": 1.0,
+    "Fog Color G": 1.0,
+    "Fog Color R": 1.0,
+    "Glow Color A": 0.14999999,
+    "Glow Color B": 0.8,
+    "Glow Color G": 0.5,
+    "Glow Color R": 0.3,
+    "Noise Scale": 10.0
   },
-  "Sky Color": {
-    "Color B": 0.42859876,
-    "Color G": 0.37451324,
-    "Color R": 0.55408555,
+  "Visuals/Sky Color": {
+    "Color B": 0.7317171,
+    "Color G": 0.6317171,
+    "Color R": 0.5926869,
     "Override": false
   },
-  "Sunlight": {
-    "Color B": 0.24085538,
-    "Color G": 0.52451324,
-    "Color R": 0.9877434,
-    "Illuminance": 3245.1323,
+  "Visuals/Sunlight": {
+    "Color B": 0.6707474,
+    "Color G": 0.78537375,
+    "Color R": 0.8609697,
+    "Illuminance": 5780.606,
     "Override": false,
-    "Pitch": -0.20311202,
+    "Pitch": -0.75246465,
     "Shadows": true,
-    "Yaw": 0.30000004
+    "Yaw": 0.3
   },
-  "Time of Day": {
+  "Visuals/Time of Day": {
     "Cycle Duration": 600.0,
     "Paused": false,
-    "Time": 0.7061184
+    "Time": 0.458637
   }
 }

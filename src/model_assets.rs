@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use crate::blueprints::EntityKind;
-use crate::components::{AnimState, IconAssets, ModelAssets};
+use crate::components::{AnimState, AttentionIconAssets, IconAssets, ModelAssets};
 
 pub struct ModelAssetsPlugin;
 
@@ -45,6 +45,15 @@ impl Plugin for ModelAssetsPlugin {
             fire_elemental: asset_server.load("icons/summons/fire_elemental.png"),
         };
         app.insert_resource(icons);
+
+        // Load attention icon assets (CC BY 3.0, game-icons.net by Lorc)
+        let attention_icons = AttentionIconAssets {
+            under_attack: asset_server.load("icons/attention/under_attack.png"),
+            gathering: asset_server.load("icons/attention/gathering.png"),
+            attacking: asset_server.load("icons/attention/attacking.png"),
+            building: asset_server.load("icons/attention/building.png"),
+        };
+        app.insert_resource(attention_icons);
 
         // Load building GLTF model assets eagerly so they're available to Startup systems
         let building_models = load_building_model_assets_eager(&asset_server);

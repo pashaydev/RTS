@@ -1,3 +1,4 @@
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, IsRanged};
@@ -24,16 +25,15 @@ impl Plugin for CombatPlugin {
 
 fn player_auto_acquire_target(
     mut commands: Commands,
+    teams: Res<TeamConfig>,
     idle_units: Query<
         (Entity, &Transform, &AttackRange, &Faction, Option<&WorkerTask>),
         (With<Unit>, Without<MoveTarget>, Without<AttackTarget>),
     >,
-    mobs: Query<(Entity, &Transform), With<Mob>>,
+    potential_targets: Query<(Entity, &Transform, &Faction), Or<(With<Mob>, With<Unit>)>>,
+    buildings_with_faction: Query<(Entity, &Transform, &Faction), With<Building>>,
 ) {
     for (unit_entity, unit_tf, range, faction, worker_task) in &idle_units {
-        if *faction != Faction::Player {
-            continue;
-        }
         // Skip workers that are busy (not idle)
         if let Some(task) = worker_task {
             if !matches!(task, WorkerTask::Idle) {
@@ -42,17 +42,36 @@ fn player_auto_acquire_target(
         }
         let scan_range = range.0 * 2.0;
         let mut closest_dist = f32::MAX;
-        let mut closest_mob = None;
+        let mut closest_target = None;
 
-        for (mob_entity, mob_tf) in &mobs {
-            let dist = unit_tf.translation.distance(mob_tf.translation);
+        // Check units and mobs
+        for (target_entity, target_tf, target_faction) in &potential_targets {
+            if target_entity == unit_entity {
+                continue;
+            }
+            if !teams.is_hostile(faction, target_faction) {
+                continue;
+            }
+            let dist = unit_tf.translation.distance(target_tf.translation);
             if dist < scan_range && dist < closest_dist {
                 closest_dist = dist;
-                closest_mob = Some(mob_entity);
+                closest_target = Some(target_entity);
             }
         }
 
-        if let Some(target) = closest_mob {
+        // Also check hostile buildings
+        for (target_entity, target_tf, target_faction) in &buildings_with_faction {
+            if !teams.is_hostile(faction, target_faction) {
+                continue;
+            }
+            let dist = unit_tf.translation.distance(target_tf.translation);
+            if dist < scan_range && dist < closest_dist {
+                closest_dist = dist;
+                closest_target = Some(target_entity);
+            }
+        }
+
+        if let Some(target) = closest_target {
             commands.entity(unit_entity).insert(AttackTarget(target));
         }
     }
@@ -129,10 +148,13 @@ fn execute_melee_attacks(
                 start_scale: 0.3,
                 end_scale: 0.8,
             },
+            FogHideable::Vfx,
             Mesh3d(vfx.sphere_mesh.clone()),
             MeshMaterial3d(vfx.melee_material.clone()),
             Transform::from_translation(target_tf.translation)
                 .with_scale(Vec3::splat(0.3)),
+            NotShadowCaster,
+            NotShadowReceiver,
         ));
     }
 }
@@ -171,10 +193,13 @@ fn execute_ranged_attacks(
                 speed: 15.0,
                 damage: damage.0,
             },
+            FogHideable::Vfx,
             Mesh3d(vfx.sphere_mesh.clone()),
             MeshMaterial3d(vfx.projectile_material.clone()),
             Transform::from_translation(atk_tf.translation + Vec3::Y * 0.5)
                 .with_scale(Vec3::splat(0.15)),
+            NotShadowCaster,
+            NotShadowReceiver,
         ));
     }
 }

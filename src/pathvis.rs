@@ -59,12 +59,17 @@ fn spawn_path_visualization(
     mut commands: Commands,
     path_assets: Res<PathVisAssets>,
     height_map: Res<HeightMap>,
+    active_player: Res<ActivePlayer>,
     mut units: Query<
-        (Entity, &Transform, &MoveTarget, Option<&mut PathVisEntities>),
+        (Entity, &Transform, &MoveTarget, &Faction, Option<&mut PathVisEntities>),
         With<Unit>,
     >,
 ) {
-    for (entity, transform, move_target, vis_entities) in &mut units {
+    for (entity, transform, move_target, faction, vis_entities) in &mut units {
+        // Only show path visualization for the active player's units
+        if *faction != active_player.0 {
+            continue;
+        }
         let pos = transform.translation;
         let target = move_target.0;
 

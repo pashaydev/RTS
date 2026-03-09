@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy::ecs::message::MessageReader;
 
-use crate::components::{DragState, RtsCamera};
+use crate::components::{CursorOverUi, DragState, RtsCamera, SPAWN_POSITIONS};
 
 // ── Tuning constants ──
 
@@ -23,22 +23,36 @@ pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_camera).add_systems(
-            Update,
-            (
-                camera_pan_input,
-                camera_edge_scroll,
-                camera_zoom_input,
-                camera_rotate_input,
-                camera_smooth_update,
-            )
-                .chain(),
-        );
+        app.init_resource::<CursorOverUi>()
+            .add_systems(Startup, spawn_camera)
+            .add_systems(
+                Update,
+                (
+                    update_cursor_over_ui,
+                    camera_pan_input,
+                    camera_edge_scroll,
+                    camera_zoom_input,
+                    camera_rotate_input,
+                    camera_smooth_update,
+                )
+                    .chain(),
+            );
     }
 }
 
+fn update_cursor_over_ui(
+    interactions: Query<&Interaction, With<Node>>,
+    mut cursor_over_ui: ResMut<CursorOverUi>,
+) {
+    cursor_over_ui.0 = interactions
+        .iter()
+        .any(|i| *i == Interaction::Hovered || *i == Interaction::Pressed);
+}
+
 fn spawn_camera(mut commands: Commands) {
-    let pivot = Vec3::ZERO;
+    // Start camera at Player1's spawn position
+    let (_, (sx, sz)) = SPAWN_POSITIONS[0];
+    let pivot = Vec3::new(sx, 0.0, sz);
     let distance = 60.0_f32;
     let angle = 0.0_f32;
 
@@ -108,9 +122,10 @@ fn camera_pan_input(
 fn camera_edge_scroll(
     windows: Query<&Window, With<PrimaryWindow>>,
     drag: Res<DragState>,
+    cursor_over_ui: Res<CursorOverUi>,
     mut query: Query<&mut RtsCamera>,
 ) {
-    if drag.dragging {
+    if drag.dragging || cursor_over_ui.0 {
         return;
     }
 
@@ -162,6 +177,7 @@ fn camera_edge_scroll(
 fn camera_zoom_input(
     mut scroll_events: MessageReader<MouseWheel>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    cursor_over_ui: Res<CursorOverUi>,
     time: Res<Time>,
     mut query: Query<&mut RtsCamera>,
 ) {
@@ -169,12 +185,17 @@ fn camera_zoom_input(
         return;
     };
 
-    for ev in scroll_events.read() {
-        let scroll = match ev.unit {
-            MouseScrollUnit::Line => ev.y,
-            MouseScrollUnit::Pixel => ev.y / 16.0,
-        };
-        cam.target_distance *= 1.0 - scroll * ZOOM_SENSITIVITY;
+    if !cursor_over_ui.0 {
+        for ev in scroll_events.read() {
+            let scroll = match ev.unit {
+                MouseScrollUnit::Line => ev.y,
+                MouseScrollUnit::Pixel => ev.y / 16.0,
+            };
+            cam.target_distance *= 1.0 - scroll * ZOOM_SENSITIVITY;
+        }
+    } else {
+        // Drain scroll events so they don't queue up
+        scroll_events.read().last();
     }
 
     let key_zoom_speed = 2.0 * time.delta_secs();

@@ -1,10 +1,11 @@
 use bevy::prelude::*;
+use serde::{Deserialize, Serialize};
 
 use crate::blueprints::EntityKind;
 
 // ── Resource types ──
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
 pub enum ResourceType {
     Wood,
     Copper,
@@ -67,6 +68,10 @@ pub struct UiClickedThisFrame(pub u8);
 #[derive(Resource, Default)]
 pub struct UiPressActive(pub bool);
 
+/// True when the cursor is hovering any UI node (blocks camera input).
+#[derive(Resource, Default)]
+pub struct CursorOverUi(pub bool);
+
 #[derive(Component)]
 pub struct HoverRing;
 
@@ -105,10 +110,13 @@ impl Default for Health {
 pub enum WorkerTask {
     #[default]
     Idle,
+    /// Player issued a manual move command — do NOT auto-gather until arrival.
+    ManualMove,
     MovingToResource(Entity),
     Gathering(Entity),
     ReturningToDeposit { depot: Entity, gather_node: Option<Entity> },
     Depositing { depot: Entity, gather_node: Option<Entity> },
+    WaitingForStorage { depot: Entity, gather_node: Option<Entity> },
     MovingToBuild(Entity),
     Building(Entity),
 }
@@ -165,6 +173,10 @@ impl StorageInventory {
         self.wood + self.copper + self.iron + self.gold + self.oil
     }
 
+    pub fn remaining_capacity(&self) -> u32 {
+        self.capacity.saturating_sub(self.total())
+    }
+
     pub fn get(&self, rt: ResourceType) -> u32 {
         match rt {
             ResourceType::Wood => self.wood,
@@ -174,7 +186,46 @@ impl StorageInventory {
             ResourceType::Oil => self.oil,
         }
     }
+
+    /// Add resources up to capacity. Returns amount actually stored.
+    pub fn add_capped(&mut self, rt: ResourceType, amount: u32) -> u32 {
+        let can_fit = self.remaining_capacity().min(amount);
+        if can_fit == 0 {
+            return 0;
+        }
+        match rt {
+            ResourceType::Wood => self.wood += can_fit,
+            ResourceType::Copper => self.copper += can_fit,
+            ResourceType::Iron => self.iron += can_fit,
+            ResourceType::Gold => self.gold += can_fit,
+            ResourceType::Oil => self.oil += can_fit,
+        }
+        can_fit
+    }
 }
+
+// ── Resource Processing Buildings ──
+
+/// Marks a building as a resource processor that auto-harvests nearby nodes.
+#[derive(Component)]
+pub struct ResourceProcessor {
+    /// Which resource types this building can harvest
+    pub resource_types: Vec<ResourceType>,
+    /// Radius to claim nearby resource nodes
+    pub harvest_radius: f32,
+    /// Base harvest rate (units per second)
+    pub harvest_rate: f32,
+    /// Max workers that can be assigned to boost output
+    pub max_workers: u8,
+    /// Internal buffer before transfer to storage
+    pub buffer: u32,
+    /// Max buffer size
+    pub buffer_capacity: u32,
+}
+
+/// Worker assigned to work inside a resource processing building
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct AssignedToProcessor(pub Entity);
 
 #[derive(Component)]
 pub struct CarryVisual(pub Entity);
@@ -209,7 +260,7 @@ pub struct ResourceNode {
 
 // ── Global resources ──
 
-#[derive(Resource)]
+#[derive(Resource, Serialize, Deserialize)]
 pub struct PlayerResources {
     pub wood: u32,
     pub copper: u32,
@@ -231,6 +282,10 @@ impl Default for PlayerResources {
 }
 
 impl PlayerResources {
+    pub fn empty() -> Self {
+        Self { wood: 0, copper: 0, iron: 0, gold: 0, oil: 0 }
+    }
+
     pub fn add(&mut self, rt: ResourceType, amount: u32) {
         match rt {
             ResourceType::Wood => self.wood += amount,
@@ -414,11 +469,138 @@ pub struct AttackRange(pub f32);
 #[derive(Component)]
 pub struct AggroRange(pub f32);
 
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
 pub enum Faction {
-    Player,
-    Enemy,
+    Player1,
+    Player2,
+    Player3,
+    Player4,
+    Neutral,
 }
+
+impl Faction {
+    pub const PLAYERS: [Faction; 4] = [Faction::Player1, Faction::Player2, Faction::Player3, Faction::Player4];
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Faction::Player1 => "Player 1",
+            Faction::Player2 => "Player 2",
+            Faction::Player3 => "Player 3",
+            Faction::Player4 => "Player 4",
+            Faction::Neutral => "Neutral",
+        }
+    }
+
+    pub fn color(&self) -> Color {
+        match self {
+            Faction::Player1 => Color::srgb(0.2, 0.6, 1.0),   // Blue
+            Faction::Player2 => Color::srgb(1.0, 0.3, 0.2),   // Red
+            Faction::Player3 => Color::srgb(0.7, 0.3, 0.9),   // Purple
+            Faction::Player4 => Color::srgb(0.2, 0.8, 0.3),   // Green
+            Faction::Neutral => Color::srgb(0.8, 0.2, 0.2),
+        }
+    }
+}
+
+/// Team configuration — factions with the same team number are allied.
+#[derive(Resource)]
+pub struct TeamConfig {
+    pub teams: std::collections::HashMap<Faction, u8>,
+}
+
+impl Default for TeamConfig {
+    fn default() -> Self {
+        // Default: 2v2 — P1+P2 (team 0) vs P3+P4 (team 1)
+        let mut teams = std::collections::HashMap::new();
+        teams.insert(Faction::Player1, 0);
+        teams.insert(Faction::Player2, 0);
+        teams.insert(Faction::Player3, 1);
+        teams.insert(Faction::Player4, 1);
+        Self { teams }
+    }
+}
+
+impl TeamConfig {
+    /// Two factions are allied if they share the same team number.
+    pub fn is_allied(&self, a: &Faction, b: &Faction) -> bool {
+        if a == b { return true; }
+        if *a == Faction::Neutral || *b == Faction::Neutral { return false; }
+        match (self.teams.get(a), self.teams.get(b)) {
+            (Some(ta), Some(tb)) => ta == tb,
+            _ => false,
+        }
+    }
+
+    /// Two factions are hostile if they are NOT allied.
+    pub fn is_hostile(&self, a: &Faction, b: &Faction) -> bool {
+        !self.is_allied(a, b)
+    }
+
+    /// All factions on the same team as `faction` (including itself).
+    pub fn allies_of(&self, faction: &Faction) -> Vec<Faction> {
+        if *faction == Faction::Neutral { return vec![Faction::Neutral]; }
+        let team = self.teams.get(faction).copied();
+        match team {
+            Some(t) => self.teams.iter()
+                .filter(|(_, &team_num)| team_num == t)
+                .map(|(&f, _)| f)
+                .collect(),
+            None => vec![*faction],
+        }
+    }
+}
+
+/// Which faction the human player is currently controlling.
+#[derive(Resource)]
+pub struct ActivePlayer(pub Faction);
+
+impl Default for ActivePlayer {
+    fn default() -> Self {
+        Self(Faction::Player1)
+    }
+}
+
+/// Per-faction resource storage.
+#[derive(Resource, Default)]
+pub struct AllPlayerResources {
+    pub resources: std::collections::HashMap<Faction, PlayerResources>,
+}
+
+impl AllPlayerResources {
+    pub fn get(&self, faction: &Faction) -> &PlayerResources {
+        static DEFAULT: std::sync::LazyLock<PlayerResources> = std::sync::LazyLock::new(PlayerResources::empty);
+        self.resources.get(faction).unwrap_or(&DEFAULT)
+    }
+
+    pub fn get_mut(&mut self, faction: &Faction) -> &mut PlayerResources {
+        self.resources.entry(*faction).or_insert_with(PlayerResources::empty)
+    }
+}
+
+/// Per-faction completed buildings tracker.
+#[derive(Resource, Default)]
+pub struct AllCompletedBuildings {
+    pub per_faction: std::collections::HashMap<Faction, Vec<EntityKind>>,
+}
+
+impl AllCompletedBuildings {
+    pub fn has(&self, faction: &Faction, kind: EntityKind) -> bool {
+        self.per_faction.get(faction).map_or(false, |v| v.contains(&kind))
+    }
+
+    pub fn completed_for(&self, faction: &Faction) -> &[EntityKind] {
+        static EMPTY: Vec<EntityKind> = Vec::new();
+        self.per_faction.get(faction).map_or(&EMPTY, |v| v.as_slice())
+    }
+}
+
+/// Spawn positions for each faction (map corners, avoiding mob camps).
+pub const SPAWN_POSITIONS: [(Faction, (f32, f32)); 4] = [
+    (Faction::Player1, (-200.0, -200.0)),
+    (Faction::Player2, (200.0, -200.0)),
+    (Faction::Player3, (-200.0, 200.0)),
+    (Faction::Player4, (200.0, 200.0)),
+];
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PatrolStateKind {
@@ -442,24 +624,77 @@ pub struct PatrolState {
 #[derive(Component)]
 pub struct VisionRange(pub f32);
 
+/// Two-layer fog of war map: `visible` (per-frame) + `explored` (permanent).
 #[derive(Resource)]
 pub struct FogOfWarMap {
-    pub visibility: Vec<f32>,
+    /// Currently visible intensity per cell (0.0–1.0). Cleared each frame.
+    pub visible: Vec<f32>,
+    /// Permanent explored flag per cell. Once `true`, never reverts.
+    pub explored: Vec<bool>,
+    /// Smoothly interpolated display value for rendering/entity hiding.
+    pub display: Vec<f32>,
     pub grid_size: usize,
     pub map_size: f32,
 }
 
 impl FogOfWarMap {
-    pub fn get_visibility(&self, x: f32, z: f32) -> f32 {
+    fn world_to_idx(&self, x: f32, z: f32) -> Option<usize> {
         let half = self.map_size / 2.0;
         let step = self.map_size / (self.grid_size - 1) as f32;
         let ix = ((x + half) / step).round() as usize;
         let iz = ((z + half) / step).round() as usize;
         if ix >= self.grid_size || iz >= self.grid_size {
-            return 0.0;
+            return None;
         }
-        self.visibility[iz * self.grid_size + ix]
+        Some(iz * self.grid_size + ix)
     }
+
+    /// Current-frame visibility (0.0–1.0). Use for gameplay logic.
+    pub fn get_visible(&self, x: f32, z: f32) -> f32 {
+        self.world_to_idx(x, z)
+            .map(|i| self.visible[i])
+            .unwrap_or(0.0)
+    }
+
+    /// Has this cell ever been seen?
+    pub fn is_explored(&self, x: f32, z: f32) -> bool {
+        self.world_to_idx(x, z)
+            .map(|i| self.explored[i])
+            .unwrap_or(false)
+    }
+
+    /// Smoothed display value for rendering (0.0–1.0).
+    pub fn get_display(&self, x: f32, z: f32) -> f32 {
+        self.world_to_idx(x, z)
+            .map(|i| self.display[i])
+            .unwrap_or(0.0)
+    }
+
+    /// Backward-compatible: 1.0 if visible, 0.5 if explored, 0.0 if unexplored.
+    pub fn get_visibility(&self, x: f32, z: f32) -> f32 {
+        self.world_to_idx(x, z)
+            .map(|i| {
+                if self.visible[i] > 0.01 {
+                    0.5 + 0.5 * self.visible[i]
+                } else if self.explored[i] {
+                    0.5
+                } else {
+                    0.0
+                }
+            })
+            .unwrap_or(0.0)
+    }
+}
+
+/// Determines how visible an entity must be before it's shown through fog.
+#[derive(Component, Clone, Copy)]
+pub enum FogHideable {
+    /// Enemies — high threshold (0.8), only show when clearly visible
+    Mob,
+    /// Resources, decorations, trees — medium threshold (0.4)
+    Object,
+    /// Projectiles, VFX — low threshold (0.3)
+    Vfx,
 }
 
 #[derive(Component)]
@@ -592,6 +827,10 @@ impl IconAssets {
             EntityKind::Temple => self.temple.clone(),
             EntityKind::Stable => self.stable.clone(),
             EntityKind::SiegeWorks => self.siege_works.clone(),
+            // Resource processing buildings (reuse storage icon for now)
+            EntityKind::Sawmill => self.storage.clone(),
+            EntityKind::Mine => self.workshop.clone(),
+            EntityKind::OilRig => self.workshop.clone(),
             // Mobs
             EntityKind::Goblin => self.goblin.clone(),
             EntityKind::Skeleton => self.skeleton.clone(),
@@ -702,7 +941,7 @@ pub struct Building;
 #[derive(Component)]
 pub struct BuildingFootprint(pub f32);
 
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum BuildingState {
     UnderConstruction,
     Complete,
@@ -902,6 +1141,13 @@ pub struct BuildingGhostMaterials {
 #[derive(Component)]
 pub struct GhostBuilding;
 
+#[derive(Component)]
+pub struct GhostValid(pub bool);
+
+/// Marker for mesh entities under the ghost whose materials have been overridden.
+#[derive(Component)]
+pub struct GhostMaterialApplied;
+
 // ── Card-Hand UI components ──
 
 #[derive(Component)]
@@ -926,22 +1172,83 @@ pub struct CardAnimState {
     pub target_scale: f32,
     pub target_rotation_deg: f32,
     pub target_opacity: f32,
+    /// Per-card sine offset for idle breathing animation
+    pub idle_phase: f32,
+    /// Current pseudo-3D tilt (degrees)
+    pub tilt_x_deg: f32,
+    /// Target tilt toward cursor (degrees)
+    pub target_tilt_x_deg: f32,
+    /// Accumulated time for glow pulsing
+    pub glow_pulse: f32,
 }
 
 impl CardAnimState {
-    pub fn new(rotation_deg: f32, offset_y: f32) -> Self {
+    pub fn new(rotation_deg: f32, offset_y: f32, index: usize) -> Self {
         Self {
-            offset_y: -200.0,
-            scale: 0.5,
+            offset_y: -250.0,
+            scale: 0.2,
             rotation_deg,
             opacity: 0.0,
             target_offset_y: offset_y,
-            target_scale: 1.0,
+            target_scale: 0.58,
             target_rotation_deg: rotation_deg,
             target_opacity: 1.0,
+            idle_phase: index as f32 * 1.3,
+            tilt_x_deg: 0.0,
+            target_tilt_x_deg: 0.0,
+            glow_pulse: 0.0,
         }
     }
 }
+
+#[derive(Component)]
+pub struct CardDragState {
+    pub dragging: bool,
+    pub screen_pos: Vec2,
+    pub velocity: Vec2,
+    pub pickup_origin: Vec2,
+    pub drag_distance: f32,
+}
+
+impl Default for CardDragState {
+    fn default() -> Self {
+        Self {
+            dragging: false,
+            screen_pos: Vec2::ZERO,
+            velocity: Vec2::ZERO,
+            pickup_origin: Vec2::ZERO,
+            drag_distance: 0.0,
+        }
+    }
+}
+
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CardTier {
+    Common,
+    Uncommon,
+    Rare,
+    Epic,
+}
+
+impl CardTier {
+    pub fn from_total_cost(total: u32) -> Self {
+        match total {
+            0..100 => CardTier::Common,
+            100..250 => CardTier::Uncommon,
+            250..500 => CardTier::Rare,
+            _ => CardTier::Epic,
+        }
+    }
+}
+
+#[derive(Component)]
+pub struct CardBorderGlow;
+
+#[derive(Component)]
+pub struct CardShineEffect;
+
+#[derive(Component)]
+pub struct CardIconContainer;
 
 #[derive(Component)]
 pub struct CardDealIn {
@@ -982,11 +1289,54 @@ pub fn fan_params(index: usize, total: usize) -> (f32, f32) {
     }
     let t = index as f32 / (total - 1) as f32;
     let centered = t - 0.5;
-    let rotation_deg = centered * 10.0;
-    let y_offset = centered.abs() * 20.0;
+    let rotation_deg = centered * 22.0;
+    let y_offset = centered.abs() * 40.0;
     (rotation_deg, y_offset)
 }
 
 /// Marker for standard (non-ghost) buttons that receive hover/press visuals.
 #[derive(Component)]
 pub struct StandardButton;
+
+// ── Attention & Damage Popup components ──
+
+/// Tracks previous frame's health to detect damage without modifying combat code.
+#[derive(Component)]
+pub struct PreviousHealth(pub f32);
+
+/// Timer reset whenever a unit takes damage; drives the "under attack" icon.
+#[derive(Component)]
+pub struct UnderAttackTimer(pub Timer);
+
+/// Floating damage/heal number anchored to a world position.
+#[derive(Component)]
+pub struct DamagePopup {
+    pub timer: Timer,
+    pub amount: f32,
+    pub is_damage: bool,
+    pub world_pos: Vec3,
+    pub offset_x: f32,
+}
+
+/// State icon displayed above a unit.
+#[derive(Component)]
+pub struct AttentionIcon {
+    pub owner: Entity,
+    pub kind: AttentionKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AttentionKind {
+    UnderAttack,
+    Gathering,
+    Attacking,
+    Building,
+}
+
+#[derive(Resource)]
+pub struct AttentionIconAssets {
+    pub under_attack: Handle<Image>,
+    pub gathering: Handle<Image>,
+    pub attacking: Handle<Image>,
+    pub building: Handle<Image>,
+}

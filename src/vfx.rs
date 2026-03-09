@@ -1,3 +1,4 @@
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
 use crate::components::*;
@@ -124,10 +125,13 @@ fn update_projectiles(
                     start_scale: 0.2,
                     end_scale: 0.6,
                 },
+                FogHideable::Vfx,
                 Mesh3d(vfx.sphere_mesh.clone()),
                 MeshMaterial3d(vfx.impact_material.clone()),
                 Transform::from_translation(target_pos)
                     .with_scale(Vec3::splat(0.2)),
+                NotShadowCaster,
+                NotShadowReceiver,
             ));
 
             commands.entity(proj_entity).despawn();
@@ -215,6 +219,8 @@ fn gather_particle_spawner(
                 MeshMaterial3d(mat.clone()),
                 Transform::from_translation(tf.translation + Vec3::Y * 0.5)
                     .with_scale(Vec3::splat(scale)),
+                NotShadowCaster,
+                NotShadowReceiver,
             ));
         }
     }
@@ -287,6 +293,8 @@ fn footstep_dust_spawner(
             MeshMaterial3d(vfx.dust_material.clone()),
             Transform::from_translation(tf.translation - Vec3::Y * 0.3)
                 .with_scale(Vec3::splat(0.08)),
+            NotShadowCaster,
+            NotShadowReceiver,
         ));
     }
 }

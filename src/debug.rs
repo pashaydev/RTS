@@ -6,13 +6,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::fog::FogTweakSettings;
-use crate::fog_material::FogOfWarMaterial;
 use bevy::light::{FogVolume, VolumetricFog};
 use crate::lighting::{
     AtmosphericFogVolume, DayCycle, EntityClusterLight, EntityLightConfig, EntityLightGrid,
     LightingOverrides, SunLight,
 };
-use crate::components::{FogOverlay, UiClickedThisFrame, UiPressActive};
+use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
+use crate::components::{ActivePlayer, Faction, Health, InspectedEnemy, RtsCamera, Selected, TeamConfig, UiClickedThisFrame, UiPressActive, UnitSpeed};
+use crate::ground::HeightMap;
+use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
+use bevy::window::PrimaryWindow;
 
 const DEBUG_CONFIG_PATH: &str = "config/debug_tweaks.json";
 
@@ -25,8 +28,10 @@ impl Plugin for DebugPlugin {
             .init_resource::<FpsTracker>()
             .init_resource::<ActiveSlider>()
             .init_resource::<TweakStructureVersion>()
+            .init_resource::<DebugButtonPressed>()
+            .init_resource::<DebugSpawnState>()
             .insert_resource(SaveConfigFeedback(Timer::from_seconds(0.0, TimerMode::Once)))
-            .add_systems(Startup, spawn_debug_overlay)
+            .add_systems(Startup, (spawn_debug_overlay, register_entity_debug_tweaks))
             .add_systems(
                 Update,
                 (
@@ -35,6 +40,8 @@ impl Plugin for DebugPlugin {
                     update_debug_texts,
                     handle_folder_collapse,
                     handle_toggle_click,
+                    handle_cycle_click,
+                    handle_button_click,
                     handle_slider_interaction,
                     handle_debug_scroll,
                     handle_save_config_click,
@@ -43,6 +50,15 @@ impl Plugin for DebugPlugin {
                     sync_lighting_tweaks,
                     sync_entity_light_tweaks,
                     sync_fog_tweaks,
+                ),
+            )
+            .add_systems(
+                Update,
+                (
+                    sync_entity_spawn_tweaks,
+                    sync_entity_selected_tweaks,
+                    sync_save_load_tweaks,
+                    sync_player_control_tweaks,
                     rebuild_tweak_panel,
                     update_tweak_visuals,
                     block_input_over_debug_panel,
@@ -63,6 +79,15 @@ pub enum TweakValue {
     },
     Bool(bool),
     ReadOnly(String),
+    #[serde(skip)]
+    CycleEnum {
+        options: Vec<String>,
+        selected: usize,
+    },
+    #[serde(skip)]
+    Button {
+        text: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -120,6 +145,39 @@ impl DebugTweaks {
                 label: label.to_string(),
                 value: TweakValue::ReadOnly(text.to_string()),
             });
+    }
+
+    pub fn add_cycle_enum(&mut self, folder: &str, label: &str, options: Vec<String>, selected: usize) {
+        self.folders
+            .entry(folder.to_string())
+            .or_default()
+            .push(TweakEntry {
+                label: label.to_string(),
+                value: TweakValue::CycleEnum { options, selected },
+            });
+    }
+
+    pub fn add_button(&mut self, folder: &str, label: &str) {
+        self.folders
+            .entry(folder.to_string())
+            .or_default()
+            .push(TweakEntry {
+                label: label.to_string(),
+                value: TweakValue::Button {
+                    text: label.to_string(),
+                },
+            });
+    }
+
+    pub fn get_cycle_selected(&self, folder: &str, label: &str) -> Option<usize> {
+        self.folders.get(folder)?.iter().find_map(|e| {
+            if e.label == label {
+                if let TweakValue::CycleEnum { selected, .. } = &e.value {
+                    return Some(*selected);
+                }
+            }
+            None
+        })
     }
 
     pub fn get_float(&self, folder: &str, label: &str) -> Option<f32> {
@@ -198,6 +256,8 @@ fn save_debug_config(tweaks: &DebugTweaks) {
                     folder_map.insert(entry.label.clone(), ConfigValue::Bool(*v));
                 }
                 TweakValue::ReadOnly(_) => {}
+                TweakValue::CycleEnum { .. } => {}
+                TweakValue::Button { .. } => {}
             }
         }
     }
@@ -359,6 +419,30 @@ struct SaveConfigFeedback(Timer);
 struct ColorPreview {
     folder: String,
     prefix: String, // e.g. "color" matches "color R", "color G", "color B"
+}
+
+#[derive(Component)]
+struct TweakCycleEnum {
+    folder: String,
+    label: String,
+}
+
+#[derive(Component)]
+struct TweakCycleText {
+    folder: String,
+    label: String,
+}
+
+#[derive(Component)]
+struct TweakButton {
+    folder: String,
+    label: String,
+}
+
+/// Tracks which buttons were pressed this frame.
+#[derive(Resource, Default)]
+pub struct DebugButtonPressed {
+    pub pressed: Vec<(String, String)>, // (folder, label)
 }
 
 // ── Spawn the debug overlay (hidden by default) ──
@@ -661,9 +745,26 @@ fn rebuild_tweak_panel(
 
     // Rebuild
     commands.entity(panel_entity).with_children(|panel| {
+        let mut current_section: Option<String> = None;
         for (folder_name, entries) in &tweaks.folders {
+            // Detect section prefix (e.g., "Visuals/Sunlight" → section "Visuals")
+            let (section, display_name) = if let Some(idx) = folder_name.find('/') {
+                (Some(&folder_name[..idx]), &folder_name[idx + 1..])
+            } else {
+                (None, folder_name.as_str())
+            };
+
+            // Render section header when section changes
+            let section_str = section.map(|s| s.to_string());
+            if section_str != current_section {
+                if let Some(ref sec) = section_str {
+                    spawn_section_header(panel, sec);
+                }
+                current_section = section_str;
+            }
+
             let collapsed = panel_state.collapsed_folders.contains(folder_name);
-            spawn_folder_header(panel, folder_name, collapsed);
+            spawn_folder_header(panel, folder_name, display_name, collapsed);
 
             if collapsed {
                 continue;
@@ -702,6 +803,15 @@ fn rebuild_tweak_panel(
                         spawn_readonly_row(panel, folder_name, &entry.label, text);
                         color_prefix = None;
                     }
+                    TweakValue::CycleEnum { options, selected } => {
+                        let display = options.get(*selected).map(|s| s.as_str()).unwrap_or("--");
+                        spawn_cycle_row(panel, folder_name, &entry.label, display);
+                        color_prefix = None;
+                    }
+                    TweakValue::Button { text } => {
+                        spawn_button_row(panel, folder_name, &entry.label, text);
+                        color_prefix = None;
+                    }
                 }
             }
         }
@@ -719,9 +829,24 @@ fn update_tweak_visuals(
     mut toggle_text_q: Query<(&TweakToggleText, &mut Text), Without<TweakSliderValueText>>,
     mut readonly_q: Query<(&TweakReadOnlyText, &mut Text), (Without<TweakSliderValueText>, Without<TweakToggleText>)>,
     mut color_q: Query<(&ColorPreview, &mut BackgroundColor), Without<TweakToggle>>,
+    mut cycle_text_q: Query<(&TweakCycleText, &mut Text), (Without<TweakSliderValueText>, Without<TweakToggleText>, Without<TweakReadOnlyText>)>,
 ) {
     if !state.visible {
         return;
+    }
+
+    // Update cycle enum texts
+    for (ct, mut text) in &mut cycle_text_q {
+        if let Some(entries) = tweaks.folders.get(&ct.folder) {
+            if let Some(entry) = entries.iter().find(|e| e.label == ct.label) {
+                if let TweakValue::CycleEnum { options, selected } = &entry.value {
+                    let new_text = options.get(*selected).map(|s| s.as_str()).unwrap_or("--");
+                    if **text != new_text {
+                        **text = new_text.to_string();
+                    }
+                }
+            }
+        }
     }
 
     // Update slider fills
@@ -805,11 +930,33 @@ fn update_tweak_visuals(
 
 // ── UI spawn helpers ──
 
-fn spawn_folder_header(parent: &mut ChildSpawnerCommands, name: &str, collapsed: bool) {
+fn spawn_section_header(parent: &mut ChildSpawnerCommands, section: &str) {
+    parent.spawn((
+        Node {
+            padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
+            margin: UiRect::top(Val::Px(10.0)),
+            width: Val::Percent(100.0),
+            border: UiRect::bottom(Val::Px(1.0)),
+            ..default()
+        },
+        BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+    )).with_children(|row| {
+        row.spawn((
+            Text::new(section.to_uppercase()),
+            TextFont {
+                font_size: 11.0,
+                ..default()
+            },
+            TextColor(Color::srgba(0.6, 0.8, 1.0, 0.7)),
+        ));
+    });
+}
+
+fn spawn_folder_header(parent: &mut ChildSpawnerCommands, key: &str, display_name: &str, collapsed: bool) {
     let arrow = if collapsed { ">" } else { "v" };
     parent
         .spawn((
-            FolderHeader(name.to_string()),
+            FolderHeader(key.to_string()),
             Interaction::default(),
             Button,
             Node {
@@ -823,7 +970,7 @@ fn spawn_folder_header(parent: &mut ChildSpawnerCommands, name: &str, collapsed:
         ))
         .with_children(|header| {
             header.spawn((
-                Text::new(format!("{} {}", arrow, name)),
+                Text::new(format!("{} {}", arrow, display_name)),
                 TextFont {
                     font_size: 13.0,
                     ..default()
@@ -1066,6 +1213,115 @@ fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: 
         });
 }
 
+fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, display: &str) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            width: Val::Percent(100.0),
+            padding: UiRect::left(Val::Px(10.0)),
+            ..default()
+        })
+        .with_children(|row| {
+            // Label
+            row.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: 11.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.65, 0.65, 0.65)),
+                Node {
+                    width: Val::Px(95.0),
+                    ..default()
+                },
+            ));
+
+            // Clickable cycle button
+            row.spawn((
+                TweakCycleEnum {
+                    folder: folder.to_string(),
+                    label: label.to_string(),
+                },
+                Interaction::default(),
+                Button,
+                Node {
+                    padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    min_width: Val::Px(120.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.3, 0.5, 1.0, 0.25)),
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    TweakCycleText {
+                        folder: folder.to_string(),
+                        label: label.to_string(),
+                    },
+                    Pickable::IGNORE,
+                    Text::new(display),
+                    TextFont {
+                        font_size: 11.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
+        });
+}
+
+fn spawn_button_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, text: &str) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            width: Val::Percent(100.0),
+            padding: UiRect::left(Val::Px(10.0)),
+            ..default()
+        })
+        .with_children(|row| {
+            // Spacer to align with other rows
+            row.spawn(Node {
+                width: Val::Px(95.0),
+                ..default()
+            });
+
+            // Button
+            row.spawn((
+                TweakButton {
+                    folder: folder.to_string(),
+                    label: label.to_string(),
+                },
+                Interaction::default(),
+                Button,
+                Node {
+                    padding: UiRect::axes(Val::Px(10.0), Val::Px(3.0)),
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(1.0, 0.6, 0.2, 0.3)),
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Pickable::IGNORE,
+                    Text::new(text),
+                    TextFont {
+                        font_size: 11.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+            });
+        });
+}
+
 fn format_tweak_float(v: f32) -> String {
     if v.abs() >= 100.0 {
         format!("{:.0}", v)
@@ -1154,6 +1410,35 @@ fn handle_toggle_click(
                     *v = !*v;
                 }
             }
+        }
+    }
+}
+
+fn handle_cycle_click(
+    mut tweaks: ResMut<DebugTweaks>,
+    cycle_q: Query<(&TweakCycleEnum, &Interaction), Changed<Interaction>>,
+) {
+    for (cycle, interaction) in &cycle_q {
+        if *interaction == Interaction::Pressed {
+            if let Some(entry) = tweaks.get_mut(&cycle.folder, &cycle.label) {
+                if let TweakValue::CycleEnum { options, selected } = &mut entry.value {
+                    if !options.is_empty() {
+                        *selected = (*selected + 1) % options.len();
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn handle_button_click(
+    mut pressed: ResMut<DebugButtonPressed>,
+    button_q: Query<(&TweakButton, &Interaction), Changed<Interaction>>,
+) {
+    pressed.pressed.clear();
+    for (button, interaction) in &button_q {
+        if *interaction == Interaction::Pressed {
+            pressed.pressed.push((button.folder.clone(), button.label.clone()));
         }
     }
 }
@@ -1273,41 +1558,41 @@ fn sync_lighting_tweaks(
     };
 
     // ── Time of Day folder ──
-    if let Some(v) = tweaks.get_float("Time of Day", "Cycle Duration") {
+    if let Some(v) = tweaks.get_float("Visuals/Time of Day", "Cycle Duration") {
         if (cycle.cycle_duration - v).abs() > f32::EPSILON {
             cycle.cycle_duration = v;
         }
     }
-    if let Some(v) = tweaks.get_bool("Time of Day", "Paused") {
+    if let Some(v) = tweaks.get_bool("Visuals/Time of Day", "Paused") {
         if cycle.paused != v {
             cycle.paused = v;
         }
     }
-    if let Some(v) = tweaks.get_float("Time of Day", "Time") {
+    if let Some(v) = tweaks.get_float("Visuals/Time of Day", "Time") {
         if cycle.paused && (cycle.time - v).abs() > 0.001 {
             cycle.time = v;
         }
     }
-    tweaks.set_readonly_if_changed("Time of Day", "Phase", &format!("{:?}", cycle.phase));
-    if !cycle.paused && !is_dragging("Time of Day", "Time") {
-        tweaks.set_float_if_changed("Time of Day", "Time", cycle.time);
+    tweaks.set_readonly_if_changed("Visuals/Time of Day", "Phase", &format!("{:?}", cycle.phase));
+    if !cycle.paused && !is_dragging("Visuals/Time of Day", "Time") {
+        tweaks.set_float_if_changed("Visuals/Time of Day", "Time", cycle.time);
     }
 
     // ── Sunlight folder ──
-    let sun_override = tweaks.get_bool("Sunlight", "Override").unwrap_or(false);
+    let sun_override = tweaks.get_bool("Visuals/Sunlight", "Override").unwrap_or(false);
     if sun_override {
-        overrides.sun_illuminance = tweaks.get_float("Sunlight", "Illuminance");
+        overrides.sun_illuminance = tweaks.get_float("Visuals/Sunlight", "Illuminance");
         overrides.sun_color = match (
-            tweaks.get_float("Sunlight", "Color R"),
-            tweaks.get_float("Sunlight", "Color G"),
-            tweaks.get_float("Sunlight", "Color B"),
+            tweaks.get_float("Visuals/Sunlight", "Color R"),
+            tweaks.get_float("Visuals/Sunlight", "Color G"),
+            tweaks.get_float("Visuals/Sunlight", "Color B"),
         ) {
             (Some(r), Some(g), Some(b)) => Some([r, g, b]),
             _ => None,
         };
-        overrides.sun_pitch = tweaks.get_float("Sunlight", "Pitch");
-        overrides.sun_yaw = tweaks.get_float("Sunlight", "Yaw");
-        overrides.shadows_enabled = tweaks.get_bool("Sunlight", "Shadows");
+        overrides.sun_pitch = tweaks.get_float("Visuals/Sunlight", "Pitch");
+        overrides.sun_yaw = tweaks.get_float("Visuals/Sunlight", "Yaw");
+        overrides.shadows_enabled = tweaks.get_bool("Visuals/Sunlight", "Shadows");
     } else {
         overrides.sun_illuminance = None;
         overrides.sun_color = None;
@@ -1315,40 +1600,40 @@ fn sync_lighting_tweaks(
         overrides.sun_yaw = None;
 
         if let Ok((sun, sun_tf)) = sun_q.single() {
-            if !is_dragging("Sunlight", "Illuminance") {
-                tweaks.set_float_if_changed("Sunlight", "Illuminance", sun.illuminance);
+            if !is_dragging("Visuals/Sunlight", "Illuminance") {
+                tweaks.set_float_if_changed("Visuals/Sunlight", "Illuminance", sun.illuminance);
             }
             let c = sun.color.to_srgba();
-            if !is_dragging("Sunlight", "Color R") {
-                tweaks.set_float_if_changed("Sunlight", "Color R", c.red);
+            if !is_dragging("Visuals/Sunlight", "Color R") {
+                tweaks.set_float_if_changed("Visuals/Sunlight", "Color R", c.red);
             }
-            if !is_dragging("Sunlight", "Color G") {
-                tweaks.set_float_if_changed("Sunlight", "Color G", c.green);
+            if !is_dragging("Visuals/Sunlight", "Color G") {
+                tweaks.set_float_if_changed("Visuals/Sunlight", "Color G", c.green);
             }
-            if !is_dragging("Sunlight", "Color B") {
-                tweaks.set_float_if_changed("Sunlight", "Color B", c.blue);
+            if !is_dragging("Visuals/Sunlight", "Color B") {
+                tweaks.set_float_if_changed("Visuals/Sunlight", "Color B", c.blue);
             }
 
             let (pitch, yaw, _) = sun_tf.rotation.to_euler(EulerRot::XYZ);
-            if !is_dragging("Sunlight", "Pitch") {
-                tweaks.set_float_if_changed("Sunlight", "Pitch", pitch);
+            if !is_dragging("Visuals/Sunlight", "Pitch") {
+                tweaks.set_float_if_changed("Visuals/Sunlight", "Pitch", pitch);
             }
-            if !is_dragging("Sunlight", "Yaw") {
-                tweaks.set_float_if_changed("Sunlight", "Yaw", yaw);
+            if !is_dragging("Visuals/Sunlight", "Yaw") {
+                tweaks.set_float_if_changed("Visuals/Sunlight", "Yaw", yaw);
             }
         }
 
-        overrides.shadows_enabled = tweaks.get_bool("Sunlight", "Shadows");
+        overrides.shadows_enabled = tweaks.get_bool("Visuals/Sunlight", "Shadows");
     }
 
     // ── Ambient Light folder ──
-    let amb_override = tweaks.get_bool("Ambient Light", "Override").unwrap_or(false);
+    let amb_override = tweaks.get_bool("Visuals/Ambient Light", "Override").unwrap_or(false);
     if amb_override {
-        overrides.ambient_brightness = tweaks.get_float("Ambient Light", "Brightness");
+        overrides.ambient_brightness = tweaks.get_float("Visuals/Ambient Light", "Brightness");
         overrides.ambient_color = match (
-            tweaks.get_float("Ambient Light", "Color R"),
-            tweaks.get_float("Ambient Light", "Color G"),
-            tweaks.get_float("Ambient Light", "Color B"),
+            tweaks.get_float("Visuals/Ambient Light", "Color R"),
+            tweaks.get_float("Visuals/Ambient Light", "Color G"),
+            tweaks.get_float("Visuals/Ambient Light", "Color B"),
         ) {
             (Some(r), Some(g), Some(b)) => Some([r, g, b]),
             _ => None,
@@ -1357,28 +1642,28 @@ fn sync_lighting_tweaks(
         overrides.ambient_brightness = None;
         overrides.ambient_color = None;
 
-        if !is_dragging("Ambient Light", "Brightness") {
-            tweaks.set_float_if_changed("Ambient Light", "Brightness", ambient.brightness);
+        if !is_dragging("Visuals/Ambient Light", "Brightness") {
+            tweaks.set_float_if_changed("Visuals/Ambient Light", "Brightness", ambient.brightness);
         }
         let c = ambient.color.to_srgba();
-        if !is_dragging("Ambient Light", "Color R") {
-            tweaks.set_float_if_changed("Ambient Light", "Color R", c.red);
+        if !is_dragging("Visuals/Ambient Light", "Color R") {
+            tweaks.set_float_if_changed("Visuals/Ambient Light", "Color R", c.red);
         }
-        if !is_dragging("Ambient Light", "Color G") {
-            tweaks.set_float_if_changed("Ambient Light", "Color G", c.green);
+        if !is_dragging("Visuals/Ambient Light", "Color G") {
+            tweaks.set_float_if_changed("Visuals/Ambient Light", "Color G", c.green);
         }
-        if !is_dragging("Ambient Light", "Color B") {
-            tweaks.set_float_if_changed("Ambient Light", "Color B", c.blue);
+        if !is_dragging("Visuals/Ambient Light", "Color B") {
+            tweaks.set_float_if_changed("Visuals/Ambient Light", "Color B", c.blue);
         }
     }
 
     // ── Sky Color folder ──
-    let fog_override = tweaks.get_bool("Sky Color", "Override").unwrap_or(false);
+    let fog_override = tweaks.get_bool("Visuals/Sky Color", "Override").unwrap_or(false);
     if fog_override {
         overrides.fog_color = match (
-            tweaks.get_float("Sky Color", "Color R"),
-            tweaks.get_float("Sky Color", "Color G"),
-            tweaks.get_float("Sky Color", "Color B"),
+            tweaks.get_float("Visuals/Sky Color", "Color R"),
+            tweaks.get_float("Visuals/Sky Color", "Color G"),
+            tweaks.get_float("Visuals/Sky Color", "Color B"),
         ) {
             (Some(r), Some(g), Some(b)) => Some([r, g, b]),
             _ => None,
@@ -1387,20 +1672,20 @@ fn sync_lighting_tweaks(
         overrides.fog_color = None;
 
         let c = clear.0.to_srgba();
-        if !is_dragging("Sky Color", "Color R") {
-            tweaks.set_float_if_changed("Sky Color", "Color R", c.red);
+        if !is_dragging("Visuals/Sky Color", "Color R") {
+            tweaks.set_float_if_changed("Visuals/Sky Color", "Color R", c.red);
         }
-        if !is_dragging("Sky Color", "Color G") {
-            tweaks.set_float_if_changed("Sky Color", "Color G", c.green);
+        if !is_dragging("Visuals/Sky Color", "Color G") {
+            tweaks.set_float_if_changed("Visuals/Sky Color", "Color G", c.green);
         }
-        if !is_dragging("Sky Color", "Color B") {
-            tweaks.set_float_if_changed("Sky Color", "Color B", c.blue);
+        if !is_dragging("Visuals/Sky Color", "Color B") {
+            tweaks.set_float_if_changed("Visuals/Sky Color", "Color B", c.blue);
         }
     }
 
     // ── Volumetric Fog folder ──
-    let vol_enabled = tweaks.get_bool("Volumetric Fog", "Enabled").unwrap_or(true);
-    let vol_override = tweaks.get_bool("Volumetric Fog", "Override").unwrap_or(false);
+    let vol_enabled = tweaks.get_bool("Visuals/Volumetric Fog", "Enabled").unwrap_or(true);
+    let vol_override = tweaks.get_bool("Visuals/Volumetric Fog", "Override").unwrap_or(false);
 
     // Toggle visibility of the fog volume
     if let Ok(mut fog_vol) = fog_vol_q.single_mut() {
@@ -1413,30 +1698,30 @@ fn sync_lighting_tweaks(
     if let Ok(mut vol_fog) = cam_fog_q.single_mut() {
         if !vol_enabled {
             vol_fog.step_count = 0;
-        } else if let Some(sc) = tweaks.get_float("Volumetric Fog", "Step Count") {
+        } else if let Some(sc) = tweaks.get_float("Visuals/Volumetric Fog", "Step Count") {
             vol_fog.step_count = sc as u32;
         }
     }
 
     if vol_override {
-        overrides.vol_density = tweaks.get_float("Volumetric Fog", "Density");
+        overrides.vol_density = tweaks.get_float("Visuals/Volumetric Fog", "Density");
         overrides.vol_color = match (
-            tweaks.get_float("Volumetric Fog", "Color R"),
-            tweaks.get_float("Volumetric Fog", "Color G"),
-            tweaks.get_float("Volumetric Fog", "Color B"),
+            tweaks.get_float("Visuals/Volumetric Fog", "Color R"),
+            tweaks.get_float("Visuals/Volumetric Fog", "Color G"),
+            tweaks.get_float("Visuals/Volumetric Fog", "Color B"),
         ) {
             (Some(r), Some(g), Some(b)) => Some([r, g, b]),
             _ => None,
         };
-        overrides.vol_ambient_intensity = tweaks.get_float("Volumetric Fog", "Ambient Intensity");
-        overrides.vol_light_intensity = tweaks.get_float("Volumetric Fog", "Light Intensity");
+        overrides.vol_ambient_intensity = tweaks.get_float("Visuals/Volumetric Fog", "Ambient Intensity");
+        overrides.vol_light_intensity = tweaks.get_float("Visuals/Volumetric Fog", "Light Intensity");
 
         // Apply scattering/absorption directly
         if let Ok(mut fog_vol) = fog_vol_q.single_mut() {
-            if let Some(s) = tweaks.get_float("Volumetric Fog", "Scattering") {
+            if let Some(s) = tweaks.get_float("Visuals/Volumetric Fog", "Scattering") {
                 fog_vol.scattering = s;
             }
-            if let Some(a) = tweaks.get_float("Volumetric Fog", "Absorption") {
+            if let Some(a) = tweaks.get_float("Visuals/Volumetric Fog", "Absorption") {
                 fog_vol.absorption = a;
             }
         }
@@ -1447,40 +1732,40 @@ fn sync_lighting_tweaks(
         overrides.vol_light_intensity = None;
 
         if let Ok(fog_vol) = fog_vol_q.single() {
-            if !is_dragging("Volumetric Fog", "Density") {
-                tweaks.set_float_if_changed("Volumetric Fog", "Density", fog_vol.density_factor);
+            if !is_dragging("Visuals/Volumetric Fog", "Density") {
+                tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Density", fog_vol.density_factor);
             }
             let c = fog_vol.fog_color.to_srgba();
-            if !is_dragging("Volumetric Fog", "Color R") {
-                tweaks.set_float_if_changed("Volumetric Fog", "Color R", c.red);
+            if !is_dragging("Visuals/Volumetric Fog", "Color R") {
+                tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color R", c.red);
             }
-            if !is_dragging("Volumetric Fog", "Color G") {
-                tweaks.set_float_if_changed("Volumetric Fog", "Color G", c.green);
+            if !is_dragging("Visuals/Volumetric Fog", "Color G") {
+                tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color G", c.green);
             }
-            if !is_dragging("Volumetric Fog", "Color B") {
-                tweaks.set_float_if_changed("Volumetric Fog", "Color B", c.blue);
+            if !is_dragging("Visuals/Volumetric Fog", "Color B") {
+                tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color B", c.blue);
             }
-            if !is_dragging("Volumetric Fog", "Light Intensity") {
-                tweaks.set_float_if_changed("Volumetric Fog", "Light Intensity", fog_vol.light_intensity);
+            if !is_dragging("Visuals/Volumetric Fog", "Light Intensity") {
+                tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Light Intensity", fog_vol.light_intensity);
             }
-            if !is_dragging("Volumetric Fog", "Scattering") {
-                tweaks.set_float_if_changed("Volumetric Fog", "Scattering", fog_vol.scattering);
+            if !is_dragging("Visuals/Volumetric Fog", "Scattering") {
+                tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Scattering", fog_vol.scattering);
             }
-            if !is_dragging("Volumetric Fog", "Absorption") {
-                tweaks.set_float_if_changed("Volumetric Fog", "Absorption", fog_vol.absorption);
+            if !is_dragging("Visuals/Volumetric Fog", "Absorption") {
+                tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Absorption", fog_vol.absorption);
             }
         }
 
         if let Ok(vol_fog) = cam_fog_q.single() {
-            if !is_dragging("Volumetric Fog", "Ambient Intensity") {
+            if !is_dragging("Visuals/Volumetric Fog", "Ambient Intensity") {
                 tweaks.set_float_if_changed(
-                    "Volumetric Fog",
+                    "Visuals/Volumetric Fog",
                     "Ambient Intensity",
                     vol_fog.ambient_intensity,
                 );
             }
-            if !is_dragging("Volumetric Fog", "Step Count") {
-                tweaks.set_float_if_changed("Volumetric Fog", "Step Count", vol_fog.step_count as f32);
+            if !is_dragging("Visuals/Volumetric Fog", "Step Count") {
+                tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Step Count", vol_fog.step_count as f32);
             }
         }
     }
@@ -1494,30 +1779,30 @@ fn sync_entity_light_tweaks(
     mut grid: ResMut<EntityLightGrid>,
     cluster_lights: Query<&EntityClusterLight>,
 ) {
-    if let Some(v) = tweaks.get_bool("Entity Lights", "Enabled") {
+    if let Some(v) = tweaks.get_bool("Visuals/Entity Lights", "Enabled") {
         config.enabled = v;
     }
-    if let Some(v) = tweaks.get_float("Entity Lights", "Cell Size") {
+    if let Some(v) = tweaks.get_float("Visuals/Entity Lights", "Cell Size") {
         grid.cell_size = v;
     }
-    if let Some(v) = tweaks.get_float("Entity Lights", "Max Lights") {
+    if let Some(v) = tweaks.get_float("Visuals/Entity Lights", "Max Lights") {
         grid.max_lights = v as usize;
     }
-    if let Some(v) = tweaks.get_float("Entity Lights", "Building Intensity") {
+    if let Some(v) = tweaks.get_float("Visuals/Entity Lights", "Building Intensity") {
         config.building_base_intensity = v;
     }
-    if let Some(v) = tweaks.get_float("Entity Lights", "Unit Intensity") {
+    if let Some(v) = tweaks.get_float("Visuals/Entity Lights", "Unit Intensity") {
         config.unit_base_intensity = v;
     }
-    if let Some(v) = tweaks.get_float("Entity Lights", "Night Factor") {
+    if let Some(v) = tweaks.get_float("Visuals/Entity Lights", "Night Factor") {
         config.night_factor = v;
     }
-    if let Some(v) = tweaks.get_float("Entity Lights", "Day Factor") {
+    if let Some(v) = tweaks.get_float("Visuals/Entity Lights", "Day Factor") {
         config.day_factor = v;
     }
 
     let count = cluster_lights.iter().count();
-    tweaks.set_readonly_if_changed("Entity Lights", "Active Lights", &count.to_string());
+    tweaks.set_readonly_if_changed("Visuals/Entity Lights", "Active Lights", &count.to_string());
 }
 
 // ── Sync: Fog ↔ DebugTweaks ──
@@ -1525,61 +1810,28 @@ fn sync_entity_light_tweaks(
 fn sync_fog_tweaks(
     tweaks: Res<DebugTweaks>,
     mut fog_settings: ResMut<FogTweakSettings>,
-    fog_overlay: Query<&MeshMaterial3d<FogOfWarMaterial>, With<FogOverlay>>,
-    mut materials: ResMut<Assets<FogOfWarMaterial>>,
 ) {
-    // ── FoW Shader folder → material settings ──
-    let Ok(mat_handle) = fog_overlay.single() else {
-        return;
-    };
-    if let Some(mat) = materials.get_mut(&mat_handle.0) {
-        if let Some(v) = tweaks.get_float("FoW Shader", "Noise Scale") {
-            mat.settings.noise_scale = v;
-        }
-        if let Some(v) = tweaks.get_float("FoW Shader", "Edge Glow Width") {
-            mat.settings.edge_glow_width = v;
-        }
-        if let Some(v) = tweaks.get_float("FoW Shader", "Edge Glow Intensity") {
-            mat.settings.edge_glow_intensity = v;
-        }
-        if let (Some(r), Some(g), Some(b), Some(a)) = (
-            tweaks.get_float("FoW Shader", "Fog Color R"),
-            tweaks.get_float("FoW Shader", "Fog Color G"),
-            tweaks.get_float("FoW Shader", "Fog Color B"),
-            tweaks.get_float("FoW Shader", "Fog Color A"),
-        ) {
-            mat.settings.fog_color = Vec4::new(r, g, b, a);
-        }
-        if let (Some(r), Some(g), Some(b), Some(a)) = (
-            tweaks.get_float("FoW Shader", "Glow Color R"),
-            tweaks.get_float("FoW Shader", "Glow Color G"),
-            tweaks.get_float("FoW Shader", "Glow Color B"),
-            tweaks.get_float("FoW Shader", "Glow Color A"),
-        ) {
-            mat.settings.glow_color = Vec4::new(r, g, b, a);
-        }
-        if let (Some(r), Some(g), Some(b), Some(a)) = (
-            tweaks.get_float("FoW Shader", "Explored Tint R"),
-            tweaks.get_float("FoW Shader", "Explored Tint G"),
-            tweaks.get_float("FoW Shader", "Explored Tint B"),
-            tweaks.get_float("FoW Shader", "Explored Tint A"),
-        ) {
-            mat.settings.explored_tint = Vec4::new(r, g, b, a);
-        }
-    }
+    // Shader tweaks are now applied directly in fog.rs update_fog_material_time.
+    // Only sync gameplay settings here.
 
     // ── FoW Gameplay folder → FogTweakSettings ──
-    if let Some(v) = tweaks.get_float("FoW Gameplay", "Mob Threshold") {
+    if let Some(v) = tweaks.get_float("Visuals/FoW Gameplay", "Mob Threshold") {
         fog_settings.mob_threshold = v;
     }
-    if let Some(v) = tweaks.get_float("FoW Gameplay", "Object Threshold") {
+    if let Some(v) = tweaks.get_float("Visuals/FoW Gameplay", "Object Threshold") {
         fog_settings.object_threshold = v;
     }
-    if let Some(v) = tweaks.get_float("FoW Gameplay", "VFX Threshold") {
+    if let Some(v) = tweaks.get_float("Visuals/FoW Gameplay", "VFX Threshold") {
         fog_settings.vfx_threshold = v;
     }
-    if let Some(v) = tweaks.get_float("FoW Gameplay", "Decay Value") {
-        fog_settings.decay_value = v;
+    if let Some(v) = tweaks.get_float("Visuals/FoW Gameplay", "Transition Speed") {
+        fog_settings.transition_speed = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Gameplay", "Enable LOS") {
+        fog_settings.enable_los = v > 0.5;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Gameplay", "LOS Ray Count") {
+        fog_settings.los_ray_count = v as usize;
     }
 }
 
@@ -1639,5 +1891,332 @@ fn update_save_button_feedback(
         if let Ok(mut text) = text_q.single_mut() {
             **text = "Save".to_string();
         }
+    }
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Entity Debug Tool
+// ══════════════════════════════════════════════════════════════════════
+
+#[derive(Resource, Default)]
+pub struct DebugSpawnState {
+    pub click_to_spawn: bool,
+    pub status_text: String,
+    pub status_timer: f32,
+}
+
+const SPAWN_FOLDER: &str = "Entities/Spawn";
+const SELECTED_FOLDER: &str = "Entities/Selected";
+const PLAYER_FOLDER: &str = "Game/Player Control";
+const SAVE_FOLDER: &str = "Game/Save & Load";
+
+fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
+    // Spawn folder
+    let entity_names: Vec<String> = EntityKind::ALL.iter().map(|k| k.display_name().to_string()).collect();
+    tweaks.add_cycle_enum(SPAWN_FOLDER, "Entity Type", entity_names, 0);
+    tweaks.add_cycle_enum(SPAWN_FOLDER, "Faction", vec!["Player 1".to_string(), "Player 2".to_string(), "Player 3".to_string(), "Player 4".to_string(), "Neutral".to_string()], 0);
+    tweaks.add_button(SPAWN_FOLDER, "Spawn at Camera");
+    tweaks.add_bool(SPAWN_FOLDER, "Click to Place", false);
+    tweaks.add_readonly(SPAWN_FOLDER, "Status", "Ready");
+
+    // Selected entity manipulation folder
+    tweaks.add_readonly(SELECTED_FOLDER, "Count", "0");
+    tweaks.add_readonly(SELECTED_FOLDER, "Type", "--");
+    tweaks.add_float(SELECTED_FOLDER, "Set HP %", 100.0, 0.0, 100.0, 1.0);
+    tweaks.add_float(SELECTED_FOLDER, "Set Speed", 5.0, 0.0, 20.0, 0.5);
+    tweaks.add_button(SELECTED_FOLDER, "Kill Selected");
+    tweaks.add_button(SELECTED_FOLDER, "Delete Selected");
+
+    // Player control folder
+    tweaks.add_cycle_enum(PLAYER_FOLDER, "Active Player", vec!["Player 1".to_string(), "Player 2".to_string(), "Player 3".to_string(), "Player 4".to_string()], 0);
+    tweaks.add_readonly(PLAYER_FOLDER, "AI Status", "P2: AI, P3: AI, P4: AI");
+    tweaks.add_cycle_enum(PLAYER_FOLDER, "Team Mode", vec!["2v2 (P1+P2 vs P3+P4)".to_string(), "FFA (all vs all)".to_string(), "1v3 (P1 vs rest)".to_string()], 0);
+
+    // Save & Load folder
+    tweaks.add_button(SAVE_FOLDER, "Save Game");
+    tweaks.add_button(SAVE_FOLDER, "Load Game");
+    tweaks.add_readonly(SAVE_FOLDER, "Status", "Ready");
+}
+
+fn cursor_ground_pos(
+    camera_q: &Query<(&Camera, &GlobalTransform)>,
+    windows: &Query<&Window, With<PrimaryWindow>>,
+) -> Option<Vec3> {
+    let Ok(window) = windows.single() else {
+        return None;
+    };
+    let cursor = window.cursor_position()?;
+    let Ok((camera, cam_gt)) = camera_q.single() else {
+        return None;
+    };
+    let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
+        return None;
+    };
+    let dist = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))?;
+    Some(ray.get_point(dist))
+}
+
+fn get_selected_kind_and_faction(tweaks: &DebugTweaks) -> (EntityKind, Faction) {
+    let kind_idx = tweaks.get_cycle_selected(SPAWN_FOLDER, "Entity Type").unwrap_or(0);
+    let faction_idx = tweaks.get_cycle_selected(SPAWN_FOLDER, "Faction").unwrap_or(0);
+    let kind = EntityKind::ALL.get(kind_idx).copied().unwrap_or(EntityKind::Worker);
+    let faction = match faction_idx {
+        0 => Faction::Player1,
+        1 => Faction::Player2,
+        2 => Faction::Player3,
+        3 => Faction::Player4,
+        _ => Faction::Neutral,
+    };
+    (kind, faction)
+}
+
+fn sync_entity_spawn_tweaks(
+    mut commands: Commands,
+    mut tweaks: ResMut<DebugTweaks>,
+    mut spawn_state: ResMut<DebugSpawnState>,
+    pressed: Res<DebugButtonPressed>,
+    time: Res<Time>,
+    registry: Res<BlueprintRegistry>,
+    cache: Res<EntityVisualCache>,
+    building_models: Option<Res<BuildingModelAssets>>,
+    unit_models: Option<Res<UnitModelAssets>>,
+    height_map: Option<Res<HeightMap>>,
+    camera_q: Query<&RtsCamera>,
+    cam_query: Query<(&Camera, &GlobalTransform)>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    panel_state: Res<DebugPanelState>,
+    ui_press: Res<UiPressActive>,
+) {
+    // Update click-to-spawn from toggle
+    if let Some(v) = tweaks.get_bool(SPAWN_FOLDER, "Click to Place") {
+        spawn_state.click_to_spawn = v;
+    }
+
+    // Update status timer
+    if spawn_state.status_timer > 0.0 {
+        spawn_state.status_timer -= time.delta_secs();
+        if spawn_state.status_timer <= 0.0 {
+            spawn_state.status_text = if spawn_state.click_to_spawn {
+                "Click to place...".to_string()
+            } else {
+                "Ready".to_string()
+            };
+        }
+    }
+
+    // Update status text
+    if spawn_state.status_timer <= 0.0 {
+        let status = if spawn_state.click_to_spawn { "Click to place..." } else { "Ready" };
+        tweaks.set_readonly_if_changed(SPAWN_FOLDER, "Status", status);
+    } else {
+        tweaks.set_readonly_if_changed(SPAWN_FOLDER, "Status", &spawn_state.status_text);
+    }
+
+    let hm = match &height_map {
+        Some(h) => h,
+        None => return,
+    };
+
+    // Handle "Spawn at Camera" button
+    for (folder, label) in &pressed.pressed {
+        if folder == SPAWN_FOLDER && label == "Spawn at Camera" {
+            let (kind, faction) = get_selected_kind_and_faction(&tweaks);
+            let pivot = camera_q.iter().next().map(|c| c.pivot).unwrap_or(Vec3::ZERO);
+            let entity = spawn_from_blueprint(
+                &mut commands,
+                &cache,
+                kind,
+                pivot,
+                &registry,
+                building_models.as_deref(),
+                unit_models.as_deref(),
+                hm,
+            );
+            commands.entity(entity).insert(faction);
+            spawn_state.status_text = format!("Spawned {}!", kind.display_name());
+            spawn_state.status_timer = 1.5;
+        }
+    }
+
+    // Handle click-to-spawn
+    if spawn_state.click_to_spawn
+        && mouse.just_pressed(MouseButton::Left)
+        && !ui_press.0
+        && panel_state.visible
+    {
+        if let Some(world_pos) = cursor_ground_pos(&cam_query, &windows) {
+            let (kind, faction) = get_selected_kind_and_faction(&tweaks);
+            let entity = spawn_from_blueprint(
+                &mut commands,
+                &cache,
+                kind,
+                world_pos,
+                &registry,
+                building_models.as_deref(),
+                unit_models.as_deref(),
+                hm,
+            );
+            commands.entity(entity).insert(faction);
+            spawn_state.status_text = format!("Placed {}!", kind.display_name());
+            spawn_state.status_timer = 1.0;
+        }
+    }
+}
+
+fn sync_entity_selected_tweaks(
+    mut commands: Commands,
+    mut tweaks: ResMut<DebugTweaks>,
+    pressed: Res<DebugButtonPressed>,
+    active: Res<ActiveSlider>,
+    selected_q: Query<(Entity, &EntityKind), With<Selected>>,
+    mut health_q: Query<(Entity, &mut Health), With<Selected>>,
+    mut speed_q: Query<&mut UnitSpeed, With<Selected>>,
+) {
+    // Update count
+    let count = selected_q.iter().count();
+    tweaks.set_readonly_if_changed(SELECTED_FOLDER, "Count", &count.to_string());
+
+    // Update type display
+    if count == 0 {
+        tweaks.set_readonly_if_changed(SELECTED_FOLDER, "Type", "--");
+    } else {
+        let mut kinds: Vec<&str> = selected_q.iter().map(|(_, k)| k.display_name()).collect();
+        kinds.dedup();
+        if kinds.len() == 1 {
+            tweaks.set_readonly_if_changed(SELECTED_FOLDER, "Type", kinds[0]);
+        } else {
+            tweaks.set_readonly_if_changed(SELECTED_FOLDER, "Type", "Mixed");
+        }
+    }
+
+    // Handle buttons
+    for (folder, label) in &pressed.pressed {
+        if folder != SELECTED_FOLDER {
+            continue;
+        }
+        match label.as_str() {
+            "Kill Selected" => {
+                for (_, mut hp) in &mut health_q {
+                    hp.current = 0.0;
+                }
+            }
+            "Delete Selected" => {
+                for (entity, _) in &selected_q {
+                    commands.entity(entity).despawn();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Only apply HP%/Speed sliders when actively dragging them
+    let is_dragging = |label: &str| -> bool {
+        active.folder.as_deref() == Some(SELECTED_FOLDER) && active.label.as_deref() == Some(label)
+    };
+
+    if count > 0 {
+        if is_dragging("Set HP %") {
+            if let Some(hp_pct) = tweaks.get_float(SELECTED_FOLDER, "Set HP %") {
+                for (_, mut hp) in &mut health_q {
+                    let target = hp.max * hp_pct / 100.0;
+                    hp.current = target;
+                }
+            }
+        }
+        if is_dragging("Set Speed") {
+            if let Some(spd) = tweaks.get_float(SELECTED_FOLDER, "Set Speed") {
+                for mut s in &mut speed_q {
+                    s.0 = spd;
+                }
+            }
+        }
+    }
+}
+
+fn sync_save_load_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    mut save_req: ResMut<crate::save::SaveRequested>,
+    mut load_req: ResMut<crate::save::LoadRequested>,
+    status: Res<crate::save::SaveLoadStatus>,
+    button_pressed: Res<DebugButtonPressed>,
+) {
+    // Handle button presses
+    for (folder, label) in &button_pressed.pressed {
+        if folder == SAVE_FOLDER {
+            match label.as_str() {
+                "Save Game" => save_req.0 = true,
+                "Load Game" => load_req.0 = true,
+                _ => {}
+            }
+        }
+    }
+
+    // Update status display
+    if !status.message.is_empty() {
+        tweaks.set_readonly_if_changed(SAVE_FOLDER, "Status", &status.message);
+    } else {
+        tweaks.set_readonly_if_changed(SAVE_FOLDER, "Status", "Ready");
+    }
+}
+
+fn sync_player_control_tweaks(
+    mut commands: Commands,
+    tweaks: Res<DebugTweaks>,
+    mut active_player: ResMut<ActivePlayer>,
+    mut team_config: ResMut<TeamConfig>,
+    mut camera_q: Query<&mut RtsCamera>,
+    selected_entities: Query<Entity, With<Selected>>,
+    mut inspected_enemy: ResMut<InspectedEnemy>,
+) {
+    // Active Player switching
+    let selected = tweaks.get_cycle_selected(PLAYER_FOLDER, "Active Player").unwrap_or(0);
+    let new_faction = match selected {
+        0 => Faction::Player1,
+        1 => Faction::Player2,
+        2 => Faction::Player3,
+        3 => Faction::Player4,
+        _ => Faction::Player1,
+    };
+
+    if active_player.0 != new_faction {
+        active_player.0 = new_faction;
+
+        // Deselect all units/buildings from the old faction
+        for entity in &selected_entities {
+            commands.entity(entity).remove::<Selected>();
+        }
+        inspected_enemy.entity = None;
+
+        // Move camera to the new faction's base position
+        if let Some((_, (sx, sz))) = crate::components::SPAWN_POSITIONS.iter().find(|(f, _)| *f == new_faction) {
+            if let Ok(mut cam) = camera_q.single_mut() {
+                cam.target_pivot = Vec3::new(*sx, 0.0, *sz);
+            }
+        }
+    }
+
+    // Team Mode switching
+    let team_mode = tweaks.get_cycle_selected(PLAYER_FOLDER, "Team Mode").unwrap_or(0);
+    let new_teams: std::collections::HashMap<Faction, u8> = match team_mode {
+        0 => {
+            // 2v2: P1+P2 vs P3+P4
+            [(Faction::Player1, 0), (Faction::Player2, 0), (Faction::Player3, 1), (Faction::Player4, 1)]
+                .into_iter().collect()
+        }
+        1 => {
+            // FFA: all vs all
+            [(Faction::Player1, 0), (Faction::Player2, 1), (Faction::Player3, 2), (Faction::Player4, 3)]
+                .into_iter().collect()
+        }
+        2 => {
+            // 1v3: P1 vs P2+P3+P4
+            [(Faction::Player1, 0), (Faction::Player2, 1), (Faction::Player3, 1), (Faction::Player4, 1)]
+                .into_iter().collect()
+        }
+        _ => return,
+    };
+    if team_config.teams != new_teams {
+        team_config.teams = new_teams;
     }
 }

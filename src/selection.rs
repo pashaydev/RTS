@@ -400,6 +400,8 @@ fn handle_click_select(
     unit_transforms: Query<&GlobalTransform, With<Unit>>,
     flags: (Res<MinimapInteraction>, Res<UiClickedThisFrame>, Res<UiPressActive>),
     ui_interactions: Query<&Interaction, With<Node>>,
+    active_player: Res<ActivePlayer>,
+    faction_q: Query<&Faction>,
 ) {
     let (ref mut drag, ref mut inspected) = state;
     let (ref units, ref buildings, ref mobs, ref resource_nodes) = entity_queries;
@@ -462,6 +464,12 @@ fn handle_click_select(
             inspected.entity = None;
 
             for entity in units.iter() {
+                // Only select units of the active faction
+                if let Ok(f) = faction_q.get(entity) {
+                    if *f != active_player.0 {
+                        continue;
+                    }
+                }
                 if let Ok(gt) = unit_transforms.get(entity) {
                     if let Ok(screen_pos) = camera.world_to_viewport(cam_gt, gt.translation()) {
                         if screen_pos.x >= min_x
@@ -488,19 +496,38 @@ fn handle_click_select(
         if let Some(result) = pick {
             if result.is_mob {
                 inspected.entity = Some(result.entity);
-            } else {
+            } else if result.is_resource {
+                // Resources can always be inspected/selected
                 inspected.entity = None;
-
                 if !shift {
                     for entity in &selected {
                         commands.entity(entity).remove::<Selected>();
                     }
                 }
+                commands.entity(result.entity).insert(Selected);
+            } else {
+                // Units and buildings: only select if they belong to active faction
+                let is_own = faction_q.get(result.entity)
+                    .map(|f| *f == active_player.0)
+                    .unwrap_or(false);
 
-                if shift && selected.contains(result.entity) {
-                    commands.entity(result.entity).remove::<Selected>();
+                if !is_own {
+                    // Inspect enemy units/buildings instead of selecting
+                    inspected.entity = Some(result.entity);
                 } else {
-                    commands.entity(result.entity).insert(Selected);
+                    inspected.entity = None;
+
+                    if !shift {
+                        for entity in &selected {
+                            commands.entity(entity).remove::<Selected>();
+                        }
+                    }
+
+                    if shift && selected.contains(result.entity) {
+                        commands.entity(result.entity).remove::<Selected>();
+                    } else {
+                        commands.entity(result.entity).insert(Selected);
+                    }
                 }
             }
         } else {
@@ -698,7 +725,8 @@ fn handle_right_click_move(
     mouse: Res<ButtonInput<MouseButton>>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    selected_units: Query<(Entity, &EntityKind), (With<Unit>, With<Selected>)>,
+    selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
+    active_player: Res<ActivePlayer>,
     pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     mobs: Query<Entity, With<Mob>>,
     resource_nodes: Query<Entity, With<ResourceNode>>,
@@ -728,7 +756,9 @@ fn handle_right_click_move(
         return;
     };
 
-    let units_vec: Vec<(Entity, EntityKind)> = selected_units.iter().map(|(e, k)| (e, *k)).collect();
+    let units_vec: Vec<(Entity, EntityKind)> = selected_units.iter()
+        .filter(|(_, _, faction)| **faction == active_player.0)
+        .map(|(e, k, _)| (e, *k)).collect();
     if units_vec.is_empty() {
         return;
     }
@@ -844,7 +874,7 @@ fn handle_right_click_move(
                     ec.remove::<AttackTarget>()
                         .insert(MoveTarget(point));
                     if *kind == EntityKind::Worker {
-                        ec.insert(WorkerTask::Idle);
+                        ec.insert(WorkerTask::ManualMove);
                     }
                 } else if n > 1 {
                     let spacing = 1.5;
@@ -857,7 +887,7 @@ fn handle_right_click_move(
                         ec.remove::<AttackTarget>()
                             .insert(MoveTarget(point + offset));
                         if *kind == EntityKind::Worker {
-                            ec.insert(WorkerTask::Idle);
+                            ec.insert(WorkerTask::ManualMove);
                         }
                     }
                 }
