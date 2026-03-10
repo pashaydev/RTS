@@ -1,6 +1,8 @@
 use bevy::prelude::*;
 
+use crate::blueprints::EntityKind;
 use crate::components::*;
+use crate::theme;
 
 pub struct AttentionPlugin;
 
@@ -14,6 +16,8 @@ impl Plugin for AttentionPlugin {
                 manage_attention_icons,
                 position_overlays,
                 cleanup_orphaned_icons,
+                update_worker_overlays,
+                position_worker_overlays,
             ),
         );
     }
@@ -176,7 +180,7 @@ fn determine_attention_kind(
             UnitState::Gathering(_) => {
                 return Some(AttentionKind::Gathering);
             }
-            UnitState::Building(_) | UnitState::MovingToBuild(_) => {
+            UnitState::Building(_) | UnitState::MovingToBuild(_) | UnitState::MovingToPlot(_) => {
                 return Some(AttentionKind::Building);
             }
             _ => {}
@@ -287,11 +291,12 @@ fn position_overlays(
     time: Res<Time>,
     camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     fog_map: Option<Res<FogOfWarMap>>,
-    mut popups: Query<(&DamagePopup, &mut Node, &mut Visibility), Without<AttentionIcon>>,
+    mut popups: Query<(&DamagePopup, &mut Node, &mut Visibility), (Without<AttentionIcon>, Without<ResourcePopup>)>,
     mut icons: Query<
         (&AttentionIcon, &mut Node, &mut Visibility),
-        Without<DamagePopup>,
+        (Without<DamagePopup>, Without<ResourcePopup>),
     >,
+    mut res_popups: Query<(&ResourcePopup, &mut Node, &mut Visibility), (Without<DamagePopup>, Without<AttentionIcon>)>,
     transforms: Query<&Transform>,
 ) {
     let Ok((camera, cam_gt)) = camera_q.single() else {
@@ -308,6 +313,26 @@ fn position_overlays(
                 .unwrap_or(true);
             if fog_visible {
                 node.left = Val::Px(vp.x + popup.offset_x);
+                node.top = Val::Px(vp.y - rise);
+                *vis = Visibility::Inherited;
+            } else {
+                *vis = Visibility::Hidden;
+            }
+        } else {
+            *vis = Visibility::Hidden;
+        }
+    }
+
+    // Position resource popups
+    for (popup, mut node, mut vis) in &mut res_popups {
+        let rise = popup.lifetime.fraction() * 30.0;
+        if let Ok(vp) = camera.world_to_viewport(cam_gt, popup.world_pos) {
+            let fog_visible = fog_map
+                .as_ref()
+                .map(|f| f.get_visible(popup.world_pos.x, popup.world_pos.z) > 0.2)
+                .unwrap_or(true);
+            if fog_visible {
+                node.left = Val::Px(vp.x - 15.0);
                 node.top = Val::Px(vp.y - rise);
                 *vis = Visibility::Inherited;
             } else {
@@ -371,6 +396,167 @@ fn cleanup_orphaned_icons(
     for (icon_entity, icon) in &icons {
         if existing.get(icon.owner).is_err() {
             commands.entity(icon_entity).despawn();
+        }
+    }
+}
+
+// ── Worker Overlay: floating worker portraits above processor buildings ──
+
+const OVERLAY_ICON_SIZE: f32 = 18.0;
+const OVERLAY_GAP: f32 = 3.0;
+const OVERLAY_Y_OFFSET: f32 = 3.5;
+const OVERLAY_BG_PADDING: f32 = 4.0;
+
+/// Spawns/despawns worker overlay UI when AssignedWorkers changes.
+fn update_worker_overlays(
+    mut commands: Commands,
+    icons: Res<IconAssets>,
+    buildings: Query<
+        (Entity, &AssignedWorkers, &ResourceProcessor),
+        (With<Building>, Changed<AssignedWorkers>),
+    >,
+    existing_overlays: Query<(Entity, &WorkerOverlay)>,
+) {
+    for (building_entity, assigned, processor) in &buildings {
+        // Remove existing overlay for this building
+        for (overlay_entity, overlay) in &existing_overlays {
+            if overlay.building == building_entity {
+                commands.entity(overlay_entity).despawn();
+            }
+        }
+
+        // Don't show overlay if no workers and no capacity
+        if processor.max_workers == 0 {
+            continue;
+        }
+
+        // Build the overlay container
+        let container = commands
+            .spawn((
+                WorkerOverlay { building: building_entity },
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(-1000.0),
+                    top: Val::Px(-1000.0),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(OVERLAY_GAP),
+                    padding: UiRect::all(Val::Px(OVERLAY_BG_PADDING)),
+                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+                Pickable::IGNORE,
+                GlobalZIndex(5),
+            ))
+            .id();
+
+        // Spawn slots: filled worker icons + empty slots
+        for i in 0..processor.max_workers {
+            let is_filled = (i as usize) < assigned.workers.len();
+            let slot = if is_filled {
+                // Filled slot: worker icon with accent border
+                commands
+                    .spawn((
+                        Node {
+                            width: Val::Px(OVERLAY_ICON_SIZE),
+                            height: Val::Px(OVERLAY_ICON_SIZE),
+                            border: UiRect::all(Val::Px(1.5)),
+                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            ..default()
+                        },
+                        ImageNode::new(icons.entity_icon(EntityKind::Worker)),
+                        BorderColor::all(theme::ACCENT),
+                        BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.9)),
+                        Pickable::IGNORE,
+                    ))
+                    .id()
+            } else {
+                // Empty slot: dim placeholder
+                commands
+                    .spawn((
+                        Node {
+                            width: Val::Px(OVERLAY_ICON_SIZE),
+                            height: Val::Px(OVERLAY_ICON_SIZE),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            ..default()
+                        },
+                        BorderColor::all(Color::srgba(0.4, 0.4, 0.4, 0.4)),
+                        BackgroundColor(Color::srgba(0.05, 0.05, 0.05, 0.5)),
+                        Pickable::IGNORE,
+                    ))
+                    .id()
+            };
+            commands.entity(container).add_child(slot);
+        }
+
+        // Worker count text
+        let count_text = commands
+            .spawn((
+                Text::new(format!("{}/{}", assigned.workers.len(), processor.max_workers)),
+                TextFont { font_size: 10.0, ..default() },
+                TextColor(if assigned.workers.len() >= processor.max_workers as usize {
+                    theme::ACCENT
+                } else {
+                    theme::TEXT_SECONDARY
+                }),
+                Node {
+                    margin: UiRect::left(Val::Px(2.0)),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ))
+            .id();
+        commands.entity(container).add_child(count_text);
+    }
+}
+
+/// Projects worker overlays from world space to screen position above buildings.
+fn position_worker_overlays(
+    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+    fog_map: Option<Res<FogOfWarMap>>,
+    active_player: Res<ActivePlayer>,
+    building_q: Query<(&Transform, &Faction), With<Building>>,
+    mut overlays: Query<(&WorkerOverlay, &mut Node, &mut Visibility)>,
+) {
+    let Ok((camera, cam_gt)) = camera_q.single() else {
+        return;
+    };
+
+    for (overlay, mut node, mut vis) in &mut overlays {
+        let Ok((building_tf, faction)) = building_q.get(overlay.building) else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+
+        // Only show for player's own buildings
+        if *faction != active_player.0 {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+
+        let world_pos = building_tf.translation + Vec3::Y * OVERLAY_Y_OFFSET;
+
+        // Fog check
+        let fog_visible = fog_map
+            .as_ref()
+            .map(|f| f.get_visible(world_pos.x, world_pos.z) > 0.2)
+            .unwrap_or(true);
+
+        if !fog_visible {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+
+        if let Ok(vp) = camera.world_to_viewport(cam_gt, world_pos) {
+            // Center the overlay horizontally above the building
+            let estimated_width = 120.0; // approximate, will be refined by layout
+            node.left = Val::Px(vp.x - estimated_width * 0.5);
+            node.top = Val::Px(vp.y - 20.0);
+            *vis = Visibility::Inherited;
+        } else {
+            *vis = Visibility::Hidden;
         }
     }
 }

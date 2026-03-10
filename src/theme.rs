@@ -65,5 +65,8 @@ pub const ICON_FRAME_BG: Color = Color::srgba(0.16, 0.16, 0.18, 0.95);
 pub const BTN_HOVER_BRIGHT: Color = Color::srgba(0.25, 0.25, 0.25, 0.94);
 pub const BTN_GHOST_HOVER_BG: Color = Color::srgba(0.29, 0.62, 1.0, 0.08);
 pub const BTN_GHOST_PRESS_BG: Color = Color::srgba(0.29, 0.62, 1.0, 0.14);
+
+// ── Grid overlay ──
+pub const GRID_LINE: Color = Color::srgba(0.29, 0.62, 1.0, 0.15);
 #[allow(dead_code)]
 pub const DEMOLISH_HOVER: Color = Color::srgb(0.95, 0.35, 0.35);

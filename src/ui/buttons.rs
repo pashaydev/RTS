@@ -1,3 +1,4 @@
+use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind};
@@ -766,53 +767,141 @@ pub fn update_upgrade_progress_display(
 
 pub fn show_action_tooltips(
     mut commands: Commands,
-    triggers: Query<(Entity, &Interaction, &ActionTooltipTrigger, Option<&Children>), Changed<Interaction>>,
-    existing_tooltips: Query<Entity, With<ActionTooltip>>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    triggers: Query<(Entity, &Interaction, &ActionTooltipTrigger), Changed<Interaction>>,
+    existing_tooltips: Query<(Entity, &ActionTooltip)>,
 ) {
-    for (entity, interaction, trigger, children) in &triggers {
+    for (entity, interaction, trigger) in &triggers {
         match interaction {
             Interaction::Hovered => {
-                let has_tooltip = children.map_or(false, |c| {
-                    c.iter().any(|child| existing_tooltips.get(child).is_ok())
-                });
+                // Check if tooltip already exists for this trigger
+                let has_tooltip = existing_tooltips.iter().any(|(_, tt)| tt.owner == entity);
                 if has_tooltip {
                     continue;
                 }
-                let tooltip = commands
+
+                // Position near cursor
+                let (cx, cy) = windows.single().ok()
+                    .and_then(|w| w.cursor_position())
+                    .map(|p| (p.x, p.y))
+                    .unwrap_or((0.0, 0.0));
+
+                commands
                     .spawn((
-                        ActionTooltip,
+                        ActionTooltip { owner: entity },
+                        Pickable::IGNORE,
                         Node {
                             position_type: PositionType::Absolute,
-                            bottom: Val::Percent(100.0),
-                            left: Val::Px(0.0),
-                            padding: UiRect::all(Val::Px(6.0)),
-                            border_radius: BorderRadius::all(Val::Px(4.0)),
-                            max_width: Val::Px(180.0),
+                            left: Val::Px(cx + 12.0),
+                            top: Val::Px(cy - 8.0),
+                            flex_direction: FlexDirection::Column,
+                            padding: UiRect::all(Val::Px(8.0)),
+                            row_gap: Val::Px(2.0),
+                            border_radius: BorderRadius::all(Val::Px(6.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            max_width: Val::Px(220.0),
+                            min_width: Val::Px(140.0),
                             ..default()
                         },
-                        BackgroundColor(theme::BG_PANEL),
+                        BackgroundColor(Color::srgba(0.05, 0.05, 0.07, 0.96)),
+                        BorderColor::all(Color::srgba(0.25, 0.25, 0.30, 0.6)),
+                        BoxShadow::new(
+                            Color::srgba(0.0, 0.0, 0.0, 0.6),
+                            Val::Px(0.0),
+                            Val::Px(4.0),
+                            Val::Px(0.0),
+                            Val::Px(12.0),
+                        ),
                         GlobalZIndex(100),
                     ))
                     .with_children(|tt| {
-                        tt.spawn((
-                            Text::new(&trigger.text),
-                            TextFont { font_size: 10.0, ..default() },
-                            TextColor(theme::TEXT_PRIMARY),
-                        ));
+                        spawn_tooltip_content(tt, &trigger.text);
                     })
-                    .id();
-                commands.entity(entity).add_child(tooltip);
+                    ;
             }
             _ => {
-                if let Some(children) = children {
-                    for child in children.iter() {
-                        if existing_tooltips.get(child).is_ok() {
-                            commands.entity(child).try_despawn();
-                        }
+                // Remove tooltip owned by this trigger
+                for (tooltip_entity, tt) in &existing_tooltips {
+                    if tt.owner == entity {
+                        commands.entity(tooltip_entity).try_despawn();
                     }
                 }
             }
         }
+    }
+}
+
+/// Clean up orphaned tooltips whose owner trigger no longer exists or is no longer hovered.
+pub fn cleanup_action_tooltips(
+    mut commands: Commands,
+    tooltips: Query<(Entity, &ActionTooltip)>,
+    triggers: Query<&Interaction, With<ActionTooltipTrigger>>,
+) {
+    for (tooltip_entity, tt) in &tooltips {
+        let should_remove = match triggers.get(tt.owner) {
+            Ok(interaction) => *interaction != Interaction::Hovered,
+            Err(_) => true, // owner despawned
+        };
+        if should_remove {
+            commands.entity(tooltip_entity).try_despawn();
+        }
+    }
+}
+
+fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
+    let lines: Vec<&str> = text.split('\n').collect();
+    for (i, line) in lines.iter().enumerate() {
+        if line.is_empty() { continue; }
+
+        // First line = title
+        if i == 0 {
+            tt.spawn((
+                Text::new(*line),
+                TextFont { font_size: 12.0, ..default() },
+                TextColor(theme::TEXT_PRIMARY),
+            ));
+            tt.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(1.0),
+                    margin: UiRect::axes(Val::Px(0.0), Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.30, 0.30, 0.35, 0.4)),
+            ));
+            continue;
+        }
+
+        let (color, font_size) = if line.starts_with("Not enough") {
+            (theme::DESTRUCTIVE, 10.0)
+        } else if line.starts_with("Requires:") {
+            (theme::WARNING, 10.0)
+        } else if line.starts_with("Cost:") {
+            (theme::TEXT_SECONDARY, 10.0)
+        } else if line.starts_with("HP:") || line.starts_with("DMG:") {
+            (theme::STAT_DMG, 10.0)
+        } else if *line == "Drag & Drop to create" || *line == "Click to train" || *line == "Click to place" {
+            tt.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(1.0),
+                    margin: UiRect::axes(Val::Px(0.0), Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.30, 0.30, 0.35, 0.4)),
+            ));
+            (Color::srgba(0.45, 0.65, 1.0, 0.7), 9.0)
+        } else if line.starts_with("Build time:") || line.starts_with("Train:") {
+            (theme::TEXT_SECONDARY, 10.0)
+        } else {
+            (Color::srgba(0.65, 0.65, 0.65, 0.9), 10.0)
+        };
+
+        tt.spawn((
+            Text::new(*line),
+            TextFont { font_size, ..default() },
+            TextColor(color),
+        ));
     }
 }
 

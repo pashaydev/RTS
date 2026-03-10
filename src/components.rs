@@ -137,6 +137,8 @@ pub enum UnitState {
     ReturningToDeposit { depot: Entity, gather_node: Option<Entity> },
     Depositing { depot: Entity, gather_node: Option<Entity> },
     WaitingForStorage { depot: Entity, gather_node: Option<Entity> },
+    /// Worker moving to a location to plot (start) a new building
+    MovingToPlot(Vec3),
     MovingToBuild(Entity),
     Building(Entity),
     /// Worker absorbed into processor building (hidden, working inside)
@@ -160,6 +162,15 @@ pub enum QueuedTask {
     AssignToProcessor(Entity),
 }
 
+/// Attached to a worker who is walking to a location to plot a new building.
+/// When the worker arrives, the building is spawned and the worker transitions to Building state.
+#[derive(Component)]
+pub struct PendingBuildOrder {
+    pub kind: crate::blueprints::EntityKind,
+    pub position: Vec3,
+    pub faction: Faction,
+}
+
 /// Task queue for shift+click command queuing.
 #[derive(Component, Default)]
 pub struct TaskQueue {
@@ -175,6 +186,12 @@ pub struct AssignedWorkers {
 /// Button to unassign a specific worker from a processor building.
 #[derive(Component)]
 pub struct UnassignSpecificWorkerButton(pub Entity);
+
+/// Floating world-space overlay showing workers assigned to a building.
+#[derive(Component)]
+pub struct WorkerOverlay {
+    pub building: Entity,
+}
 
 #[derive(Component)]
 pub struct Carrying {
@@ -209,7 +226,12 @@ pub struct StorageInventory {
     pub iron: u32,
     pub gold: u32,
     pub oil: u32,
-    pub capacity: u32,
+    /// Per-resource capacity limits. 0 means this resource type is NOT accepted.
+    pub wood_cap: u32,
+    pub copper_cap: u32,
+    pub iron_cap: u32,
+    pub gold_cap: u32,
+    pub oil_cap: u32,
     pub last_total: u32,
 }
 
@@ -217,7 +239,7 @@ impl Default for StorageInventory {
     fn default() -> Self {
         Self {
             wood: 0, copper: 0, iron: 0, gold: 0, oil: 0,
-            capacity: 500,
+            wood_cap: 500, copper_cap: 500, iron_cap: 500, gold_cap: 500, oil_cap: 500,
             last_total: 0,
         }
     }
@@ -228,8 +250,39 @@ impl StorageInventory {
         self.wood + self.copper + self.iron + self.gold + self.oil
     }
 
+    pub fn total_capacity(&self) -> u32 {
+        self.wood_cap + self.copper_cap + self.iron_cap + self.gold_cap + self.oil_cap
+    }
+
+    /// Returns the capacity limit for a specific resource type.
+    pub fn cap_for(&self, rt: ResourceType) -> u32 {
+        match rt {
+            ResourceType::Wood => self.wood_cap,
+            ResourceType::Copper => self.copper_cap,
+            ResourceType::Iron => self.iron_cap,
+            ResourceType::Gold => self.gold_cap,
+            ResourceType::Oil => self.oil_cap,
+        }
+    }
+
+    /// Whether this storage accepts the given resource type at all.
+    pub fn accepts(&self, rt: ResourceType) -> bool {
+        self.cap_for(rt) > 0
+    }
+
+    /// Remaining capacity for the total across all resources.
     pub fn remaining_capacity(&self) -> u32 {
-        self.capacity.saturating_sub(self.total())
+        // Sum of per-resource remaining
+        self.remaining_capacity_for(ResourceType::Wood)
+            + self.remaining_capacity_for(ResourceType::Copper)
+            + self.remaining_capacity_for(ResourceType::Iron)
+            + self.remaining_capacity_for(ResourceType::Gold)
+            + self.remaining_capacity_for(ResourceType::Oil)
+    }
+
+    /// Remaining capacity for a specific resource type.
+    pub fn remaining_capacity_for(&self, rt: ResourceType) -> u32 {
+        self.cap_for(rt).saturating_sub(self.get(rt))
     }
 
     pub fn get(&self, rt: ResourceType) -> u32 {
@@ -242,9 +295,29 @@ impl StorageInventory {
         }
     }
 
-    /// Add resources up to capacity. Returns amount actually stored.
+    /// Set capacity for a specific resource type.
+    pub fn set_cap(&mut self, rt: ResourceType, cap: u32) {
+        match rt {
+            ResourceType::Wood => self.wood_cap = cap,
+            ResourceType::Copper => self.copper_cap = cap,
+            ResourceType::Iron => self.iron_cap = cap,
+            ResourceType::Gold => self.gold_cap = cap,
+            ResourceType::Oil => self.oil_cap = cap,
+        }
+    }
+
+    /// Multiply all non-zero capacities by a factor.
+    pub fn scale_caps(&mut self, factor: f32) {
+        if self.wood_cap > 0 { self.wood_cap = (self.wood_cap as f32 * factor) as u32; }
+        if self.copper_cap > 0 { self.copper_cap = (self.copper_cap as f32 * factor) as u32; }
+        if self.iron_cap > 0 { self.iron_cap = (self.iron_cap as f32 * factor) as u32; }
+        if self.gold_cap > 0 { self.gold_cap = (self.gold_cap as f32 * factor) as u32; }
+        if self.oil_cap > 0 { self.oil_cap = (self.oil_cap as f32 * factor) as u32; }
+    }
+
+    /// Add resources up to per-resource capacity. Returns amount actually stored.
     pub fn add_capped(&mut self, rt: ResourceType, amount: u32) -> u32 {
-        let can_fit = self.remaining_capacity().min(amount);
+        let can_fit = self.remaining_capacity_for(rt).min(amount);
         if can_fit == 0 {
             return 0;
         }
@@ -257,6 +330,17 @@ impl StorageInventory {
         }
         can_fit
     }
+
+    /// Returns the list of accepted resource types (those with cap > 0).
+    pub fn accepted_types(&self) -> Vec<ResourceType> {
+        let mut types = Vec::new();
+        if self.wood_cap > 0 { types.push(ResourceType::Wood); }
+        if self.copper_cap > 0 { types.push(ResourceType::Copper); }
+        if self.iron_cap > 0 { types.push(ResourceType::Iron); }
+        if self.gold_cap > 0 { types.push(ResourceType::Gold); }
+        if self.oil_cap > 0 { types.push(ResourceType::Oil); }
+        types
+    }
 }
 
 // ── Resource Processing Buildings ──
@@ -268,7 +352,7 @@ pub struct ResourceProcessor {
     pub resource_types: Vec<ResourceType>,
     /// Radius to claim nearby resource nodes
     pub harvest_radius: f32,
-    /// Base harvest rate (units per second)
+    /// Base harvest rate (units per tick)
     pub harvest_rate: f32,
     /// Max workers that can be assigned to boost output
     pub max_workers: u8,
@@ -278,6 +362,19 @@ pub struct ResourceProcessor {
     pub buffer_capacity: u32,
     /// Each worker adds this fraction of base rate (default 0.5 = 50%)
     pub worker_rate_bonus: f32,
+    /// Timer that controls harvest tick interval
+    pub harvest_timer: Timer,
+    /// Fractional accumulator for sub-1.0 rates
+    pub harvest_accumulator: f32,
+}
+
+/// Floating "+N resource" popup that appears above buildings when resources are gathered.
+#[derive(Component)]
+pub struct ResourcePopup {
+    pub lifetime: Timer,
+    pub world_pos: Vec3,
+    pub resource_type: ResourceType,
+    pub amount: u32,
 }
 
 /// Sub-state for workers inside processor buildings (visual work loop).
@@ -1332,6 +1429,8 @@ pub struct BuildingPlacementState {
     pub mode: PlacementMode,
     pub preview_entity: Option<Entity>,
     pub awaiting_release: bool,
+    /// Feedback text shown during placement (e.g. biome requirement hint)
+    pub hint_text: Option<&'static str>,
 }
 
 impl Default for BuildingPlacementState {
@@ -1340,6 +1439,7 @@ impl Default for BuildingPlacementState {
             mode: PlacementMode::None,
             preview_entity: None,
             awaiting_release: false,
+            hint_text: None,
         }
     }
 }
@@ -1449,7 +1549,9 @@ pub struct ToggleAutoAttackButton;
 pub struct CancelTrainButton(pub usize);
 
 #[derive(Component)]
-pub struct ActionTooltip;
+pub struct ActionTooltip {
+    pub owner: Entity,
+}
 
 #[derive(Component)]
 pub struct ActionTooltipTrigger {

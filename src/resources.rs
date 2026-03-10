@@ -31,7 +31,7 @@ impl Plugin for ResourcesPlugin {
             )
             .add_systems(
                 Update,
-                (processor_worker_visual_system, resource_respawn_system, grow_resource_system),
+                (processor_worker_visual_system, resource_respawn_system, grow_resource_system, update_resource_popups),
             );
     }
 }
@@ -517,6 +517,7 @@ fn worker_ai_system(
     mut commands: Commands,
     time: Res<Time>,
     mut all_resources: ResMut<AllPlayerResources>,
+    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut workers: Query<
         (Entity, &Transform, &mut UnitState, &mut TaskSource, &mut Carrying, &GatherSpeed, &CarryCapacity, &EntityKind, &Faction, Option<&MoveTarget>, &TaskQueue),
@@ -549,9 +550,9 @@ fn worker_ai_system(
                     continue;
                 }
 
-                // If carrying resources, find depot to deposit
+                // If carrying resources, find depot to deposit (resource-type aware)
                 if carrying.amount > 0 {
-                    if let Some(depot) = find_nearest_deposit(&tf.translation, worker_faction, &deposit_points) {
+                    if let Some(depot) = find_nearest_deposit_for(&tf.translation, worker_faction, carrying.resource_type, &deposit_points, Some(&inventories)) {
                         let depot_pos = deposit_points.get(depot).unwrap().1.translation;
                         commands.entity(entity).insert(MoveTarget(depot_pos));
                         *state = UnitState::ReturningToDeposit { depot, gather_node: None };
@@ -596,7 +597,7 @@ fn worker_ai_system(
                     // Node gone
                     commands.entity(entity).remove::<MoveTarget>();
                     if carrying.amount > 0 {
-                        if let Some(depot) = find_nearest_deposit(&tf.translation, worker_faction, &deposit_points) {
+                        if let Some(depot) = find_nearest_deposit_for(&tf.translation, worker_faction, carrying.resource_type, &deposit_points, Some(&inventories)) {
                             let depot_pos = deposit_points.get(depot).unwrap().1.translation;
                             commands.entity(entity).insert(MoveTarget(depot_pos));
                             *state = UnitState::ReturningToDeposit { depot, gather_node: None };
@@ -613,7 +614,7 @@ fn worker_ai_system(
 
                 if node_data.amount_remaining == 0 {
                     if carrying.amount > 0 {
-                        if let Some(depot) = find_nearest_deposit(&tf.translation, worker_faction, &deposit_points) {
+                        if let Some(depot) = find_nearest_deposit_for(&tf.translation, worker_faction, carrying.resource_type, &deposit_points, Some(&inventories)) {
                             let depot_pos = deposit_points.get(depot).unwrap().1.translation;
                             commands.entity(entity).insert(MoveTarget(depot_pos));
                             *state = UnitState::ReturningToDeposit { depot, gather_node: None };
@@ -660,8 +661,8 @@ fn worker_ai_system(
                         carrying.resource_type = Some(rt);
                     }
 
-                    // Full — go deposit
-                    if let Some(depot) = find_nearest_deposit(&tf.translation, worker_faction, &deposit_points) {
+                    // Full — go deposit (resource-type aware)
+                    if let Some(depot) = find_nearest_deposit_for(&tf.translation, worker_faction, carrying.resource_type, &deposit_points, Some(&inventories)) {
                         let depot_pos = deposit_points.get(depot).unwrap().1.translation;
                         commands.entity(entity).insert(MoveTarget(depot_pos));
                         *state = UnitState::ReturningToDeposit { depot, gather_node: Some(node) };
@@ -679,7 +680,7 @@ fn worker_ai_system(
                 let Ok((depot_tf, _)) = inventories.get(depot) else {
                     // Try find another depot
                     commands.entity(entity).remove::<MoveTarget>();
-                    if let Some(new_depot) = find_nearest_deposit(&tf.translation, worker_faction, &deposit_points) {
+                    if let Some(new_depot) = find_nearest_deposit_for(&tf.translation, worker_faction, carrying.resource_type, &deposit_points, Some(&inventories)) {
                         let depot_pos = deposit_points.get(new_depot).unwrap().1.translation;
                         commands.entity(entity).insert(MoveTarget(depot_pos));
                         *state = UnitState::ReturningToDeposit { depot: new_depot, gather_node };
@@ -701,6 +702,7 @@ fn worker_ai_system(
 
             UnitState::Depositing { depot, gather_node } => {
                 // Transfer resources (capacity-limited)
+                let mut deposit_info: Option<(ResourceType, u32)> = None;
                 if let Some(rt) = carrying.resource_type {
                     let mut deposited = carrying.amount;
 
@@ -713,6 +715,13 @@ fn worker_ai_system(
 
                     if deposited == 0 {
                         // Storage full — wait nearby
+                        event_log.push(
+                            time.elapsed_secs(),
+                            "Storage full — worker waiting".into(),
+                            crate::ui::event_log_widget::EventCategory::Alert,
+                            Some(tf.translation),
+                            Some(*worker_faction),
+                        );
                         commands.entity(entity).remove::<MoveTarget>();
                         *state = UnitState::WaitingForStorage { depot, gather_node };
                         continue;
@@ -720,6 +729,7 @@ fn worker_ai_system(
 
                     // Add deposited amount to global resources
                     all_resources.get_mut(worker_faction).add(rt, deposited);
+                    deposit_info = Some((rt, deposited));
 
                     // Update carrying with leftover
                     let leftover = carrying.amount - deposited;
@@ -750,13 +760,15 @@ fn worker_ai_system(
                                             .with_scale(Vec3::splat(0.15)),
                                     ));
                                 }
+                                // Spawn resource popup for partial deposit
+                                spawn_resource_popup(&mut commands, deposit_pos + Vec3::Y * 1.5, rt, deposited);
                             }
                         }
                         continue;
                     }
                 }
 
-                // Spawn deposit VFX
+                // Spawn deposit VFX + resource popup
                 if let Some(ref vfx) = vfx_assets {
                     if let Ok((depot_tf, _)) = inventories.get(depot) {
                         let deposit_pos = depot_tf.translation + Vec3::Y * 2.0;
@@ -775,6 +787,9 @@ fn worker_ai_system(
                                 Transform::from_translation(deposit_pos + offset)
                                     .with_scale(Vec3::splat(0.15)),
                             ));
+                        }
+                        if let Some((rt, amount)) = deposit_info {
+                            spawn_resource_popup(&mut commands, deposit_pos + Vec3::Y * 1.5, rt, amount);
                         }
                     }
                 }
@@ -813,9 +828,17 @@ fn worker_ai_system(
             }
 
             UnitState::WaitingForStorage { depot, gather_node } => {
-                // Periodically check if depot has capacity again
+                let carried_rt = carrying.resource_type;
+
+                // Periodically check if depot has capacity for the carried resource type
                 let has_space = if let Ok((_, inventory)) = inventories.get(depot) {
-                    inventory.map_or(true, |inv| inv.remaining_capacity() > 0)
+                    inventory.map_or(true, |inv| {
+                        if let Some(rt) = carried_rt {
+                            inv.accepts(rt) && inv.remaining_capacity_for(rt) > 0
+                        } else {
+                            inv.remaining_capacity() > 0
+                        }
+                    })
                 } else {
                     false
                 };
@@ -825,17 +848,21 @@ fn worker_ai_system(
                     continue;
                 }
 
-                // Try a different depot that has space
+                // Try a different depot that accepts our resource type and has space
                 let mut best_depot = None;
                 let mut best_dist = f32::MAX;
                 for (dp_entity, dp_tf, dp_state, dp_faction) in &deposit_points {
                     if dp_faction != worker_faction || *dp_state != BuildingState::Complete {
                         continue;
                     }
-                    // Check this depot has capacity
+                    // Check this depot accepts and has capacity for the carried resource
                     if let Ok((_, inv_opt)) = inventories.get(dp_entity) {
                         if let Some(inv) = inv_opt {
-                            if inv.remaining_capacity() == 0 {
+                            if let Some(rt) = carried_rt {
+                                if !inv.accepts(rt) || inv.remaining_capacity_for(rt) == 0 {
+                                    continue;
+                                }
+                            } else if inv.remaining_capacity() == 0 {
                                 continue;
                             }
                         }
@@ -862,18 +889,25 @@ fn worker_ai_system(
     }
 }
 
-/// Resource processing buildings auto-harvest nearby nodes and deposit into player resources.
+/// Resource processing buildings auto-harvest nearby nodes on a timer and deposit into player resources.
 fn resource_processor_system(
     time: Res<Time>,
+    mut commands: Commands,
     mut all_resources: ResMut<AllPlayerResources>,
     mut processors: Query<
         (Entity, &Transform, &mut ResourceProcessor, &BuildingState, &Faction, Option<&mut StorageInventory>, Option<&AssignedWorkers>),
         With<Building>,
     >,
     mut nodes: Query<(&Transform, &mut ResourceNode), Without<Building>>,
+    vfx_assets: Option<Res<VfxAssets>>,
 ) {
     for (_building_entity, building_tf, mut processor, state, faction, storage, assigned_workers) in &mut processors {
         if *state != BuildingState::Complete {
+            continue;
+        }
+
+        processor.harvest_timer.tick(time.delta());
+        if !processor.harvest_timer.just_finished() {
             continue;
         }
 
@@ -882,15 +916,15 @@ fn resource_processor_system(
             .map(|aw| aw.workers.len())
             .unwrap_or(0) as f32;
 
-        // Effective rate = base_rate + (worker_count * base_rate * worker_rate_bonus)
+        // Effective amount per tick = base_rate + (worker_count * base_rate * worker_rate_bonus)
         let effective_rate = processor.harvest_rate + (worker_count * processor.harvest_rate * processor.worker_rate_bonus);
-        let rate = effective_rate * time.delta_secs();
-        let amount = rate as u32;
-        if amount == 0 && (rate * 10.0) as u32 == 0 {
-            processor.buffer += if rand::random::<f32>() < rate { 1 } else { 0 };
-        } else {
-            processor.buffer += amount.max(1);
+        processor.harvest_accumulator += effective_rate;
+        let amount = processor.harvest_accumulator as u32;
+        processor.harvest_accumulator -= amount as f32;
+        if amount == 0 {
+            continue;
         }
+        processor.buffer += amount;
 
         // Find nearest matching resource node in range and drain from it
         let mut harvested_type = None;
@@ -915,8 +949,9 @@ fn resource_processor_system(
             }
         }
 
-        // Transfer harvested resources to player
+        // Transfer harvested resources to player and spawn popup
         if let Some((rt, amount)) = harvested_type {
+            let stored_amount;
             if let Some(mut inv) = storage {
                 let stored = inv.add_capped(rt, amount);
                 if stored > 0 {
@@ -925,9 +960,104 @@ fn resource_processor_system(
                 if amount > stored {
                     processor.buffer += amount - stored;
                 }
+                stored_amount = stored;
             } else {
                 all_resources.get_mut(faction).add(rt, amount);
+                stored_amount = amount;
             }
+
+            // Spawn floating "+N" resource popup above the building
+            if stored_amount > 0 {
+                let popup_pos = building_tf.translation + Vec3::Y * 3.5;
+                spawn_resource_popup(&mut commands, popup_pos, rt, stored_amount);
+
+                // Also spawn deposit VFX particles
+                if let Some(ref vfx) = vfx_assets {
+                    let deposit_pos = building_tf.translation + Vec3::Y * 2.0;
+                    for i in 0..3 {
+                        let angle = std::f32::consts::TAU * (i as f32 / 3.0);
+                        let offset = Vec3::new(angle.cos() * 0.4, 0.3, angle.sin() * 0.4);
+                        commands.spawn((
+                            VfxFlash {
+                                timer: Timer::from_seconds(0.25, TimerMode::Once),
+                                start_scale: 0.12,
+                                end_scale: 0.0,
+                            },
+                            FogHideable::Vfx,
+                            Mesh3d(vfx.sphere_mesh.clone()),
+                            MeshMaterial3d(vfx.deposit_material.clone()),
+                            Transform::from_translation(deposit_pos + offset)
+                                .with_scale(Vec3::splat(0.12)),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Spawn a floating "+N" resource popup UI node at a world position.
+fn spawn_resource_popup(commands: &mut Commands, world_pos: Vec3, rt: ResourceType, amount: u32) {
+    let color = rt.carry_color();
+    let srgba = color.to_srgba();
+    commands.spawn((
+        ResourcePopup {
+            lifetime: Timer::from_seconds(1.2, TimerMode::Once),
+            world_pos,
+            resource_type: rt,
+            amount,
+        },
+        Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(-1000.0),
+            top: Val::Px(-1000.0),
+            ..default()
+        },
+        Text::new(format!("+{}", amount)),
+        TextFont {
+            font_size: 15.0,
+            ..default()
+        },
+        TextColor(Color::srgb(
+            srgba.red.max(0.4),
+            srgba.green.max(0.6),
+            srgba.blue.max(0.3),
+        )),
+        TextLayout::new_with_justify(Justify::Center),
+        Pickable::IGNORE,
+    ));
+}
+
+/// Tick resource popup lifetimes, animate font size, fade out, and despawn when done.
+fn update_resource_popups(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut popups: Query<(Entity, &mut ResourcePopup, &mut TextColor, &mut TextFont)>,
+) {
+    for (entity, mut popup, mut color, mut font) in &mut popups {
+        popup.lifetime.tick(time.delta());
+        let frac = popup.lifetime.fraction();
+
+        // Pop-in scale animation
+        let scale = if frac < 0.1 {
+            0.5 + (frac / 0.1) * 0.7
+        } else if frac < 0.25 {
+            1.2 - ((frac - 0.1) / 0.15) * 0.2
+        } else {
+            1.0
+        };
+        font.font_size = 15.0 * scale;
+
+        // Rise in world Y
+        popup.world_pos.y += 30.0 * time.delta_secs() * 0.02;
+
+        // Fade out in the last 40%
+        let alpha = if frac > 0.6 { 1.0 - (frac - 0.6) / 0.4 } else { 1.0 };
+        let base = color.0.to_srgba();
+        color.0 = Color::srgba(base.red, base.green, base.blue, alpha);
+
+        if popup.lifetime.is_finished() {
+            commands.entity(entity).despawn();
         }
     }
 }
@@ -937,11 +1067,36 @@ fn find_nearest_deposit(
     faction: &Faction,
     deposit_points: &Query<(Entity, &Transform, &BuildingState, &Faction), (With<DepositPoint>, Without<Unit>)>,
 ) -> Option<Entity> {
+    find_nearest_deposit_for(pos, faction, None, deposit_points, None)
+}
+
+/// Find nearest deposit that accepts the given resource type.
+/// If `resource_type` is Some, only depots that accept that type AND have remaining capacity are returned.
+/// If `inventories` is None, capacity checks are skipped.
+fn find_nearest_deposit_for(
+    pos: &Vec3,
+    faction: &Faction,
+    resource_type: Option<ResourceType>,
+    deposit_points: &Query<(Entity, &Transform, &BuildingState, &Faction), (With<DepositPoint>, Without<Unit>)>,
+    inventories: Option<&Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>>,
+) -> Option<Entity> {
     let mut closest_dist = f32::MAX;
     let mut closest = None;
     for (entity, tf, state, depot_faction) in deposit_points {
         if *state != BuildingState::Complete || depot_faction != faction {
             continue;
+        }
+        // If we have a resource type, check that the depot accepts it and has capacity
+        if let Some(rt) = resource_type {
+            if let Some(inv_query) = inventories {
+                if let Ok((_, inv_opt)) = inv_query.get(entity) {
+                    if let Some(inv) = inv_opt {
+                        if !inv.accepts(rt) || inv.remaining_capacity_for(rt) == 0 {
+                            continue;
+                        }
+                    }
+                }
+            }
         }
         let dist = pos.distance(tf.translation);
         if dist < closest_dist {
@@ -1054,9 +1209,21 @@ fn update_carry_visuals(
     }
 }
 
-fn deplete_resource_nodes(mut commands: Commands, nodes: Query<(Entity, &ResourceNode)>) {
-    for (entity, node) in &nodes {
+fn deplete_resource_nodes(
+    mut commands: Commands,
+    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
+    time: Res<Time>,
+    nodes: Query<(Entity, &ResourceNode, &Transform)>,
+) {
+    for (entity, node, transform) in &nodes {
         if node.amount_remaining == 0 {
+            event_log.push(
+                time.elapsed_secs(),
+                format!("{} node depleted", node.resource_type.display_name()),
+                crate::ui::event_log_widget::EventCategory::Resource,
+                Some(transform.translation),
+                None, // resource nodes are global, no faction
+            );
             commands.entity(entity).despawn();
         }
     }

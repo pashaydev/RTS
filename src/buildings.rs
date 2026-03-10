@@ -18,6 +18,34 @@ pub fn footprint_for_kind(kind: EntityKind) -> f32 {
     }
 }
 
+/// Returns the allowed biomes for a building kind, or `None` for default (any non-water).
+pub fn allowed_biomes(kind: EntityKind) -> Option<&'static [Biome]> {
+    match kind {
+        EntityKind::Sawmill => Some(&[Biome::Forest]),
+        EntityKind::Mine => Some(&[Biome::Mountain, Biome::Mud]),
+        EntityKind::OilRig => Some(&[Biome::Water]),
+        _ => None,
+    }
+}
+
+/// Checks if a building kind can be placed on the given biome.
+pub fn is_biome_valid_for(kind: EntityKind, biome: Biome) -> bool {
+    match allowed_biomes(kind) {
+        Some(allowed) => allowed.contains(&biome),
+        None => biome != Biome::Water,
+    }
+}
+
+/// Returns a human-readable biome requirement hint for placement feedback.
+pub fn biome_requirement_text(kind: EntityKind) -> Option<&'static str> {
+    match kind {
+        EntityKind::Sawmill => Some("Sawmill must be placed on Forest"),
+        EntityKind::Mine => Some("Mine must be placed on Mountain or Mud"),
+        EntityKind::OilRig => Some("Oil Rig must be placed on Water"),
+        _ => Some("Cannot place on Water"),
+    }
+}
+
 pub struct BuildingsPlugin;
 
 impl Plugin for BuildingsPlugin {
@@ -31,6 +59,8 @@ impl Plugin for BuildingsPlugin {
                     apply_ghost_materials,
                     confirm_placement,
                     cancel_placement,
+                    pending_build_arrival_system,
+                    pending_build_cleanup_system,
                     construction_progress_system,
                     tower_auto_attack,
                     training_queue_system,
@@ -183,10 +213,13 @@ fn update_placement_preview(
     ghost_tf.translation = Vec3::new(world_pos.x, y, world_pos.z);
 
     let mut valid = true;
+    let mut hint: Option<&'static str> = None;
 
     if let Some(ref bm) = biome_map {
-        if bm.get_biome(world_pos.x, world_pos.z) == Biome::Water {
+        let biome = bm.get_biome(world_pos.x, world_pos.z);
+        if !is_biome_valid_for(kind, biome) {
             valid = false;
+            hint = biome_requirement_text(kind);
         }
     }
 
@@ -202,6 +235,8 @@ fn update_placement_preview(
     if world_pos.x.abs() > half_map - 5.0 || world_pos.z.abs() > half_map - 5.0 {
         valid = false;
     }
+
+    placement.hint_text = if !valid { hint } else { None };
 
     if let Ok(mut gv) = ghost_valid_q.get_mut(ghost_entity) {
         gv.0 = valid;
@@ -259,19 +294,16 @@ fn confirm_placement(
     carried_totals: Res<CarriedResourceTotals>,
     mut pending_drains: ResMut<PendingCarriedDrains>,
     registry: Res<BlueprintRegistry>,
-    cache: Res<EntityVisualCache>,
-    ghost_mats: Res<BuildingGhostMaterials>,
-    height_map: Res<HeightMap>,
     extras: (
         Res<AllCompletedBuildings>,
-        Option<Res<BuildingModelAssets>>,
         Option<Res<BiomeMap>>,
     ),
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
     existing_buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<GhostBuilding>)>,
+    workers: Query<(Entity, &Transform, &UnitState, &Faction, &EntityKind), With<Unit>>,
 ) {
-    let (all_completed, building_models, biome_map) = extras;
+    let (all_completed, biome_map) = extras;
     let PlacementMode::Placing(kind) = placement.mode else {
         return;
     };
@@ -284,8 +316,8 @@ fn confirm_placement(
             placement.awaiting_release = false;
 
             if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) {
-                let on_water = biome_map.as_ref()
-                    .map_or(false, |bm| bm.get_biome(world_pos.x, world_pos.z) == Biome::Water);
+                let bad_biome = biome_map.as_ref()
+                    .map_or(false, |bm| !is_biome_valid_for(kind, bm.get_biome(world_pos.x, world_pos.z)));
                 let too_close = existing_buildings.iter().any(|(building_tf, existing_fp)| {
                     let check_pos = Vec3::new(world_pos.x, building_tf.translation.y, world_pos.z);
                     building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
@@ -294,7 +326,7 @@ fn confirm_placement(
                 let out_of_bounds = world_pos.x.abs() > half_map - 5.0
                     || world_pos.z.abs() > half_map - 5.0;
 
-                if !on_water && !too_close && !out_of_bounds {
+                if !bad_biome && !too_close && !out_of_bounds {
                     // Valid drag-and-drop
                 } else {
                     return;
@@ -330,9 +362,9 @@ fn confirm_placement(
         return;
     }
 
-    // Check validity
+    // Check biome validity
     if let Some(ref bm) = biome_map {
-        if bm.get_biome(world_pos.x, world_pos.z) == Biome::Water {
+        if !is_biome_valid_for(kind, bm.get_biome(world_pos.x, world_pos.z)) {
             return;
         }
     }
@@ -346,6 +378,38 @@ fn confirm_placement(
     if world_pos.x.abs() > half_map - 5.0 || world_pos.z.abs() > half_map - 5.0 {
         return;
     }
+
+    // Find closest available worker (idle, gathering, returning, depositing, waiting)
+    let build_pos = Vec3::new(world_pos.x, 0.0, world_pos.z);
+    let mut best_worker: Option<(Entity, f32)> = None;
+    for (w_entity, w_tf, w_state, w_faction, w_kind) in &workers {
+        if *w_kind != EntityKind::Worker || *w_faction != faction {
+            continue;
+        }
+        // Skip workers already assigned to plot or build something, or inside processors
+        let available = matches!(
+            w_state,
+            UnitState::Idle
+            | UnitState::Gathering(_)
+            | UnitState::ReturningToDeposit { .. }
+            | UnitState::Depositing { .. }
+            | UnitState::WaitingForStorage { .. }
+            | UnitState::Moving(_)
+        );
+        if !available {
+            continue;
+        }
+        let dist = w_tf.translation.distance(build_pos);
+        if best_worker.map_or(true, |(_, best_dist)| dist < best_dist) {
+            best_worker = Some((w_entity, dist));
+        }
+    }
+
+    let Some((worker_entity, _)) = best_worker else {
+        // No workers available — show hint and abort
+        placement.hint_text = Some("No workers available!");
+        return;
+    };
 
     // Check affordability (stored + carried)
     let player_res = all_resources.get(&faction);
@@ -367,23 +431,25 @@ fn confirm_placement(
         commands.entity(ghost).despawn();
     }
 
-    // Spawn building using blueprint
-    let bp = registry.get(kind);
-    let is_gltf = bp.visual.mesh_kind.is_gltf();
-    let entity_id = spawn_from_blueprint_with_faction(&mut commands, &cache, kind, world_pos, &registry, building_models.as_deref(), None, &height_map, faction);
-
-    // Override material with under_construction (only for non-GLTF buildings)
-    if !is_gltf {
-        commands.entity(entity_id).insert(
-            MeshMaterial3d(ghost_mats.under_construction.clone()),
-        );
-    }
-
-    // Tower gets combat components from blueprint already
+    // Assign worker to move to the build site (building spawns on arrival)
+    commands.entity(worker_entity)
+        .remove::<MoveTarget>()
+        .remove::<AttackTarget>()
+        .insert(UnitState::MovingToPlot(build_pos))
+        .insert(TaskSource::Manual)
+        .insert(PendingBuildOrder {
+            kind,
+            position: build_pos,
+            faction,
+        })
+        .insert(MoveTarget(build_pos));
+    // Clear any queued tasks
+    commands.entity(worker_entity).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
 
     // Reset placement
     placement.mode = PlacementMode::None;
     placement.preview_entity = None;
+    placement.hint_text = None;
 }
 
 fn cancel_placement(
@@ -403,6 +469,108 @@ fn cancel_placement(
         placement.mode = PlacementMode::None;
         placement.preview_entity = None;
         placement.awaiting_release = false;
+        placement.hint_text = None;
+    }
+}
+
+// ── Worker arrives to plot building ──
+
+fn pending_build_arrival_system(
+    mut commands: Commands,
+    mut workers: Query<(Entity, &Transform, &UnitState, &PendingBuildOrder), With<Unit>>,
+    registry: Res<BlueprintRegistry>,
+    cache: Res<EntityVisualCache>,
+    ghost_mats: Res<BuildingGhostMaterials>,
+    height_map: Res<HeightMap>,
+    building_models: Option<Res<BuildingModelAssets>>,
+    existing_buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<GhostBuilding>)>,
+    mut all_resources: ResMut<AllPlayerResources>,
+) {
+    let plot_range = 4.0;
+
+    for (w_entity, w_tf, w_state, pending) in &mut workers {
+        // Only act when in MovingToPlot state
+        let UnitState::MovingToPlot(_) = *w_state else {
+            continue;
+        };
+
+        let dist = w_tf.translation.distance(pending.position);
+        if dist > plot_range {
+            continue; // Still walking
+        }
+
+        let kind = pending.kind;
+        let faction = pending.faction;
+        let build_pos = pending.position;
+        let new_footprint = footprint_for_kind(kind);
+
+        // Final collision check — another building may have been placed in the meantime
+        let blocked = existing_buildings.iter().any(|(building_tf, existing_fp)| {
+            let check_pos = Vec3::new(build_pos.x, building_tf.translation.y, build_pos.z);
+            building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
+        });
+
+        if blocked {
+            // Refund resources and cancel
+            let bp = registry.get(kind);
+            let res = all_resources.get_mut(&faction);
+            res.wood += bp.cost.wood;
+            res.copper += bp.cost.copper;
+            res.iron += bp.cost.iron;
+            res.gold += bp.cost.gold;
+            res.oil += bp.cost.oil;
+
+            commands.entity(w_entity)
+                .remove::<PendingBuildOrder>()
+                .remove::<MoveTarget>()
+                .insert(UnitState::Idle)
+                .insert(TaskSource::Auto);
+            continue;
+        }
+
+        // Spawn the building
+        let bp = registry.get(kind);
+        let is_gltf = bp.visual.mesh_kind.is_gltf();
+        let building_entity = spawn_from_blueprint_with_faction(
+            &mut commands, &cache, kind, build_pos, &registry,
+            building_models.as_deref(), None, &height_map, faction,
+        );
+
+        if !is_gltf {
+            commands.entity(building_entity).insert(
+                MeshMaterial3d(ghost_mats.under_construction.clone()),
+            );
+        }
+
+        // Transition worker to actively building
+        commands.entity(w_entity)
+            .remove::<PendingBuildOrder>()
+            .remove::<MoveTarget>()
+            .insert(UnitState::Building(building_entity))
+            .insert(TaskSource::Manual);
+    }
+}
+
+/// If a worker with a PendingBuildOrder dies or is reassigned, refund the building cost.
+fn pending_build_cleanup_system(
+    mut commands: Commands,
+    removed: Query<(Entity, &PendingBuildOrder, &UnitState), With<Unit>>,
+    mut all_resources: ResMut<AllPlayerResources>,
+    registry: Res<BlueprintRegistry>,
+) {
+    for (entity, pending, state) in &removed {
+        // If the worker is no longer in MovingToPlot state, the order was interrupted
+        if !matches!(state, UnitState::MovingToPlot(_)) {
+            let bp = registry.get(pending.kind);
+            let res = all_resources.get_mut(&pending.faction);
+            res.wood += bp.cost.wood;
+            res.copper += bp.cost.copper;
+            res.iron += bp.cost.iron;
+            res.gold += bp.cost.gold;
+            res.oil += bp.cost.oil;
+
+            commands.entity(entity).remove::<PendingBuildOrder>();
+        }
     }
 }
 
@@ -419,11 +587,12 @@ fn construction_progress_system(
         &mut BuildingState,
         &mut ConstructionProgress,
         &mut Transform,
+        &Faction,
     )>,
     workers: Query<&UnitState, With<Unit>>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
-    for (entity, kind, mut state, mut progress, mut transform) in &mut buildings {
+    for (entity, kind, mut state, mut progress, mut transform, faction) in &mut buildings {
         if *state != BuildingState::UnderConstruction {
             continue;
         }
@@ -490,6 +659,7 @@ fn construction_progress_system(
                 format!("{} construction complete", kind.display_name()),
                 crate::ui::event_log_widget::EventCategory::Construction,
                 Some(transform.translation),
+                Some(*faction),
             );
         }
     }
@@ -604,6 +774,7 @@ fn training_queue_system(
                     format!("{} trained", unit_kind.display_name()),
                     crate::ui::event_log_widget::EventCategory::Training,
                     Some(spawn_pos),
+                    Some(*building_faction),
                 );
 
                 // If building has a rally point, send the unit there
@@ -697,6 +868,7 @@ fn building_upgrade_system(
     mut commands: Commands,
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
+    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     building_models: Option<Res<BuildingModelAssets>>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut buildings: Query<(
@@ -705,6 +877,7 @@ fn building_upgrade_system(
         &mut BuildingLevel,
         &mut UpgradeProgress,
         &Transform,
+        &Faction,
         Option<&mut VisionRange>,
         Option<&mut AttackRange>,
         Option<&mut AttackDamage>,
@@ -715,7 +888,7 @@ fn building_upgrade_system(
     children_q: Query<&Children>,
     scene_child_q: Query<Entity, With<BuildingSceneChild>>,
 ) {
-    for (entity, kind, mut level, mut upgrade, transform, vision, attack_range, attack_damage, storage_inv, processor, respawn_config) in &mut buildings {
+    for (entity, kind, mut level, mut upgrade, transform, faction, vision, attack_range, attack_damage, storage_inv, processor, respawn_config) in &mut buildings {
         upgrade.timer.tick(time.delta());
 
         if !upgrade.timer.is_finished() {
@@ -814,14 +987,6 @@ fn building_upgrade_system(
                     gather_speed_bonus: *speed_bonus,
                     range: *range,
                 });
-                // Increase storage capacity on upgrade (L2: 800, L3: 1200)
-                if let Some(mut inv) = storage_inv {
-                    inv.capacity = match new_level {
-                        2 => 800,
-                        3 => 1200,
-                        _ => inv.capacity,
-                    };
-                }
             }
             LevelBonus::HealAura { heal_per_sec, range } => {
                 commands.entity(entity).insert(HealingAura {
@@ -858,6 +1023,11 @@ fn building_upgrade_system(
             }
         }
 
+        // Scale storage capacities +15% on any upgrade for buildings with storage
+        if let Some(mut inv) = storage_inv {
+            inv.scale_caps(1.15);
+        }
+
         // Spawn VFX burst (4-6 flash entities in a ring)
         if let Some(ref vfx) = vfx_assets {
             let center = transform.translation;
@@ -881,6 +1051,15 @@ fn building_upgrade_system(
             }
         }
 
+        // Log upgrade complete
+        event_log.push(
+            time.elapsed_secs(),
+            format!("{} upgraded to L{}", kind.display_name(), new_level),
+            crate::ui::event_log_widget::EventCategory::Upgrade,
+            Some(transform.translation),
+            Some(*faction),
+        );
+
         // Remove UpgradeProgress
         commands.entity(entity).remove::<UpgradeProgress>();
     }
@@ -900,6 +1079,7 @@ fn demolish_system(
     mut commands: Commands,
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
+    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     mut all_resources: ResMut<AllPlayerResources>,
     mut buildings: Query<(
         Entity,
@@ -917,6 +1097,15 @@ fn demolish_system(
         transform.scale = demolish.original_scale * (1.0 - fraction);
 
         if demolish.timer.is_finished() {
+            // Log demolish event
+            event_log.push(
+                time.elapsed_secs(),
+                format!("{} demolished", kind.display_name()),
+                crate::ui::event_log_widget::EventCategory::Demolish,
+                Some(transform.translation),
+                Some(*faction),
+            );
+
             // Refund 50% of building cost
             let bp = registry.get(*kind);
             let cost = &bp.cost;
@@ -1165,33 +1354,45 @@ fn update_storage_piles(
 
         let mut pile_entities = Vec::new();
 
-        // Place piles in a ring on the ground around the building
-        let radius = 4.0;
-        let positions = [
-            (ResourceType::Wood,   Vec2::new(radius, 0.0)),               // East
-            (ResourceType::Copper, Vec2::new(0.0, radius)),               // North
-            (ResourceType::Iron,   Vec2::new(-radius, 0.0)),              // West
-            (ResourceType::Gold,   Vec2::new(0.0, -radius)),              // South
-            (ResourceType::Oil,    Vec2::new(radius * 0.707, radius * 0.707)), // NE
-        ];
+        // Collect accepted resource types that have items stored
+        let accepted = inventory.accepted_types();
+        let stored: Vec<ResourceType> = accepted.iter().copied()
+            .filter(|rt| inventory.get(*rt) > 0)
+            .collect();
 
-        for (rt, offset) in positions {
-            let amount = inventory.get(rt);
-            if amount == 0 {
-                continue;
-            }
+        if stored.is_empty() {
+            commands.entity(entity).insert(ResourcePileVisuals { entities: pile_entities });
+            continue;
+        }
 
-            let scale = (amount as f32 / 100.0).min(1.0) * 0.8 + 0.2;
+        // Place all piles on one side (East) in an inner grid layout
+        let side_offset = 4.0; // distance from building center to pile side
+        let grid_spacing = 1.2; // spacing between piles in the grid
+        let max_cols = 3;
+
+        for (idx, rt) in stored.iter().enumerate() {
+            let amount = inventory.get(*rt);
+            let cap = inventory.cap_for(*rt);
+            let fill_ratio = (amount as f32 / cap.max(1) as f32).min(1.0);
+            let scale = fill_ratio * 0.8 + 0.2;
             let half_pile_height = scale * 0.5;
+
+            // Grid position: row and column within the side
+            let col = (idx % max_cols) as f32;
+            let row = (idx / max_cols) as f32;
+            let grid_width = (stored.len().min(max_cols) as f32 - 1.0) * grid_spacing;
+            let local_x = side_offset;
+            let local_z = col * grid_spacing - grid_width * 0.5 + row * grid_spacing * 0.5;
+
             let (mesh, mat) = match rt {
-                ResourceType::Wood => (assets.cube_mesh.clone(), assets.materials.get(&rt).cloned().unwrap_or_default()),
-                ResourceType::Gold => (assets.sphere_mesh.clone(), assets.materials.get(&rt).cloned().unwrap_or_default()),
-                ResourceType::Oil => (assets.cylinder_mesh.clone(), assets.materials.get(&rt).cloned().unwrap_or_default()),
-                _ => (assets.cube_mesh.clone(), assets.materials.get(&rt).cloned().unwrap_or_default()),
+                ResourceType::Wood => (assets.cube_mesh.clone(), assets.materials.get(rt).cloned().unwrap_or_default()),
+                ResourceType::Gold => (assets.sphere_mesh.clone(), assets.materials.get(rt).cloned().unwrap_or_default()),
+                ResourceType::Oil => (assets.cylinder_mesh.clone(), assets.materials.get(rt).cloned().unwrap_or_default()),
+                _ => (assets.cube_mesh.clone(), assets.materials.get(rt).cloned().unwrap_or_default()),
             };
 
-            let world_x = transform.translation.x + offset.x;
-            let world_z = transform.translation.z + offset.y;
+            let world_x = transform.translation.x + local_x;
+            let world_z = transform.translation.z + local_z;
             let ground_y = height_map.sample(world_x, world_z);
 
             let pile = commands

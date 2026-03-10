@@ -18,7 +18,7 @@ pub fn update_action_bar(
     player_state: (Res<AllCompletedBuildings>, Res<ActivePlayer>, Res<AllPlayerResources>),
     registry: Res<BlueprintRegistry>,
     action_bar: Query<(Entity, Option<&Children>), With<ActionBarInner>>,
-    changed_buildings: Query<Entity, Or<(Changed<BuildingState>, Changed<BuildingLevel>, Changed<UpgradeProgress>, Changed<TowerAutoAttackEnabled>)>>,
+    changed_buildings: Query<Entity, Or<(Changed<BuildingState>, Changed<BuildingLevel>, Changed<UpgradeProgress>, Changed<TowerAutoAttackEnabled>, Changed<AssignedWorkers>)>>,
     mut last_queue_len: Local<usize>,
     ui_state: (Res<IconAssets>, Res<RallyPointMode>),
     existing_cards: Query<Entity, With<BuildGridButton>>,
@@ -40,6 +40,7 @@ pub fn update_action_bar(
     let has_building_change = !changed_buildings.is_empty();
     let completed_changed = all_completed.is_changed();
     let rally_changed = rally_mode.is_changed();
+    let resources_changed = all_resources.is_changed();
 
     let current_queue_len = selected_buildings.iter().next()
         .and_then(|(_, _, _, _, _, _, q, _, _, _, _)| q.map(|q| q.queue.len()))
@@ -47,7 +48,7 @@ pub fn update_action_bar(
     let queue_changed = current_queue_len != *last_queue_len;
     *last_queue_len = current_queue_len;
 
-    if !mode_changed && !has_building_change && !completed_changed && !queue_changed && !rally_changed {
+    if !mode_changed && !has_building_change && !completed_changed && !queue_changed && !rally_changed && !resources_changed {
         return;
     }
 
@@ -55,7 +56,7 @@ pub fn update_action_bar(
         return;
     };
 
-    if !mode_changed && *ui_mode == UiMode::Idle && !existing_cards.is_empty() && !completed_changed {
+    if !mode_changed && *ui_mode == UiMode::Idle && !existing_cards.is_empty() && !completed_changed && !resources_changed {
         return;
     }
 
@@ -94,7 +95,8 @@ pub fn update_action_bar(
         _ => {
             is_building_grid = true;
             let completed = all_completed.completed_for(&active_player.0);
-            spawn_building_grid(&mut commands, bar_entity, completed, &icons, &registry);
+            let player_res = all_resources.get(&active_player.0);
+            spawn_building_grid(&mut commands, bar_entity, completed, &icons, &registry, player_res);
         }
     }
 
@@ -213,6 +215,7 @@ fn spawn_units_action_bar(
                             UnitState::Gathering(_) => "Gathering",
                             UnitState::ReturningToDeposit { .. } => "Returning to depot",
                             UnitState::Depositing { .. } => "Depositing",
+                            UnitState::MovingToPlot(_) => "Going to plot building",
                             UnitState::MovingToBuild(_) => "Moving to build",
                             UnitState::Building(_) => "Building",
                             UnitState::WaitingForStorage { .. } => "Storage full!",
@@ -385,9 +388,10 @@ fn spawn_building_action_bar(
     // Storage inventory display
     if let Some(inv) = storage_inventory {
         let total = inv.total();
-        let capacity_color = if total >= inv.capacity {
+        let total_cap = inv.total_capacity();
+        let capacity_color = if total >= total_cap {
             theme::DESTRUCTIVE
-        } else if total as f32 >= inv.capacity as f32 * 0.8 {
+        } else if total as f32 >= total_cap as f32 * 0.8 {
             theme::WARNING
         } else {
             theme::TEXT_SECONDARY
@@ -406,32 +410,32 @@ fn spawn_building_action_bar(
 
         let cap_text = commands
             .spawn((
-                Text::new(format!("Storage: {}/{}", total, inv.capacity)),
+                Text::new(format!("Storage: {}/{}", total, total_cap)),
                 TextFont { font_size: 11.0, ..default() },
                 TextColor(capacity_color),
             ))
             .id();
         commands.entity(storage_row).add_child(cap_text);
 
-        if total > 0 {
-            for (rt, amount) in [
-                (ResourceType::Wood, inv.wood),
-                (ResourceType::Copper, inv.copper),
-                (ResourceType::Iron, inv.iron),
-                (ResourceType::Gold, inv.gold),
-                (ResourceType::Oil, inv.oil),
-            ] {
-                if amount == 0 { continue; }
-                let color = rt.carry_color();
-                let entry = commands
-                    .spawn((
-                        Text::new(format!("{}: {}", rt.display_name(), amount)),
-                        TextFont { font_size: 10.0, ..default() },
-                        TextColor(color),
-                    ))
-                    .id();
-                commands.entity(storage_row).add_child(entry);
-            }
+        // Show per-resource amounts with their individual caps
+        for (rt, amount) in [
+            (ResourceType::Wood, inv.wood),
+            (ResourceType::Copper, inv.copper),
+            (ResourceType::Iron, inv.iron),
+            (ResourceType::Gold, inv.gold),
+            (ResourceType::Oil, inv.oil),
+        ] {
+            let cap = inv.cap_for(rt);
+            if cap == 0 { continue; } // skip resource types this building doesn't accept
+            let color = rt.carry_color();
+            let entry = commands
+                .spawn((
+                    Text::new(format!("{}: {}/{}", rt.display_name(), amount, cap)),
+                    TextFont { font_size: 10.0, ..default() },
+                    TextColor(color),
+                ))
+                .id();
+            commands.entity(storage_row).add_child(entry);
         }
 
         spawn_separator(commands, container);
@@ -512,15 +516,20 @@ fn spawn_building_action_bar(
             commands.entity(proc_row).add_child(btn_row);
 
             if worker_count < proc.max_workers as usize {
+                let rest_bg = [0.14, 0.14, 0.14, 0.94];
                 let assign_btn = commands
                     .spawn((
                         Button,
                         AssignWorkerButton,
+                        ButtonAnimState::new(rest_bg),
+                        ButtonStyle::Ghost,
                         Node {
-                            padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                            padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                            border: UiRect::all(Val::Px(1.0)),
                             border_radius: BorderRadius::all(Val::Px(4.0)),
                             ..default()
                         },
+                        BorderColor::all(theme::ACCENT.with_alpha(0.3)),
                         BackgroundColor(theme::BG_ELEVATED),
                         Interaction::None,
                     ))
@@ -528,7 +537,7 @@ fn spawn_building_action_bar(
                         btn.spawn((
                             Text::new("+ Assign"),
                             TextFont { font_size: 10.0, ..default() },
-                            TextColor(theme::TEXT_PRIMARY),
+                            TextColor(theme::ACCENT),
                         ));
                     })
                     .id();
@@ -536,15 +545,20 @@ fn spawn_building_action_bar(
             }
 
             if worker_count > 0 {
+                let rest_bg = [0.14, 0.14, 0.14, 0.94];
                 let unassign_btn = commands
                     .spawn((
                         Button,
                         UnassignWorkerButton,
+                        ButtonAnimState::new(rest_bg),
+                        ButtonStyle::Destructive,
                         Node {
-                            padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                            padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                            border: UiRect::all(Val::Px(1.0)),
                             border_radius: BorderRadius::all(Val::Px(4.0)),
                             ..default()
                         },
+                        BorderColor::all(theme::DESTRUCTIVE.with_alpha(0.3)),
                         BackgroundColor(theme::BG_ELEVATED),
                         Interaction::None,
                     ))
@@ -601,7 +615,7 @@ fn spawn_building_action_bar(
             commands.entity(container).add_child(train_row);
 
             for unit_kind in &all_trainable {
-                spawn_train_button(commands, train_row, *unit_kind, icons, registry);
+                spawn_train_button(commands, train_row, *unit_kind, icons, registry, player_res);
             }
 
             spawn_separator(commands, container);
@@ -1124,6 +1138,7 @@ fn spawn_building_grid(
     completed: &[EntityKind],
     icons: &IconAssets,
     registry: &BlueprintRegistry,
+    player_res: &PlayerResources,
 ) {
     let building_kinds = registry.building_kinds();
     let available: Vec<EntityKind> = building_kinds.iter().copied().filter(|kind| {
@@ -1196,16 +1211,39 @@ fn spawn_building_grid(
 
         for kind in *kinds {
             let bp = registry.get(*kind);
+            let can_afford = bp.cost.can_afford(player_res);
             let cost_str = format_cost(&bp.cost);
+
+            // Build rich tooltip
+            let mut tooltip_lines = vec![kind.display_name().to_string()];
+            tooltip_lines.push(kind.description().to_string());
+            if let Some(ref bd) = bp.building {
+                if let Some(prereq) = bd.prerequisite {
+                    tooltip_lines.push(format!("Requires: {}", prereq.display_name()));
+                }
+                tooltip_lines.push(format!("Build time: {:.0}s", bd.construction_time_secs));
+            }
+            tooltip_lines.push(format!("Cost: {}", cost_str));
+            if !can_afford {
+                tooltip_lines.push("Not enough resources!".to_string());
+            }
+            tooltip_lines.push("Drag & Drop to create".to_string());
+
+            let border_color = if can_afford {
+                Color::srgba(0.25, 0.25, 0.30, 0.4)
+            } else {
+                Color::srgba(0.80, 0.27, 0.27, 0.25)
+            };
+            let name_color = if can_afford { theme::TEXT_PRIMARY } else { theme::TEXT_DISABLED };
 
             let btn = commands
                 .spawn((
                     BuildGridButton(*kind),
                     BuildButton(*kind),
                     Button,
-                    ButtonAnimState::new([0.12, 0.12, 0.12, 0.94]),
+                    ButtonAnimState::new(if can_afford { [0.12, 0.12, 0.12, 0.94] } else { [0.06, 0.06, 0.06, 0.94] }),
                     ButtonStyle::Filled,
-                    ActionTooltipTrigger { text: format!("{}\nCost: {}", kind.display_name(), cost_str) },
+                    ActionTooltipTrigger { text: tooltip_lines.join("\n") },
                     Node {
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Center,
@@ -1217,12 +1255,16 @@ fn spawn_building_grid(
                         border_radius: BorderRadius::all(Val::Px(6.0)),
                         ..default()
                     },
-                    BackgroundColor(theme::BG_SURFACE),
-                    BorderColor::all(Color::srgba(0.25, 0.25, 0.30, 0.4)),
+                    BackgroundColor(if can_afford { theme::BG_SURFACE } else { Color::srgba(0.08, 0.08, 0.08, 0.7) }),
+                    BorderColor::all(border_color),
                 ))
                 .with_children(|btn| {
                     btn.spawn((
-                        ImageNode::new(icons.entity_icon(*kind)),
+                        ImageNode {
+                            image: icons.entity_icon(*kind),
+                            color: if can_afford { Color::WHITE } else { Color::srgba(1.0, 1.0, 1.0, 0.35) },
+                            ..default()
+                        },
                         Node {
                             width: Val::Px(40.0),
                             height: Val::Px(40.0),
@@ -1232,7 +1274,7 @@ fn spawn_building_grid(
                     btn.spawn((
                         Text::new(kind.display_name()),
                         TextFont { font_size: 8.0, ..default() },
-                        TextColor(theme::TEXT_PRIMARY),
+                        TextColor(name_color),
                     ));
                 })
                 .id();
@@ -1241,28 +1283,41 @@ fn spawn_building_grid(
     }
 }
 
-fn spawn_train_button(commands: &mut Commands, parent: Entity, kind: EntityKind, icons: &IconAssets, registry: &BlueprintRegistry) {
+fn spawn_train_button(commands: &mut Commands, parent: Entity, kind: EntityKind, icons: &IconAssets, registry: &BlueprintRegistry, player_res: &PlayerResources) {
     let label = kind.display_name();
     let bp = registry.get(kind);
     let cost_str = format_cost_from_blueprint(bp);
+    let can_afford = bp.cost.can_afford(player_res);
 
-    let tooltip = if let Some(ref combat) = bp.combat {
-        format!(
-            "{}\nHP: {} | DMG: {} | Range: {:.0}\nCost: {} | Train: {:.0}s",
-            label, combat.hp as u32, combat.damage as u32, combat.attack_range,
-            cost_str, bp.train_time_secs,
-        )
+    // Build rich tooltip
+    let mut tooltip_lines = vec![label.to_string()];
+    tooltip_lines.push(kind.description().to_string());
+    if let Some(ref combat) = bp.combat {
+        tooltip_lines.push(format!(
+            "HP: {} | DMG: {} | Range: {:.0}",
+            combat.hp as u32, combat.damage as u32, combat.attack_range,
+        ));
+    }
+    tooltip_lines.push(format!("Cost: {} | Train: {:.0}s", cost_str, bp.train_time_secs));
+    if !can_afford {
+        tooltip_lines.push("Not enough resources!".to_string());
+    }
+    tooltip_lines.push("Click to train".to_string());
+
+    let border_color = if can_afford {
+        Color::srgba(0.25, 0.25, 0.30, 0.4)
     } else {
-        format!("{}\nCost: {}", label, cost_str)
+        Color::srgba(0.80, 0.27, 0.27, 0.25)
     };
+    let name_color = if can_afford { theme::TEXT_PRIMARY } else { theme::TEXT_DISABLED };
 
     let child = commands
         .spawn((
             TrainButton(kind),
             Button,
-            ButtonAnimState::new([0.17, 0.17, 0.17, 0.94]),
+            ButtonAnimState::new(if can_afford { [0.17, 0.17, 0.17, 0.94] } else { [0.08, 0.08, 0.08, 0.94] }),
             ButtonStyle::Filled,
-            ActionTooltipTrigger { text: tooltip },
+            ActionTooltipTrigger { text: tooltip_lines.join("\n") },
             Node {
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
@@ -1272,8 +1327,8 @@ fn spawn_train_button(commands: &mut Commands, parent: Entity, kind: EntityKind,
                 border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
-            BackgroundColor(theme::BTN_PRIMARY),
-            BorderColor::all(Color::srgba(0.25, 0.25, 0.30, 0.4)),
+            BackgroundColor(if can_afford { theme::BTN_PRIMARY } else { Color::srgba(0.08, 0.08, 0.08, 0.7) }),
+            BorderColor::all(border_color),
         ))
         .with_children(|btn| {
             btn.spawn((
@@ -1289,7 +1344,11 @@ fn spawn_train_button(commands: &mut Commands, parent: Entity, kind: EntityKind,
             ))
             .with_children(|frame| {
                 frame.spawn((
-                    ImageNode::new(icons.entity_icon(kind)),
+                    ImageNode {
+                        image: icons.entity_icon(kind),
+                        color: if can_afford { Color::WHITE } else { Color::srgba(1.0, 1.0, 1.0, 0.35) },
+                        ..default()
+                    },
                     Node {
                         width: Val::Px(36.0),
                         height: Val::Px(36.0),
@@ -1300,13 +1359,13 @@ fn spawn_train_button(commands: &mut Commands, parent: Entity, kind: EntityKind,
             btn.spawn((
                 Text::new(label),
                 TextFont { font_size: 12.0, ..default() },
-                TextColor(theme::TEXT_PRIMARY),
+                TextColor(name_color),
             ));
             btn.spawn((
                 TrainCostText { kind },
                 Text::new(cost_str),
                 TextFont { font_size: 10.0, ..default() },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(if can_afford { theme::TEXT_SECONDARY } else { theme::DESTRUCTIVE }),
             ));
         })
         .id();

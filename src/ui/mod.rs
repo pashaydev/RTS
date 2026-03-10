@@ -29,15 +29,18 @@ impl Plugin for UiPlugin {
             .init_resource::<WidgetRegistry>()
             .init_resource::<widget_framework::WidgetResizeState>()
             .init_resource::<widget_framework::WidgetDragState>()
+            .init_resource::<widget_framework::GridInteractionActive>()
             .init_resource::<group_hotkeys_widget::ControlGroups>()
             .init_resource::<event_log_widget::GameEventLog>()
-            .add_systems(Startup, spawn_hud)
+            .init_resource::<event_log_widget::EventLogRenderState>()
+            .add_systems(Startup, (spawn_hud, widget_framework::spawn_grid_overlay))
             .add_systems(
                 Update,
                 (ApplyDeferred, compute_ui_mode)
                     .chain()
                     .after(SelectionSet),
             )
+            .add_systems(Update, update_placement_hint)
             .add_systems(
                 Update,
                 (
@@ -82,6 +85,7 @@ impl Plugin for UiPlugin {
                     buttons::animated_button_hover_system,
                     buttons::action_bar_transition_system,
                     buttons::show_action_tooltips,
+                    buttons::cleanup_action_tooltips,
                 ),
             )
             .add_systems(
@@ -95,6 +99,7 @@ impl Plugin for UiPlugin {
                     widget_framework::handle_widget_scroll,
                     widget_framework::handle_widget_resize,
                     widget_framework::update_resize_handle_visuals,
+                    widget_framework::toggle_grid_overlay,
                 ),
             )
             .add_systems(Update, (notifications::update_ally_notifications, notifications::handle_notification_click))
@@ -130,6 +135,10 @@ impl Plugin for UiPlugin {
 /// Root UI container that holds all widgets
 #[derive(Component)]
 struct UiRoot;
+
+/// Floating label showing biome placement feedback
+#[derive(Component)]
+struct PlacementHintLabel;
 
 fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<WidgetRegistry>) {
     // Root full-screen container for widget grid
@@ -211,8 +220,50 @@ fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<Widge
         registry.is_visible(WidgetId::EventLog),
     );
 
+    // Spawn Minimap widget (content populated by MinimapPlugin in PostStartup)
+    let minimap_content = spawn_widget_frame(
+        &mut commands, root, WidgetId::Minimap,
+        registry.slots.get(&WidgetId::Minimap).unwrap(),
+        registry.is_visible(WidgetId::Minimap),
+    );
+    commands.entity(minimap_content).insert(crate::minimap::MinimapWidgetContent);
+
     // Spawn notification container
     notifications::spawn_notification_container(&mut commands, root);
+
+    // Spawn placement hint label (hidden by default)
+    commands.spawn((
+        PlacementHintLabel,
+        Text::new(""),
+        TextFont {
+            font_size: 18.0,
+            ..default()
+        },
+        TextColor(Color::srgba(1.0, 0.3, 0.3, 0.95)),
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(60.0),
+            left: Val::Percent(50.0),
+            ..default()
+        },
+        Visibility::Hidden,
+        Pickable::IGNORE,
+    ));
+}
+
+fn update_placement_hint(
+    placement: Res<BuildingPlacementState>,
+    mut hint_q: Query<(&mut Text, &mut Visibility), With<PlacementHintLabel>>,
+) {
+    let Ok((mut text, mut vis)) = hint_q.single_mut() else {
+        return;
+    };
+    if let Some(hint) = placement.hint_text {
+        **text = hint.to_string();
+        *vis = Visibility::Inherited;
+    } else {
+        *vis = Visibility::Hidden;
+    }
 }
 
 fn compute_ui_mode(

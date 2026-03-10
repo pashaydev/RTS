@@ -206,20 +206,25 @@ fn execute_ranged_attacks(
 
 fn handle_death(
     mut commands: Commands,
-    dead: Query<(Entity, &Health, Option<&Building>, Option<&Selected>, Option<&EntityKind>, Option<&Transform>, Option<&UnitState>, Option<&AssignedWorkers>)>,
+    dead: Query<(Entity, &Health, Option<&Building>, Option<&Selected>, Option<&EntityKind>, Option<&Transform>, Option<&UnitState>, Option<&Faction>)>,
     mut attackers_with_target: Query<(Entity, &AttackTarget, Option<&mut PatrolState>)>,
     mut all_assigned_workers: Query<&mut AssignedWorkers>,
     workers_with_state: Query<(Entity, &UnitState), With<Unit>>,
     time: Res<Time>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
-    for (dead_entity, health, opt_building, opt_selected, opt_kind, opt_transform, opt_unit_state, opt_assigned_workers) in &dead {
-        if health.current > 0.0 {
-            continue;
-        }
+    // Collect dead entities first to avoid borrow issues
+    let dead_list: Vec<_> = dead.iter()
+        .filter(|(_, health, ..)| health.current <= 0.0)
+        .map(|(entity, _, opt_building, opt_selected, opt_kind, opt_transform, opt_unit_state, opt_faction)| {
+            (entity, opt_building.is_some(), opt_selected.is_some(),
+             opt_kind.map(|k| *k), opt_transform.map(|t| *t), opt_unit_state.copied(), opt_faction.copied())
+        })
+        .collect();
 
+    for (dead_entity, is_building, is_selected, opt_kind, opt_transform, opt_unit_state, opt_faction) in &dead_list {
         for (attacker_entity, attack_target, opt_patrol) in &mut attackers_with_target {
-            if attack_target.0 == dead_entity {
+            if attack_target.0 == *dead_entity {
                 commands.entity(attacker_entity).remove::<AttackTarget>();
                 if let Some(mut patrol) = opt_patrol {
                     patrol.state = PatrolStateKind::Returning;
@@ -230,18 +235,18 @@ fn handle_death(
         // If a worker dies while inside a processor, remove it from the building's AssignedWorkers
         if let Some(UnitState::InsideProcessor(building)) = opt_unit_state {
             if let Ok(mut aw) = all_assigned_workers.get_mut(*building) {
-                aw.workers.retain(|&w| w != dead_entity);
+                aw.workers.retain(|&w| w != *dead_entity);
             }
         }
 
         // If a building dies with assigned workers, eject them all
-        if opt_building.is_some() {
-            if let Some(aw) = opt_assigned_workers {
-                for &worker in &aw.workers {
+        if *is_building {
+            if let Ok(aw) = all_assigned_workers.get(*dead_entity) {
+                let workers_to_eject: Vec<Entity> = aw.workers.clone();
+                for worker in workers_to_eject {
                     if let Ok((_, worker_state)) = workers_with_state.get(worker) {
-                        if matches!(worker_state, UnitState::InsideProcessor(b) if *b == dead_entity) {
+                        if matches!(worker_state, UnitState::InsideProcessor(b) if *b == *dead_entity) {
                             crate::resources::unassign_worker_from_processor(&mut commands, worker);
-                            // Place worker at building's last position
                             if let Some(building_tf) = opt_transform {
                                 commands.entity(worker).insert(Transform::from_translation(building_tf.translation));
                             }
@@ -259,13 +264,14 @@ fn handle_death(
             format!("{} destroyed", name),
             crate::ui::event_log_widget::EventCategory::Combat,
             pos,
+            *opt_faction,
         );
 
         // Clear selection if selected
-        if opt_selected.is_some() {
-            commands.entity(dead_entity).remove::<Selected>();
+        if *is_selected {
+            commands.entity(*dead_entity).remove::<Selected>();
         }
 
-        commands.entity(dead_entity).despawn();
+        commands.entity(*dead_entity).despawn();
     }
 }

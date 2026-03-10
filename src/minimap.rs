@@ -6,12 +6,9 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
 
 use crate::components::*;
-use crate::theme;
 use crate::ground::{HALF_MAP, MAP_SIZE};
 
 const MINIMAP_TEX_SIZE: usize = 200;
-const MINIMAP_UI_SIZE: f32 = 180.0;
-const MINIMAP_MARGIN: f32 = 10.0;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MinimapSet;
@@ -28,7 +25,11 @@ pub struct MinimapInteraction {
 }
 
 #[derive(Component)]
-struct MinimapNode;
+pub struct MinimapNode;
+
+/// Marker for the widget content area that holds the minimap image
+#[derive(Component)]
+pub struct MinimapWidgetContent;
 
 pub struct MinimapPlugin;
 
@@ -119,6 +120,7 @@ fn setup_minimap(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     biome_map: Res<BiomeMap>,
+    content_q: Query<Entity, With<MinimapWidgetContent>>,
 ) {
     // Pre-compute biome base pixels
     let mut base_pixels = vec![[0u8; 4]; MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE];
@@ -152,36 +154,23 @@ fn setup_minimap(
         base_pixels,
     });
 
-    // Spawn UI: container in bottom-right
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(MINIMAP_MARGIN),
-                bottom: Val::Px(MINIMAP_MARGIN),
-                width: Val::Px(MINIMAP_UI_SIZE + 6.0),
-                height: Val::Px(MINIMAP_UI_SIZE + 6.0),
-                padding: UiRect::all(Val::Px(3.0)),
-                border: UiRect::all(Val::Px(2.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(theme::BG_PANEL),
-            BorderColor::all(theme::BORDER_SUBTLE),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
+    // Spawn minimap image inside the widget content area
+    if let Ok(content_entity) = content_q.single() {
+        let minimap_image = commands
+            .spawn((
                 MinimapNode,
                 Interaction::default(),
                 RelativeCursorPosition::default(),
                 ImageNode::new(handle),
                 Node {
-                    width: Val::Px(MINIMAP_UI_SIZE),
-                    height: Val::Px(MINIMAP_UI_SIZE),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
                     ..default()
                 },
-            ));
-        });
+            ))
+            .id();
+        commands.entity(content_entity).add_child(minimap_image);
+    }
 }
 
 fn reset_minimap_interaction(mut interaction: ResMut<MinimapInteraction>) {

@@ -126,6 +126,35 @@ impl EntityKind {
         EntityKind::SkeletonMinion, EntityKind::SpiritWolf, EntityKind::FireElemental,
     ];
 
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Worker => "Basic worker unit. Gathers resources and constructs buildings.",
+            Self::Soldier => "Infantry unit. Can be upgraded to Knight.",
+            Self::Archer => "Ranged unit with long attack range.",
+            Self::Tank => "Heavy armored unit with high damage.",
+            Self::Knight => "Elite melee unit with Charge and Shield Bash abilities.",
+            Self::Mage => "Ranged caster with Fireball and Frost Nova.",
+            Self::Priest => "Support caster with Heal and Holy Smite.",
+            Self::Cavalry => "Fast mounted unit for flanking.",
+            Self::Catapult => "Long-range siege unit with AoE Boulder Throw.",
+            Self::BatteringRam => "Melee siege unit with massive anti-structure damage.",
+            Self::Base => "Main headquarters. Unlocks all other buildings.",
+            Self::Barracks => "Trains Workers, Soldiers, and Archers.",
+            Self::Workshop => "Trains heavy Tanks.",
+            Self::Tower => "Defensive structure. Auto-attacks nearby enemies.",
+            Self::Storage => "Resource depot. Increases storage capacity.",
+            Self::MageTower => "Trains Mages and Priests.",
+            Self::Temple => "Trains Priests. Provides healing aura when upgraded.",
+            Self::Stable => "Trains Cavalry and Knights.",
+            Self::SiegeWorks => "Trains Catapults and Battering Rams.",
+            Self::Sawmill => "Processes Wood from nearby trees automatically.",
+            Self::Mine => "Processes Copper, Iron, and Gold from nearby deposits.",
+            Self::OilRig => "Extracts Oil from nearby deposits.",
+            Self::Goblin | Self::Skeleton | Self::Orc | Self::Demon => "Enemy mob.",
+            Self::SkeletonMinion | Self::SpiritWolf | Self::FireElemental => "Summoned creature.",
+        }
+    }
+
     pub fn is_building(self) -> bool {
         self.category() == EntityCategory::Building
     }
@@ -1482,18 +1511,30 @@ pub fn spawn_from_blueprint_with_faction(
             if kind == EntityKind::Tower {
                 entity_cmds.insert(TowerAutoAttackEnabled(true));
             }
-            // Base and Storage are deposit points with different capacities
+            // Base and Storage are deposit points with per-resource capacities
             if kind == EntityKind::Base {
-                entity_cmds.insert((DepositPoint, StorageInventory { capacity: 300, ..default() }));
+                entity_cmds.insert((DepositPoint, StorageInventory {
+                    wood_cap: 500, copper_cap: 30, iron_cap: 50,
+                    gold_cap: 0, oil_cap: 0,
+                    ..default()
+                }));
             } else if kind == EntityKind::Storage {
-                entity_cmds.insert((DepositPoint, StorageInventory { capacity: 500, ..default() }));
+                entity_cmds.insert((DepositPoint, StorageInventory {
+                    wood_cap: 300, copper_cap: 300, iron_cap: 300,
+                    gold_cap: 300, oil_cap: 200,
+                    ..default()
+                }));
             }
             // Resource processing buildings
             match kind {
                 EntityKind::Sawmill => {
                     entity_cmds.insert((
                         DepositPoint,
-                        StorageInventory { capacity: 200, ..default() },
+                        StorageInventory {
+                            wood_cap: 3000,
+                            copper_cap: 0, iron_cap: 0, gold_cap: 0, oil_cap: 0,
+                            ..default()
+                        },
                         AssignedWorkers::default(),
                         ResourceProcessor {
                             resource_types: vec![ResourceType::Wood],
@@ -1503,6 +1544,8 @@ pub fn spawn_from_blueprint_with_faction(
                             buffer: 0,
                             buffer_capacity: 50,
                             worker_rate_bonus: 0.5,
+                            harvest_timer: Timer::from_seconds(3.0, TimerMode::Repeating),
+                            harvest_accumulator: 0.0,
                         },
                         ResourceRespawnConfig {
                             resource_types: vec![ResourceType::Wood],
@@ -1516,7 +1559,11 @@ pub fn spawn_from_blueprint_with_faction(
                 EntityKind::Mine => {
                     entity_cmds.insert((
                         DepositPoint,
-                        StorageInventory { capacity: 200, ..default() },
+                        StorageInventory {
+                            wood_cap: 0, copper_cap: 1000, iron_cap: 1000,
+                            gold_cap: 0, oil_cap: 0,
+                            ..default()
+                        },
                         AssignedWorkers::default(),
                         ResourceProcessor {
                             resource_types: vec![ResourceType::Copper],
@@ -1526,6 +1573,8 @@ pub fn spawn_from_blueprint_with_faction(
                             buffer: 0,
                             buffer_capacity: 40,
                             worker_rate_bonus: 0.5,
+                            harvest_timer: Timer::from_seconds(4.0, TimerMode::Repeating),
+                            harvest_accumulator: 0.0,
                         },
                         ResourceRespawnConfig {
                             resource_types: vec![ResourceType::Copper],
@@ -1539,7 +1588,11 @@ pub fn spawn_from_blueprint_with_faction(
                 EntityKind::OilRig => {
                     entity_cmds.insert((
                         DepositPoint,
-                        StorageInventory { capacity: 150, ..default() },
+                        StorageInventory {
+                            wood_cap: 0, copper_cap: 0, iron_cap: 0,
+                            gold_cap: 0, oil_cap: 500,
+                            ..default()
+                        },
                         AssignedWorkers::default(),
                         ResourceProcessor {
                             resource_types: vec![ResourceType::Oil],
@@ -1549,6 +1602,8 @@ pub fn spawn_from_blueprint_with_faction(
                             buffer: 0,
                             buffer_capacity: 30,
                             worker_rate_bonus: 0.0,
+                            harvest_timer: Timer::from_seconds(5.0, TimerMode::Repeating),
+                            harvest_accumulator: 0.0,
                         },
                         ResourceRespawnConfig {
                             resource_types: vec![ResourceType::Oil],

@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::window::PrimaryWindow;
 use bevy::ecs::message::MessageReader;
@@ -103,7 +103,6 @@ impl GridSlot {
 #[derive(Component)]
 pub struct Widget {
     pub id: WidgetId,
-    pub pinned: bool,
 }
 
 #[derive(Component)]
@@ -111,9 +110,6 @@ pub struct WidgetContent;
 
 #[derive(Component)]
 pub struct WidgetCloseButton(pub WidgetId);
-
-#[derive(Component)]
-pub struct WidgetPinButton(pub WidgetId);
 
 #[derive(Component)]
 pub struct WidgetTitleBar(pub WidgetId);
@@ -138,29 +134,34 @@ pub struct WidgetDragState {
     pub start_pos: Vec2,
 }
 
+#[derive(Component)]
+pub struct GridOverlay;
+
+#[derive(Resource, Default)]
+pub struct GridInteractionActive(pub bool);
+
 // ── Registry Resource ──
 
 #[derive(Resource)]
 pub struct WidgetRegistry {
     pub slots: HashMap<WidgetId, GridSlot>,
     pub visibility: HashMap<WidgetId, bool>,
-    pub pinned: HashSet<WidgetId>,
     pub top_z: i32,
 }
 
 impl Default for WidgetRegistry {
     fn default() -> Self {
         let mut slots = HashMap::new();
-        slots.insert(WidgetId::Resources,      GridSlot::new(0, 0, 2, 1));
-        slots.insert(WidgetId::ArmyOverview,   GridSlot::new(2, 0, 2, 1));
-        slots.insert(WidgetId::EventLog,       GridSlot::new(10, 0, 2, 3));
-        slots.insert(WidgetId::GroupHotkeys,   GridSlot::new(0, 4, 2, 2));
-        slots.insert(WidgetId::Selection,      GridSlot::new(0, 6, 3, 2));
-        slots.insert(WidgetId::Actions,        GridSlot::new(3, 6, 4, 2));
-        slots.insert(WidgetId::ProductionQueue, GridSlot::new(7, 5, 3, 3));
-        slots.insert(WidgetId::Minimap,        GridSlot::new(10, 5, 2, 3));
-        slots.insert(WidgetId::TechTree,       GridSlot::new(3, 3, 6, 3));
-        slots.insert(WidgetId::Debug,          GridSlot::new(10, 0, 2, 8));
+        slots.insert(WidgetId::Resources,      GridSlot::new(0, 0, 1, 2));
+        slots.insert(WidgetId::ArmyOverview,   GridSlot::new(0, 2, 1, 1));
+        slots.insert(WidgetId::EventLog,       GridSlot::new(10, 0, 2, 4));
+        slots.insert(WidgetId::GroupHotkeys,   GridSlot::new(0, 4, 1, 3));
+        slots.insert(WidgetId::Selection,      GridSlot::new(0, 9, 3, 3));
+        slots.insert(WidgetId::Actions,        GridSlot::new(3, 8, 4, 4));
+        slots.insert(WidgetId::ProductionQueue, GridSlot::new(7, 8, 2, 4));
+        slots.insert(WidgetId::Minimap,        GridSlot::new(9, 8, 3, 4));
+        slots.insert(WidgetId::TechTree,       GridSlot::new(3, 4, 6, 4));
+        slots.insert(WidgetId::Debug,          GridSlot::new(10, 0, 2, 12));
 
         let mut visibility = HashMap::new();
         visibility.insert(WidgetId::Resources, true);
@@ -177,7 +178,6 @@ impl Default for WidgetRegistry {
         Self {
             slots,
             visibility,
-            pinned: HashSet::new(),
             top_z: 0,
         }
     }
@@ -201,7 +201,7 @@ impl WidgetRegistry {
 // ── Grid-to-Style Conversion ──
 
 const GRID_COLS: f32 = 12.0;
-const GRID_ROWS: f32 = 8.0;
+const GRID_ROWS: f32 = 12.0;
 
 pub fn grid_to_style(slot: &GridSlot) -> Node {
     Node {
@@ -232,7 +232,7 @@ pub fn spawn_widget_frame(
 
     let widget_entity = commands
         .spawn((
-            Widget { id, pinned: false },
+            Widget { id },
             Interaction::None,
             ZIndex(0),
             node,
@@ -274,56 +274,26 @@ pub fn spawn_widget_frame(
                 TextColor(theme::TEXT_SECONDARY),
             ));
 
-            // Button row
-            bar.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(4.0),
-                ..default()
-            })
-            .with_children(|btns| {
-                // Pin button
-                btns.spawn((
-                    Button,
-                    WidgetPinButton(id),
-                    Node {
-                        width: Val::Px(16.0),
-                        height: Val::Px(16.0),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        border_radius: BorderRadius::all(Val::Px(3.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::NONE),
-                ))
-                .with_children(|pin| {
-                    pin.spawn((
-                        Text::new("P"),
-                        TextFont { font_size: 8.0, ..default() },
-                        TextColor(theme::TEXT_DISABLED),
-                    ));
-                });
-
-                // Close button
-                btns.spawn((
-                    Button,
-                    WidgetCloseButton(id),
-                    Node {
-                        width: Val::Px(16.0),
-                        height: Val::Px(16.0),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        border_radius: BorderRadius::all(Val::Px(3.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::NONE),
-                ))
-                .with_children(|close| {
-                    close.spawn((
-                        Text::new("X"),
-                        TextFont { font_size: 8.0, ..default() },
-                        TextColor(theme::TEXT_DISABLED),
-                    ));
-                });
+            // Close button
+            bar.spawn((
+                Button,
+                WidgetCloseButton(id),
+                Node {
+                    width: Val::Px(16.0),
+                    height: Val::Px(16.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|close| {
+                close.spawn((
+                    Text::new("X"),
+                    TextFont { font_size: 8.0, ..default() },
+                    TextColor(theme::TEXT_DISABLED),
+                ));
             });
         })
         .id();
@@ -398,44 +368,15 @@ pub fn sync_widget_visibility(
     }
 }
 
-// ── Handle Close/Pin Buttons ──
+// ── Handle Close Button ──
 
 pub fn handle_widget_buttons(
     mut registry: ResMut<WidgetRegistry>,
     close_q: Query<(&Interaction, &WidgetCloseButton), Changed<Interaction>>,
-    pin_q: Query<(&Interaction, &WidgetPinButton), Changed<Interaction>>,
-    mut widgets: Query<&mut Widget>,
-    mut pin_texts: Query<(&mut TextColor, &WidgetPinButton), Without<WidgetCloseButton>>,
 ) {
     for (interaction, close_btn) in &close_q {
         if *interaction == Interaction::Pressed {
             registry.set_visible(close_btn.0, false);
-        }
-    }
-
-    for (interaction, pin_btn) in &pin_q {
-        if *interaction == Interaction::Pressed {
-            let id = pin_btn.0;
-            if registry.pinned.contains(&id) {
-                registry.pinned.remove(&id);
-            } else {
-                registry.pinned.insert(id);
-            }
-            // Update widget component
-            for mut widget in &mut widgets {
-                if widget.id == id {
-                    widget.pinned = registry.pinned.contains(&id);
-                }
-            }
-        }
-    }
-
-    // Update pin button visual
-    for (mut color, pin_btn) in &mut pin_texts {
-        if registry.pinned.contains(&pin_btn.0) {
-            *color = TextColor(theme::ACCENT);
-        } else {
-            *color = TextColor(theme::TEXT_DISABLED);
         }
     }
 }
@@ -466,37 +407,155 @@ pub fn handle_widget_scroll(
     }
 }
 
+// ── Grid Overlay ──
+
+pub fn spawn_grid_overlay(mut commands: Commands) {
+    commands
+        .spawn((
+            GridOverlay,
+            Visibility::Hidden,
+            ZIndex(9999),
+            Pickable::IGNORE,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+        ))
+        .with_children(|parent| {
+            // 13 vertical lines (at each column boundary 0..=12)
+            for i in 0..=12 {
+                let pct = i as f32 * (100.0 / GRID_COLS);
+                parent.spawn((
+                    Pickable::IGNORE,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Percent(pct),
+                        top: Val::Px(0.0),
+                        width: Val::Px(1.0),
+                        height: Val::Percent(100.0),
+                        ..default()
+                    },
+                    BackgroundColor(theme::GRID_LINE),
+                ));
+            }
+            // 13 horizontal lines (at each row boundary 0..=12)
+            for i in 0..=12 {
+                let pct = i as f32 * (100.0 / GRID_ROWS);
+                parent.spawn((
+                    Pickable::IGNORE,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px(0.0),
+                        top: Val::Percent(pct),
+                        width: Val::Percent(100.0),
+                        height: Val::Px(1.0),
+                        ..default()
+                    },
+                    BackgroundColor(theme::GRID_LINE),
+                ));
+            }
+        });
+}
+
+pub fn toggle_grid_overlay(
+    interaction: Res<GridInteractionActive>,
+    mut overlay: Query<&mut Visibility, With<GridOverlay>>,
+) {
+    if !interaction.is_changed() {
+        return;
+    }
+    for mut vis in &mut overlay {
+        *vis = if interaction.0 { Visibility::Inherited } else { Visibility::Hidden };
+    }
+}
+
+// ── Snap Helper ──
+
+fn pixel_to_grid_slot(px_x: f32, px_y: f32, px_w: f32, px_h: f32, win_w: f32, win_h: f32) -> GridSlot {
+    let cell_w = win_w / GRID_COLS;
+    let cell_h = win_h / GRID_ROWS;
+
+    let col = (px_x / cell_w).round().clamp(0.0, 11.0) as u8;
+    let row = (px_y / cell_h).round().clamp(0.0, 11.0) as u8;
+    let col_span = (px_w / cell_w).round().clamp(1.0, (12 - col) as f32) as u8;
+    let row_span = (px_h / cell_h).round().clamp(1.0, (12 - row) as f32) as u8;
+
+    GridSlot::new(col, row, col_span, row_span)
+}
+
+// ── Drag & Resize Systems ──
+
 pub fn handle_widget_drag(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut drag_state: ResMut<WidgetDragState>,
     mut registry: ResMut<WidgetRegistry>,
+    mut grid_active: ResMut<GridInteractionActive>,
     interactions: Query<(&Interaction, &WidgetDragHandle)>,
-    mut widget_nodes: Query<(&mut Node, &mut ZIndex), With<Widget>>,
+    mut widget_nodes: Query<(&mut Node, &mut ZIndex, &Widget, &ComputedNode), With<Widget>>,
 ) {
     let Ok(window) = windows.single() else { return; };
     let Some(cursor) = window.cursor_position() else { return; };
 
+    // Snap on release (before clearing active_widget)
     if mouse.just_released(MouseButton::Left) {
+        if let Some(widget_entity) = drag_state.active_widget {
+            if let Ok((mut node, _, widget, computed)) = widget_nodes.get_mut(widget_entity) {
+                let win_w = window.width();
+                let win_h = window.height();
+                let inv_scale = computed.inverse_scale_factor();
+
+                let px_x = match node.left {
+                    Val::Px(x) => x,
+                    Val::Percent(p) => p / 100.0 * win_w,
+                    _ => 0.0,
+                };
+                let px_y = match node.top {
+                    Val::Px(y) => y,
+                    Val::Percent(p) => p / 100.0 * win_h,
+                    _ => 0.0,
+                };
+                let px_w = match node.width {
+                    Val::Px(w) => w,
+                    Val::Percent(p) => p / 100.0 * win_w,
+                    _ => computed.size().x * inv_scale,
+                };
+                let px_h = match node.height {
+                    Val::Px(h) => h,
+                    Val::Percent(p) => p / 100.0 * win_h,
+                    _ => computed.size().y * inv_scale,
+                };
+
+                let slot = pixel_to_grid_slot(px_x, px_y, px_w, px_h, win_w, win_h);
+                let snapped = grid_to_style(&slot);
+                node.left = snapped.left;
+                node.top = snapped.top;
+                node.width = snapped.width;
+                node.height = snapped.height;
+                registry.slots.insert(widget.id, slot);
+            }
+            grid_active.0 = false;
+        }
         drag_state.active_widget = None;
     }
 
     if mouse.just_pressed(MouseButton::Left) {
         for (interaction, handle) in &interactions {
-            // Hovered check allows dragging immediately on press instead of waiting 1 frame for Interaction::Pressed
             if *interaction == Interaction::Pressed || *interaction == Interaction::Hovered {
                 let widget_entity = handle.0;
-                if let Ok((mut node, mut z_index)) = widget_nodes.get_mut(widget_entity) {
+                if let Ok((mut node, mut z_index, _, _)) = widget_nodes.get_mut(widget_entity) {
                     registry.top_z += 1;
                     *z_index = ZIndex(registry.top_z);
 
                     drag_state.active_widget = Some(widget_entity);
                     drag_state.start_cursor = cursor;
+                    grid_active.0 = true;
 
                     let win_w = window.width();
                     let win_h = window.height();
 
-                    // Convert current relative layouts into absolute pixels
                     let start_x = match node.left {
                         Val::Px(x) => x,
                         Val::Percent(p) => p / 100.0 * win_w,
@@ -509,7 +568,7 @@ pub fn handle_widget_drag(
                     };
                     drag_state.start_pos = Vec2::new(start_x, start_y);
                 }
-                break; // Only start dragging one widget
+                break;
             }
         }
     }
@@ -517,7 +576,7 @@ pub fn handle_widget_drag(
     if mouse.pressed(MouseButton::Left) {
         if let Some(widget_entity) = drag_state.active_widget {
             let delta = cursor - drag_state.start_cursor;
-            if let Ok((mut node, _)) = widget_nodes.get_mut(widget_entity) {
+            if let Ok((mut node, _, _, _)) = widget_nodes.get_mut(widget_entity) {
                 node.left = Val::Px(drag_state.start_pos.x + delta.x);
                 node.top = Val::Px(drag_state.start_pos.y + delta.y);
             }
@@ -530,20 +589,59 @@ pub fn handle_widget_resize(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut resize_state: ResMut<WidgetResizeState>,
     mut registry: ResMut<WidgetRegistry>,
+    mut grid_active: ResMut<GridInteractionActive>,
     interactions: Query<(&Interaction, &WidgetResizeHandle)>,
-    mut widget_nodes: Query<(&mut Node, &ComputedNode, &mut ZIndex), With<Widget>>,
+    mut widget_nodes: Query<(&mut Node, &ComputedNode, &mut ZIndex, &Widget), With<Widget>>,
 ) {
     let Ok(window) = windows.single() else { return; };
     let Some(cursor) = window.cursor_position() else { return; };
 
+    // Snap on release (before clearing active_widget)
     if mouse.just_released(MouseButton::Left) {
+        if let Some(widget_entity) = resize_state.active_widget {
+            if let Ok((mut node, computed, _, widget)) = widget_nodes.get_mut(widget_entity) {
+                let win_w = window.width();
+                let win_h = window.height();
+                let inv_scale = computed.inverse_scale_factor();
+
+                let px_x = match node.left {
+                    Val::Px(x) => x,
+                    Val::Percent(p) => p / 100.0 * win_w,
+                    _ => 0.0,
+                };
+                let px_y = match node.top {
+                    Val::Px(y) => y,
+                    Val::Percent(p) => p / 100.0 * win_h,
+                    _ => 0.0,
+                };
+                let px_w = match node.width {
+                    Val::Px(w) => w,
+                    Val::Percent(p) => p / 100.0 * win_w,
+                    _ => computed.size().x * inv_scale,
+                };
+                let px_h = match node.height {
+                    Val::Px(h) => h,
+                    Val::Percent(p) => p / 100.0 * win_h,
+                    _ => computed.size().y * inv_scale,
+                };
+
+                let slot = pixel_to_grid_slot(px_x, px_y, px_w, px_h, win_w, win_h);
+                let snapped = grid_to_style(&slot);
+                node.left = snapped.left;
+                node.top = snapped.top;
+                node.width = snapped.width;
+                node.height = snapped.height;
+                registry.slots.insert(widget.id, slot);
+            }
+            grid_active.0 = false;
+        }
         resize_state.active_widget = None;
     }
 
     if mouse.just_pressed(MouseButton::Left) {
         for (interaction, handle) in &interactions {
             if *interaction == Interaction::Pressed || *interaction == Interaction::Hovered {
-                if let Ok((_, computed, mut z_index)) = widget_nodes.get_mut(handle.0) {
+                if let Ok((_, computed, mut z_index, _)) = widget_nodes.get_mut(handle.0) {
                     registry.top_z += 1;
                     *z_index = ZIndex(registry.top_z);
 
@@ -551,8 +649,9 @@ pub fn handle_widget_resize(
                     resize_state.active_widget = Some(handle.0);
                     resize_state.start_cursor = cursor;
                     resize_state.start_size = computed.size() * inv_scale;
+                    grid_active.0 = true;
                 }
-                break; // Only pick one to resize at a time
+                break;
             }
         }
     }
@@ -560,8 +659,8 @@ pub fn handle_widget_resize(
     if mouse.pressed(MouseButton::Left) {
         if let Some(widget_entity) = resize_state.active_widget {
             let delta = cursor - resize_state.start_cursor;
-            if let Ok((mut node, _, _)) = widget_nodes.get_mut(widget_entity) {
-                let new_w = (resize_state.start_size.x + delta.x).max(120.0); // Clamp minimum bounds
+            if let Ok((mut node, _, _, _)) = widget_nodes.get_mut(widget_entity) {
+                let new_w = (resize_state.start_size.x + delta.x).max(120.0);
                 let new_h = (resize_state.start_size.y + delta.y).max(70.0);
                 node.width = Val::Px(new_w);
                 node.height = Val::Px(new_h);

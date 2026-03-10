@@ -9,6 +9,8 @@ use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 
 pub const SAVE_PATH: &str = "saves/save.json";
 
+fn default_cap() -> u32 { 500 }
+
 // ── Stable entity ID ────────────────────────────────────────────────────────
 
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
@@ -151,6 +153,16 @@ pub struct SavedStorage {
     pub iron: u32,
     pub gold: u32,
     pub oil: u32,
+    #[serde(default = "default_cap")]
+    pub wood_cap: u32,
+    #[serde(default = "default_cap")]
+    pub copper_cap: u32,
+    #[serde(default = "default_cap")]
+    pub iron_cap: u32,
+    #[serde(default = "default_cap")]
+    pub gold_cap: u32,
+    #[serde(default = "default_cap")]
+    pub oil_cap: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -342,6 +354,11 @@ fn save_game(
                 iron: si.iron,
                 gold: si.gold,
                 oil: si.oil,
+                wood_cap: si.wood_cap,
+                copper_cap: si.copper_cap,
+                iron_cap: si.iron_cap,
+                gold_cap: si.gold_cap,
+                oil_cap: si.oil_cap,
             });
         }
 
@@ -433,6 +450,10 @@ fn serialize_unit_state(
             variant: "Depositing".into(),
             depot_id: lookup.get(depot).copied(),
             gather_node_id: gather_node.and_then(|gn| lookup.get(&gn).copied()),
+            ..default()
+        },
+        UnitState::MovingToPlot(_) => SavedWorkerTask {
+            variant: "Idle".into(),
             ..default()
         },
         UnitState::MovingToBuild(e) => SavedWorkerTask {
@@ -682,7 +703,12 @@ fn apply_load_overrides(
                 iron: st.iron,
                 gold: st.gold,
                 oil: st.oil,
-                ..default()
+                wood_cap: st.wood_cap,
+                copper_cap: st.copper_cap,
+                iron_cap: st.iron_cap,
+                gold_cap: st.gold_cap,
+                oil_cap: st.oil_cap,
+                last_total: 0,
             });
         }
 

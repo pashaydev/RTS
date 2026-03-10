@@ -200,6 +200,15 @@ pub fn unit_state_executor_system(
                 // Handled by worker_ai_system
             }
 
+            UnitState::MovingToPlot(pos) => {
+                // Worker walking to plot a new building — keep MoveTarget synced.
+                // Actual building spawn is handled by pending_build_arrival_system.
+                if move_target.is_none() {
+                    // Re-insert MoveTarget in case it was consumed
+                    commands.entity(entity).insert(MoveTarget(pos));
+                }
+            }
+
             UnitState::MovingToBuild(building) => {
                 if let Ok((build_state, _)) = construction_sites.get(building) {
                     if *build_state != BuildingState::UnderConstruction {
