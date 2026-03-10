@@ -9,12 +9,12 @@ use super::shared::format_cost;
 pub fn update_action_bar(
     mut commands: Commands,
     ui_mode: Res<UiMode>,
-    selected_units: Query<(&EntityKind, Option<&Carrying>, Option<&CarryCapacity>, Option<&WorkerTask>), (With<Unit>, With<Selected>)>,
+    selected_units: Query<(&EntityKind, Option<&Carrying>, Option<&CarryCapacity>, Option<&UnitState>), (With<Unit>, With<Selected>)>,
     selected_buildings: Query<
         (Entity, &EntityKind, &BuildingState, &BuildingLevel, Option<&UpgradeProgress>, Option<&ConstructionProgress>, Option<&TrainingQueue>, Option<&StorageInventory>, Option<&Health>, Option<&TowerAutoAttackEnabled>, Option<&ResourceProcessor>),
         (With<Building>, With<Selected>),
     >,
-    assigned_workers_q: Query<&AssignedToProcessor, With<Unit>>,
+    assigned_workers_q: Query<&AssignedWorkers>,
     player_state: (Res<AllCompletedBuildings>, Res<ActivePlayer>, Res<AllPlayerResources>),
     registry: Res<BlueprintRegistry>,
     action_bar: Query<(Entity, Option<&Children>), With<ActionBarInner>>,
@@ -73,7 +73,9 @@ pub fn update_action_bar(
             if let Ok((building_entity, kind, state, level, upgrade_progress, construction, training_queue, storage_inv, health, auto_attack, proc_opt)) = selected_buildings.single() {
                 if *state == BuildingState::Complete {
                     let player_res = all_resources.get(&active_player.0);
-                    let worker_count = assigned_workers_q.iter().filter(|a| a.0 == building_entity).count();
+                    let worker_count = assigned_workers_q.get(building_entity)
+                        .map(|aw| aw.workers.len())
+                        .unwrap_or(0);
                     spawn_building_action_bar(
                         &mut commands, bar_entity, *kind, level.0, upgrade_progress,
                         training_queue, storage_inv, health, auto_attack,
@@ -115,7 +117,7 @@ pub fn update_action_bar(
 fn spawn_units_action_bar(
     commands: &mut Commands,
     parent: Entity,
-    selected_units: &Query<(&EntityKind, Option<&Carrying>, Option<&CarryCapacity>, Option<&WorkerTask>), (With<Unit>, With<Selected>)>,
+    selected_units: &Query<(&EntityKind, Option<&Carrying>, Option<&CarryCapacity>, Option<&UnitState>), (With<Unit>, With<Selected>)>,
 ) {
     let container = commands
         .spawn((
@@ -206,16 +208,20 @@ fn spawn_units_action_bar(
 
                     if let Some(state) = worker_state {
                         let state_text = match state {
-                            WorkerTask::Idle => "Idle",
-                            WorkerTask::ManualMove => "Moving",
-                            WorkerTask::MovingToResource(_) => "Moving to resource",
-                            WorkerTask::Gathering(_) => "Gathering",
-                            WorkerTask::ReturningToDeposit { .. } => "Returning to depot",
-                            WorkerTask::Depositing { .. } => "Depositing",
-                            WorkerTask::MovingToBuild(_) => "Moving to build",
-                            WorkerTask::Building(_) => "Building",
-                            WorkerTask::WaitingForStorage { .. } => "Storage full!",
-                            WorkerTask::AssignedToBuilding(_) => "Working at building",
+                            UnitState::Idle => "Idle",
+                            UnitState::Moving(_) => "Moving",
+                            UnitState::Gathering(_) => "Gathering",
+                            UnitState::ReturningToDeposit { .. } => "Returning to depot",
+                            UnitState::Depositing { .. } => "Depositing",
+                            UnitState::MovingToBuild(_) => "Moving to build",
+                            UnitState::Building(_) => "Building",
+                            UnitState::WaitingForStorage { .. } => "Storage full!",
+                            UnitState::InsideProcessor(_) => "Working at building",
+                            UnitState::MovingToProcessor(_) => "Going to building",
+                            UnitState::Attacking(_) => "Attacking",
+                            UnitState::AttackMoving(_) => "Attack moving",
+                            UnitState::Patrolling { .. } => "Patrolling",
+                            UnitState::HoldPosition => "Holding position",
                         };
                         let state_label = commands
                             .spawn((

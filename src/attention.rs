@@ -158,7 +158,7 @@ fn update_damage_popups(
 // ── System 3: Manage attention icons based on unit state ──
 
 fn determine_attention_kind(
-    worker_task: Option<&WorkerTask>,
+    unit_state: Option<&UnitState>,
     has_attack_target: bool,
     under_attack: Option<&UnderAttackTimer>,
 ) -> Option<AttentionKind> {
@@ -171,12 +171,12 @@ fn determine_attention_kind(
     if has_attack_target {
         return Some(AttentionKind::Attacking);
     }
-    if let Some(task) = worker_task {
-        match task {
-            WorkerTask::Gathering(_) | WorkerTask::MovingToResource(_) => {
+    if let Some(state) = unit_state {
+        match state {
+            UnitState::Gathering(_) => {
                 return Some(AttentionKind::Gathering);
             }
-            WorkerTask::Building(_) | WorkerTask::MovingToBuild(_) => {
+            UnitState::Building(_) | UnitState::MovingToBuild(_) => {
                 return Some(AttentionKind::Building);
             }
             _ => {}
@@ -191,7 +191,7 @@ fn manage_attention_icons(
     units: Query<
         (
             Entity,
-            Option<&WorkerTask>,
+            Option<&UnitState>,
             Option<&AttackTarget>,
             Option<&UnderAttackTimer>,
         ),
@@ -210,9 +210,9 @@ fn manage_attention_icons(
         icon_map.insert(icon.owner, (icon_entity, icon.kind));
     }
 
-    for (unit_entity, worker_task, attack_target, under_attack) in &units {
+    for (unit_entity, unit_state, attack_target, under_attack) in &units {
         let desired =
-            determine_attention_kind(worker_task, attack_target.is_some(), under_attack);
+            determine_attention_kind(unit_state, attack_target.is_some(), under_attack);
 
         match (icon_map.remove(&unit_entity), desired) {
             (Some((_icon_e, existing_kind)), Some(desired_kind))

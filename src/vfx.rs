@@ -167,15 +167,15 @@ fn gather_particle_spawner(
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut workers: Query<
-        (&Transform, &WorkerTask, &mut GatherParticleTimer),
+        (&Transform, &UnitState, &mut GatherParticleTimer),
         With<Unit>,
     >,
     nodes: Query<&ResourceNode>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (tf, task, mut particle_timer) in &mut workers {
-        let WorkerTask::Gathering(node) = task else {
+    for (tf, state, mut particle_timer) in &mut workers {
+        let UnitState::Gathering(node) = state else {
             continue;
         };
         particle_timer.0.tick(time.delta());

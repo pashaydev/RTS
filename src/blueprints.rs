@@ -1460,7 +1460,7 @@ pub fn spawn_from_blueprint_with_faction(
     // Category markers
     match kind.category() {
         EntityCategory::Unit | EntityCategory::Siege | EntityCategory::Summon => {
-            entity_cmds.insert(Unit);
+            entity_cmds.insert((Unit, UnitState::default(), TaskSource::default(), TaskQueue::default()));
         }
         EntityCategory::Mob => {
             entity_cmds.insert((Mob, FogHideable::Mob));
@@ -1494,6 +1494,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory { capacity: 200, ..default() },
+                        AssignedWorkers::default(),
                         ResourceProcessor {
                             resource_types: vec![ResourceType::Wood],
                             harvest_radius: 15.0,
@@ -1516,6 +1517,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory { capacity: 200, ..default() },
+                        AssignedWorkers::default(),
                         ResourceProcessor {
                             resource_types: vec![ResourceType::Copper],
                             harvest_radius: 12.0,
@@ -1538,6 +1540,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory { capacity: 150, ..default() },
+                        AssignedWorkers::default(),
                         ResourceProcessor {
                             resource_types: vec![ResourceType::Oil],
                             harvest_radius: 12.0,
@@ -1593,7 +1596,6 @@ pub fn spawn_from_blueprint_with_faction(
             GatherSpeed(gathering.gather_speed),
             Carrying::default(),
             CarryCapacity(gathering.carry_weight_capacity),
-            WorkerTask::Idle,
             GatherParticleTimer(Timer::from_seconds(0.3, TimerMode::Repeating)),
         ));
     }

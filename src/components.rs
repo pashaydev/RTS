@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 
 use crate::blueprints::EntityKind;
 
@@ -116,22 +116,65 @@ impl Default for Health {
 
 // ── Gathering ──
 
+/// Whether a unit's current state was set by the player or the AI.
 #[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
-pub enum WorkerTask {
+pub enum TaskSource {
+    /// Player-ordered — AI must not override.
+    Manual,
+    /// AI-decided — can be replaced freely.
+    #[default]
+    Auto,
+}
+
+/// Unified unit state machine — replaces WorkerTask, ProcessorWorkerState, and ad-hoc combat states.
+#[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
+pub enum UnitState {
     #[default]
     Idle,
-    /// Player issued a manual move command — do NOT auto-gather until arrival.
-    ManualMove,
-    MovingToResource(Entity),
+    Moving(Vec3),
+    Attacking(Entity),
     Gathering(Entity),
     ReturningToDeposit { depot: Entity, gather_node: Option<Entity> },
     Depositing { depot: Entity, gather_node: Option<Entity> },
     WaitingForStorage { depot: Entity, gather_node: Option<Entity> },
     MovingToBuild(Entity),
     Building(Entity),
-    /// Worker is assigned to a processor building (visual work loop)
-    AssignedToBuilding(Entity),
+    /// Worker absorbed into processor building (hidden, working inside)
+    InsideProcessor(Entity),
+    /// Worker walking to processor building before being absorbed
+    MovingToProcessor(Entity),
+    Patrolling { target: Vec3, origin: Vec3 },
+    AttackMoving(Vec3),
+    HoldPosition,
 }
+
+/// A task waiting in a unit's queue (shift+click).
+#[derive(Clone, Debug)]
+pub enum QueuedTask {
+    Move(Vec3),
+    AttackMove(Vec3),
+    Attack(Entity),
+    Gather(Entity),
+    Build(Entity),
+    Patrol(Vec3),
+    AssignToProcessor(Entity),
+}
+
+/// Task queue for shift+click command queuing.
+#[derive(Component, Default)]
+pub struct TaskQueue {
+    pub queue: VecDeque<QueuedTask>,
+}
+
+/// Tracks which workers are assigned inside a building (for UI display).
+#[derive(Component, Default)]
+pub struct AssignedWorkers {
+    pub workers: Vec<Entity>,
+}
+
+/// Button to unassign a specific worker from a processor building.
+#[derive(Component)]
+pub struct UnassignSpecificWorkerButton(pub Entity);
 
 #[derive(Component)]
 pub struct Carrying {
@@ -237,11 +280,8 @@ pub struct ResourceProcessor {
     pub worker_rate_bonus: f32,
 }
 
-/// Worker assigned to work inside a resource processing building
-#[derive(Component, Clone, Copy, PartialEq, Debug)]
-pub struct AssignedToProcessor(pub Entity);
-
-/// Sub-state for workers assigned to processor buildings (visual work loop)
+/// Sub-state for workers inside processor buildings (visual work loop).
+/// Only present on workers in `UnitState::InsideProcessor`.
 #[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
 pub enum ProcessorWorkerState {
     #[default]

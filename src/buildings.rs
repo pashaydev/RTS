@@ -420,7 +420,7 @@ fn construction_progress_system(
         &mut ConstructionProgress,
         &mut Transform,
     )>,
-    workers: Query<&WorkerTask, With<Unit>>,
+    workers: Query<&UnitState, With<Unit>>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
     for (entity, kind, mut state, mut progress, mut transform) in &mut buildings {
@@ -431,7 +431,7 @@ fn construction_progress_system(
         // Count workers actively building this entity
         let builder_count = workers
             .iter()
-            .filter(|task| matches!(task, WorkerTask::Building(e) if *e == entity))
+            .filter(|state| matches!(state, UnitState::Building(e) if *e == entity))
             .count();
 
         if builder_count == 0 {

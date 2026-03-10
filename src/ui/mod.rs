@@ -28,6 +28,7 @@ impl Plugin for UiPlugin {
             .init_resource::<UiMode>()
             .init_resource::<WidgetRegistry>()
             .init_resource::<widget_framework::WidgetResizeState>()
+            .init_resource::<widget_framework::WidgetDragState>()
             .init_resource::<group_hotkeys_widget::ControlGroups>()
             .init_resource::<event_log_widget::GameEventLog>()
             .add_systems(Startup, spawn_hud)
@@ -67,6 +68,7 @@ impl Plugin for UiPlugin {
                     buttons::handle_cancel_train,
                     buttons::handle_assign_worker_button,
                     buttons::handle_unassign_worker_button,
+                    buttons::handle_unassign_specific_worker_button,
                     buttons::update_training_queue_display,
                     buttons::update_construction_progress_display,
                     buttons::update_train_cost_colors,
@@ -89,6 +91,7 @@ impl Plugin for UiPlugin {
                     widget_toolbar::update_toolbar_visuals,
                     widget_framework::sync_widget_visibility,
                     widget_framework::handle_widget_buttons,
+                    widget_framework::handle_widget_drag,
                     widget_framework::handle_widget_scroll,
                     widget_framework::handle_widget_resize,
                     widget_framework::update_resize_handle_visuals,

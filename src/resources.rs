@@ -519,7 +519,7 @@ fn worker_ai_system(
     mut all_resources: ResMut<AllPlayerResources>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut workers: Query<
-        (Entity, &Transform, &mut WorkerTask, &mut Carrying, &GatherSpeed, &CarryCapacity, &EntityKind, &Faction, Option<&MoveTarget>),
+        (Entity, &Transform, &mut UnitState, &mut TaskSource, &mut Carrying, &GatherSpeed, &CarryCapacity, &EntityKind, &Faction, Option<&MoveTarget>, &TaskQueue),
         With<Unit>,
     >,
     mut nodes: Query<(&Transform, &mut ResourceNode), Without<Unit>>,
@@ -533,26 +533,28 @@ fn worker_ai_system(
     let deposit_range = 4.0;
     let auto_scan_range = 20.0;
 
-    for (entity, tf, mut task, mut carrying, speed, capacity, kind, worker_faction, move_target) in &mut workers {
+    for (entity, tf, mut state, mut source, mut carrying, speed, capacity, kind, worker_faction, _move_target, task_queue) in &mut workers {
         if *kind != EntityKind::Worker {
             continue;
         }
 
-        match *task {
-            WorkerTask::ManualMove => {
-                // Player issued a manual move — only transition to Idle once arrived
-                if move_target.is_none() {
-                    *task = WorkerTask::Idle;
-                }
+        match *state {
+            UnitState::Moving(_) => {
+                // Player issued a manual move — handled by unit_state_executor
                 continue;
             }
-            WorkerTask::Idle => {
+            UnitState::Idle => {
+                // Only auto-decide if source is Auto and queue is empty
+                if *source == TaskSource::Manual || !task_queue.queue.is_empty() {
+                    continue;
+                }
+
                 // If carrying resources, find depot to deposit
                 if carrying.amount > 0 {
                     if let Some(depot) = find_nearest_deposit(&tf.translation, worker_faction, &deposit_points) {
                         let depot_pos = deposit_points.get(depot).unwrap().1.translation;
                         commands.entity(entity).insert(MoveTarget(depot_pos));
-                        *task = WorkerTask::ReturningToDeposit { depot, gather_node: None };
+                        *state = UnitState::ReturningToDeposit { depot, gather_node: None };
                     }
                     continue;
                 }
@@ -567,7 +569,7 @@ fn worker_ai_system(
                     }
                 }
                 if let Some(node) = closest_node {
-                    *task = WorkerTask::MovingToResource(node);
+                    *state = UnitState::Gathering(node);
                 } else {
                     // No nearby resource — check for nearby construction sites (same faction)
                     let auto_build_range = 10.0;
@@ -584,35 +586,12 @@ fn worker_ai_system(
                         }
                     }
                     if let Some(site) = closest_site {
-                        *task = WorkerTask::MovingToBuild(site);
+                        *state = UnitState::MovingToBuild(site);
                     }
                 }
             }
 
-            WorkerTask::MovingToResource(node) => {
-                // Check node still exists and has resources
-                let Ok((node_tf, node_data)) = nodes.get(node) else {
-                    commands.entity(entity).remove::<MoveTarget>();
-                    *task = WorkerTask::Idle;
-                    continue;
-                };
-                if node_data.amount_remaining == 0 {
-                    commands.entity(entity).remove::<MoveTarget>();
-                    *task = WorkerTask::Idle;
-                    continue;
-                }
-
-                let dist = tf.translation.distance(node_tf.translation);
-                if dist <= gather_range {
-                    commands.entity(entity).remove::<MoveTarget>();
-                    *task = WorkerTask::Gathering(node);
-                } else {
-                    // Ensure we have a MoveTarget to the node
-                    commands.entity(entity).insert(MoveTarget(node_tf.translation));
-                }
-            }
-
-            WorkerTask::Gathering(node) => {
+            UnitState::Gathering(node) => {
                 let Ok((node_tf, mut node_data)) = nodes.get_mut(node) else {
                     // Node gone
                     commands.entity(entity).remove::<MoveTarget>();
@@ -620,12 +599,14 @@ fn worker_ai_system(
                         if let Some(depot) = find_nearest_deposit(&tf.translation, worker_faction, &deposit_points) {
                             let depot_pos = deposit_points.get(depot).unwrap().1.translation;
                             commands.entity(entity).insert(MoveTarget(depot_pos));
-                            *task = WorkerTask::ReturningToDeposit { depot, gather_node: None };
+                            *state = UnitState::ReturningToDeposit { depot, gather_node: None };
                         } else {
-                            *task = WorkerTask::Idle;
+                            *state = UnitState::Idle;
+                            *source = TaskSource::Auto;
                         }
                     } else {
-                        *task = WorkerTask::Idle;
+                        *state = UnitState::Idle;
+                        *source = TaskSource::Auto;
                     }
                     continue;
                 };
@@ -635,12 +616,14 @@ fn worker_ai_system(
                         if let Some(depot) = find_nearest_deposit(&tf.translation, worker_faction, &deposit_points) {
                             let depot_pos = deposit_points.get(depot).unwrap().1.translation;
                             commands.entity(entity).insert(MoveTarget(depot_pos));
-                            *task = WorkerTask::ReturningToDeposit { depot, gather_node: None };
+                            *state = UnitState::ReturningToDeposit { depot, gather_node: None };
                         } else {
-                            *task = WorkerTask::Idle;
+                            *state = UnitState::Idle;
+                            *source = TaskSource::Auto;
                         }
                     } else {
-                        *task = WorkerTask::Idle;
+                        *state = UnitState::Idle;
+                        *source = TaskSource::Auto;
                     }
                     continue;
                 }
@@ -648,7 +631,8 @@ fn worker_ai_system(
                 // If pushed away by avoidance, go back
                 let dist = tf.translation.distance(node_tf.translation);
                 if dist > gather_range {
-                    *task = WorkerTask::MovingToResource(node);
+                    // MovingToResource equivalent: just set MoveTarget, stay in Gathering
+                    commands.entity(entity).insert(MoveTarget(node_tf.translation));
                     continue;
                 }
 
@@ -680,7 +664,7 @@ fn worker_ai_system(
                     if let Some(depot) = find_nearest_deposit(&tf.translation, worker_faction, &deposit_points) {
                         let depot_pos = deposit_points.get(depot).unwrap().1.translation;
                         commands.entity(entity).insert(MoveTarget(depot_pos));
-                        *task = WorkerTask::ReturningToDeposit { depot, gather_node: Some(node) };
+                        *state = UnitState::ReturningToDeposit { depot, gather_node: Some(node) };
                     }
                 } else {
                     node_data.amount_remaining -= amount;
@@ -690,7 +674,7 @@ fn worker_ai_system(
                 }
             }
 
-            WorkerTask::ReturningToDeposit { depot, gather_node } => {
+            UnitState::ReturningToDeposit { depot, gather_node } => {
                 // Check depot still exists
                 let Ok((depot_tf, _)) = inventories.get(depot) else {
                     // Try find another depot
@@ -698,23 +682,24 @@ fn worker_ai_system(
                     if let Some(new_depot) = find_nearest_deposit(&tf.translation, worker_faction, &deposit_points) {
                         let depot_pos = deposit_points.get(new_depot).unwrap().1.translation;
                         commands.entity(entity).insert(MoveTarget(depot_pos));
-                        *task = WorkerTask::ReturningToDeposit { depot: new_depot, gather_node };
+                        *state = UnitState::ReturningToDeposit { depot: new_depot, gather_node };
                     } else {
-                        *task = WorkerTask::Idle;
+                        *state = UnitState::Idle;
+                        *source = TaskSource::Auto;
                     }
                     continue;
                 };
 
                 let dist = tf.translation.distance(depot_tf.translation);
                 if dist <= deposit_range {
-                    *task = WorkerTask::Depositing { depot, gather_node };
+                    *state = UnitState::Depositing { depot, gather_node };
                 } else {
                     // Ensure MoveTarget
                     commands.entity(entity).insert(MoveTarget(depot_tf.translation));
                 }
             }
 
-            WorkerTask::Depositing { depot, gather_node } => {
+            UnitState::Depositing { depot, gather_node } => {
                 // Transfer resources (capacity-limited)
                 if let Some(rt) = carrying.resource_type {
                     let mut deposited = carrying.amount;
@@ -729,7 +714,7 @@ fn worker_ai_system(
                     if deposited == 0 {
                         // Storage full — wait nearby
                         commands.entity(entity).remove::<MoveTarget>();
-                        *task = WorkerTask::WaitingForStorage { depot, gather_node };
+                        *state = UnitState::WaitingForStorage { depot, gather_node };
                         continue;
                     }
 
@@ -743,7 +728,7 @@ fn worker_ai_system(
                         carrying.weight = leftover as f32 * rt.weight();
                         // Worker still has resources — wait for capacity
                         commands.entity(entity).remove::<MoveTarget>();
-                        *task = WorkerTask::WaitingForStorage { depot, gather_node };
+                        *state = UnitState::WaitingForStorage { depot, gather_node };
 
                         // Still spawn VFX for partial deposit
                         if let Some(ref vfx) = vfx_assets {
@@ -804,7 +789,7 @@ fn worker_ai_system(
                 if let Some(gn) = gather_node {
                     if let Ok((_, node_data)) = nodes.get(gn) {
                         if node_data.amount_remaining > 0 {
-                            *task = WorkerTask::MovingToResource(gn);
+                            *state = UnitState::Gathering(gn);
                             continue;
                         }
                     }
@@ -820,13 +805,14 @@ fn worker_ai_system(
                     }
                 }
                 if let Some(node) = closest_node {
-                    *task = WorkerTask::MovingToResource(node);
+                    *state = UnitState::Gathering(node);
                 } else {
-                    *task = WorkerTask::Idle;
+                    *state = UnitState::Idle;
+                    *source = TaskSource::Auto;
                 }
             }
 
-            WorkerTask::WaitingForStorage { depot, gather_node } => {
+            UnitState::WaitingForStorage { depot, gather_node } => {
                 // Periodically check if depot has capacity again
                 let has_space = if let Ok((_, inventory)) = inventories.get(depot) {
                     inventory.map_or(true, |inv| inv.remaining_capacity() > 0)
@@ -835,7 +821,7 @@ fn worker_ai_system(
                 };
 
                 if has_space {
-                    *task = WorkerTask::Depositing { depot, gather_node };
+                    *state = UnitState::Depositing { depot, gather_node };
                     continue;
                 }
 
@@ -864,57 +850,14 @@ fn worker_ai_system(
                 if let Some(new_depot) = best_depot {
                     let depot_pos = deposit_points.get(new_depot).unwrap().1.translation;
                     commands.entity(entity).insert(MoveTarget(depot_pos));
-                    *task = WorkerTask::ReturningToDeposit { depot: new_depot, gather_node };
+                    *state = UnitState::ReturningToDeposit { depot: new_depot, gather_node };
                 }
                 // Otherwise keep waiting at current depot
             }
 
-            WorkerTask::MovingToBuild(building) => {
-                // Check building still exists and is under construction
-                let Ok((_, build_tf, build_state, _)) = construction_sites.get(building) else {
-                    commands.entity(entity).remove::<MoveTarget>();
-                    *task = WorkerTask::Idle;
-                    continue;
-                };
-                if *build_state != BuildingState::UnderConstruction {
-                    commands.entity(entity).remove::<MoveTarget>();
-                    *task = WorkerTask::Idle;
-                    continue;
-                }
-
-                let dist = tf.translation.distance(build_tf.translation);
-                if dist <= 4.0 {
-                    commands.entity(entity).remove::<MoveTarget>();
-                    *task = WorkerTask::Building(building);
-                } else {
-                    commands.entity(entity).insert(MoveTarget(build_tf.translation));
-                }
-            }
-
-            WorkerTask::Building(building) => {
-                let Ok((_, build_tf, build_state, _)) = construction_sites.get(building) else {
-                    commands.entity(entity).remove::<MoveTarget>();
-                    *task = WorkerTask::Idle;
-                    continue;
-                };
-                if *build_state != BuildingState::UnderConstruction {
-                    commands.entity(entity).remove::<MoveTarget>();
-                    *task = WorkerTask::Idle;
-                    continue;
-                }
-
-                let dist = tf.translation.distance(build_tf.translation);
-                if dist > 4.0 {
-                    *task = WorkerTask::MovingToBuild(building);
-                } else {
-                    commands.entity(entity).remove::<MoveTarget>();
-                }
-            }
-
-            WorkerTask::AssignedToBuilding(_) => {
-                // Handled by processor_worker_visual_system — skip
-                continue;
-            }
+            // Building/MovingToBuild states are handled by unit_state_executor
+            // InsideProcessor/MovingToProcessor handled by processor_worker_visual_system + unit_state_executor
+            _ => {}
         }
     }
 }
@@ -924,22 +867,20 @@ fn resource_processor_system(
     time: Res<Time>,
     mut all_resources: ResMut<AllPlayerResources>,
     mut processors: Query<
-        (Entity, &Transform, &mut ResourceProcessor, &BuildingState, &Faction, Option<&mut StorageInventory>),
+        (Entity, &Transform, &mut ResourceProcessor, &BuildingState, &Faction, Option<&mut StorageInventory>, Option<&AssignedWorkers>),
         With<Building>,
     >,
     mut nodes: Query<(&Transform, &mut ResourceNode), Without<Building>>,
-    assigned_workers: Query<&AssignedToProcessor>,
 ) {
-    for (building_entity, building_tf, mut processor, state, faction, storage) in &mut processors {
+    for (_building_entity, building_tf, mut processor, state, faction, storage, assigned_workers) in &mut processors {
         if *state != BuildingState::Complete {
             continue;
         }
 
         // Count assigned workers for this building
         let worker_count = assigned_workers
-            .iter()
-            .filter(|a| a.0 == building_entity)
-            .count() as f32;
+            .map(|aw| aw.workers.len())
+            .unwrap_or(0) as f32;
 
         // Effective rate = base_rate + (worker_count * base_rate * worker_rate_bonus)
         let effective_rate = processor.harvest_rate + (worker_count * processor.harvest_rate * processor.worker_rate_bonus);
@@ -1267,13 +1208,14 @@ fn grow_trees_system(
 
 // ── Processor Worker Visual System ──
 
-/// Drives the ProcessorWorkerState state machine for workers assigned to processor buildings.
+/// Drives the ProcessorWorkerState state machine for workers in InsideProcessor state.
+/// Workers in InsideProcessor are hidden but still run a visual harvest/deposit loop.
 fn processor_worker_visual_system(
     mut commands: Commands,
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut workers: Query<
-        (Entity, &Transform, &mut ProcessorWorkerState, &AssignedToProcessor, &mut WorkerTask, &mut Carrying),
+        (Entity, &Transform, &mut ProcessorWorkerState, &UnitState, &mut Carrying),
         With<Unit>,
     >,
     processors: Query<(Entity, &Transform, &ResourceProcessor, &BuildingState), With<Building>>,
@@ -1281,20 +1223,18 @@ fn processor_worker_visual_system(
 ) {
     // Collect nodes targeted by other workers to avoid clustering
     let mut targeted_nodes: Vec<Entity> = Vec::new();
-    for (_, _, state, _, _, _) in workers.iter() {
-        if let ProcessorWorkerState::MovingToNode(node) | ProcessorWorkerState::Harvesting { node, .. } = *state {
+    for (_, _, pstate, ustate, _) in workers.iter() {
+        if !matches!(ustate, UnitState::InsideProcessor(_)) { continue; }
+        if let ProcessorWorkerState::MovingToNode(node) | ProcessorWorkerState::Harvesting { node, .. } = *pstate {
             targeted_nodes.push(node);
         }
     }
 
-    for (entity, tf, mut worker_state, assigned, mut task, mut carrying) in &mut workers {
-        let building_entity = assigned.0;
+    for (_entity, tf, mut worker_state, unit_state, _carrying) in &mut workers {
+        let UnitState::InsideProcessor(building_entity) = *unit_state else { continue; };
+
         let Ok((_, building_tf, processor, building_state)) = processors.get(building_entity) else {
-            // Building gone — unassign
-            commands.entity(entity)
-                .remove::<AssignedToProcessor>()
-                .remove::<ProcessorWorkerState>();
-            *task = WorkerTask::Idle;
+            // Building gone — handled by unit_state_executor
             continue;
         };
 
@@ -1317,10 +1257,9 @@ fn processor_worker_visual_system(
                     if dist_to_building > processor.harvest_radius {
                         continue;
                     }
-                    // Prefer nodes not already targeted
                     let already_targeted = targeted_nodes.iter().filter(|&&n| n == node_entity).count();
                     if already_targeted >= 2 {
-                        continue; // max 2 workers per node
+                        continue;
                     }
                     let dist = tf.translation.distance(node_tf.translation);
                     if best.is_none() || dist < best.unwrap().1 {
@@ -1329,62 +1268,37 @@ fn processor_worker_visual_system(
                 }
                 if let Some((node, _)) = best {
                     *worker_state = ProcessorWorkerState::MovingToNode(node);
-                    if let Ok((_, node_tf, _)) = nodes.get(node) {
-                        commands.entity(entity).insert(MoveTarget(node_tf.translation));
-                    }
                 }
             }
             ProcessorWorkerState::MovingToNode(node) => {
-                let Ok((_, node_tf, node_data)) = nodes.get(node) else {
-                    commands.entity(entity).remove::<MoveTarget>();
+                let Ok((_, _node_tf, node_data)) = nodes.get(node) else {
                     *worker_state = ProcessorWorkerState::Idle;
                     continue;
                 };
                 if node_data.amount_remaining == 0 {
-                    commands.entity(entity).remove::<MoveTarget>();
                     *worker_state = ProcessorWorkerState::Idle;
                     continue;
                 }
-                let dist = tf.translation.distance(node_tf.translation);
-                if dist <= 2.5 {
-                    commands.entity(entity).remove::<MoveTarget>();
-                    *worker_state = ProcessorWorkerState::Harvesting { node, timer_secs: 0.0 };
-                }
+                // Workers inside processors are hidden, so just timer-simulate "moving"
+                *worker_state = ProcessorWorkerState::Harvesting { node, timer_secs: 0.0 };
             }
             ProcessorWorkerState::Harvesting { node, ref mut timer_secs } => {
-                // Check node still valid
                 if nodes.get(node).is_err() || nodes.get(node).map(|(_, _, n)| n.amount_remaining == 0).unwrap_or(true) {
                     *worker_state = ProcessorWorkerState::Idle;
                     continue;
                 }
                 *timer_secs += time.delta_secs();
                 if *timer_secs >= 2.5 {
-                    // Done "harvesting" — pretend to carry resource back
-                    if let Ok((_, _, node_data)) = nodes.get(node) {
-                        carrying.resource_type = Some(node_data.resource_type);
-                        carrying.amount = 1; // Visual only
-                        carrying.weight = 1.0;
-                    }
                     *worker_state = ProcessorWorkerState::ReturningToBuilding;
-                    commands.entity(entity).insert(MoveTarget(building_tf.translation));
                 }
             }
             ProcessorWorkerState::ReturningToBuilding => {
-                let dist = tf.translation.distance(building_tf.translation);
-                if dist <= 3.0 {
-                    commands.entity(entity).remove::<MoveTarget>();
-                    *worker_state = ProcessorWorkerState::Depositing { timer_secs: 0.0 };
-                }
+                *worker_state = ProcessorWorkerState::Depositing { timer_secs: 0.0 };
             }
             ProcessorWorkerState::Depositing { ref mut timer_secs } => {
                 *timer_secs += time.delta_secs();
                 if *timer_secs >= 0.5 {
-                    // Clear visual carry
-                    carrying.amount = 0;
-                    carrying.weight = 0.0;
-                    carrying.resource_type = None;
-
-                    // Deposit VFX
+                    // Deposit VFX at building
                     if let Some(ref vfx) = vfx_assets {
                         let deposit_pos = building_tf.translation + Vec3::Y * 2.0;
                         for i in 0..3 {
@@ -1404,8 +1318,6 @@ fn processor_worker_visual_system(
                             ));
                         }
                     }
-
-                    // Loop back
                     *worker_state = ProcessorWorkerState::Idle;
                 }
             }
@@ -1597,19 +1509,24 @@ fn grow_resource_system(
 
 // ── Worker assignment helpers ──
 
-/// Assign a worker to a processor building.
 pub fn assign_worker_to_processor(commands: &mut Commands, worker: Entity, building: Entity) {
-    commands.entity(worker).insert((
-        AssignedToProcessor(building),
-        ProcessorWorkerState::Idle,
-        WorkerTask::AssignedToBuilding(building),
-    ));
+    commands.entity(worker)
+        .insert(UnitState::InsideProcessor(building))
+        .insert(TaskSource::Manual)
+        .insert(ProcessorWorkerState::default())
+        .remove::<MoveTarget>()
+        .remove::<AttackTarget>()
+        .insert(Visibility::Hidden);
 }
 
-/// Unassign a worker from a processor building.
 pub fn unassign_worker_from_processor(commands: &mut Commands, worker: Entity) {
     commands.entity(worker)
-        .remove::<AssignedToProcessor>()
-        .remove::<ProcessorWorkerState>();
-    commands.entity(worker).insert(WorkerTask::Idle);
+        .remove::<ProcessorWorkerState>()
+        .insert(UnitState::Idle)
+        .insert(TaskSource::Auto)
+        .insert(Visibility::Inherited);
 }
+
+
+
+// processor_worker_loop_system removed — merged into processor_worker_visual_system

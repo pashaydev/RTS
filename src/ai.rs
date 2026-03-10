@@ -599,7 +599,7 @@ fn ai_economy_system(
     height_map: Res<HeightMap>,
     biome_map: Res<BiomeMap>,
     queries: (
-        Query<(Entity, &Faction, &Transform, &WorkerTask), (With<Unit>, With<GatherSpeed>)>,
+        Query<(Entity, &Faction, &Transform, &UnitState), (With<Unit>, With<GatherSpeed>)>,
         Query<(Entity, &Transform, &ResourceNode), Without<Unit>>,
         Query<(Entity, &Faction, &EntityKind, &Transform, &BuildingState), With<Building>>,
         Query<(&Faction, &EntityKind, &BuildingLevel, Entity, &BuildingState), With<Building>>,
@@ -607,7 +607,7 @@ fn ai_economy_system(
         Query<(&Faction, &EntityKind, &mut TrainingQueue), With<Building>>,
         Query<&BuildingFootprint>,
         Query<(Entity, &Faction, &ResourceProcessor, &BuildingState), With<Building>>,
-        Query<&AssignedToProcessor, With<Unit>>,
+        Query<&AssignedWorkers>,
     ),
 ) {
     let dt = time.delta_secs();
@@ -700,7 +700,7 @@ fn ai_economy_system(
             if *f != faction {
                 continue;
             }
-            if *task == WorkerTask::Idle && !brain.assigned_units.contains_key(&entity) {
+            if *task == UnitState::Idle && !brain.assigned_units.contains_key(&entity) {
                 idle_workers.push((entity, tf.translation));
             }
         }
@@ -720,7 +720,7 @@ fn ai_economy_system(
             ) {
                 commands
                     .entity(*entity)
-                    .insert(WorkerTask::MovingToResource(node_entity));
+                    .insert(UnitState::Gathering(node_entity));
                 brain.add_to_squad(*entity, role);
             }
         }
@@ -733,14 +733,16 @@ fn ai_economy_system(
             if processor.max_workers == 0 {
                 continue;
             }
-            let current_count = assigned_workers_q.iter().filter(|a| a.0 == proc_entity).count();
+            let current_count = assigned_workers_q.get(proc_entity)
+                .map(|aw| aw.workers.len())
+                .unwrap_or(0);
             if current_count >= processor.max_workers as usize {
                 continue;
             }
             let slots = processor.max_workers as usize - current_count;
             let mut assigned = 0;
             for (w_entity, w_f, _, w_task) in workers_q.iter() {
-                if *w_f != faction || *w_task != WorkerTask::Idle {
+                if *w_f != faction || *w_task != UnitState::Idle {
                     continue;
                 }
                 if brain.assigned_units.contains_key(&w_entity) {
@@ -750,6 +752,12 @@ fn ai_economy_system(
                     break;
                 }
                 crate::resources::assign_worker_to_processor(&mut commands, w_entity, proc_entity);
+                // Also add to AssignedWorkers on the building
+                commands.entity(proc_entity).entry::<AssignedWorkers>().and_modify(move |mut aw| {
+                    if !aw.workers.contains(&w_entity) {
+                        aw.workers.push(w_entity);
+                    }
+                }).or_insert(AssignedWorkers { workers: vec![w_entity] });
                 brain.add_to_squad(w_entity, SquadRole::GatherCopper); // Generic resource role
                 assigned += 1;
             }
@@ -771,7 +779,7 @@ fn ai_economy_system(
                     if *w_f != faction {
                         continue;
                     }
-                    if *w_task != WorkerTask::Idle {
+                    if *w_task != UnitState::Idle {
                         continue;
                     }
                     let role = brain.assigned_units.get(&w_entity);
@@ -788,7 +796,7 @@ fn ai_economy_system(
                     brain.add_to_squad(w_entity, SquadRole::BuildConstruction);
                     commands
                         .entity(w_entity)
-                        .insert(WorkerTask::MovingToBuild(entity));
+                        .insert(UnitState::MovingToBuild(entity));
                 }
             }
         }
@@ -908,7 +916,7 @@ fn ai_military_system(
     mut notifications: ResMut<AllyNotifications>,
     queries: (
         Query<(Entity, &Faction, &EntityKind, &Transform), (With<Unit>, Without<Building>)>,
-        Query<(Entity, &Faction, &EntityKind, &Transform), (With<Unit>, Without<AttackTarget>, Without<WorkerTask>, Without<MoveTarget>, Without<Building>)>,
+        Query<(Entity, &Faction, &EntityKind, &Transform, &UnitState), (With<Unit>, Without<AttackTarget>, Without<MoveTarget>, Without<Building>)>,
         Query<&Health>,
         Query<(&Faction, &Transform), With<Building>>,
         Query<(&Faction, &EntityKind, &mut TrainingQueue), With<Building>>,

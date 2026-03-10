@@ -380,8 +380,8 @@ pub fn handle_assign_worker_button(
     mut commands: Commands,
     interactions: Query<&Interaction, (Changed<Interaction>, With<AssignWorkerButton>)>,
     selected_buildings: Query<(Entity, &ResourceProcessor), (With<Building>, With<Selected>)>,
-    idle_workers: Query<(Entity, &WorkerTask, &Faction), (With<Unit>, With<GatherSpeed>)>,
-    assigned_workers: Query<&AssignedToProcessor, With<Unit>>,
+    idle_workers: Query<(Entity, &UnitState, &Faction), (With<Unit>, With<GatherSpeed>)>,
+    assigned_workers_q: Query<&AssignedWorkers>,
     active_player: Res<ActivePlayer>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
@@ -394,24 +394,32 @@ pub fn handle_assign_worker_button(
         ui_press.0 = true;
 
         for (building_entity, processor) in &selected_buildings {
-            let current_count = assigned_workers.iter().filter(|a| a.0 == building_entity).count();
+            let current_count = assigned_workers_q.get(building_entity)
+                .map(|aw| aw.workers.len())
+                .unwrap_or(0);
             if current_count >= processor.max_workers as usize {
                 continue;
             }
 
             let slots_available = processor.max_workers as usize - current_count;
             let mut assigned = 0;
-            for (worker_entity, task, faction) in &idle_workers {
+            for (worker_entity, state, faction) in &idle_workers {
                 if *faction != active_player.0 {
                     continue;
                 }
-                if *task != WorkerTask::Idle {
+                if *state != UnitState::Idle {
                     continue;
                 }
                 if assigned >= slots_available {
                     break;
                 }
                 crate::resources::assign_worker_to_processor(&mut commands, worker_entity, building_entity);
+                // Also add to AssignedWorkers
+                commands.entity(building_entity).entry::<AssignedWorkers>().and_modify(move |mut aw| {
+                    if !aw.workers.contains(&worker_entity) {
+                        aw.workers.push(worker_entity);
+                    }
+                }).or_insert(AssignedWorkers { workers: vec![worker_entity] });
                 assigned += 1;
             }
         }
@@ -422,7 +430,8 @@ pub fn handle_unassign_worker_button(
     mut commands: Commands,
     interactions: Query<&Interaction, (Changed<Interaction>, With<UnassignWorkerButton>)>,
     selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
-    assigned_workers: Query<(Entity, &AssignedToProcessor), With<Unit>>,
+    assigned_workers_q: Query<&AssignedWorkers>,
+    _unit_states: Query<&UnitState, With<Unit>>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -434,11 +443,40 @@ pub fn handle_unassign_worker_button(
         ui_press.0 = true;
 
         for building_entity in &selected_buildings {
-            for (worker_entity, assigned) in &assigned_workers {
-                if assigned.0 == building_entity {
+            if let Ok(aw) = assigned_workers_q.get(building_entity) {
+                let workers_to_unassign: Vec<Entity> = aw.workers.clone();
+                for worker_entity in workers_to_unassign {
                     crate::resources::unassign_worker_from_processor(&mut commands, worker_entity);
                 }
+                // Clear the building's assigned workers list
+                commands.entity(building_entity).entry::<AssignedWorkers>().and_modify(|mut aw| {
+                    aw.workers.clear();
+                });
             }
+        }
+    }
+}
+
+pub fn handle_unassign_specific_worker_button(
+    mut commands: Commands,
+    interactions: Query<(&Interaction, &UnassignSpecificWorkerButton), Changed<Interaction>>,
+    mut assigned_workers_q: Query<&mut AssignedWorkers>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for (interaction, btn) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+
+        let worker = btn.0;
+        crate::resources::unassign_worker_from_processor(&mut commands, worker);
+
+        // Remove from all buildings' AssignedWorkers
+        for mut aw in &mut assigned_workers_q {
+            aw.workers.retain(|&w| w != worker);
         }
     }
 }
@@ -690,7 +728,7 @@ pub fn update_construction_progress_display(
     selected_buildings: Query<(Entity, &ConstructionProgress), (With<Building>, With<Selected>)>,
     mut progress_bars: Query<&mut Node, With<ConstructionProgressBar>>,
     mut worker_texts: Query<(&mut Text, &mut TextColor), With<ConstructionWorkerCountText>>,
-    workers: Query<&WorkerTask, With<Unit>>,
+    workers: Query<&UnitState, With<Unit>>,
 ) {
     let Ok((building_entity, progress)) = selected_buildings.single() else { return };
     for mut node in &mut progress_bars {
@@ -699,7 +737,7 @@ pub fn update_construction_progress_display(
 
     let builder_count = workers
         .iter()
-        .filter(|task| matches!(task, WorkerTask::Building(e) if *e == building_entity))
+        .filter(|state| matches!(state, UnitState::Building(e) if *e == building_entity))
         .count();
 
     for (mut text, mut color) in &mut worker_texts {

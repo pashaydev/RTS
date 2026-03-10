@@ -27,16 +27,16 @@ fn player_auto_acquire_target(
     mut commands: Commands,
     teams: Res<TeamConfig>,
     idle_units: Query<
-        (Entity, &Transform, &AttackRange, &Faction, Option<&WorkerTask>),
+        (Entity, &Transform, &AttackRange, &Faction, Option<&UnitState>),
         (With<Unit>, Without<MoveTarget>, Without<AttackTarget>),
     >,
     potential_targets: Query<(Entity, &Transform, &Faction), Or<(With<Mob>, With<Unit>)>>,
     buildings_with_faction: Query<(Entity, &Transform, &Faction), With<Building>>,
 ) {
-    for (unit_entity, unit_tf, range, faction, worker_task) in &idle_units {
-        // Skip workers that are busy (not idle)
-        if let Some(task) = worker_task {
-            if !matches!(task, WorkerTask::Idle) {
+    for (unit_entity, unit_tf, range, faction, unit_state) in &idle_units {
+        // Skip units that are busy (not idle)
+        if let Some(state) = unit_state {
+            if !matches!(state, UnitState::Idle) {
                 continue;
             }
         }
@@ -206,12 +206,14 @@ fn execute_ranged_attacks(
 
 fn handle_death(
     mut commands: Commands,
-    dead: Query<(Entity, &Health, Option<&Building>, Option<&Selected>, Option<&EntityKind>, Option<&Transform>)>,
+    dead: Query<(Entity, &Health, Option<&Building>, Option<&Selected>, Option<&EntityKind>, Option<&Transform>, Option<&UnitState>, Option<&AssignedWorkers>)>,
     mut attackers_with_target: Query<(Entity, &AttackTarget, Option<&mut PatrolState>)>,
+    mut all_assigned_workers: Query<&mut AssignedWorkers>,
+    workers_with_state: Query<(Entity, &UnitState), With<Unit>>,
     time: Res<Time>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
-    for (dead_entity, health, _opt_building, opt_selected, opt_kind, opt_transform) in &dead {
+    for (dead_entity, health, opt_building, opt_selected, opt_kind, opt_transform, opt_unit_state, opt_assigned_workers) in &dead {
         if health.current > 0.0 {
             continue;
         }
@@ -221,6 +223,30 @@ fn handle_death(
                 commands.entity(attacker_entity).remove::<AttackTarget>();
                 if let Some(mut patrol) = opt_patrol {
                     patrol.state = PatrolStateKind::Returning;
+                }
+            }
+        }
+
+        // If a worker dies while inside a processor, remove it from the building's AssignedWorkers
+        if let Some(UnitState::InsideProcessor(building)) = opt_unit_state {
+            if let Ok(mut aw) = all_assigned_workers.get_mut(*building) {
+                aw.workers.retain(|&w| w != dead_entity);
+            }
+        }
+
+        // If a building dies with assigned workers, eject them all
+        if opt_building.is_some() {
+            if let Some(aw) = opt_assigned_workers {
+                for &worker in &aw.workers {
+                    if let Ok((_, worker_state)) = workers_with_state.get(worker) {
+                        if matches!(worker_state, UnitState::InsideProcessor(b) if *b == dead_entity) {
+                            crate::resources::unassign_worker_from_processor(&mut commands, worker);
+                            // Place worker at building's last position
+                            if let Some(building_tf) = opt_transform {
+                                commands.entity(worker).insert(Transform::from_translation(building_tf.translation));
+                            }
+                        }
+                    }
                 }
             }
         }

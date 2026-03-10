@@ -21,6 +21,7 @@ mod save;
 mod selection;
 mod theme;
 mod ui;
+mod unit_ai;
 mod units;
 mod vfx;
 
@@ -63,5 +64,6 @@ fn main() {
         .add_plugins(minimap::MinimapPlugin)
         .add_plugins(attention::AttentionPlugin)
         .add_plugins(ai::AiPlugin)
+        .add_plugins(unit_ai::UnitAiPlugin)
         .run();
 }

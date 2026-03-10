@@ -119,6 +119,9 @@ pub struct WidgetPinButton(pub WidgetId);
 pub struct WidgetTitleBar(pub WidgetId);
 
 #[derive(Component)]
+pub struct WidgetDragHandle(pub Entity);
+
+#[derive(Component)]
 pub struct WidgetResizeHandle(pub Entity);
 
 #[derive(Resource, Default)]
@@ -128,6 +131,13 @@ pub struct WidgetResizeState {
     pub start_size: Vec2,
 }
 
+#[derive(Resource, Default)]
+pub struct WidgetDragState {
+    pub active_widget: Option<Entity>,
+    pub start_cursor: Vec2,
+    pub start_pos: Vec2,
+}
+
 // ── Registry Resource ──
 
 #[derive(Resource)]
@@ -135,6 +145,7 @@ pub struct WidgetRegistry {
     pub slots: HashMap<WidgetId, GridSlot>,
     pub visibility: HashMap<WidgetId, bool>,
     pub pinned: HashSet<WidgetId>,
+    pub top_z: i32,
 }
 
 impl Default for WidgetRegistry {
@@ -167,6 +178,7 @@ impl Default for WidgetRegistry {
             slots,
             visibility,
             pinned: HashSet::new(),
+            top_z: 0,
         }
     }
 }
@@ -222,6 +234,7 @@ pub fn spawn_widget_frame(
         .spawn((
             Widget { id, pinned: false },
             Interaction::None,
+            ZIndex(0),
             node,
             BackgroundColor(theme::BG_PANEL),
             BorderColor::all(theme::SEPARATOR),
@@ -237,10 +250,12 @@ pub fn spawn_widget_frame(
         .id();
     commands.entity(parent).add_child(widget_entity);
 
-    // Title bar
+    // Title bar (Draggable Handle)
     let title_bar = commands
         .spawn((
             WidgetTitleBar(id),
+            WidgetDragHandle(widget_entity),
+            Interaction::None,
             Node {
                 flex_direction: FlexDirection::Row,
                 justify_content: JustifyContent::SpaceBetween,
@@ -425,7 +440,7 @@ pub fn handle_widget_buttons(
     }
 }
 
-// ── Scroll & Resize Systems ──
+// ── Scroll, Drag, & Resize Systems ──
 
 pub fn handle_widget_scroll(
     mut mouse_wheel: MessageReader<MouseWheel>,
@@ -451,12 +466,72 @@ pub fn handle_widget_scroll(
     }
 }
 
+pub fn handle_widget_drag(
+    mouse: Res<ButtonInput<MouseButton>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut drag_state: ResMut<WidgetDragState>,
+    mut registry: ResMut<WidgetRegistry>,
+    interactions: Query<(&Interaction, &WidgetDragHandle)>,
+    mut widget_nodes: Query<(&mut Node, &mut ZIndex), With<Widget>>,
+) {
+    let Ok(window) = windows.single() else { return; };
+    let Some(cursor) = window.cursor_position() else { return; };
+
+    if mouse.just_released(MouseButton::Left) {
+        drag_state.active_widget = None;
+    }
+
+    if mouse.just_pressed(MouseButton::Left) {
+        for (interaction, handle) in &interactions {
+            // Hovered check allows dragging immediately on press instead of waiting 1 frame for Interaction::Pressed
+            if *interaction == Interaction::Pressed || *interaction == Interaction::Hovered {
+                let widget_entity = handle.0;
+                if let Ok((mut node, mut z_index)) = widget_nodes.get_mut(widget_entity) {
+                    registry.top_z += 1;
+                    *z_index = ZIndex(registry.top_z);
+
+                    drag_state.active_widget = Some(widget_entity);
+                    drag_state.start_cursor = cursor;
+
+                    let win_w = window.width();
+                    let win_h = window.height();
+
+                    // Convert current relative layouts into absolute pixels
+                    let start_x = match node.left {
+                        Val::Px(x) => x,
+                        Val::Percent(p) => p / 100.0 * win_w,
+                        _ => 0.0,
+                    };
+                    let start_y = match node.top {
+                        Val::Px(y) => y,
+                        Val::Percent(p) => p / 100.0 * win_h,
+                        _ => 0.0,
+                    };
+                    drag_state.start_pos = Vec2::new(start_x, start_y);
+                }
+                break; // Only start dragging one widget
+            }
+        }
+    }
+
+    if mouse.pressed(MouseButton::Left) {
+        if let Some(widget_entity) = drag_state.active_widget {
+            let delta = cursor - drag_state.start_cursor;
+            if let Ok((mut node, _)) = widget_nodes.get_mut(widget_entity) {
+                node.left = Val::Px(drag_state.start_pos.x + delta.x);
+                node.top = Val::Px(drag_state.start_pos.y + delta.y);
+            }
+        }
+    }
+}
+
 pub fn handle_widget_resize(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut resize_state: ResMut<WidgetResizeState>,
+    mut registry: ResMut<WidgetRegistry>,
     interactions: Query<(&Interaction, &WidgetResizeHandle)>,
-    mut widget_nodes: Query<(&mut Node, &ComputedNode), With<Widget>>,
+    mut widget_nodes: Query<(&mut Node, &ComputedNode, &mut ZIndex), With<Widget>>,
 ) {
     let Ok(window) = windows.single() else { return; };
     let Some(cursor) = window.cursor_position() else { return; };
@@ -468,7 +543,10 @@ pub fn handle_widget_resize(
     if mouse.just_pressed(MouseButton::Left) {
         for (interaction, handle) in &interactions {
             if *interaction == Interaction::Pressed || *interaction == Interaction::Hovered {
-                if let Ok((_, computed)) = widget_nodes.get(handle.0) {
+                if let Ok((_, computed, mut z_index)) = widget_nodes.get_mut(handle.0) {
+                    registry.top_z += 1;
+                    *z_index = ZIndex(registry.top_z);
+
                     let inv_scale = computed.inverse_scale_factor();
                     resize_state.active_widget = Some(handle.0);
                     resize_state.start_cursor = cursor;
@@ -482,7 +560,7 @@ pub fn handle_widget_resize(
     if mouse.pressed(MouseButton::Left) {
         if let Some(widget_entity) = resize_state.active_widget {
             let delta = cursor - resize_state.start_cursor;
-            if let Ok((mut node, _)) = widget_nodes.get_mut(widget_entity) {
+            if let Ok((mut node, _, _)) = widget_nodes.get_mut(widget_entity) {
                 let new_w = (resize_state.start_size.x + delta.x).max(120.0); // Clamp minimum bounds
                 let new_h = (resize_state.start_size.y + delta.y).max(70.0);
                 node.width = Val::Px(new_w);

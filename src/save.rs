@@ -227,7 +227,7 @@ fn save_game(
         &Transform,
         Option<&Health>,
         Option<&MoveTarget>,
-        Option<&WorkerTask>,
+        Option<&UnitState>,
         Option<&Carrying>,
     ), Without<ResourceNode>>,
     building_q: Query<(
@@ -264,7 +264,7 @@ fn save_game(
 
     let mut entities: Vec<SavedEntity> = Vec::new();
 
-    for (game_id, kind, faction, transform, health, move_target, worker_task, carrying) in
+    for (game_id, kind, faction, transform, health, move_target, unit_state, carrying) in
         &entity_q
     {
         let mut saved = SavedEntity {
@@ -279,7 +279,7 @@ fn save_game(
             health_current: health.map(|h| h.current).unwrap_or(100.0),
             health_max: health.map(|h| h.max).unwrap_or(100.0),
             move_target: move_target.map(|mt| [mt.0.x, mt.0.y, mt.0.z]),
-            worker_task: worker_task.map(|wt| serialize_worker_task(wt, &entity_to_gid)),
+            worker_task: unit_state.map(|s| serialize_unit_state(s, &entity_to_gid)),
             carrying_amount: carrying.and_then(|c| {
                 if c.amount > 0 {
                     Some(c.amount)
@@ -407,55 +407,52 @@ fn save_game(
     }
 }
 
-fn serialize_worker_task(
-    wt: &WorkerTask,
+fn serialize_unit_state(
+    state: &UnitState,
     lookup: &HashMap<Entity, u64>,
 ) -> SavedWorkerTask {
-    match wt {
-        WorkerTask::Idle | WorkerTask::ManualMove => SavedWorkerTask {
+    match state {
+        UnitState::Idle | UnitState::Moving(_) | UnitState::HoldPosition
+        | UnitState::AttackMoving(_) | UnitState::Patrolling { .. }
+        | UnitState::Attacking(_) | UnitState::MovingToProcessor(_) => SavedWorkerTask {
             variant: "Idle".into(),
             ..default()
         },
-        WorkerTask::MovingToResource(e) => SavedWorkerTask {
-            variant: "MovingToResource".into(),
-            target_id: lookup.get(e).copied(),
-            ..default()
-        },
-        WorkerTask::Gathering(e) => SavedWorkerTask {
+        UnitState::Gathering(e) => SavedWorkerTask {
             variant: "Gathering".into(),
             target_id: lookup.get(e).copied(),
             ..default()
         },
-        WorkerTask::ReturningToDeposit { depot, gather_node } => SavedWorkerTask {
+        UnitState::ReturningToDeposit { depot, gather_node } => SavedWorkerTask {
             variant: "ReturningToDeposit".into(),
             depot_id: lookup.get(depot).copied(),
             gather_node_id: gather_node.and_then(|gn| lookup.get(&gn).copied()),
             ..default()
         },
-        WorkerTask::Depositing { depot, gather_node } => SavedWorkerTask {
+        UnitState::Depositing { depot, gather_node } => SavedWorkerTask {
             variant: "Depositing".into(),
             depot_id: lookup.get(depot).copied(),
             gather_node_id: gather_node.and_then(|gn| lookup.get(&gn).copied()),
             ..default()
         },
-        WorkerTask::MovingToBuild(e) => SavedWorkerTask {
+        UnitState::MovingToBuild(e) => SavedWorkerTask {
             variant: "MovingToBuild".into(),
             target_id: lookup.get(e).copied(),
             ..default()
         },
-        WorkerTask::Building(e) => SavedWorkerTask {
+        UnitState::Building(e) => SavedWorkerTask {
             variant: "Building".into(),
             target_id: lookup.get(e).copied(),
             ..default()
         },
-        WorkerTask::WaitingForStorage { depot, gather_node } => SavedWorkerTask {
+        UnitState::WaitingForStorage { depot, gather_node } => SavedWorkerTask {
             variant: "WaitingForStorage".into(),
             depot_id: lookup.get(depot).copied(),
             gather_node_id: gather_node.and_then(|gn| lookup.get(&gn).copied()),
             ..default()
         },
-        WorkerTask::AssignedToBuilding(e) => SavedWorkerTask {
-            variant: "AssignedToBuilding".into(),
+        UnitState::InsideProcessor(e) => SavedWorkerTask {
+            variant: "InsideProcessor".into(),
             target_id: lookup.get(e).copied(),
             ..default()
         },
@@ -467,7 +464,7 @@ fn serialize_worker_task(
 fn load_game(
     mut load_req: ResMut<LoadRequested>,
     mut commands: Commands,
-    mut player_resources: Option<ResMut<PlayerResources>>,
+    player_resources: Option<ResMut<PlayerResources>>,
     mut fog: ResMut<FogOfWarMap>,
     mut id_counter: ResMut<GameIdCounter>,
     mut status: ResMut<SaveLoadStatus>,
@@ -599,7 +596,7 @@ fn apply_load_overrides(
 
         // Worker task
         if let Some(ref wt) = saved.worker_task {
-            commands.entity(entity).insert(restore_worker_task(wt, map));
+            commands.entity(entity).insert(restore_unit_state(wt, map));
         }
 
         // Carrying
@@ -720,53 +717,53 @@ fn apply_load_overrides(
     }
 }
 
-fn restore_worker_task(saved: &SavedWorkerTask, map: &HashMap<u64, Entity>) -> WorkerTask {
+fn restore_unit_state(saved: &SavedWorkerTask, map: &HashMap<u64, Entity>) -> UnitState {
     let resolve = |id: Option<u64>| id.and_then(|i| map.get(&i).copied());
 
     match saved.variant.as_str() {
-        "MovingToResource" => resolve(saved.target_id)
-            .map(WorkerTask::MovingToResource)
-            .unwrap_or(WorkerTask::Idle),
         "Gathering" => resolve(saved.target_id)
-            .map(WorkerTask::Gathering)
-            .unwrap_or(WorkerTask::Idle),
+            .map(UnitState::Gathering)
+            .unwrap_or(UnitState::Idle),
         "ReturningToDeposit" => {
             if let Some(depot) = resolve(saved.depot_id) {
-                WorkerTask::ReturningToDeposit {
+                UnitState::ReturningToDeposit {
                     depot,
                     gather_node: resolve(saved.gather_node_id),
                 }
             } else {
-                WorkerTask::Idle
+                UnitState::Idle
             }
         }
         "Depositing" => {
             if let Some(depot) = resolve(saved.depot_id) {
-                WorkerTask::Depositing {
+                UnitState::Depositing {
                     depot,
                     gather_node: resolve(saved.gather_node_id),
                 }
             } else {
-                WorkerTask::Idle
+                UnitState::Idle
             }
         }
         "MovingToBuild" => resolve(saved.target_id)
-            .map(WorkerTask::MovingToBuild)
-            .unwrap_or(WorkerTask::Idle),
+            .map(UnitState::MovingToBuild)
+            .unwrap_or(UnitState::Idle),
         "Building" => resolve(saved.target_id)
-            .map(WorkerTask::Building)
-            .unwrap_or(WorkerTask::Idle),
+            .map(UnitState::Building)
+            .unwrap_or(UnitState::Idle),
         "WaitingForStorage" => {
             if let Some(depot) = resolve(saved.depot_id) {
-                WorkerTask::WaitingForStorage {
+                UnitState::WaitingForStorage {
                     depot,
                     gather_node: resolve(saved.gather_node_id),
                 }
             } else {
-                WorkerTask::Idle
+                UnitState::Idle
             }
         }
-        _ => WorkerTask::Idle,
+        "InsideProcessor" => resolve(saved.target_id)
+            .map(UnitState::InsideProcessor)
+            .unwrap_or(UnitState::Idle),
+        _ => UnitState::Idle,
     }
 }
 

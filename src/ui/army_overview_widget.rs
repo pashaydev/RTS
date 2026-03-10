@@ -14,7 +14,7 @@ pub fn update_army_overview(
     widget_q: Query<(&super::widget_framework::Widget, &Children)>,
     content_q: Query<Entity, With<super::widget_framework::WidgetContent>>,
     existing: Query<Entity, With<ArmyOverviewContent>>,
-    units: Query<(&EntityKind, &Faction, Option<&WorkerTask>), With<Unit>>,
+    units: Query<(&EntityKind, &Faction, Option<&UnitState>), With<Unit>>,
     registry: Res<super::widget_framework::WidgetRegistry>,
 ) {
     use super::widget_framework::WidgetId;
@@ -43,22 +43,22 @@ pub fn update_army_overview(
 
     // Count units by type
     let mut counts: Vec<(EntityKind, u32, u32)> = Vec::new(); // kind, total, idle_workers
-    for (kind, faction, worker_task) in &units {
+    for (kind, faction, unit_state) in &units {
         if *faction != active_player.0 {
             continue;
         }
         if let Some(entry) = counts.iter_mut().find(|(k, _, _)| *k == *kind) {
             entry.1 += 1;
             if *kind == EntityKind::Worker {
-                if let Some(task) = worker_task {
-                    if *task == WorkerTask::Idle {
+                if let Some(state) = unit_state {
+                    if *state == UnitState::Idle {
                         entry.2 += 1;
                     }
                 }
             }
         } else {
             let idle = if *kind == EntityKind::Worker {
-                worker_task.map_or(0, |t| if *t == WorkerTask::Idle { 1 } else { 0 })
+                unit_state.map_or(0, |s| if *s == UnitState::Idle { 1 } else { 0 })
             } else {
                 0
             };
