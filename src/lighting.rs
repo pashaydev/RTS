@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use bevy::light::{FogVolume, VolumetricFog, VolumetricLight};
 use bevy::prelude::*;
 
-use crate::components::{Building, GhostBuilding, Unit};
+use crate::components::{AppState, Building, GameSetupConfig, GhostBuilding, Unit};
 
 pub struct LightingPlugin;
 
@@ -11,14 +11,17 @@ impl Plugin for LightingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EntityLightGrid>()
             .init_resource::<EntityLightConfig>()
-            .add_systems(Startup, (setup_lighting, register_lighting_tweaks))
+            .add_systems(Startup, register_lighting_tweaks)
+            .add_systems(OnEnter(AppState::InGame), setup_lighting)
             .add_systems(
                 Update,
-                (advance_day_cycle, update_lighting, update_volumetric_fog).chain(),
+                (advance_day_cycle, update_lighting, update_volumetric_fog).chain()
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
-                (update_entity_light_grid, manage_cluster_lights).chain(),
+                (update_entity_light_grid, manage_cluster_lights).chain()
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -202,8 +205,11 @@ const SUN_YAW: f32 = 0.3;
 
 // ── Setup ──
 
-fn setup_lighting(mut commands: Commands) {
-    commands.insert_resource(DayCycle::default());
+fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
+    commands.insert_resource(DayCycle {
+        cycle_duration: config.day_cycle_secs,
+        ..default()
+    });
     commands.insert_resource(LightingOverrides::default());
 
     // Directional light (sun)

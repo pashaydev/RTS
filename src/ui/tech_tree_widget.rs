@@ -24,18 +24,7 @@ pub fn update_tech_tree(
         return;
     }
 
-    // Find content entity
-    let mut content_entity = None;
-    for (widget, widget_children) in &widget_q {
-        if widget.id == WidgetId::TechTree {
-            for wchild in widget_children.iter() {
-                if content_q.get(wchild).is_ok() {
-                    content_entity = Some(wchild);
-                }
-            }
-        }
-    }
-    let Some(content) = content_entity else { return; };
+    let Some(content) = super::widget_framework::find_widget_content(WidgetId::TechTree, &widget_q, &content_q) else { return; };
 
     // Clear existing
     for entity in &existing {
@@ -122,7 +111,7 @@ pub fn update_tech_tree(
         let name = commands
             .spawn((
                 Text::new(kind.display_name()),
-                TextFont { font_size: 9.0, ..default() },
+                TextFont { font_size: theme::FONT_CAPTION, ..default() },
                 TextColor(text_color),
             ))
             .id();
@@ -203,7 +192,7 @@ pub fn update_tech_tree(
         let text = commands
             .spawn((
                 Text::new(label),
-                TextFont { font_size: 8.0, ..default() },
+                TextFont { font_size: theme::FONT_TINY, ..default() },
                 TextColor(theme::TEXT_SECONDARY),
             ))
             .id();

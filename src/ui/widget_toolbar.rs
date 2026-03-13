@@ -73,7 +73,7 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity) {
             .with_children(|btn| {
                 btn.spawn((
                     Text::new(format!("{} {}", id.icon(), hotkey_name)),
-                    TextFont { font_size: 9.0, ..default() },
+                    TextFont { font_size: theme::FONT_CAPTION, ..default() },
                     TextColor(theme::TEXT_SECONDARY),
                 ));
             })

@@ -64,11 +64,11 @@ pub struct SavedPlayerResources {
 impl From<&PlayerResources> for SavedPlayerResources {
     fn from(r: &PlayerResources) -> Self {
         Self {
-            wood: r.wood,
-            copper: r.copper,
-            iron: r.iron,
-            gold: r.gold,
-            oil: r.oil,
+            wood: r.amounts[ResourceType::Wood.index()],
+            copper: r.amounts[ResourceType::Copper.index()],
+            iron: r.amounts[ResourceType::Iron.index()],
+            gold: r.amounts[ResourceType::Gold.index()],
+            oil: r.amounts[ResourceType::Oil.index()],
         }
     }
 }
@@ -76,11 +76,7 @@ impl From<&PlayerResources> for SavedPlayerResources {
 impl From<&SavedPlayerResources> for PlayerResources {
     fn from(r: &SavedPlayerResources) -> Self {
         Self {
-            wood: r.wood,
-            copper: r.copper,
-            iron: r.iron,
-            gold: r.gold,
-            oil: r.oil,
+            amounts: [r.wood, r.copper, r.iron, r.gold, r.oil],
         }
     }
 }
@@ -200,7 +196,8 @@ impl Plugin for SavePlugin {
                     load_game,
                     apply_load_overrides,
                     tick_status_timer,
-                ),
+                )
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -349,16 +346,16 @@ fn save_game(
             saved.rally_point = b_rally.map(|rp| [rp.0.x, rp.0.y, rp.0.z]);
             saved.tower_auto_attack = b_tower.map(|ta| ta.0);
             saved.storage = b_storage.map(|si| SavedStorage {
-                wood: si.wood,
-                copper: si.copper,
-                iron: si.iron,
-                gold: si.gold,
-                oil: si.oil,
-                wood_cap: si.wood_cap,
-                copper_cap: si.copper_cap,
-                iron_cap: si.iron_cap,
-                gold_cap: si.gold_cap,
-                oil_cap: si.oil_cap,
+                wood: si.amounts[ResourceType::Wood.index()],
+                copper: si.amounts[ResourceType::Copper.index()],
+                iron: si.amounts[ResourceType::Iron.index()],
+                gold: si.amounts[ResourceType::Gold.index()],
+                oil: si.amounts[ResourceType::Oil.index()],
+                wood_cap: si.caps[ResourceType::Wood.index()],
+                copper_cap: si.caps[ResourceType::Copper.index()],
+                iron_cap: si.caps[ResourceType::Iron.index()],
+                gold_cap: si.caps[ResourceType::Gold.index()],
+                oil_cap: si.caps[ResourceType::Oil.index()],
             });
         }
 
@@ -698,16 +695,8 @@ fn apply_load_overrides(
         // Storage inventory
         if let Some(ref st) = saved.storage {
             commands.entity(entity).insert(StorageInventory {
-                wood: st.wood,
-                copper: st.copper,
-                iron: st.iron,
-                gold: st.gold,
-                oil: st.oil,
-                wood_cap: st.wood_cap,
-                copper_cap: st.copper_cap,
-                iron_cap: st.iron_cap,
-                gold_cap: st.gold_cap,
-                oil_cap: st.oil_cap,
+                amounts: [st.wood, st.copper, st.iron, st.gold, st.oil],
+                caps: [st.wood_cap, st.copper_cap, st.iron_cap, st.gold_cap, st.oil_cap],
                 last_total: 0,
             });
         }

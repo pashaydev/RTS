@@ -270,7 +270,7 @@ pub fn spawn_widget_frame(
             // Title text
             bar.spawn((
                 Text::new(id.display_name().to_uppercase()),
-                TextFont { font_size: 10.0, ..default() },
+                TextFont { font_size: theme::FONT_SMALL, ..default() },
                 TextColor(theme::TEXT_SECONDARY),
             ));
 
@@ -291,7 +291,7 @@ pub fn spawn_widget_frame(
             .with_children(|close| {
                 close.spawn((
                     Text::new("X"),
-                    TextFont { font_size: 8.0, ..default() },
+                    TextFont { font_size: theme::FONT_TINY, ..default() },
                     TextColor(theme::TEXT_DISABLED),
                 ));
             });
@@ -348,6 +348,26 @@ pub fn spawn_widget_frame(
     commands.entity(widget_entity).add_child(resize_handle);
 
     content
+}
+
+// ── Widget Content Lookup ──
+
+/// Find the content area entity for a widget by its ID.
+pub fn find_widget_content(
+    id: WidgetId,
+    widget_q: &Query<(&Widget, &Children)>,
+    content_q: &Query<Entity, With<WidgetContent>>,
+) -> Option<Entity> {
+    for (widget, widget_children) in widget_q {
+        if widget.id == id {
+            for wchild in widget_children.iter() {
+                if content_q.get(wchild).is_ok() {
+                    return Some(wchild);
+                }
+            }
+        }
+    }
+    None
 }
 
 // ── Sync Widget Visibility ──

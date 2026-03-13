@@ -105,7 +105,7 @@ pub fn update_event_log(
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
     widget_q: Query<(&super::widget_framework::Widget, &Children)>,
-    content_q: Query<(Entity, &super::widget_framework::WidgetContent, Option<&ScrollPosition>)>,
+    content_q: Query<Entity, With<super::widget_framework::WidgetContent>>,
     existing: Query<Entity, With<EventLogContent>>,
     registry: Res<super::widget_framework::WidgetRegistry>,
 ) {
@@ -120,18 +120,7 @@ pub fn update_event_log(
     }
     render_state.last_revision = event_log.revision;
 
-    // Find content entity
-    let mut content_entity = None;
-    for (widget, widget_children) in &widget_q {
-        if widget.id == WidgetId::EventLog {
-            for wchild in widget_children.iter() {
-                if let Ok((e, _, _)) = content_q.get(wchild) {
-                    content_entity = Some(e);
-                }
-            }
-        }
-    }
-    let Some(content) = content_entity else { return; };
+    let Some(content) = super::widget_framework::find_widget_content(WidgetId::EventLog, &widget_q, &content_q) else { return; };
 
     // Clear existing
     for entity in &existing {
@@ -164,7 +153,7 @@ pub fn update_event_log(
         let empty = commands
             .spawn((
                 Text::new("No events yet"),
-                TextFont { font_size: 9.0, ..default() },
+                TextFont { font_size: theme::FONT_CAPTION, ..default() },
                 TextColor(theme::TEXT_DISABLED),
             ))
             .id();
@@ -192,7 +181,7 @@ pub fn update_event_log(
     let header_text = commands
         .spawn((
             Text::new(format!("Events: {} (showing {})", total, showing)),
-            TextFont { font_size: 7.0, ..default() },
+            TextFont { font_size: theme::FONT_MICRO, ..default() },
             TextColor(theme::TEXT_DISABLED),
         ))
         .id();
@@ -221,7 +210,7 @@ pub fn update_event_log(
         let prefix = commands
             .spawn((
                 Text::new(event.category.prefix()),
-                TextFont { font_size: 8.0, ..default() },
+                TextFont { font_size: theme::FONT_TINY, ..default() },
                 TextColor(event.category.color()),
             ))
             .id();
@@ -234,7 +223,7 @@ pub fn update_event_log(
         let time_text = commands
             .spawn((
                 Text::new(time_str),
-                TextFont { font_size: 7.0, ..default() },
+                TextFont { font_size: theme::FONT_MICRO, ..default() },
                 TextColor(theme::TEXT_DISABLED),
             ))
             .id();
@@ -245,7 +234,7 @@ pub fn update_event_log(
             let tag = commands
                 .spawn((
                     Text::new(faction.display_name()),
-                    TextFont { font_size: 7.0, ..default() },
+                    TextFont { font_size: theme::FONT_MICRO, ..default() },
                     TextColor(faction.color()),
                 ))
                 .id();
@@ -256,7 +245,7 @@ pub fn update_event_log(
         let msg = commands
             .spawn((
                 Text::new(&event.message),
-                TextFont { font_size: 8.0, ..default() },
+                TextFont { font_size: theme::FONT_TINY, ..default() },
                 TextColor(theme::TEXT_SECONDARY),
             ))
             .id();

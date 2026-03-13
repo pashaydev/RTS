@@ -23,8 +23,9 @@ impl Plugin for SelectionPlugin {
             .init_resource::<UiClickedThisFrame>()
             .init_resource::<UiPressActive>()
             .init_resource::<CommandMode>()
-            .add_systems(Startup, (spawn_selection_box, setup_hover_assets))
-            .add_systems(First, reset_ui_clicked)
+            .add_systems(Startup, setup_hover_assets)
+            .add_systems(OnEnter(AppState::InGame), spawn_selection_box)
+            .add_systems(First, reset_ui_clicked.run_if(in_state(AppState::InGame)))
             .add_systems(
                 Update,
                 (
@@ -33,7 +34,8 @@ impl Plugin for SelectionPlugin {
                 )
                     .chain()
                     .in_set(SelectionSet)
-                    .after(MinimapSet),
+                    .after(MinimapSet)
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
@@ -42,7 +44,8 @@ impl Plugin for SelectionPlugin {
                     handle_click_select.after(update_hover),
                 )
                     .in_set(SelectionSet)
-                    .after(MinimapSet),
+                    .after(MinimapSet)
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
@@ -51,16 +54,18 @@ impl Plugin for SelectionPlugin {
                     handle_right_click_move,
                     handle_unit_command_hotkeys,
                 )
-                    .after(SelectionSet),
+                    .after(SelectionSet)
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
                 (update_hover_ring, update_hover_tooltip)
-                    .after(SelectionSet),
+                    .after(SelectionSet)
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 PostUpdate,
-                clear_ui_press_on_release,
+                clear_ui_press_on_release.run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -92,43 +97,6 @@ fn ray_sphere_dist(ray: &Ray3d, center: Vec3, radius: f32) -> Option<f32> {
     } else {
         Some(t)
     }
-}
-
-/// Cast a ray against all pickable entities (those with `PickRadius` + `GlobalTransform`)
-/// and one of the marker components. Returns the closest hit entity.
-fn pick_nearest(
-    ray: &Ray3d,
-    pickables: &Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
-    units: &Query<Entity, With<Unit>>,
-    buildings: &Query<Entity, With<Building>>,
-    mobs: &Query<Entity, With<Mob>>,
-    resource_nodes: &Query<Entity, With<ResourceNode>>,
-) -> Option<Entity> {
-    let mut best: Option<(Entity, f32)> = None;
-
-    for (entity, gt, pick_r, inherited_vis) in pickables {
-        // Skip entities hidden by fog of war
-        if !inherited_vis.get() {
-            continue;
-        }
-        // Only pick entities that are units, buildings, mobs, or resource nodes
-        if !units.contains(entity)
-            && !buildings.contains(entity)
-            && !mobs.contains(entity)
-            && !resource_nodes.contains(entity)
-        {
-            continue;
-        }
-
-        let center = gt.translation();
-        if let Some(dist) = ray_sphere_dist(ray, center, pick_r.0) {
-            if best.is_none() || dist < best.unwrap().1 {
-                best = Some((entity, dist));
-            }
-        }
-    }
-
-    best.map(|(e, _)| e)
 }
 
 /// Categorized pick result for click selection.
@@ -237,7 +205,7 @@ fn setup_hover_assets(
         Visibility::Hidden,
         GlobalTransform::default(),
         Text::new(""),
-        TextFont { font_size: 12.0, ..default() },
+        TextFont { font_size: theme::FONT_BODY, ..default() },
         TextColor(theme::TEXT_PRIMARY),
     ));
 }
@@ -378,8 +346,8 @@ fn update_hover(
         return;
     };
 
-    if let Some(entity) = pick_nearest(&ray, &pickables, &units, &buildings, &mobs, &resource_nodes) {
-        commands.entity(entity).insert(Hovered);
+    if let Some(result) = pick_for_click(&ray, &pickables, &units, &buildings, &mobs, &resource_nodes) {
+        commands.entity(result.entity).insert(Hovered);
     }
 }
 

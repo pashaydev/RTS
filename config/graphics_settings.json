@@ -1,0 +1,9 @@
+{
+  "resolution": [
+    1280,
+    720
+  ],
+  "fullscreen": false,
+  "shadow_quality": "Low",
+  "entity_lights": true
+}

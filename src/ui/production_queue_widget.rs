@@ -11,7 +11,7 @@ pub fn update_production_queue(
     mut commands: Commands,
     active_player: Res<ActivePlayer>,
     icons: Res<IconAssets>,
-    content_q: Query<(Entity, &super::widget_framework::WidgetContent, &Children), With<ChildOf>>,
+    content_q: Query<Entity, With<super::widget_framework::WidgetContent>>,
     widget_q: Query<(&super::widget_framework::Widget, &Children)>,
     buildings: Query<
         (Entity, &EntityKind, &TrainingQueue, &Faction),
@@ -26,18 +26,7 @@ pub fn update_production_queue(
         return;
     }
 
-    // Find the production queue widget content entity
-    let mut content_entity = None;
-    for (widget, widget_children) in &widget_q {
-        if widget.id == WidgetId::ProductionQueue {
-            for wchild in widget_children.iter() {
-                if content_q.get(wchild).is_ok() {
-                    content_entity = Some(wchild);
-                }
-            }
-        }
-    }
-    let Some(content) = content_entity else { return; };
+    let Some(content) = super::widget_framework::find_widget_content(WidgetId::ProductionQueue, &widget_q, &content_q) else { return; };
 
     // Clear existing rows
     for row in &existing_rows {
@@ -61,7 +50,7 @@ pub fn update_production_queue(
             .spawn((
                 GlobalQueueRow(Entity::PLACEHOLDER),
                 Text::new("No active queues"),
-                TextFont { font_size: 10.0, ..default() },
+                TextFont { font_size: theme::FONT_SMALL, ..default() },
                 TextColor(theme::TEXT_DISABLED),
             ))
             .id();
@@ -128,7 +117,7 @@ pub fn update_production_queue(
             let more = commands
                 .spawn((
                     Text::new(format!("+{}", queue.queue.len() - 5)),
-                    TextFont { font_size: 9.0, ..default() },
+                    TextFont { font_size: theme::FONT_CAPTION, ..default() },
                     TextColor(theme::TEXT_SECONDARY),
                 ))
                 .id();
@@ -167,7 +156,7 @@ pub fn update_production_queue(
             let time_text = commands
                 .spawn((
                     Text::new(format!("{:.0}s", remaining)),
-                    TextFont { font_size: 9.0, ..default() },
+                    TextFont { font_size: theme::FONT_CAPTION, ..default() },
                     TextColor(theme::TEXT_SECONDARY),
                 ))
                 .id();

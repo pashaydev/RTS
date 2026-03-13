@@ -17,7 +17,8 @@ impl Plugin for PathVisPlugin {
                     animate_path_ring,
                     cleanup_path_vis,
                     cleanup_orphaned_path_vis,
-                ),
+                )
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }

@@ -12,8 +12,9 @@ use crate::lighting::{
     LightingOverrides, SunLight,
 };
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
-use crate::components::{ActivePlayer, AiControlledFactions, AiDifficulty, AiFactionSettings, AiPersonality, Faction, Health, InspectedEnemy, RtsCamera, Selected, TeamConfig, UiClickedThisFrame, UiPressActive, UnitSpeed};
+use crate::components::{ActivePlayer, AiControlledFactions, AiDifficulty, AiFactionSettings, AiPersonality, AppState, Faction, Health, InspectedEnemy, RtsCamera, Selected, TeamConfig, UiClickedThisFrame, UiPressActive, UnitSpeed};
 use crate::ground::HeightMap;
+use crate::theme;
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 use bevy::window::PrimaryWindow;
 
@@ -50,7 +51,8 @@ impl Plugin for DebugPlugin {
                     sync_lighting_tweaks,
                     sync_entity_light_tweaks,
                     sync_fog_tweaks,
-                ),
+                )
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
@@ -63,7 +65,8 @@ impl Plugin for DebugPlugin {
                     rebuild_tweak_panel,
                     update_tweak_visuals,
                     block_input_over_debug_panel,
-                ),
+                )
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -484,7 +487,7 @@ fn spawn_debug_overlay(mut commands: Commands) {
                     row.spawn((
                         Text::new("Debug Panel (F3)"),
                         TextFont {
-                            font_size: 15.0,
+                            font_size: theme::FONT_LARGE,
                             ..default()
                         },
                         TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
@@ -507,7 +510,7 @@ fn spawn_debug_overlay(mut commands: Commands) {
                             Pickable::IGNORE,
                             Text::new("Save"),
                             TextFont {
-                                font_size: 11.0,
+                                font_size: theme::FONT_BODY,
                                 ..default()
                             },
                             TextColor(Color::WHITE),
@@ -522,7 +525,7 @@ fn spawn_debug_overlay(mut commands: Commands) {
                 DebugFpsText,
                 Text::new("FPS: --"),
                 TextFont {
-                    font_size: 13.0,
+                    font_size: theme::FONT_MEDIUM,
                     ..default()
                 },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
@@ -533,7 +536,7 @@ fn spawn_debug_overlay(mut commands: Commands) {
                 DebugEntityCountText,
                 Text::new("Entities: --"),
                 TextFont {
-                    font_size: 13.0,
+                    font_size: theme::FONT_MEDIUM,
                     ..default()
                 },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
@@ -544,7 +547,7 @@ fn spawn_debug_overlay(mut commands: Commands) {
                 DebugDayCycleText,
                 Text::new("Day: --"),
                 TextFont {
-                    font_size: 13.0,
+                    font_size: theme::FONT_MEDIUM,
                     ..default()
                 },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
@@ -945,7 +948,7 @@ fn spawn_section_header(parent: &mut ChildSpawnerCommands, section: &str) {
         row.spawn((
             Text::new(section.to_uppercase()),
             TextFont {
-                font_size: 11.0,
+                font_size: theme::FONT_BODY,
                 ..default()
             },
             TextColor(Color::srgba(0.6, 0.8, 1.0, 0.7)),
@@ -973,7 +976,7 @@ fn spawn_folder_header(parent: &mut ChildSpawnerCommands, key: &str, display_nam
             header.spawn((
                 Text::new(format!("{} {}", arrow, display_name)),
                 TextFont {
-                    font_size: 13.0,
+                    font_size: theme::FONT_MEDIUM,
                     ..default()
                 },
                 TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
@@ -1005,7 +1008,7 @@ fn spawn_slider_row(
             row.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: 11.0,
+                    font_size: theme::FONT_BODY,
                     ..default()
                 },
                 TextColor(Color::srgb(0.65, 0.65, 0.65)),
@@ -1053,7 +1056,7 @@ fn spawn_slider_row(
                 },
                 Text::new(format_tweak_float(value)),
                 TextFont {
-                    font_size: 11.0,
+                    font_size: theme::FONT_BODY,
                     ..default()
                 },
                 TextColor(Color::WHITE),
@@ -1079,7 +1082,7 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
             row.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: 11.0,
+                    font_size: theme::FONT_BODY,
                     ..default()
                 },
                 TextColor(Color::srgb(0.65, 0.65, 0.65)),
@@ -1121,7 +1124,7 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                     Pickable::IGNORE,
                     Text::new(text),
                     TextFont {
-                        font_size: 11.0,
+                        font_size: theme::FONT_BODY,
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -1149,7 +1152,7 @@ fn spawn_readonly_row(
             row.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: 11.0,
+                    font_size: theme::FONT_BODY,
                     ..default()
                 },
                 TextColor(Color::srgb(0.65, 0.65, 0.65)),
@@ -1166,7 +1169,7 @@ fn spawn_readonly_row(
                 },
                 Text::new(text),
                 TextFont {
-                    font_size: 11.0,
+                    font_size: theme::FONT_BODY,
                     ..default()
                 },
                 TextColor(Color::srgb(0.5, 0.5, 0.5)),
@@ -1188,7 +1191,7 @@ fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: 
             row.spawn((
                 Text::new("preview"),
                 TextFont {
-                    font_size: 11.0,
+                    font_size: theme::FONT_BODY,
                     ..default()
                 },
                 TextColor(Color::srgb(0.45, 0.45, 0.45)),
@@ -1229,7 +1232,7 @@ fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str,
             row.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: 11.0,
+                    font_size: theme::FONT_BODY,
                     ..default()
                 },
                 TextColor(Color::srgb(0.65, 0.65, 0.65)),
@@ -1266,7 +1269,7 @@ fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str,
                     Pickable::IGNORE,
                     Text::new(display),
                     TextFont {
-                        font_size: 11.0,
+                        font_size: theme::FONT_BODY,
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -1314,7 +1317,7 @@ fn spawn_button_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                     Pickable::IGNORE,
                     Text::new(text),
                     TextFont {
-                        font_size: 11.0,
+                        font_size: theme::FONT_BODY,
                         ..default()
                     },
                     TextColor(Color::WHITE),
@@ -2212,29 +2215,8 @@ fn sync_player_control_tweaks(
         }
     }
 
-    // Team Mode switching
-    let team_mode = tweaks.get_cycle_selected(PLAYER_FOLDER, "Team Mode").unwrap_or(0);
-    let new_teams: std::collections::HashMap<Faction, u8> = match team_mode {
-        0 => {
-            // 2v2: P1+P2 vs P3+P4
-            [(Faction::Player1, 0), (Faction::Player2, 0), (Faction::Player3, 1), (Faction::Player4, 1)]
-                .into_iter().collect()
-        }
-        1 => {
-            // FFA: all vs all
-            [(Faction::Player1, 0), (Faction::Player2, 1), (Faction::Player3, 2), (Faction::Player4, 3)]
-                .into_iter().collect()
-        }
-        2 => {
-            // 1v3: P1 vs P2+P3+P4
-            [(Faction::Player1, 0), (Faction::Player2, 1), (Faction::Player3, 1), (Faction::Player4, 1)]
-                .into_iter().collect()
-        }
-        _ => return,
-    };
-    if team_config.teams != new_teams {
-        team_config.teams = new_teams;
-    }
+    // Team Mode switching — only override if debug tweak was actively changed
+    // (don't overwrite the config set by apply_game_config on every frame)
 }
 
 fn sync_ai_debug_tweaks(

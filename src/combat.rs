@@ -14,11 +14,11 @@ impl Plugin for CombatPlugin {
             (
                 player_auto_acquire_target,
                 approach_attack_target,
-                execute_melee_attacks,
-                execute_ranged_attacks,
+                execute_attacks,
                 handle_death,
             )
-                .chain(),
+                .chain()
+                .run_if(in_state(AppState::InGame)),
         );
     }
 }
@@ -112,19 +112,18 @@ fn approach_attack_target(
     }
 }
 
-fn execute_melee_attacks(
+fn execute_attacks(
     mut commands: Commands,
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut attackers: Query<
-        (&Transform, &AttackTarget, &mut AttackCooldown, &AttackDamage, &AttackRange),
-        Without<IsRanged>,
+        (&Transform, &AttackTarget, &mut AttackCooldown, &AttackDamage, &AttackRange, Option<&IsRanged>),
     >,
     mut healths: Query<(&Transform, &mut Health)>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (atk_tf, attack_target, mut cooldown, damage, range) in &mut attackers {
+    for (atk_tf, attack_target, mut cooldown, damage, range, is_ranged) in &mut attackers {
         cooldown.timer.tick(time.delta());
 
         if !cooldown.timer.just_finished() {
@@ -140,67 +139,40 @@ fn execute_melee_attacks(
             continue;
         }
 
-        health.current -= damage.0;
-
-        commands.spawn((
-            VfxFlash {
-                timer: Timer::from_seconds(0.15, TimerMode::Once),
-                start_scale: 0.3,
-                end_scale: 0.8,
-            },
-            FogHideable::Vfx,
-            Mesh3d(vfx.sphere_mesh.clone()),
-            MeshMaterial3d(vfx.melee_material.clone()),
-            Transform::from_translation(target_tf.translation)
-                .with_scale(Vec3::splat(0.3)),
-            NotShadowCaster,
-            NotShadowReceiver,
-        ));
-    }
-}
-
-fn execute_ranged_attacks(
-    mut commands: Commands,
-    time: Res<Time>,
-    vfx_assets: Option<Res<VfxAssets>>,
-    mut archers: Query<
-        (&Transform, &AttackTarget, &mut AttackCooldown, &AttackDamage, &AttackRange),
-        (With<Unit>, With<IsRanged>),
-    >,
-    targets: Query<&Transform, Without<Unit>>,
-) {
-    let Some(vfx) = vfx_assets else { return };
-
-    for (atk_tf, attack_target, mut cooldown, damage, range) in &mut archers {
-        cooldown.timer.tick(time.delta());
-
-        if !cooldown.timer.just_finished() {
-            continue;
+        if is_ranged.is_some() {
+            // Ranged: spawn projectile
+            commands.spawn((
+                Projectile {
+                    target: attack_target.0,
+                    speed: 15.0,
+                    damage: damage.0,
+                },
+                FogHideable::Vfx,
+                Mesh3d(vfx.sphere_mesh.clone()),
+                MeshMaterial3d(vfx.projectile_material.clone()),
+                Transform::from_translation(atk_tf.translation + Vec3::Y * 0.5)
+                    .with_scale(Vec3::splat(0.15)),
+                NotShadowCaster,
+                NotShadowReceiver,
+            ));
+        } else {
+            // Melee: apply damage directly + flash VFX
+            health.current -= damage.0;
+            commands.spawn((
+                VfxFlash {
+                    timer: Timer::from_seconds(0.15, TimerMode::Once),
+                    start_scale: 0.3,
+                    end_scale: 0.8,
+                },
+                FogHideable::Vfx,
+                Mesh3d(vfx.sphere_mesh.clone()),
+                MeshMaterial3d(vfx.melee_material.clone()),
+                Transform::from_translation(target_tf.translation)
+                    .with_scale(Vec3::splat(0.3)),
+                NotShadowCaster,
+                NotShadowReceiver,
+            ));
         }
-
-        let Ok(target_tf) = targets.get(attack_target.0) else {
-            continue;
-        };
-
-        let dist = atk_tf.translation.distance(target_tf.translation);
-        if dist > range.0 * 1.2 {
-            continue;
-        }
-
-        commands.spawn((
-            Projectile {
-                target: attack_target.0,
-                speed: 15.0,
-                damage: damage.0,
-            },
-            FogHideable::Vfx,
-            Mesh3d(vfx.sphere_mesh.clone()),
-            MeshMaterial3d(vfx.projectile_material.clone()),
-            Transform::from_translation(atk_tf.translation + Vec3::Y * 0.5)
-                .with_scale(Vec3::splat(0.15)),
-            NotShadowCaster,
-            NotShadowReceiver,
-        ));
     }
 }
 

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::components::*;
+use crate::theme;
 
 #[derive(Component)]
 pub struct AllyNotificationToast {
@@ -82,7 +83,7 @@ pub fn update_ally_notifications(
                 toast.spawn((
                     Text::new(notif.message.clone()),
                     TextFont {
-                        font_size: 14.0,
+                        font_size: theme::FONT_MEDIUM,
                         ..default()
                     },
                     TextColor(color),

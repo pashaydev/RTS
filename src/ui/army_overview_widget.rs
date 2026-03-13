@@ -23,18 +23,7 @@ pub fn update_army_overview(
         return;
     }
 
-    // Find the army overview content entity
-    let mut content_entity = None;
-    for (widget, widget_children) in &widget_q {
-        if widget.id == WidgetId::ArmyOverview {
-            for wchild in widget_children.iter() {
-                if content_q.get(wchild).is_ok() {
-                    content_entity = Some(wchild);
-                }
-            }
-        }
-    }
-    let Some(content) = content_entity else { return; };
+    let Some(content) = super::widget_framework::find_widget_content(WidgetId::ArmyOverview, &widget_q, &content_q) else { return; };
 
     // Clear existing
     for entity in &existing {
@@ -108,7 +97,7 @@ pub fn update_army_overview(
         let count_text = commands
             .spawn((
                 Text::new(format!("x{}", count)),
-                TextFont { font_size: 9.0, ..default() },
+                TextFont { font_size: theme::FONT_CAPTION, ..default() },
                 TextColor(theme::TEXT_PRIMARY),
             ))
             .id();
@@ -118,7 +107,7 @@ pub fn update_army_overview(
             let idle_badge = commands
                 .spawn((
                     Text::new(format!("({})", idle)),
-                    TextFont { font_size: 8.0, ..default() },
+                    TextFont { font_size: theme::FONT_TINY, ..default() },
                     TextColor(theme::WARNING),
                 ))
                 .id();
@@ -131,7 +120,7 @@ pub fn update_army_overview(
         .spawn((
             ArmyOverviewContent,
             Text::new(format!("Total: {}", total)),
-            TextFont { font_size: 9.0, ..default() },
+            TextFont { font_size: theme::FONT_CAPTION, ..default() },
             TextColor(theme::TEXT_SECONDARY),
             Node { margin: UiRect::top(Val::Px(2.0)), ..default() },
         ))

@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy::ecs::message::MessageReader;
 
-use crate::components::{CursorOverUi, DragState, RtsCamera, SPAWN_POSITIONS};
+use crate::components::{AppState, CursorOverUi, DragState, GameSetupConfig, MapSeed, RtsCamera};
 
 // ── Tuning constants ──
 
@@ -24,7 +24,7 @@ pub struct CameraPlugin;
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CursorOverUi>()
-            .add_systems(Startup, spawn_camera)
+            .add_systems(OnEnter(AppState::InGame), spawn_camera.after(crate::ground::spawn_ground))
             .add_systems(
                 Update,
                 (
@@ -35,7 +35,8 @@ impl Plugin for CameraPlugin {
                     camera_rotate_input,
                     camera_smooth_update,
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -49,9 +50,10 @@ fn update_cursor_over_ui(
         .any(|i| *i == Interaction::Hovered || *i == Interaction::Pressed);
 }
 
-fn spawn_camera(mut commands: Commands) {
-    // Start camera at Player1's spawn position
-    let (_, (sx, sz)) = SPAWN_POSITIONS[0];
+fn spawn_camera(mut commands: Commands, config: Res<GameSetupConfig>, map_seed: Res<MapSeed>) {
+    // Start camera at Player1's actual spawn position
+    let positions = config.spawn_positions(map_seed.0);
+    let (sx, sz) = positions[0].1;
     let pivot = Vec3::new(sx, 0.0, sz);
     let distance = 60.0_f32;
     let angle = 0.0_f32;

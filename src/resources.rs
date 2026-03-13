@@ -4,8 +4,11 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::blueprints::EntityKind;
 use crate::components::*;
-use crate::ground::{HeightMap, MAP_SIZE};
+use crate::ground::HeightMap;
+use crate::theme;
 use rand::Rng;
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 
 pub struct ResourcesPlugin;
 
@@ -15,23 +18,27 @@ impl Plugin for ResourcesPlugin {
             .init_resource::<CarriedResourceTotals>()
             .init_resource::<PendingCarriedDrains>()
             .add_systems(Startup, (create_resource_node_materials, create_carry_visual_assets))
-            .add_systems(PostStartup, (spawn_resource_nodes, spawn_decorations))
+            .add_systems(OnEnter(AppState::InGame), (spawn_resource_nodes, spawn_decorations).after(crate::ground::spawn_ground))
             .add_systems(
                 Update,
-                (compute_carried_totals, worker_ai_system, resource_processor_system, deplete_resource_nodes).chain(),
+                (compute_carried_totals, worker_ai_system, resource_processor_system, deplete_resource_nodes).chain()
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
                 (drain_carried_from_workers, update_carry_visuals).chain()
-                    .after(deplete_resource_nodes),
+                    .after(deplete_resource_nodes)
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
-                (spawn_saplings_system, grow_saplings_system, grow_trees_system),
+                (spawn_saplings_system, grow_saplings_system, grow_trees_system)
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
-                (processor_worker_visual_system, resource_respawn_system, grow_resource_system, update_resource_popups),
+                (processor_worker_visual_system, resource_respawn_system, grow_resource_system, update_resource_popups)
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -177,6 +184,8 @@ fn spawn_resource_nodes(
     biome_map: Res<BiomeMap>,
     model_assets: Res<ModelAssets>,
     height_map: Res<HeightMap>,
+    config: Res<GameSetupConfig>,
+    map_seed: Res<MapSeed>,
 ) {
     let wood_mesh = meshes.add(Cuboid::new(0.6, 2.5, 0.6));
     let ore_mesh = meshes.add(Cuboid::new(1.0, 0.8, 1.0));
@@ -185,11 +194,15 @@ fn spawn_resource_nodes(
 
     let has_tree_models = !model_assets.trees.is_empty();
     let has_rock_models = !model_assets.rocks.is_empty();
-    let mut rng = rand::rng();
+    let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(1000));
 
-    let placement_noise = Fbm::<Perlin>::new(999).set_octaves(2);
+    let resource_seed = (map_seed.0 >> 8) as u32;
+    let placement_noise = Fbm::<Perlin>::new(resource_seed).set_octaves(2);
+    let density_mult = config.resource_density.multiplier();
     let spacing = 12.0;
-    let half = MAP_SIZE / 2.0;
+    let half = height_map.half_map;
+
+    let spawn_positions = config.spawn_positions(map_seed.0);
 
     let mut x = -half + 5.0;
     while x < half - 5.0 {
@@ -197,7 +210,7 @@ fn spawn_resource_nodes(
         while z < half - 5.0 {
             // Keep starting areas clear (all faction spawn positions)
             let mut too_close_to_spawn = false;
-            for &(_, (sx, sz)) in &SPAWN_POSITIONS {
+            for &(_, (sx, sz)) in &spawn_positions {
                 let dx = x - sx;
                 let dz = z - sz;
                 if (dx * dx + dz * dz).sqrt() < 25.0 {
@@ -212,7 +225,7 @@ fn spawn_resource_nodes(
 
             let biome = biome_map.get_biome(x, z);
             let noise_val = placement_noise.get([x as f64 * 0.1, z as f64 * 0.1]) as f32;
-            let threshold = biome_spawn_threshold(biome);
+            let threshold = biome_spawn_threshold(biome) / density_mult;
 
             if noise_val > threshold {
                 // For Water, only spawn at edges
@@ -296,7 +309,7 @@ fn spawn_resource_nodes(
                 let secondary_noise = placement_noise
                     .get([x as f64 * 0.13 + 50.0, z as f64 * 0.13 + 50.0])
                     as f32;
-                if secondary_noise > threshold + 0.3 {
+                if secondary_noise > threshold + 0.3 / density_mult {
                     if let Some((rt, amount, mesh, mat, half_h)) =
                         secondary_resource_for(biome, &ore_mesh, &gold_mesh, &node_mats)
                     {
@@ -374,12 +387,15 @@ fn spawn_decorations(
     biome_map: Res<BiomeMap>,
     model_assets: Res<ModelAssets>,
     height_map: Res<HeightMap>,
+    config: Res<GameSetupConfig>,
+    map_seed: Res<MapSeed>,
 ) {
-    let mut rng = rand::rng();
-    let deco_noise = Fbm::<Perlin>::new(777).set_octaves(2);
+    let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(2000));
+    let deco_seed = (map_seed.0 >> 12) as u32;
+    let deco_noise = Fbm::<Perlin>::new(deco_seed).set_octaves(2);
     let spacing = 8.0;
-    let half = MAP_SIZE / 2.0;
-    let max_decorations = 700;
+    let half = height_map.half_map;
+    let max_decorations = ((height_map.map_size / 500.0).powi(2) * 700.0) as u32;
     let mut count = 0u32;
 
     let mut x = -half + 4.0;
@@ -391,8 +407,9 @@ fn spawn_decorations(
             }
 
             // Keep starting areas clear (all faction spawn positions)
+            let deco_spawn_positions = config.spawn_positions(map_seed.0);
             let mut too_close_to_spawn = false;
-            for &(_, (sx, sz)) in &SPAWN_POSITIONS {
+            for &(_, (sx, sz)) in &deco_spawn_positions {
                 let dx = x - sx;
                 let dz = z - sz;
                 if (dx * dx + dz * dz).sqrt() < 25.0 {
@@ -552,24 +569,14 @@ fn worker_ai_system(
 
                 // If carrying resources, find depot to deposit (resource-type aware)
                 if carrying.amount > 0 {
-                    if let Some(depot) = find_nearest_deposit_for(&tf.translation, worker_faction, carrying.resource_type, &deposit_points, Some(&inventories)) {
-                        let depot_pos = deposit_points.get(depot).unwrap().1.translation;
-                        commands.entity(entity).insert(MoveTarget(depot_pos));
-                        *state = UnitState::ReturningToDeposit { depot, gather_node: None };
+                    let new_state = return_to_depot_or_idle(&mut commands, entity, &tf.translation, worker_faction, &carrying, None, &deposit_points, Some(&inventories));
+                    if !matches!(new_state, UnitState::Idle) {
+                        *state = new_state;
                     }
                     continue;
                 }
                 // Scan for nearby resource to auto-gather
-                let mut closest_dist = f32::MAX;
-                let mut closest_node = None;
-                for (node_entity, node_tf) in &all_nodes {
-                    let dist = tf.translation.distance(node_tf.translation);
-                    if dist < auto_scan_range && dist < closest_dist {
-                        closest_dist = dist;
-                        closest_node = Some(node_entity);
-                    }
-                }
-                if let Some(node) = closest_node {
+                if let Some(node) = find_nearest_node(&tf.translation, auto_scan_range, &all_nodes) {
                     *state = UnitState::Gathering(node);
                 } else {
                     // No nearby resource — check for nearby construction sites (same faction)
@@ -596,36 +603,16 @@ fn worker_ai_system(
                 let Ok((node_tf, mut node_data)) = nodes.get_mut(node) else {
                     // Node gone
                     commands.entity(entity).remove::<MoveTarget>();
-                    if carrying.amount > 0 {
-                        if let Some(depot) = find_nearest_deposit_for(&tf.translation, worker_faction, carrying.resource_type, &deposit_points, Some(&inventories)) {
-                            let depot_pos = deposit_points.get(depot).unwrap().1.translation;
-                            commands.entity(entity).insert(MoveTarget(depot_pos));
-                            *state = UnitState::ReturningToDeposit { depot, gather_node: None };
-                        } else {
-                            *state = UnitState::Idle;
-                            *source = TaskSource::Auto;
-                        }
-                    } else {
-                        *state = UnitState::Idle;
-                        *source = TaskSource::Auto;
-                    }
+                    let new_state = return_to_depot_or_idle(&mut commands, entity, &tf.translation, worker_faction, &carrying, None, &deposit_points, Some(&inventories));
+                    *state = new_state;
+                    if matches!(*state, UnitState::Idle) { *source = TaskSource::Auto; }
                     continue;
                 };
 
                 if node_data.amount_remaining == 0 {
-                    if carrying.amount > 0 {
-                        if let Some(depot) = find_nearest_deposit_for(&tf.translation, worker_faction, carrying.resource_type, &deposit_points, Some(&inventories)) {
-                            let depot_pos = deposit_points.get(depot).unwrap().1.translation;
-                            commands.entity(entity).insert(MoveTarget(depot_pos));
-                            *state = UnitState::ReturningToDeposit { depot, gather_node: None };
-                        } else {
-                            *state = UnitState::Idle;
-                            *source = TaskSource::Auto;
-                        }
-                    } else {
-                        *state = UnitState::Idle;
-                        *source = TaskSource::Auto;
-                    }
+                    let new_state = return_to_depot_or_idle(&mut commands, entity, &tf.translation, worker_faction, &carrying, None, &deposit_points, Some(&inventories));
+                    *state = new_state;
+                    if matches!(*state, UnitState::Idle) { *source = TaskSource::Auto; }
                     continue;
                 }
 
@@ -678,16 +665,10 @@ fn worker_ai_system(
             UnitState::ReturningToDeposit { depot, gather_node } => {
                 // Check depot still exists
                 let Ok((depot_tf, _)) = inventories.get(depot) else {
-                    // Try find another depot
                     commands.entity(entity).remove::<MoveTarget>();
-                    if let Some(new_depot) = find_nearest_deposit_for(&tf.translation, worker_faction, carrying.resource_type, &deposit_points, Some(&inventories)) {
-                        let depot_pos = deposit_points.get(new_depot).unwrap().1.translation;
-                        commands.entity(entity).insert(MoveTarget(depot_pos));
-                        *state = UnitState::ReturningToDeposit { depot: new_depot, gather_node };
-                    } else {
-                        *state = UnitState::Idle;
-                        *source = TaskSource::Auto;
-                    }
+                    let new_state = return_to_depot_or_idle(&mut commands, entity, &tf.translation, worker_faction, &carrying, gather_node, &deposit_points, Some(&inventories));
+                    *state = new_state;
+                    if matches!(*state, UnitState::Idle) { *source = TaskSource::Auto; }
                     continue;
                 };
 
@@ -744,23 +725,7 @@ fn worker_ai_system(
                         if let Some(ref vfx) = vfx_assets {
                             if let Ok((depot_tf, _)) = inventories.get(depot) {
                                 let deposit_pos = depot_tf.translation + Vec3::Y * 2.0;
-                                for i in 0..4 {
-                                    let angle = std::f32::consts::TAU * (i as f32 / 4.0);
-                                    let offset = Vec3::new(angle.cos() * 0.5, 0.5, angle.sin() * 0.5);
-                                    commands.spawn((
-                                        VfxFlash {
-                                            timer: Timer::from_seconds(0.3, TimerMode::Once),
-                                            start_scale: 0.15,
-                                            end_scale: 0.0,
-                                        },
-                                        FogHideable::Vfx,
-                                        Mesh3d(vfx.sphere_mesh.clone()),
-                                        MeshMaterial3d(vfx.deposit_material.clone()),
-                                        Transform::from_translation(deposit_pos + offset)
-                                            .with_scale(Vec3::splat(0.15)),
-                                    ));
-                                }
-                                // Spawn resource popup for partial deposit
+                                spawn_deposit_vfx(&mut commands, &vfx, deposit_pos, 4, 0.15, 0.3);
                                 spawn_resource_popup(&mut commands, deposit_pos + Vec3::Y * 1.5, rt, deposited);
                             }
                         }
@@ -772,22 +737,7 @@ fn worker_ai_system(
                 if let Some(ref vfx) = vfx_assets {
                     if let Ok((depot_tf, _)) = inventories.get(depot) {
                         let deposit_pos = depot_tf.translation + Vec3::Y * 2.0;
-                        for i in 0..4 {
-                            let angle = std::f32::consts::TAU * (i as f32 / 4.0);
-                            let offset = Vec3::new(angle.cos() * 0.5, 0.5, angle.sin() * 0.5);
-                            commands.spawn((
-                                VfxFlash {
-                                    timer: Timer::from_seconds(0.3, TimerMode::Once),
-                                    start_scale: 0.15,
-                                    end_scale: 0.0,
-                                },
-                                FogHideable::Vfx,
-                                Mesh3d(vfx.sphere_mesh.clone()),
-                                MeshMaterial3d(vfx.deposit_material.clone()),
-                                Transform::from_translation(deposit_pos + offset)
-                                    .with_scale(Vec3::splat(0.15)),
-                            ));
-                        }
+                        spawn_deposit_vfx(&mut commands, &vfx, deposit_pos, 4, 0.15, 0.3);
                         if let Some((rt, amount)) = deposit_info {
                             spawn_resource_popup(&mut commands, deposit_pos + Vec3::Y * 1.5, rt, amount);
                         }
@@ -810,16 +760,7 @@ fn worker_ai_system(
                     }
                 }
                 // No gather node or depleted — scan broadly for next resource
-                let mut closest_dist = f32::MAX;
-                let mut closest_node = None;
-                for (node_entity, node_tf) in &all_nodes {
-                    let dist = tf.translation.distance(node_tf.translation);
-                    if dist < auto_scan_range && dist < closest_dist {
-                        closest_dist = dist;
-                        closest_node = Some(node_entity);
-                    }
-                }
-                if let Some(node) = closest_node {
+                if let Some(node) = find_nearest_node(&tf.translation, auto_scan_range, &all_nodes) {
                     *state = UnitState::Gathering(node);
                 } else {
                     *state = UnitState::Idle;
@@ -974,22 +915,7 @@ fn resource_processor_system(
                 // Also spawn deposit VFX particles
                 if let Some(ref vfx) = vfx_assets {
                     let deposit_pos = building_tf.translation + Vec3::Y * 2.0;
-                    for i in 0..3 {
-                        let angle = std::f32::consts::TAU * (i as f32 / 3.0);
-                        let offset = Vec3::new(angle.cos() * 0.4, 0.3, angle.sin() * 0.4);
-                        commands.spawn((
-                            VfxFlash {
-                                timer: Timer::from_seconds(0.25, TimerMode::Once),
-                                start_scale: 0.12,
-                                end_scale: 0.0,
-                            },
-                            FogHideable::Vfx,
-                            Mesh3d(vfx.sphere_mesh.clone()),
-                            MeshMaterial3d(vfx.deposit_material.clone()),
-                            Transform::from_translation(deposit_pos + offset)
-                                .with_scale(Vec3::splat(0.12)),
-                        ));
-                    }
+                    spawn_deposit_vfx(&mut commands, &vfx, deposit_pos, 3, 0.12, 0.25);
                 }
             }
         }
@@ -1015,7 +941,7 @@ fn spawn_resource_popup(commands: &mut Commands, world_pos: Vec3, rt: ResourceTy
         },
         Text::new(format!("+{}", amount)),
         TextFont {
-            font_size: 15.0,
+            font_size: theme::FONT_LARGE,
             ..default()
         },
         TextColor(Color::srgb(
@@ -1046,7 +972,7 @@ fn update_resource_popups(
         } else {
             1.0
         };
-        font.font_size = 15.0 * scale;
+        font.font_size = theme::FONT_LARGE * scale;
 
         // Rise in world Y
         popup.world_pos.y += 30.0 * time.delta_secs() * 0.02;
@@ -1062,12 +988,71 @@ fn update_resource_popups(
     }
 }
 
-fn find_nearest_deposit(
+/// Try to send a worker to the nearest depot, or go idle if none found.
+/// Returns the new state to assign.
+fn return_to_depot_or_idle(
+    commands: &mut Commands,
+    entity: Entity,
     pos: &Vec3,
     faction: &Faction,
+    carrying: &Carrying,
+    gather_node: Option<Entity>,
     deposit_points: &Query<(Entity, &Transform, &BuildingState, &Faction), (With<DepositPoint>, Without<Unit>)>,
+    inventories: Option<&Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>>,
+) -> UnitState {
+    if carrying.amount > 0 {
+        if let Some(depot) = find_nearest_deposit_for(pos, faction, carrying.resource_type, deposit_points, inventories) {
+            let depot_pos = deposit_points.get(depot).unwrap().1.translation;
+            commands.entity(entity).insert(MoveTarget(depot_pos));
+            return UnitState::ReturningToDeposit { depot, gather_node };
+        }
+    }
+    UnitState::Idle
+}
+
+/// Scan for the nearest resource node within range.
+fn find_nearest_node(
+    pos: &Vec3,
+    range: f32,
+    all_nodes: &Query<(Entity, &Transform), (With<ResourceNode>, Without<Unit>)>,
 ) -> Option<Entity> {
-    find_nearest_deposit_for(pos, faction, None, deposit_points, None)
+    let mut closest_dist = f32::MAX;
+    let mut closest_node = None;
+    for (node_entity, node_tf) in all_nodes {
+        let dist = pos.distance(node_tf.translation);
+        if dist < range && dist < closest_dist {
+            closest_dist = dist;
+            closest_node = Some(node_entity);
+        }
+    }
+    closest_node
+}
+
+/// Spawn deposit VFX particles around a position.
+fn spawn_deposit_vfx(
+    commands: &mut Commands,
+    vfx: &VfxAssets,
+    deposit_pos: Vec3,
+    count: u32,
+    scale: f32,
+    duration: f32,
+) {
+    for i in 0..count {
+        let angle = std::f32::consts::TAU * (i as f32 / count as f32);
+        let offset = Vec3::new(angle.cos() * 0.5, 0.5, angle.sin() * 0.5);
+        commands.spawn((
+            VfxFlash {
+                timer: Timer::from_seconds(duration, TimerMode::Once),
+                start_scale: scale,
+                end_scale: 0.0,
+            },
+            FogHideable::Vfx,
+            Mesh3d(vfx.sphere_mesh.clone()),
+            MeshMaterial3d(vfx.deposit_material.clone()),
+            Transform::from_translation(deposit_pos + offset)
+                .with_scale(Vec3::splat(scale)),
+        ));
+    }
 }
 
 /// Find nearest deposit that accepts the given resource type.
@@ -1241,6 +1226,8 @@ fn spawn_saplings_system(
     mature_trees: Query<&Transform, With<MatureTree>>,
     saplings: Query<&Sapling>,
     growing: Query<&GrowingTree>,
+    game_config: Res<GameSetupConfig>,
+    map_seed: Res<MapSeed>,
 ) {
     config.spawn_timer.tick(time.delta());
     if !config.spawn_timer.just_finished() {
@@ -1278,8 +1265,9 @@ fn spawn_saplings_system(
         }
 
         // Don't spawn too close to any player base
+        let sapling_spawn_positions = game_config.spawn_positions(map_seed.0);
         let mut near_base = false;
-        for &(_, (sx, sz)) in &SPAWN_POSITIONS {
+        for &(_, (sx, sz)) in &sapling_spawn_positions {
             let dx = x - sx;
             let dz = z - sz;
             if (dx * dx + dz * dz).sqrt() < 25.0 {

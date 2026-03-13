@@ -15,7 +15,7 @@ impl Plugin for VfxPlugin {
                 update_gather_particles,
                 footstep_dust_spawner,
                 update_footstep_dust,
-            ));
+            ).run_if(in_state(AppState::InGame)));
     }
 }
 

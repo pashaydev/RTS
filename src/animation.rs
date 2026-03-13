@@ -13,7 +13,8 @@ impl Plugin for AnimationPlugin {
                 discover_animation_players,
                 drive_animations,
                 face_movement_direction,
-            ),
+            )
+                .run_if(in_state(AppState::InGame)),
         );
     }
 }

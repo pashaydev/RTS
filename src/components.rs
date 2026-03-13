@@ -4,6 +4,197 @@ use std::collections::{HashSet, VecDeque};
 
 use crate::blueprints::EntityKind;
 
+// ── Map Seed ──
+
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct MapSeed(pub u64);
+
+// ── App State ──
+
+#[derive(States, Default, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum AppState {
+    #[default]
+    MainMenu,
+    InGame,
+}
+
+// ── Game Setup Config ──
+
+#[derive(Resource, Clone, Debug)]
+pub struct GameSetupConfig {
+    pub player_name: String,
+    pub player_color_index: usize,
+    pub num_ai_opponents: u8,
+    pub ai_difficulties: [AiDifficulty; 3],
+    pub team_mode: TeamMode,
+    pub player_teams: [u8; 4],
+    pub map_size: MapSize,
+    pub resource_density: ResourceDensity,
+    pub day_cycle_secs: f32,
+    pub starting_resources_mult: f32,
+    pub map_seed: u64, // 0 = random
+}
+
+impl Default for GameSetupConfig {
+    fn default() -> Self {
+        Self {
+            player_name: "Commander".to_string(),
+            player_color_index: 0,
+            num_ai_opponents: 3,
+            ai_difficulties: [AiDifficulty::Medium; 3],
+            team_mode: TeamMode::default(),
+            player_teams: [0, 1, 2, 3],
+            map_size: MapSize::default(),
+            resource_density: ResourceDensity::default(),
+            day_cycle_secs: 600.0,
+            starting_resources_mult: 1.0,
+            map_seed: 0,
+        }
+    }
+}
+
+impl GameSetupConfig {
+    pub fn spawn_positions(&self, seed: u64) -> Vec<(Faction, (f32, f32))> {
+        let factions = [Faction::Player1, Faction::Player2, Faction::Player3, Faction::Player4];
+        let count = (1 + self.num_ai_opponents as usize).min(4);
+        let half_map = self.map_size.world_size() / 2.0;
+        let radius = 0.6 * half_map;
+        let rotation_offset = (seed % 360) as f32 * std::f32::consts::PI / 180.0;
+
+        (0..count)
+            .map(|i| {
+                let angle = 2.0 * std::f32::consts::PI * i as f32 / count as f32 + rotation_offset;
+                let x = angle.cos() * radius;
+                let z = angle.sin() * radius;
+                (factions[i], (x, z))
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TeamMode {
+    #[default]
+    FFA,
+    Teams,
+    Custom,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MapSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl MapSize {
+    pub fn world_size(&self) -> f32 {
+        match self {
+            MapSize::Small => 300.0,
+            MapSize::Medium => 500.0,
+            MapSize::Large => 700.0,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            MapSize::Small => "Small",
+            MapSize::Medium => "Medium",
+            MapSize::Large => "Large",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ResourceDensity {
+    Sparse,
+    #[default]
+    Normal,
+    Dense,
+}
+
+impl ResourceDensity {
+    pub fn multiplier(&self) -> f32 {
+        match self {
+            ResourceDensity::Sparse => 0.5,
+            ResourceDensity::Normal => 1.0,
+            ResourceDensity::Dense => 1.5,
+        }
+    }
+
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ResourceDensity::Sparse => "Sparse",
+            ResourceDensity::Normal => "Normal",
+            ResourceDensity::Dense => "Dense",
+        }
+    }
+}
+
+// ── Graphics Settings ──
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum ShadowQuality {
+    Off,
+    Low,
+    #[default]
+    High,
+}
+
+impl ShadowQuality {
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ShadowQuality::Off => "Off",
+            ShadowQuality::Low => "Low",
+            ShadowQuality::High => "High",
+        }
+    }
+}
+
+#[derive(Resource, Clone, Debug, Serialize, Deserialize)]
+pub struct GraphicsSettings {
+    pub resolution: (u32, u32),
+    pub fullscreen: bool,
+    pub shadow_quality: ShadowQuality,
+    pub entity_lights: bool,
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: f32,
+}
+
+fn default_ui_scale() -> f32 {
+    1.0
+}
+
+impl Default for GraphicsSettings {
+    fn default() -> Self {
+        Self {
+            resolution: (1280, 720),
+            fullscreen: false,
+            shadow_quality: ShadowQuality::High,
+            entity_lights: true,
+            ui_scale: 1.0,
+        }
+    }
+}
+
+impl GraphicsSettings {
+    pub fn load_or_default() -> Self {
+        std::fs::read_to_string("config/graphics_settings.json")
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) {
+        let _ = std::fs::create_dir_all("config");
+        let _ = std::fs::write(
+            "config/graphics_settings.json",
+            serde_json::to_string_pretty(self).unwrap(),
+        );
+    }
+}
+
 // ── Resource types ──
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
@@ -16,6 +207,26 @@ pub enum ResourceType {
 }
 
 impl ResourceType {
+    pub const ALL: [ResourceType; 5] = [
+        ResourceType::Wood,
+        ResourceType::Copper,
+        ResourceType::Iron,
+        ResourceType::Gold,
+        ResourceType::Oil,
+    ];
+
+    pub const COUNT: usize = 5;
+
+    pub fn index(self) -> usize {
+        match self {
+            Self::Wood => 0,
+            Self::Copper => 1,
+            Self::Iron => 2,
+            Self::Gold => 3,
+            Self::Oil => 4,
+        }
+    }
+
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Wood => "Wood",
@@ -221,25 +432,17 @@ pub struct DepositPoint;
 
 #[derive(Component)]
 pub struct StorageInventory {
-    pub wood: u32,
-    pub copper: u32,
-    pub iron: u32,
-    pub gold: u32,
-    pub oil: u32,
+    pub amounts: [u32; ResourceType::COUNT],
     /// Per-resource capacity limits. 0 means this resource type is NOT accepted.
-    pub wood_cap: u32,
-    pub copper_cap: u32,
-    pub iron_cap: u32,
-    pub gold_cap: u32,
-    pub oil_cap: u32,
+    pub caps: [u32; ResourceType::COUNT],
     pub last_total: u32,
 }
 
 impl Default for StorageInventory {
     fn default() -> Self {
         Self {
-            wood: 0, copper: 0, iron: 0, gold: 0, oil: 0,
-            wood_cap: 500, copper_cap: 500, iron_cap: 500, gold_cap: 500, oil_cap: 500,
+            amounts: [0; ResourceType::COUNT],
+            caps: [500; ResourceType::COUNT],
             last_total: 0,
         }
     }
@@ -247,99 +450,55 @@ impl Default for StorageInventory {
 
 impl StorageInventory {
     pub fn total(&self) -> u32 {
-        self.wood + self.copper + self.iron + self.gold + self.oil
+        self.amounts.iter().sum()
     }
 
     pub fn total_capacity(&self) -> u32 {
-        self.wood_cap + self.copper_cap + self.iron_cap + self.gold_cap + self.oil_cap
+        self.caps.iter().sum()
     }
 
-    /// Returns the capacity limit for a specific resource type.
     pub fn cap_for(&self, rt: ResourceType) -> u32 {
-        match rt {
-            ResourceType::Wood => self.wood_cap,
-            ResourceType::Copper => self.copper_cap,
-            ResourceType::Iron => self.iron_cap,
-            ResourceType::Gold => self.gold_cap,
-            ResourceType::Oil => self.oil_cap,
-        }
+        self.caps[rt.index()]
     }
 
-    /// Whether this storage accepts the given resource type at all.
     pub fn accepts(&self, rt: ResourceType) -> bool {
-        self.cap_for(rt) > 0
+        self.caps[rt.index()] > 0
     }
 
-    /// Remaining capacity for the total across all resources.
     pub fn remaining_capacity(&self) -> u32 {
-        // Sum of per-resource remaining
-        self.remaining_capacity_for(ResourceType::Wood)
-            + self.remaining_capacity_for(ResourceType::Copper)
-            + self.remaining_capacity_for(ResourceType::Iron)
-            + self.remaining_capacity_for(ResourceType::Gold)
-            + self.remaining_capacity_for(ResourceType::Oil)
+        ResourceType::ALL.iter().map(|rt| self.remaining_capacity_for(*rt)).sum()
     }
 
-    /// Remaining capacity for a specific resource type.
     pub fn remaining_capacity_for(&self, rt: ResourceType) -> u32 {
-        self.cap_for(rt).saturating_sub(self.get(rt))
+        self.caps[rt.index()].saturating_sub(self.amounts[rt.index()])
     }
 
     pub fn get(&self, rt: ResourceType) -> u32 {
-        match rt {
-            ResourceType::Wood => self.wood,
-            ResourceType::Copper => self.copper,
-            ResourceType::Iron => self.iron,
-            ResourceType::Gold => self.gold,
-            ResourceType::Oil => self.oil,
-        }
+        self.amounts[rt.index()]
     }
 
-    /// Set capacity for a specific resource type.
     pub fn set_cap(&mut self, rt: ResourceType, cap: u32) {
-        match rt {
-            ResourceType::Wood => self.wood_cap = cap,
-            ResourceType::Copper => self.copper_cap = cap,
-            ResourceType::Iron => self.iron_cap = cap,
-            ResourceType::Gold => self.gold_cap = cap,
-            ResourceType::Oil => self.oil_cap = cap,
+        self.caps[rt.index()] = cap;
+    }
+
+    pub fn scale_caps(&mut self, factor: f32) {
+        for cap in &mut self.caps {
+            if *cap > 0 {
+                *cap = (*cap as f32 * factor) as u32;
+            }
         }
     }
 
-    /// Multiply all non-zero capacities by a factor.
-    pub fn scale_caps(&mut self, factor: f32) {
-        if self.wood_cap > 0 { self.wood_cap = (self.wood_cap as f32 * factor) as u32; }
-        if self.copper_cap > 0 { self.copper_cap = (self.copper_cap as f32 * factor) as u32; }
-        if self.iron_cap > 0 { self.iron_cap = (self.iron_cap as f32 * factor) as u32; }
-        if self.gold_cap > 0 { self.gold_cap = (self.gold_cap as f32 * factor) as u32; }
-        if self.oil_cap > 0 { self.oil_cap = (self.oil_cap as f32 * factor) as u32; }
-    }
-
-    /// Add resources up to per-resource capacity. Returns amount actually stored.
     pub fn add_capped(&mut self, rt: ResourceType, amount: u32) -> u32 {
         let can_fit = self.remaining_capacity_for(rt).min(amount);
-        if can_fit == 0 {
-            return 0;
-        }
-        match rt {
-            ResourceType::Wood => self.wood += can_fit,
-            ResourceType::Copper => self.copper += can_fit,
-            ResourceType::Iron => self.iron += can_fit,
-            ResourceType::Gold => self.gold += can_fit,
-            ResourceType::Oil => self.oil += can_fit,
+        if can_fit > 0 {
+            self.amounts[rt.index()] += can_fit;
         }
         can_fit
     }
 
-    /// Returns the list of accepted resource types (those with cap > 0).
     pub fn accepted_types(&self) -> Vec<ResourceType> {
-        let mut types = Vec::new();
-        if self.wood_cap > 0 { types.push(ResourceType::Wood); }
-        if self.copper_cap > 0 { types.push(ResourceType::Copper); }
-        if self.iron_cap > 0 { types.push(ResourceType::Iron); }
-        if self.gold_cap > 0 { types.push(ResourceType::Gold); }
-        if self.oil_cap > 0 { types.push(ResourceType::Oil); }
-        types
+        ResourceType::ALL.iter().filter(|rt| self.caps[rt.index()] > 0).copied().collect()
     }
 }
 
@@ -454,36 +613,20 @@ pub struct PendingCarriedDrains {
 /// Queued request to drain resources from workers' carried amounts.
 pub struct SpendFromCarried {
     pub faction: Faction,
-    pub wood: u32,
-    pub copper: u32,
-    pub iron: u32,
-    pub gold: u32,
-    pub oil: u32,
+    pub amounts: [u32; ResourceType::COUNT],
 }
 
 impl SpendFromCarried {
     pub fn has_deficit(&self) -> bool {
-        self.wood > 0 || self.copper > 0 || self.iron > 0 || self.gold > 0 || self.oil > 0
+        self.amounts.iter().any(|&a| a > 0)
     }
 
     pub fn get(&self, rt: ResourceType) -> u32 {
-        match rt {
-            ResourceType::Wood => self.wood,
-            ResourceType::Copper => self.copper,
-            ResourceType::Iron => self.iron,
-            ResourceType::Gold => self.gold,
-            ResourceType::Oil => self.oil,
-        }
+        self.amounts[rt.index()]
     }
 
     pub fn sub(&mut self, rt: ResourceType, amount: u32) {
-        match rt {
-            ResourceType::Wood => self.wood = self.wood.saturating_sub(amount),
-            ResourceType::Copper => self.copper = self.copper.saturating_sub(amount),
-            ResourceType::Iron => self.iron = self.iron.saturating_sub(amount),
-            ResourceType::Gold => self.gold = self.gold.saturating_sub(amount),
-            ResourceType::Oil => self.oil = self.oil.saturating_sub(amount),
-        }
+        self.amounts[rt.index()] = self.amounts[rt.index()].saturating_sub(amount);
     }
 }
 
@@ -499,85 +642,57 @@ pub struct ResourceNode {
 
 #[derive(Resource, Serialize, Deserialize)]
 pub struct PlayerResources {
-    pub wood: u32,
-    pub copper: u32,
-    pub iron: u32,
-    pub gold: u32,
-    pub oil: u32,
+    pub amounts: [u32; ResourceType::COUNT],
 }
 
 impl Default for PlayerResources {
     fn default() -> Self {
-        Self {
-            wood: 300,
-            copper: 60,
-            iron: 20,
-            gold: 0,
-            oil: 0,
-        }
+        let mut amounts = [0; ResourceType::COUNT];
+        amounts[ResourceType::Wood.index()] = 300;
+        amounts[ResourceType::Copper.index()] = 60;
+        amounts[ResourceType::Iron.index()] = 20;
+        Self { amounts }
     }
 }
 
 impl PlayerResources {
     pub fn empty() -> Self {
-        Self { wood: 0, copper: 0, iron: 0, gold: 0, oil: 0 }
+        Self { amounts: [0; ResourceType::COUNT] }
     }
 
     pub fn add(&mut self, rt: ResourceType, amount: u32) {
-        match rt {
-            ResourceType::Wood => self.wood += amount,
-            ResourceType::Copper => self.copper += amount,
-            ResourceType::Iron => self.iron += amount,
-            ResourceType::Gold => self.gold += amount,
-            ResourceType::Oil => self.oil += amount,
-        }
+        self.amounts[rt.index()] += amount;
     }
 
     pub fn get(&self, rt: ResourceType) -> u32 {
-        match rt {
-            ResourceType::Wood => self.wood,
-            ResourceType::Copper => self.copper,
-            ResourceType::Iron => self.iron,
-            ResourceType::Gold => self.gold,
-            ResourceType::Oil => self.oil,
-        }
+        self.amounts[rt.index()]
     }
 
     pub fn can_afford(&self, wood: u32, copper: u32, iron: u32, gold: u32, oil: u32) -> bool {
-        self.wood >= wood
-            && self.copper >= copper
-            && self.iron >= iron
-            && self.gold >= gold
-            && self.oil >= oil
+        let costs = [wood, copper, iron, gold, oil];
+        self.amounts.iter().zip(costs.iter()).all(|(have, need)| have >= need)
     }
 
     pub fn subtract(&mut self, wood: u32, copper: u32, iron: u32, gold: u32, oil: u32) {
-        self.wood -= wood;
-        self.copper -= copper;
-        self.iron -= iron;
-        self.gold -= gold;
-        self.oil -= oil;
+        let costs = [wood, copper, iron, gold, oil];
+        for (amount, cost) in self.amounts.iter_mut().zip(costs.iter()) {
+            *amount -= cost;
+        }
     }
 }
 
 #[derive(Resource)]
 pub struct LastPlayerResources {
-    pub wood: u32,
-    pub copper: u32,
-    pub iron: u32,
-    pub gold: u32,
-    pub oil: u32,
+    pub amounts: [u32; ResourceType::COUNT],
 }
 
 impl Default for LastPlayerResources {
     fn default() -> Self {
-        Self {
-            wood: 300,
-            copper: 60,
-            iron: 20,
-            gold: 0,
-            oil: 0,
-        }
+        let mut amounts = [0; ResourceType::COUNT];
+        amounts[ResourceType::Wood.index()] = 300;
+        amounts[ResourceType::Copper.index()] = 60;
+        amounts[ResourceType::Iron.index()] = 20;
+        Self { amounts }
     }
 }
 
@@ -747,12 +862,12 @@ pub struct TeamConfig {
 
 impl Default for TeamConfig {
     fn default() -> Self {
-        // Default: 2v2 — P1+P2 (team 0) vs P3+P4 (team 1)
+        // Default: FFA — each faction on its own team
         let mut teams = std::collections::HashMap::new();
         teams.insert(Faction::Player1, 0);
-        teams.insert(Faction::Player2, 0);
-        teams.insert(Faction::Player3, 1);
-        teams.insert(Faction::Player4, 1);
+        teams.insert(Faction::Player2, 1);
+        teams.insert(Faction::Player3, 2);
+        teams.insert(Faction::Player4, 3);
         Self { teams }
     }
 }
@@ -1691,6 +1806,42 @@ pub struct UiSlideIn {
     pub timer: Timer,
 }
 
+/// Scales a UI node in from a start scale to 1.0 with optional elastic overshoot.
+#[derive(Component)]
+pub struct UiScaleIn {
+    pub from: f32,
+    pub timer: Timer,
+    pub elastic: bool,
+}
+
+/// Expands a separator line from zero width to full width.
+#[derive(Component)]
+pub struct UiLineExpand {
+    pub target_width: f32,
+    pub timer: Timer,
+}
+
+/// Floating ambient particle on the menu background.
+#[derive(Component)]
+pub struct MenuParticle {
+    pub velocity: Vec2,
+    pub base_alpha: f32,
+    pub phase: f32,
+}
+
+/// Shimmer effect on title text — cycles hue/brightness.
+#[derive(Component)]
+pub struct TitleShimmer {
+    pub phase_offset: f32,
+}
+
+/// Pulsing glow border on focused/hovered elements.
+#[derive(Component)]
+pub struct UiGlowPulse {
+    pub color: Color,
+    pub intensity: f32,
+}
+
 /// Queue count badge on a train button.
 #[derive(Component)]
 pub struct TrainButtonQueueBadge(pub EntityKind);
@@ -1743,3 +1894,28 @@ pub struct AttentionIconAssets {
     pub attacking: Handle<Image>,
     pub building: Handle<Image>,
 }
+
+// ── Text Input ──
+
+#[derive(Component)]
+pub struct TextInputField {
+    pub value: String,
+    pub cursor_pos: usize,
+    pub max_len: usize,
+}
+
+#[derive(Component)]
+pub struct TextInputFocused;
+
+#[derive(Component)]
+pub struct TextInputCursor;
+
+// ── Ally/Enemy Toggle ──
+
+#[derive(Component)]
+pub struct AllyToggleButton {
+    pub ai_index: usize,
+}
+
+#[derive(Component)]
+pub struct RandomNameButton;

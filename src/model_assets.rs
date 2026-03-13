@@ -248,43 +248,26 @@ fn load_building_model_assets_eager(asset_server: &AssetServer) -> BuildingModel
         }
     }
 
-    let mut calibration = HashMap::new();
-    calibration.insert(EntityKind::Base, BuildingModelCalibration {
-        scale: 3.0, y_offset: 0.0, building_height: 4.0,
-    });
-    calibration.insert(EntityKind::Barracks, BuildingModelCalibration {
-        scale: 3.0, y_offset: 0.0, building_height: 7.0,
-    });
-    calibration.insert(EntityKind::Workshop, BuildingModelCalibration {
-        scale: 3.0, y_offset: 0.0, building_height: 7.0,
-    });
-    calibration.insert(EntityKind::Tower, BuildingModelCalibration {
-        scale: 3.0, y_offset: 0.0, building_height: 12.0,
-    });
-    calibration.insert(EntityKind::Storage, BuildingModelCalibration {
-        scale: 3.0, y_offset: 0.0, building_height: 5.0,
-    });
-    calibration.insert(EntityKind::MageTower, BuildingModelCalibration {
-        scale: 3.0, y_offset: 0.0, building_height: 10.0,
-    });
-    calibration.insert(EntityKind::Temple, BuildingModelCalibration {
-        scale: 3.0, y_offset: 0.0, building_height: 8.0,
-    });
-    calibration.insert(EntityKind::Stable, BuildingModelCalibration {
-        scale: 3.0, y_offset: 0.0, building_height: 7.0,
-    });
-    calibration.insert(EntityKind::SiegeWorks, BuildingModelCalibration {
-        scale: 3.0, y_offset: 0.0, building_height: 7.0,
-    });
-    calibration.insert(EntityKind::Sawmill, BuildingModelCalibration {
-        scale: 2.5, y_offset: 0.0, building_height: 6.0,
-    });
-    calibration.insert(EntityKind::Mine, BuildingModelCalibration {
-        scale: 3.0, y_offset: 0.0, building_height: 4.0,
-    });
-    calibration.insert(EntityKind::OilRig, BuildingModelCalibration {
-        scale: 2.5, y_offset: 0.0, building_height: 5.0,
-    });
+    // (kind, scale, y_offset, building_height)
+    let calibration_data: &[(EntityKind, f32, f32, f32)] = &[
+        (EntityKind::Base,       3.0, 0.0,  4.0),
+        (EntityKind::Barracks,   3.0, 0.0,  7.0),
+        (EntityKind::Workshop,   3.0, 0.0,  7.0),
+        (EntityKind::Tower,      3.0, 0.0, 12.0),
+        (EntityKind::Storage,    3.0, 0.0,  5.0),
+        (EntityKind::MageTower,  3.0, 0.0, 10.0),
+        (EntityKind::Temple,     3.0, 0.0,  8.0),
+        (EntityKind::Stable,     3.0, 0.0,  7.0),
+        (EntityKind::SiegeWorks, 3.0, 0.0,  7.0),
+        (EntityKind::Sawmill,    2.5, 0.0,  6.0),
+        (EntityKind::Mine,       3.0, 0.0,  4.0),
+        (EntityKind::OilRig,     2.5, 0.0,  5.0),
+    ];
+    let calibration: HashMap<_, _> = calibration_data.iter()
+        .map(|&(kind, scale, y_offset, building_height)| {
+            (kind, BuildingModelCalibration { scale, y_offset, building_height })
+        })
+        .collect();
 
     BuildingModelAssets { scenes, calibration }
 }
@@ -333,50 +316,30 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
         scenes.insert(*kind, handle);
     }
 
-    let mut calibration = HashMap::new();
-
-    // Player units
-    calibration.insert(EntityKind::Worker, CharacterModelCalibration {
-        scale: 0.3, y_offset: -0.8, facing_rotation: 0.0,
-    });
-    calibration.insert(EntityKind::Soldier, CharacterModelCalibration {
-        scale: 0.35, y_offset: -0.9, facing_rotation: 0.0,
-    });
-    calibration.insert(EntityKind::Archer, CharacterModelCalibration {
-        scale: 0.3, y_offset: -0.75, facing_rotation: 0.0,
-    });
-    calibration.insert(EntityKind::Tank, CharacterModelCalibration {
-        scale: 0.42, y_offset: -1.25, facing_rotation: 0.0,
-    });
-    calibration.insert(EntityKind::Knight, CharacterModelCalibration {
-        scale: 0.4, y_offset: -1.2, facing_rotation: 0.0,
-    });
-    calibration.insert(EntityKind::Mage, CharacterModelCalibration {
-        scale: 0.3, y_offset: -0.8, facing_rotation: 0.0,
-    });
-    calibration.insert(EntityKind::Priest, CharacterModelCalibration {
-        scale: 0.3, y_offset: -0.8, facing_rotation: 0.0,
-    });
-    calibration.insert(EntityKind::Cavalry, CharacterModelCalibration {
-        scale: 0.35, y_offset: -1.1, facing_rotation: 0.0,
-    });
-    // Mobs
-    calibration.insert(EntityKind::Goblin, CharacterModelCalibration {
-        scale: 0.28, y_offset: -0.65, facing_rotation: 0.0,
-    });
-    calibration.insert(EntityKind::Skeleton, CharacterModelCalibration {
-        scale: 0.3, y_offset: -0.78, facing_rotation: 0.0,
-    });
-    calibration.insert(EntityKind::Orc, CharacterModelCalibration {
-        scale: 0.38, y_offset: -1.05, facing_rotation: 0.0,
-    });
-    calibration.insert(EntityKind::Demon, CharacterModelCalibration {
-        scale: 0.42, y_offset: -1.15, facing_rotation: 0.0,
-    });
-    // Summons
-    calibration.insert(EntityKind::SkeletonMinion, CharacterModelCalibration {
-        scale: 0.28, y_offset: -0.7, facing_rotation: 0.0,
-    });
+    // (kind, scale, y_offset, facing_rotation)
+    let calibration_data: &[(EntityKind, f32, f32, f32)] = &[
+        // Player units
+        (EntityKind::Worker,          0.3,  -0.8,  0.0),
+        (EntityKind::Soldier,         0.35, -0.9,  0.0),
+        (EntityKind::Archer,          0.3,  -0.75, 0.0),
+        (EntityKind::Tank,            0.42, -1.25, 0.0),
+        (EntityKind::Knight,          0.4,  -1.2,  0.0),
+        (EntityKind::Mage,            0.3,  -0.8,  0.0),
+        (EntityKind::Priest,          0.3,  -0.8,  0.0),
+        (EntityKind::Cavalry,         0.35, -1.1,  0.0),
+        // Mobs
+        (EntityKind::Goblin,          0.28, -0.65, 0.0),
+        (EntityKind::Skeleton,        0.3,  -0.78, 0.0),
+        (EntityKind::Orc,             0.38, -1.05, 0.0),
+        (EntityKind::Demon,           0.42, -1.15, 0.0),
+        // Summons
+        (EntityKind::SkeletonMinion,  0.28, -0.7,  0.0),
+    ];
+    let calibration: HashMap<_, _> = calibration_data.iter()
+        .map(|&(kind, scale, y_offset, facing_rotation)| {
+            (kind, CharacterModelCalibration { scale, y_offset, facing_rotation })
+        })
+        .collect();
 
     UnitModelAssets { scenes, calibration }
 }

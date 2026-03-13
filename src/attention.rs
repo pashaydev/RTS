@@ -18,7 +18,8 @@ impl Plugin for AttentionPlugin {
                 cleanup_orphaned_icons,
                 update_worker_overlays,
                 position_worker_overlays,
-            ),
+            )
+                .run_if(in_state(AppState::InGame)),
         );
     }
 }
@@ -298,10 +299,12 @@ fn position_overlays(
     >,
     mut res_popups: Query<(&ResourcePopup, &mut Node, &mut Visibility), (Without<DamagePopup>, Without<AttentionIcon>)>,
     transforms: Query<&Transform>,
+    ui_scale: Res<UiScale>,
 ) {
     let Ok((camera, cam_gt)) = camera_q.single() else {
         return;
     };
+    let scale = ui_scale.0;
 
     // Position damage popups
     for (popup, mut node, mut vis) in &mut popups {
@@ -312,8 +315,8 @@ fn position_overlays(
                 .map(|f| f.get_visible(popup.world_pos.x, popup.world_pos.z) > 0.2)
                 .unwrap_or(true);
             if fog_visible {
-                node.left = Val::Px(vp.x + popup.offset_x);
-                node.top = Val::Px(vp.y - rise);
+                node.left = Val::Px((vp.x + popup.offset_x) / scale);
+                node.top = Val::Px((vp.y - rise) / scale);
                 *vis = Visibility::Inherited;
             } else {
                 *vis = Visibility::Hidden;
@@ -332,8 +335,8 @@ fn position_overlays(
                 .map(|f| f.get_visible(popup.world_pos.x, popup.world_pos.z) > 0.2)
                 .unwrap_or(true);
             if fog_visible {
-                node.left = Val::Px(vp.x - 15.0);
-                node.top = Val::Px(vp.y - rise);
+                node.left = Val::Px((vp.x - 15.0) / scale);
+                node.top = Val::Px((vp.y - rise) / scale);
                 *vis = Visibility::Inherited;
             } else {
                 *vis = Visibility::Hidden;
@@ -377,8 +380,8 @@ fn position_overlays(
 
             node.width = Val::Px(size);
             node.height = Val::Px(size);
-            node.left = Val::Px(vp.x - size * 0.5);
-            node.top = Val::Px(vp.y - size * 0.5 + bob);
+            node.left = Val::Px((vp.x - size * 0.5) / scale);
+            node.top = Val::Px((vp.y - size * 0.5 + bob) / scale);
             *vis = Visibility::Inherited;
         } else {
             *vis = Visibility::Hidden;
@@ -519,10 +522,12 @@ fn position_worker_overlays(
     active_player: Res<ActivePlayer>,
     building_q: Query<(&Transform, &Faction), With<Building>>,
     mut overlays: Query<(&WorkerOverlay, &mut Node, &mut Visibility)>,
+    ui_scale: Res<UiScale>,
 ) {
     let Ok((camera, cam_gt)) = camera_q.single() else {
         return;
     };
+    let scale = ui_scale.0;
 
     for (overlay, mut node, mut vis) in &mut overlays {
         let Ok((building_tf, faction)) = building_q.get(overlay.building) else {
@@ -552,8 +557,8 @@ fn position_worker_overlays(
         if let Ok(vp) = camera.world_to_viewport(cam_gt, world_pos) {
             // Center the overlay horizontally above the building
             let estimated_width = 120.0; // approximate, will be refined by layout
-            node.left = Val::Px(vp.x - estimated_width * 0.5);
-            node.top = Val::Px(vp.y - 20.0);
+            node.left = Val::Px((vp.x - estimated_width * 0.5) / scale);
+            node.top = Val::Px((vp.y - 20.0) / scale);
             *vis = Visibility::Inherited;
         } else {
             *vis = Visibility::Hidden;

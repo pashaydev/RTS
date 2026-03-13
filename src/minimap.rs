@@ -36,7 +36,7 @@ pub struct MinimapPlugin;
 impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MinimapInteraction>()
-            .add_systems(PostStartup, setup_minimap)
+            .add_systems(OnEnter(AppState::InGame), setup_minimap.after(crate::ground::spawn_ground).after(crate::ui::spawn_hud))
             .add_systems(
                 Update,
                 (
@@ -45,7 +45,8 @@ impl Plugin for MinimapPlugin {
                     update_minimap_texture,
                 )
                     .chain()
-                    .in_set(MinimapSet),
+                    .in_set(MinimapSet)
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }

@@ -43,18 +43,7 @@ pub fn update_group_hotkeys_widget(
         return;
     }
 
-    // Find content entity
-    let mut content_entity = None;
-    for (widget, widget_children) in &widget_q {
-        if widget.id == WidgetId::GroupHotkeys {
-            for wchild in widget_children.iter() {
-                if content_q.get(wchild).is_ok() {
-                    content_entity = Some(wchild);
-                }
-            }
-        }
-    }
-    let Some(content) = content_entity else { return; };
+    let Some(content) = super::widget_framework::find_widget_content(WidgetId::GroupHotkeys, &widget_q, &content_q) else { return; };
 
     // Clear existing
     for entity in &existing {
@@ -110,7 +99,7 @@ pub fn update_group_hotkeys_widget(
         let num = commands
             .spawn((
                 Text::new(format!("{}", i + 1)),
-                TextFont { font_size: 10.0, ..default() },
+                TextFont { font_size: theme::FONT_SMALL, ..default() },
                 TextColor(num_color),
             ))
             .id();
@@ -146,7 +135,7 @@ pub fn update_group_hotkeys_widget(
             let count_text = commands
                 .spawn((
                     Text::new(format!("{}", alive.len())),
-                    TextFont { font_size: 8.0, ..default() },
+                    TextFont { font_size: theme::FONT_TINY, ..default() },
                     TextColor(theme::TEXT_SECONDARY),
                 ))
                 .id();

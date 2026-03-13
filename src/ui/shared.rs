@@ -53,6 +53,38 @@ pub fn spawn_hp_bar(commands: &mut Commands, parent: Entity, tracked_entity: Ent
     commands.entity(bg).add_child(fill);
 }
 
+/// Spawn a section divider: a label above a horizontal separator line.
+pub fn spawn_section_divider(commands: &mut Commands, parent: Entity, label: &str) {
+    let section = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(16.0), Val::Px(8.0)),
+            ..default()
+        })
+        .with_children(|p| {
+            p.spawn((
+                Text::new(label),
+                TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                TextColor(theme::TEXT_SECONDARY),
+                Node {
+                    margin: UiRect::bottom(Val::Px(4.0)),
+                    ..default()
+                },
+            ));
+            p.spawn((
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Px(1.0),
+                    ..default()
+                },
+                BackgroundColor(theme::SEPARATOR),
+            ));
+        })
+        .id();
+    commands.entity(parent).add_child(section);
+}
+
 pub fn format_cost(cost: &crate::blueprints::ResourceCost) -> String {
     let mut parts = Vec::new();
     if cost.wood > 0 { parts.push(format!("W:{}", cost.wood)); }

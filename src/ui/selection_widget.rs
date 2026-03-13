@@ -105,7 +105,7 @@ pub fn rebuild_selection_panel(
             for (kind, entities) in &unit_groups {
                 let header = commands.spawn((
                     Text::new(format!("{} ({})", kind.display_name(), entities.len())),
-                    TextFont { font_size: 10.0, ..default() },
+                    TextFont { font_size: theme::FONT_SMALL, ..default() },
                     TextColor(theme::TEXT_SECONDARY),
                     Node { margin: UiRect::bottom(Val::Px(1.0)), ..default() },
                 )).id();
@@ -133,7 +133,7 @@ pub fn rebuild_selection_panel(
             for (kind, entities) in &building_groups {
                 let header = commands.spawn((
                     Text::new(format!("{} ({})", kind.display_name(), entities.len())),
-                    TextFont { font_size: 10.0, ..default() },
+                    TextFont { font_size: theme::FONT_SMALL, ..default() },
                     TextColor(theme::TEXT_SECONDARY),
                     Node { margin: UiRect::bottom(Val::Px(1.0)), ..default() },
                 )).id();
@@ -203,7 +203,7 @@ pub fn rebuild_selection_panel(
             spawn_friendly_detail_card(&mut commands, panel_entity, inspected_entity, *kind, health, dmg, rng, spd, &icons);
             let label = commands.spawn((
                 Text::new(relationship),
-                TextFont { font_size: 11.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(relationship_color),
             )).id();
             commands.entity(panel_entity).add_child(label);
@@ -218,7 +218,7 @@ pub fn rebuild_selection_panel(
             spawn_building_detail_card(&mut commands, panel_entity, inspected_entity, *kind, *state, health, &icons);
             let label = commands.spawn((
                 Text::new(relationship),
-                TextFont { font_size: 11.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(relationship_color),
             )).id();
             commands.entity(panel_entity).add_child(label);
@@ -290,7 +290,7 @@ pub fn spawn_friendly_detail_card(
     let name = commands
         .spawn((
             Text::new(kind.display_name()),
-            TextFont { font_size: 15.0, ..default() },
+            TextFont { font_size: theme::FONT_LARGE, ..default() },
             TextColor(theme::TEXT_PRIMARY),
         ))
         .id();
@@ -301,7 +301,7 @@ pub fn spawn_friendly_detail_card(
     let hp_text = commands
         .spawn((
             Text::new(format!("{:.0}/{:.0}", health.current, health.max)),
-            TextFont { font_size: 10.0, ..default() },
+            TextFont { font_size: theme::FONT_SMALL, ..default() },
             TextColor(theme::TEXT_SECONDARY),
         ))
         .id();
@@ -325,7 +325,7 @@ pub fn spawn_friendly_detail_card(
         let stat = commands
             .spawn((
                 Text::new(format!("{}: {}", label, value)),
-                TextFont { font_size: 11.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(*color),
             ))
             .id();
@@ -407,7 +407,7 @@ pub fn spawn_building_detail_card(
     let name = commands
         .spawn((
             Text::new(format!("{}{}", kind.display_name(), state_str)),
-            TextFont { font_size: 15.0, ..default() },
+            TextFont { font_size: theme::FONT_LARGE, ..default() },
             TextColor(name_color),
         ))
         .id();
@@ -488,7 +488,7 @@ fn spawn_enemy_detail_card(
     let name = commands
         .spawn((
             Text::new(name_str),
-            TextFont { font_size: 15.0, ..default() },
+            TextFont { font_size: theme::FONT_LARGE, ..default() },
             TextColor(theme::WARNING),
         ))
         .id();
@@ -499,7 +499,7 @@ fn spawn_enemy_detail_card(
     let hp_text = commands
         .spawn((
             Text::new(format!("{:.0}/{:.0}", health.current, health.max)),
-            TextFont { font_size: 10.0, ..default() },
+            TextFont { font_size: theme::FONT_SMALL, ..default() },
             TextColor(theme::TEXT_SECONDARY),
         ))
         .id();
@@ -524,7 +524,7 @@ fn spawn_enemy_detail_card(
         let stat = commands
             .spawn((
                 Text::new(format!("{}: {}", label, value)),
-                TextFont { font_size: 11.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(*color),
             ))
             .id();

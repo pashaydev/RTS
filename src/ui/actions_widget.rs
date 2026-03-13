@@ -128,17 +128,17 @@ fn spawn_units_action_bar(
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(4.0),
                 padding: UiRect::all(Val::Px(10.0)),
-                border_radius: BorderRadius::all(Val::Px(8.0)),
+                // border_radius: BorderRadius::all(Val::Px(8.0)),
                 ..default()
             },
-            BackgroundColor(theme::BG_PANEL),
-            BoxShadow::new(
-                Color::srgba(0.0, 0.0, 0.0, 0.4),
-                Val::Px(0.0),
-                Val::Px(3.0),
-                Val::Px(0.0),
-                Val::Px(8.0),
-            ),
+            BackgroundColor(theme::BG_TRANSPARENT),
+            // BoxShadow::new(
+            //     Color::srgba(0.0, 0.0, 0.0, 0.4),
+            //     Val::Px(0.0),
+            //     Val::Px(3.0),
+            //     Val::Px(0.0),
+            //     Val::Px(8.0),
+            // ),
             Interaction::None,
         ))
         .id();
@@ -156,7 +156,7 @@ fn spawn_units_action_bar(
     let label = commands
         .spawn((
             Text::new(label_text),
-            TextFont { font_size: 15.0, ..default() },
+            TextFont { font_size: theme::FONT_LARGE, ..default() },
             TextColor(theme::TEXT_PRIMARY),
         ))
         .id();
@@ -174,7 +174,7 @@ fn spawn_units_action_bar(
                         let carry_label = commands
                             .spawn((
                                 Text::new(carry_text),
-                                TextFont { font_size: 13.0, ..default() },
+                                TextFont { font_size: theme::FONT_MEDIUM, ..default() },
                                 TextColor(theme::WARNING),
                             ))
                             .id();
@@ -229,7 +229,7 @@ fn spawn_units_action_bar(
                         let state_label = commands
                             .spawn((
                                 Text::new(state_text),
-                                TextFont { font_size: 12.0, ..default() },
+                                TextFont { font_size: theme::FONT_BODY, ..default() },
                                 TextColor(theme::TEXT_SECONDARY),
                             ))
                             .id();
@@ -300,7 +300,7 @@ fn spawn_building_action_bar(
     let name_child = commands
         .spawn((
             Text::new(kind.display_name()),
-            TextFont { font_size: 15.0, ..default() },
+            TextFont { font_size: theme::FONT_LARGE, ..default() },
             TextColor(theme::TEXT_PRIMARY),
         ))
         .id();
@@ -318,7 +318,7 @@ fn spawn_building_action_bar(
         .with_children(|pill| {
             pill.spawn((
                 Text::new(format!("Lv {}", level)),
-                TextFont { font_size: 11.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(theme::TEXT_SECONDARY),
             ));
         })
@@ -375,7 +375,7 @@ fn spawn_building_action_bar(
         let hp_text = commands
             .spawn((
                 Text::new(format!("{}/{}", hp.current as u32, hp.max as u32)),
-                TextFont { font_size: 10.0, ..default() },
+                TextFont { font_size: theme::FONT_SMALL, ..default() },
                 TextColor(theme::TEXT_SECONDARY),
             ))
             .id();
@@ -411,27 +411,22 @@ fn spawn_building_action_bar(
         let cap_text = commands
             .spawn((
                 Text::new(format!("Storage: {}/{}", total, total_cap)),
-                TextFont { font_size: 11.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(capacity_color),
             ))
             .id();
         commands.entity(storage_row).add_child(cap_text);
 
         // Show per-resource amounts with their individual caps
-        for (rt, amount) in [
-            (ResourceType::Wood, inv.wood),
-            (ResourceType::Copper, inv.copper),
-            (ResourceType::Iron, inv.iron),
-            (ResourceType::Gold, inv.gold),
-            (ResourceType::Oil, inv.oil),
-        ] {
+        for rt in ResourceType::ALL {
+            let amount = inv.amounts[rt.index()];
             let cap = inv.cap_for(rt);
             if cap == 0 { continue; } // skip resource types this building doesn't accept
             let color = rt.carry_color();
             let entry = commands
                 .spawn((
                     Text::new(format!("{}: {}/{}", rt.display_name(), amount, cap)),
-                    TextFont { font_size: 10.0, ..default() },
+                    TextFont { font_size: theme::FONT_SMALL, ..default() },
                     TextColor(color),
                 ))
                 .id();
@@ -458,7 +453,7 @@ fn spawn_building_action_bar(
         let harvest_label = commands
             .spawn((
                 Text::new(format!("Harvesting: {} ({:.1}/s)", rt_names.join(", "), effective_rate)),
-                TextFont { font_size: 11.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(theme::TEXT_SECONDARY),
             ))
             .id();
@@ -478,7 +473,7 @@ fn spawn_building_action_bar(
             let workers_label = commands
                 .spawn((
                     Text::new(format!("Workers: {}/{}", worker_count, proc.max_workers)),
-                    TextFont { font_size: 11.0, ..default() },
+                    TextFont { font_size: theme::FONT_BODY, ..default() },
                     TextColor(theme::TEXT_SECONDARY),
                 ))
                 .id();
@@ -536,7 +531,7 @@ fn spawn_building_action_bar(
                     .with_children(|btn| {
                         btn.spawn((
                             Text::new("+ Assign"),
-                            TextFont { font_size: 10.0, ..default() },
+                            TextFont { font_size: theme::FONT_SMALL, ..default() },
                             TextColor(theme::ACCENT),
                         ));
                     })
@@ -565,7 +560,7 @@ fn spawn_building_action_bar(
                     .with_children(|btn| {
                         btn.spawn((
                             Text::new("- Unassign"),
-                            TextFont { font_size: 10.0, ..default() },
+                            TextFont { font_size: theme::FONT_SMALL, ..default() },
                             TextColor(theme::DESTRUCTIVE),
                         ));
                     })
@@ -576,7 +571,7 @@ fn spawn_building_action_bar(
             let auto_badge = commands
                 .spawn((
                     Text::new("Automated (no workers needed)"),
-                    TextFont { font_size: 10.0, ..default() },
+                    TextFont { font_size: theme::FONT_SMALL, ..default() },
                     TextColor(theme::ACCENT),
                 ))
                 .id();
@@ -667,12 +662,12 @@ fn spawn_building_action_bar(
                             .with_children(|row| {
                                 row.spawn((
                                     Text::new(format!("Upgrading L{}", target_lvl)),
-                                    TextFont { font_size: 11.0, ..default() },
+                                    TextFont { font_size: theme::FONT_BODY, ..default() },
                                     TextColor(theme::ACCENT),
                                 ));
                                 row.spawn((
                                     Text::new(format!("{:.0}s", remaining)),
-                                    TextFont { font_size: 11.0, ..default() },
+                                    TextFont { font_size: theme::FONT_BODY, ..default() },
                                     TextColor(theme::WARNING),
                                 ));
                             });
@@ -711,7 +706,7 @@ fn spawn_building_action_bar(
                                 });
                                 bar_row.spawn((
                                     Text::new(format!("{}%", (fraction * 100.0) as u32)),
-                                    TextFont { font_size: 10.0, ..default() },
+                                    TextFont { font_size: theme::FONT_SMALL, ..default() },
                                     TextColor(theme::TEXT_SECONDARY),
                                 ));
                             });
@@ -748,12 +743,12 @@ fn spawn_building_action_bar(
                         .with_children(|btn| {
                             btn.spawn((
                                 Text::new(format!("Upgrade L{}", level + 1)),
-                                TextFont { font_size: 12.0, ..default() },
+                                TextFont { font_size: theme::FONT_BODY, ..default() },
                                 TextColor(text_color),
                             ));
                             btn.spawn((
                                 Text::new(cost_str),
-                                TextFont { font_size: 9.0, ..default() },
+                                TextFont { font_size: theme::FONT_CAPTION, ..default() },
                                 TextColor(theme::TEXT_SECONDARY),
                             ));
                         })
@@ -776,7 +771,7 @@ fn spawn_building_action_bar(
                 .with_children(|pill| {
                     pill.spawn((
                         Text::new("MAX"),
-                        TextFont { font_size: 12.0, ..default() },
+                        TextFont { font_size: theme::FONT_BODY, ..default() },
                         TextColor(theme::TEXT_DISABLED),
                     ));
                 })
@@ -812,7 +807,7 @@ fn spawn_building_action_bar(
                 .with_children(|btn| {
                     btn.spawn((
                         Text::new(rally_text),
-                        TextFont { font_size: 12.0, ..default() },
+                        TextFont { font_size: theme::FONT_BODY, ..default() },
                         TextColor(rally_text_color),
                     ));
                 })
@@ -847,7 +842,7 @@ fn spawn_building_action_bar(
             .with_children(|btn| {
                 btn.spawn((
                     Text::new(toggle_text),
-                    TextFont { font_size: 11.0, ..default() },
+                    TextFont { font_size: theme::FONT_BODY, ..default() },
                     TextColor(toggle_color),
                 ));
             })
@@ -894,7 +889,7 @@ fn spawn_building_action_bar(
         .with_children(|btn| {
             btn.spawn((
                 Text::new("Demolish"),
-                TextFont { font_size: 11.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(theme::DESTRUCTIVE),
             ));
         })
@@ -912,7 +907,7 @@ fn spawn_training_queue_ui(
     let header = commands
         .spawn((
             Text::new(format!("Queue ({})", queue.queue.len())),
-            TextFont { font_size: 10.0, ..default() },
+            TextFont { font_size: theme::FONT_SMALL, ..default() },
             TextColor(theme::TEXT_SECONDARY),
             Node { margin: UiRect::bottom(Val::Px(2.0)), ..default() },
         ))
@@ -1002,7 +997,7 @@ fn spawn_training_queue_ui(
 
                 item.spawn((
                     Text::new("X"),
-                    TextFont { font_size: if is_first { 10.0 } else { 8.0 }, ..default() },
+                    TextFont { font_size: if is_first { theme::FONT_SMALL } else { theme::FONT_TINY }, ..default() },
                     TextColor(Color::srgba(0.80, 0.27, 0.27, 0.4)),
                     Node { margin: UiRect::top(Val::Px(1.0)), ..default() },
                 ));
@@ -1047,7 +1042,7 @@ fn spawn_construction_action_bar(
     let name = commands
         .spawn((
             Text::new(format!("Building {}", kind.display_name())),
-            TextFont { font_size: 16.0, ..default() },
+            TextFont { font_size: theme::FONT_LARGE, ..default() },
             TextColor(theme::WARNING),
         ))
         .id();
@@ -1085,7 +1080,7 @@ fn spawn_construction_action_bar(
         let pct = commands
             .spawn((
                 Text::new(pct_text),
-                TextFont { font_size: 12.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(theme::TEXT_SECONDARY),
             ))
             .id();
@@ -1095,7 +1090,7 @@ fn spawn_construction_action_bar(
             .spawn((
                 ConstructionWorkerCountText,
                 Text::new("Waiting for workers..."),
-                TextFont { font_size: 11.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(Color::srgb(0.6, 0.7, 0.9)),
             ))
             .id();
@@ -1118,7 +1113,7 @@ fn spawn_construction_action_bar(
         .with_children(|btn| {
             btn.spawn((
                 Text::new("Cancel"),
-                TextFont { font_size: 12.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(theme::DESTRUCTIVE),
             ));
         })
@@ -1192,7 +1187,7 @@ fn spawn_building_grid(
         let cat_label = commands
             .spawn((
                 Text::new(*cat_name),
-                TextFont { font_size: 10.0, ..default() },
+                TextFont { font_size: theme::FONT_SMALL, ..default() },
                 TextColor(theme::TEXT_SECONDARY),
             ))
             .id();
@@ -1273,7 +1268,7 @@ fn spawn_building_grid(
                     ));
                     btn.spawn((
                         Text::new(kind.display_name()),
-                        TextFont { font_size: 8.0, ..default() },
+                        TextFont { font_size: theme::FONT_TINY, ..default() },
                         TextColor(name_color),
                     ));
                 })
@@ -1358,13 +1353,13 @@ fn spawn_train_button(commands: &mut Commands, parent: Entity, kind: EntityKind,
             });
             btn.spawn((
                 Text::new(label),
-                TextFont { font_size: 12.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(name_color),
             ));
             btn.spawn((
                 TrainCostText { kind },
                 Text::new(cost_str),
-                TextFont { font_size: 10.0, ..default() },
+                TextFont { font_size: theme::FONT_SMALL, ..default() },
                 TextColor(if can_afford { theme::TEXT_SECONDARY } else { theme::DESTRUCTIVE }),
             ));
         })
@@ -1390,35 +1385,4 @@ fn spawn_separator(commands: &mut Commands, parent: Entity) {
         ))
         .id();
     commands.entity(parent).add_child(sep);
-}
-
-fn spawn_cost_entry(
-    parent: &mut ChildSpawnerCommands,
-    icons: &IconAssets,
-    rt: ResourceType,
-    amount: u32,
-    color: Color,
-) {
-    parent
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(1.0),
-            ..default()
-        })
-        .with_children(|entry| {
-            entry.spawn((
-                ImageNode::new(icons.resource_icon(rt)),
-                Node {
-                    width: Val::Px(14.0),
-                    height: Val::Px(14.0),
-                    ..default()
-                },
-            ));
-            entry.spawn((
-                Text::new(format!("{}", amount)),
-                TextFont { font_size: 10.0, ..default() },
-                TextColor(color),
-            ));
-        });
 }

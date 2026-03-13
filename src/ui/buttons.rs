@@ -81,7 +81,7 @@ pub fn handle_train_buttons(
             if let Ok(mut queue) = queues.get_mut(building_entity) {
                 let player_res_mut = all_resources.get_mut(&active_player.0);
                 let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(player_res_mut);
-                let drain = SpendFromCarried { faction: active_player.0, wood: dw, copper: dc, iron: di, gold: dg, oil: do_ };
+                let drain = SpendFromCarried { faction: active_player.0, amounts: [dw, dc, di, dg, do_] };
                 if drain.has_deficit() {
                     pending_drains.drains.push(drain);
                 }
@@ -196,12 +196,12 @@ pub fn handle_demolish_button(
                 .with_children(|panel| {
                     panel.spawn((
                         Text::new("Demolish?"),
-                        TextFont { font_size: 14.0, ..default() },
+                        TextFont { font_size: theme::FONT_MEDIUM, ..default() },
                         TextColor(theme::DESTRUCTIVE),
                     ));
                     panel.spawn((
                         Text::new(refund_str),
-                        TextFont { font_size: 10.0, ..default() },
+                        TextFont { font_size: theme::FONT_SMALL, ..default() },
                         TextColor(theme::TEXT_SECONDARY),
                     ));
                     panel.spawn(Node {
@@ -224,7 +224,7 @@ pub fn handle_demolish_button(
                         .with_children(|btn| {
                             btn.spawn((
                                 Text::new("Yes"),
-                                TextFont { font_size: 12.0, ..default() },
+                                TextFont { font_size: theme::FONT_BODY, ..default() },
                                 TextColor(theme::TEXT_PRIMARY),
                             ));
                         });
@@ -243,7 +243,7 @@ pub fn handle_demolish_button(
                         .with_children(|btn| {
                             btn.spawn((
                                 Text::new("No"),
-                                TextFont { font_size: 12.0, ..default() },
+                                TextFont { font_size: theme::FONT_BODY, ..default() },
                                 TextColor(theme::TEXT_PRIMARY),
                             ));
                         });
@@ -283,11 +283,10 @@ pub fn handle_demolish_confirm(
                 if let Ok(kind) = building_kinds.get(entity) {
                     let bp = registry.get(*kind);
                     let player_res = all_resources.get_mut(&active_player.0);
-                    player_res.wood += bp.cost.wood;
-                    player_res.copper += bp.cost.copper;
-                    player_res.iron += bp.cost.iron;
-                    player_res.gold += bp.cost.gold;
-                    player_res.oil += bp.cost.oil;
+                    let refund = [bp.cost.wood, bp.cost.copper, bp.cost.iron, bp.cost.gold, bp.cost.oil];
+                    for (i, &amt) in refund.iter().enumerate() {
+                        player_res.amounts[i] += amt;
+                    }
                 }
                 commands.entity(entity).try_despawn();
             } else {
@@ -508,11 +507,10 @@ pub fn handle_cancel_train(
                     let removed_kind = queue.queue.remove(idx);
                     let bp = registry.get(removed_kind);
                     let player_res = all_resources.get_mut(&active_player.0);
-                    player_res.wood += bp.cost.wood;
-                    player_res.copper += bp.cost.copper;
-                    player_res.iron += bp.cost.iron;
-                    player_res.gold += bp.cost.gold;
-                    player_res.oil += bp.cost.oil;
+                    let refund = [bp.cost.wood, bp.cost.copper, bp.cost.iron, bp.cost.gold, bp.cost.oil];
+                    for (i, &amt) in refund.iter().enumerate() {
+                        player_res.amounts[i] += amt;
+                    }
                     if idx == 0 {
                         queue.timer = None;
                     }
@@ -857,7 +855,7 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
         if i == 0 {
             tt.spawn((
                 Text::new(*line),
-                TextFont { font_size: 12.0, ..default() },
+                TextFont { font_size: theme::FONT_BODY, ..default() },
                 TextColor(theme::TEXT_PRIMARY),
             ));
             tt.spawn((
@@ -873,13 +871,13 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
         }
 
         let (color, font_size) = if line.starts_with("Not enough") {
-            (theme::DESTRUCTIVE, 10.0)
+            (theme::DESTRUCTIVE, theme::FONT_SMALL)
         } else if line.starts_with("Requires:") {
-            (theme::WARNING, 10.0)
+            (theme::WARNING, theme::FONT_SMALL)
         } else if line.starts_with("Cost:") {
-            (theme::TEXT_SECONDARY, 10.0)
+            (theme::TEXT_SECONDARY, theme::FONT_SMALL)
         } else if line.starts_with("HP:") || line.starts_with("DMG:") {
-            (theme::STAT_DMG, 10.0)
+            (theme::STAT_DMG, theme::FONT_SMALL)
         } else if *line == "Drag & Drop to create" || *line == "Click to train" || *line == "Click to place" {
             tt.spawn((
                 Node {
@@ -890,11 +888,11 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
                 },
                 BackgroundColor(Color::srgba(0.30, 0.30, 0.35, 0.4)),
             ));
-            (Color::srgba(0.45, 0.65, 1.0, 0.7), 9.0)
+            (Color::srgba(0.45, 0.65, 1.0, 0.7), theme::FONT_CAPTION)
         } else if line.starts_with("Build time:") || line.starts_with("Train:") {
-            (theme::TEXT_SECONDARY, 10.0)
+            (theme::TEXT_SECONDARY, theme::FONT_SMALL)
         } else {
-            (Color::srgba(0.65, 0.65, 0.65, 0.9), 10.0)
+            (Color::srgba(0.65, 0.65, 0.65, 0.9), theme::FONT_SMALL)
         };
 
         tt.spawn((

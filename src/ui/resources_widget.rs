@@ -59,7 +59,7 @@ pub fn spawn_resource_content(commands: &mut Commands, parent: Entity, icons: &I
                 ResourceText(rt),
                 Text::new(format!("{:?}: 0", rt)),
                 TextFont {
-                    font_size: 13.0,
+                    font_size: theme::FONT_MEDIUM,
                     ..default()
                 },
                 TextColor(theme::TEXT_PRIMARY),

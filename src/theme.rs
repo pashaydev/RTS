@@ -5,6 +5,7 @@ pub const BG_PANEL: Color = Color::srgba(0.07, 0.07, 0.07, 0.94);
 pub const BG_SURFACE: Color = Color::srgba(0.12, 0.12, 0.12, 0.94);
 pub const BG_ELEVATED: Color = Color::srgba(0.14, 0.14, 0.14, 0.94);
 pub const BG_TRANSPARENT: Color = Color::srgba(0.0, 0.0, 0.0, 0.0);
+pub const BG_MENU: Color = Color::srgb(0.04, 0.04, 0.05);
 
 // ── Text colors ──
 pub const TEXT_PRIMARY: Color = Color::srgb(0.88, 0.88, 0.88);
@@ -65,6 +66,23 @@ pub const ICON_FRAME_BG: Color = Color::srgba(0.16, 0.16, 0.18, 0.95);
 pub const BTN_HOVER_BRIGHT: Color = Color::srgba(0.25, 0.25, 0.25, 0.94);
 pub const BTN_GHOST_HOVER_BG: Color = Color::srgba(0.29, 0.62, 1.0, 0.08);
 pub const BTN_GHOST_PRESS_BG: Color = Color::srgba(0.29, 0.62, 1.0, 0.14);
+
+// ── Input fields ──
+pub const INPUT_BG: Color = BG_SURFACE;
+pub const INPUT_BORDER: Color = BORDER_SUBTLE;
+pub const INPUT_BORDER_FOCUSED: Color = ACCENT;
+
+// ── Font sizes (base design at 720p, scaled globally by UiScale) ──
+pub const FONT_DISPLAY: f32 = 48.0;  // Menu title
+pub const FONT_HEADING: f32 = 28.0;  // Section headers
+pub const FONT_BUTTON: f32 = 18.0;   // Menu buttons, large labels
+pub const FONT_LARGE: f32 = 15.0;    // Popups, unit names
+pub const FONT_MEDIUM: f32 = 13.0;   // Selector labels, resource counts
+pub const FONT_BODY: f32 = 12.0;     // Standard text, tooltips
+pub const FONT_SMALL: f32 = 10.0;    // Widget titles, costs
+pub const FONT_CAPTION: f32 = 9.0;   // Toolbar, queue labels
+pub const FONT_TINY: f32 = 8.0;      // Close buttons, badges
+pub const FONT_MICRO: f32 = 7.0;     // Event log timestamps
 
 // ── Grid overlay ──
 pub const GRID_LINE: Color = Color::srgba(0.29, 0.62, 1.0, 0.15);

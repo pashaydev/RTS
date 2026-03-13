@@ -14,9 +14,11 @@ pub mod notifications;
 pub mod shared;
 
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 
 use crate::components::*;
 use crate::selection::SelectionSet;
+use crate::theme;
 
 use widget_framework::{WidgetRegistry, spawn_widget_frame, WidgetId};
 
@@ -33,14 +35,15 @@ impl Plugin for UiPlugin {
             .init_resource::<group_hotkeys_widget::ControlGroups>()
             .init_resource::<event_log_widget::GameEventLog>()
             .init_resource::<event_log_widget::EventLogRenderState>()
-            .add_systems(Startup, (spawn_hud, widget_framework::spawn_grid_overlay))
+            .add_systems(OnEnter(AppState::InGame), (spawn_hud, widget_framework::spawn_grid_overlay))
             .add_systems(
                 Update,
                 (ApplyDeferred, compute_ui_mode)
                     .chain()
-                    .after(SelectionSet),
+                    .after(SelectionSet)
+                    .run_if(in_state(AppState::InGame)),
             )
-            .add_systems(Update, update_placement_hint)
+            .add_systems(Update, update_placement_hint.run_if(in_state(AppState::InGame)))
             .add_systems(
                 Update,
                 (
@@ -50,15 +53,17 @@ impl Plugin for UiPlugin {
                     buttons::handle_unit_card_click,
                     buttons::clear_stale_inspected,
                 )
-                    .after(compute_ui_mode),
+                    .after(compute_ui_mode)
+                    .run_if(in_state(AppState::InGame)),
             )
-            .add_systems(Update, actions_widget::update_action_bar.after(compute_ui_mode))
+            .add_systems(Update, actions_widget::update_action_bar.after(compute_ui_mode).run_if(in_state(AppState::InGame)))
             .add_systems(
                 Update,
                 (
                     buttons::handle_build_buttons,
                     buttons::handle_train_buttons,
-                ),
+                )
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
@@ -75,17 +80,26 @@ impl Plugin for UiPlugin {
                     buttons::update_training_queue_display,
                     buttons::update_construction_progress_display,
                     buttons::update_train_cost_colors,
-                ),
+                )
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
                 (
                     buttons::update_upgrade_progress_display,
-                    buttons::button_hover_visual,
-                    buttons::animated_button_hover_system,
+                    // button_hover_visual and animated_button_hover_system run always (needed for menu)
                     buttons::action_bar_transition_system,
                     buttons::show_action_tooltips,
                     buttons::cleanup_action_tooltips,
+                )
+                    .run_if(in_state(AppState::InGame)),
+            )
+            // These run in ALL states so menu buttons animate too
+            .add_systems(
+                Update,
+                (
+                    buttons::button_hover_visual,
+                    buttons::animated_button_hover_system,
                 ),
             )
             .add_systems(
@@ -100,9 +114,10 @@ impl Plugin for UiPlugin {
                     widget_framework::handle_widget_resize,
                     widget_framework::update_resize_handle_visuals,
                     widget_framework::toggle_grid_overlay,
-                ),
+                )
+                    .run_if(in_state(AppState::InGame)),
             )
-            .add_systems(Update, (notifications::update_ally_notifications, notifications::handle_notification_click))
+            .add_systems(Update, (notifications::update_ally_notifications, notifications::handle_notification_click).run_if(in_state(AppState::InGame)))
             .add_systems(
                 Update,
                 (
@@ -110,7 +125,8 @@ impl Plugin for UiPlugin {
                     production_queue_widget::handle_queue_row_click,
                     army_overview_widget::update_army_overview,
                     tech_tree_widget::update_tech_tree,
-                ),
+                )
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
@@ -120,15 +136,39 @@ impl Plugin for UiPlugin {
                     group_hotkeys_widget::update_group_hotkeys_widget,
                     group_hotkeys_widget::handle_control_group_keys,
                     group_hotkeys_widget::handle_group_slot_click,
-                ),
+                )
+                    .run_if(in_state(AppState::InGame)),
             )
+            // Animation systems run in ALL states so menu animations work
             .add_systems(
                 Update,
                 (
                     animations::ui_fade_system,
                     animations::ui_slide_system,
+                    animations::ui_scale_in_system,
+                    animations::ui_line_expand_system,
+                    animations::menu_particle_system,
+                    animations::title_shimmer_system,
+                    animations::ui_glow_pulse_system,
                 ),
-            );
+            )
+            // UI scale system runs in ALL states
+            .add_systems(Update, update_ui_scale);
+    }
+}
+
+fn update_ui_scale(
+    graphics: Res<GraphicsSettings>,
+    mut ui_scale: ResMut<UiScale>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    let Ok(window) = windows.single() else { return };
+    let logical_height = window.physical_height() as f32 / window.scale_factor();
+    let base_height = 720.0_f32;
+    let auto = logical_height / base_height;
+    let new_scale = auto * graphics.ui_scale;
+    if (ui_scale.0 - new_scale).abs() > 0.001 {
+        ui_scale.0 = new_scale;
     }
 }
 
@@ -140,7 +180,7 @@ struct UiRoot;
 #[derive(Component)]
 struct PlacementHintLabel;
 
-fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<WidgetRegistry>) {
+pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<WidgetRegistry>) {
     // Root full-screen container for widget grid
     let root = commands
         .spawn((
@@ -236,7 +276,7 @@ fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<Widge
         PlacementHintLabel,
         Text::new(""),
         TextFont {
-            font_size: 18.0,
+            font_size: theme::FONT_BUTTON,
             ..default()
         },
         TextColor(Color::srgba(1.0, 0.3, 0.3, 0.95)),

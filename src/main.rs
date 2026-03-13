@@ -12,6 +12,7 @@ mod fog_material;
 mod hover_material;
 mod ground;
 mod lighting;
+mod menu;
 mod minimap;
 mod mobs;
 mod model_assets;
@@ -29,18 +30,32 @@ use bevy::ecs::error;
 use bevy::prelude::*;
 use bevy_mod_outline::OutlinePlugin;
 
+use components::{AppState, GameSetupConfig, GraphicsSettings};
+
 fn main() {
+    let graphics = GraphicsSettings::load_or_default();
+    let (w, h) = graphics.resolution;
+
     App::new()
         .set_error_handler(error::warn)
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "RTS Prototype".to_string(),
-                resolution: (1280u32, 720u32).into(),
+                resolution: (w, h).into(),
+                mode: if graphics.fullscreen {
+                    bevy::window::WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+                } else {
+                    bevy::window::WindowMode::Windowed
+                },
                 ..default()
             }),
             ..default()
         }))
         .add_plugins(OutlinePlugin)
+        .init_state::<AppState>()
+        .insert_resource(GameSetupConfig::default())
+        .insert_resource(graphics)
+        .add_plugins(menu::MenuPlugin)
         .add_plugins(blueprints::BlueprintPlugin)
         .add_plugins((
             debug::DebugPlugin,

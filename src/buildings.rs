@@ -66,7 +66,8 @@ impl Plugin for BuildingsPlugin {
                     training_queue_system,
                     update_completed_buildings_tracker,
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
@@ -78,7 +79,8 @@ impl Plugin for BuildingsPlugin {
                     level_indicator_system,
                     sync_storage_on_spend,
                     update_storage_piles,
-                ),
+                )
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -421,7 +423,7 @@ fn confirm_placement(
     // Deduct from stored first, queue carried drain for any deficit
     let player_res_mut = all_resources.get_mut(&faction);
     let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(player_res_mut);
-    let drain = SpendFromCarried { faction, wood: dw, copper: dc, iron: di, gold: dg, oil: do_ };
+    let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
     if drain.has_deficit() {
         pending_drains.drains.push(drain);
     }
@@ -514,11 +516,11 @@ fn pending_build_arrival_system(
             // Refund resources and cancel
             let bp = registry.get(kind);
             let res = all_resources.get_mut(&faction);
-            res.wood += bp.cost.wood;
-            res.copper += bp.cost.copper;
-            res.iron += bp.cost.iron;
-            res.gold += bp.cost.gold;
-            res.oil += bp.cost.oil;
+            res.add(ResourceType::Wood, bp.cost.wood);
+            res.add(ResourceType::Copper, bp.cost.copper);
+            res.add(ResourceType::Iron, bp.cost.iron);
+            res.add(ResourceType::Gold, bp.cost.gold);
+            res.add(ResourceType::Oil, bp.cost.oil);
 
             commands.entity(w_entity)
                 .remove::<PendingBuildOrder>()
@@ -563,11 +565,11 @@ fn pending_build_cleanup_system(
         if !matches!(state, UnitState::MovingToPlot(_)) {
             let bp = registry.get(pending.kind);
             let res = all_resources.get_mut(&pending.faction);
-            res.wood += bp.cost.wood;
-            res.copper += bp.cost.copper;
-            res.iron += bp.cost.iron;
-            res.gold += bp.cost.gold;
-            res.oil += bp.cost.oil;
+            res.add(ResourceType::Wood, bp.cost.wood);
+            res.add(ResourceType::Copper, bp.cost.copper);
+            res.add(ResourceType::Iron, bp.cost.iron);
+            res.add(ResourceType::Gold, bp.cost.gold);
+            res.add(ResourceType::Oil, bp.cost.oil);
 
             commands.entity(entity).remove::<PendingBuildOrder>();
         }
@@ -850,7 +852,7 @@ pub fn start_upgrade(
 
     // Deduct from stored first, queue carried drain for deficit
     let (dw, dc, di, dg, do_) = level_data.cost.deduct_with_carried(player_res);
-    let drain = SpendFromCarried { faction, wood: dw, copper: dc, iron: di, gold: dg, oil: do_ };
+    let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
     if drain.has_deficit() {
         pending_drains.drains.push(drain);
     }
@@ -1110,11 +1112,11 @@ fn demolish_system(
             let bp = registry.get(*kind);
             let cost = &bp.cost;
             let res = all_resources.get_mut(faction);
-            res.wood += cost.wood / 2;
-            res.copper += cost.copper / 2;
-            res.iron += cost.iron / 2;
-            res.gold += cost.gold / 2;
-            res.oil += cost.oil / 2;
+            res.add(ResourceType::Wood, cost.wood / 2);
+            res.add(ResourceType::Copper, cost.copper / 2);
+            res.add(ResourceType::Iron, cost.iron / 2);
+            res.add(ResourceType::Gold, cost.gold / 2);
+            res.add(ResourceType::Oil, cost.oil / 2);
 
             // Despawn
             commands.entity(entity).despawn();
@@ -1271,26 +1273,21 @@ fn sync_storage_on_spend(
     use std::collections::HashMap;
 
     // Collect per-faction storage totals
-    let mut faction_totals: HashMap<Faction, [u32; 5]> = HashMap::new();
+    let mut faction_totals: HashMap<Faction, [u32; ResourceType::COUNT]> = HashMap::new();
     for (faction, inv) in &storages {
-        let totals = faction_totals.entry(*faction).or_insert([0; 5]);
-        totals[0] += inv.wood;
-        totals[1] += inv.copper;
-        totals[2] += inv.iron;
-        totals[3] += inv.gold;
-        totals[4] += inv.oil;
+        let totals = faction_totals.entry(*faction).or_insert([0; ResourceType::COUNT]);
+        for rt in ResourceType::ALL {
+            totals[rt.index()] += inv.get(rt);
+        }
     }
 
     // For each faction, check if inventories exceed player resources
     for (faction, totals) in &faction_totals {
         let player_res = all_resources.get(faction);
-        let excess = [
-            totals[0].saturating_sub(player_res.wood),
-            totals[1].saturating_sub(player_res.copper),
-            totals[2].saturating_sub(player_res.iron),
-            totals[3].saturating_sub(player_res.gold),
-            totals[4].saturating_sub(player_res.oil),
-        ];
+        let mut excess = [0u32; ResourceType::COUNT];
+        for rt in ResourceType::ALL {
+            excess[rt.index()] = totals[rt.index()].saturating_sub(player_res.get(rt));
+        }
 
         if excess.iter().all(|&e| e == 0) {
             continue;
@@ -1302,25 +1299,12 @@ fn sync_storage_on_spend(
             if f != faction {
                 continue;
             }
-            let drain_wood = remaining[0].min(inv.wood);
-            inv.wood -= drain_wood;
-            remaining[0] -= drain_wood;
-
-            let drain_copper = remaining[1].min(inv.copper);
-            inv.copper -= drain_copper;
-            remaining[1] -= drain_copper;
-
-            let drain_iron = remaining[2].min(inv.iron);
-            inv.iron -= drain_iron;
-            remaining[2] -= drain_iron;
-
-            let drain_gold = remaining[3].min(inv.gold);
-            inv.gold -= drain_gold;
-            remaining[3] -= drain_gold;
-
-            let drain_oil = remaining[4].min(inv.oil);
-            inv.oil -= drain_oil;
-            remaining[4] -= drain_oil;
+            for rt in ResourceType::ALL {
+                let i = rt.index();
+                let drain = remaining[i].min(inv.get(rt));
+                inv.amounts[i] -= drain;
+                remaining[i] -= drain;
+            }
         }
     }
 }

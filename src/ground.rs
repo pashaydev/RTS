@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
-use crate::components::{Biome, BiomeMap, Ground};
+use crate::components::{AppState, Biome, BiomeMap, GameSetupConfig, Ground, MapSeed};
 
 pub const MAP_SIZE: f32 = 500.0;
 pub const HALF_MAP: f32 = 250.0;
@@ -16,14 +16,16 @@ pub struct HeightMap {
     pub heights: Vec<f32>,
     pub grid_size: usize,
     pub step: f32,
+    pub map_size: f32,
+    pub half_map: f32,
 }
 
 impl HeightMap {
     /// Sample terrain height at any world position using bilinear interpolation
     /// of the actual mesh grid vertices.
     pub fn sample(&self, x: f32, z: f32) -> f32 {
-        let gx = (x + HALF_MAP) / self.step;
-        let gz = (z + HALF_MAP) / self.step;
+        let gx = (x + self.half_map) / self.step;
+        let gz = (z + self.half_map) / self.step;
         let ix = (gx.floor().max(0.0) as usize).min(self.grid_size - 2);
         let iz = (gz.floor().max(0.0) as usize).min(self.grid_size - 2);
         let fx = (gx - ix as f32).clamp(0.0, 1.0);
@@ -45,60 +47,74 @@ const AMPLITUDE: f32 = 10.0;
 const MOISTURE_SCALE: f64 = 0.005;
 const TEMPERATURE_SCALE: f64 = 0.004;
 
-fn noise_gen() -> Fbm<Perlin> {
-    Fbm::<Perlin>::new(42).set_octaves(4)
+/// Holds seed-derived noise generators for terrain generation.
+pub struct TerrainNoise {
+    height_fbm: Fbm<Perlin>,
+    moisture_fbm: Fbm<Perlin>,
+    temperature_fbm: Fbm<Perlin>,
 }
 
-fn moisture_noise() -> Fbm<Perlin> {
-    Fbm::<Perlin>::new(137).set_octaves(3)
+impl TerrainNoise {
+    pub fn from_seed(seed: u64) -> Self {
+        let s0 = seed as u32;
+        let s1 = (seed >> 16) as u32;
+        let s2 = (seed >> 32) as u32;
+        Self {
+            height_fbm: Fbm::<Perlin>::new(s0).set_octaves(4),
+            moisture_fbm: Fbm::<Perlin>::new(s1).set_octaves(3),
+            temperature_fbm: Fbm::<Perlin>::new(s2).set_octaves(3),
+        }
+    }
+
+    pub fn terrain_height(&self, x: f32, z: f32) -> f32 {
+        let val = self.height_fbm.get([x as f64 * NOISE_SCALE, z as f64 * NOISE_SCALE]) as f32;
+        val * AMPLITUDE
+    }
+
+    pub fn biome_at(&self, x: f32, z: f32) -> Biome {
+        let height = self.terrain_height(x, z);
+        let height_norm = ((height / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0);
+
+        let moisture = (self.moisture_fbm.get([x as f64 * MOISTURE_SCALE, z as f64 * MOISTURE_SCALE]) as f32
+            * 0.5
+            + 0.5)
+            .clamp(0.0, 1.0);
+
+        let temperature = (self.temperature_fbm
+            .get([x as f64 * TEMPERATURE_SCALE, z as f64 * TEMPERATURE_SCALE])
+            as f32
+            * 0.5
+            + 0.5)
+            .clamp(0.0, 1.0);
+
+        if height_norm < 0.3 {
+            return Biome::Water;
+        }
+        if height_norm > 0.75 {
+            return Biome::Mountain;
+        }
+        if temperature > 0.6 && moisture < 0.4 {
+            return Biome::Desert;
+        }
+        if moisture > 0.6 && temperature < 0.6 {
+            return Biome::Forest;
+        }
+        Biome::Mud
+    }
 }
 
-fn temperature_noise() -> Fbm<Perlin> {
-    Fbm::<Perlin>::new(271).set_octaves(3)
-}
-
-pub fn terrain_height(x: f32, z: f32) -> f32 {
-    let fbm = noise_gen();
-    let val = fbm.get([x as f64 * NOISE_SCALE, z as f64 * NOISE_SCALE]) as f32;
-    val * AMPLITUDE
-}
-
-pub fn biome_at(x: f32, z: f32) -> Biome {
-    let height = terrain_height(x, z);
-    let height_norm = ((height / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0);
-
-    let moisture_fbm = moisture_noise();
-    let moisture = (moisture_fbm.get([x as f64 * MOISTURE_SCALE, z as f64 * MOISTURE_SCALE]) as f32
-        * 0.5
-        + 0.5)
-        .clamp(0.0, 1.0);
-
-    let temp_fbm = temperature_noise();
-    let temperature = (temp_fbm
-        .get([x as f64 * TEMPERATURE_SCALE, z as f64 * TEMPERATURE_SCALE])
-        as f32
-        * 0.5
-        + 0.5)
-        .clamp(0.0, 1.0);
-
-    // Very low areas -> Water
-    if height_norm < 0.3 {
-        return Biome::Water;
-    }
-    // Very high areas -> Mountain
-    if height_norm > 0.75 {
-        return Biome::Mountain;
-    }
-    // Hot and dry -> Desert
-    if temperature > 0.6 && moisture < 0.4 {
-        return Biome::Desert;
-    }
-    // Cool and wet -> Forest
-    if moisture > 0.6 && temperature < 0.6 {
-        return Biome::Forest;
-    }
-    // Default mid-range
-    Biome::Mud
+/// Resolves the map seed: if 0, generates a random one. Inserts MapSeed resource.
+pub fn resolve_map_seed(
+    mut commands: Commands,
+    config: Res<GameSetupConfig>,
+) {
+    let seed = if config.map_seed == 0 {
+        rand::random::<u64>()
+    } else {
+        config.map_seed
+    };
+    info!("Map seed: {}", seed);
+    commands.insert_resource(MapSeed(seed));
 }
 
 fn biome_color(biome: Biome, height_norm: f32) -> [f32; 4] {
@@ -149,59 +165,67 @@ pub struct GroundPlugin;
 
 impl Plugin for GroundPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_ground);
+        app.add_systems(OnEnter(AppState::InGame), (resolve_map_seed, spawn_ground).chain());
     }
 }
 
-fn spawn_ground(
+pub fn spawn_ground(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    config: Res<GameSetupConfig>,
+    map_seed: Res<MapSeed>,
 ) {
-    // Generate terrain mesh
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
-    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
-    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
-    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
-    let mut biome_data: Vec<Biome> = Vec::with_capacity(GRID_SIZE * GRID_SIZE);
+    let noise = TerrainNoise::from_seed(map_seed.0);
 
-    let step = MAP_SIZE / (GRID_SIZE - 1) as f32;
+    let actual_map_size = config.map_size.world_size();
+    let actual_half_map = actual_map_size / 2.0;
+    let actual_grid_size = (actual_map_size / 2.5) as usize + 1;
+
+    // Generate terrain mesh
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(actual_grid_size * actual_grid_size);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(actual_grid_size * actual_grid_size);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(actual_grid_size * actual_grid_size);
+    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(actual_grid_size * actual_grid_size);
+    let mut biome_data: Vec<Biome> = Vec::with_capacity(actual_grid_size * actual_grid_size);
+
+    let step = actual_map_size / (actual_grid_size - 1) as f32;
     let eps = 0.5_f32; // for normal calculation
 
-    for iz in 0..GRID_SIZE {
-        for ix in 0..GRID_SIZE {
-            let x = -HALF_MAP + ix as f32 * step;
-            let z = -HALF_MAP + iz as f32 * step;
-            let y = terrain_height(x, z);
+    for iz in 0..actual_grid_size {
+        for ix in 0..actual_grid_size {
+            let x = -actual_half_map + ix as f32 * step;
+            let z = -actual_half_map + iz as f32 * step;
+            let y = noise.terrain_height(x, z);
             let height_norm = ((y / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0);
 
-            let biome = biome_at(x, z);
+            let biome = noise.biome_at(x, z);
             biome_data.push(biome);
 
             positions.push([x, y, z]);
             uvs.push([
-                ix as f32 / (GRID_SIZE - 1) as f32,
-                iz as f32 / (GRID_SIZE - 1) as f32,
+                ix as f32 / (actual_grid_size - 1) as f32,
+                iz as f32 / (actual_grid_size - 1) as f32,
             ]);
             colors.push(biome_color(biome, height_norm));
 
             // Central-difference normals
-            let h_l = terrain_height(x - eps, z);
-            let h_r = terrain_height(x + eps, z);
-            let h_d = terrain_height(x, z - eps);
-            let h_u = terrain_height(x, z + eps);
+            let h_l = noise.terrain_height(x - eps, z);
+            let h_r = noise.terrain_height(x + eps, z);
+            let h_d = noise.terrain_height(x, z - eps);
+            let h_u = noise.terrain_height(x, z + eps);
             let normal = Vec3::new(h_l - h_r, 2.0 * eps, h_d - h_u).normalize();
             normals.push(normal.to_array());
         }
     }
 
     // Generate indices
-    let mut indices: Vec<u32> = Vec::with_capacity((GRID_SIZE - 1) * (GRID_SIZE - 1) * 6);
-    for iz in 0..(GRID_SIZE - 1) {
-        for ix in 0..(GRID_SIZE - 1) {
-            let tl = (iz * GRID_SIZE + ix) as u32;
+    let mut indices: Vec<u32> = Vec::with_capacity((actual_grid_size - 1) * (actual_grid_size - 1) * 6);
+    for iz in 0..(actual_grid_size - 1) {
+        for ix in 0..(actual_grid_size - 1) {
+            let tl = (iz * actual_grid_size + ix) as u32;
             let tr = tl + 1;
-            let bl = tl + GRID_SIZE as u32;
+            let bl = tl + actual_grid_size as u32;
             let br = bl + 1;
 
             indices.push(tl);
@@ -239,14 +263,16 @@ fn spawn_ground(
     ));
     commands.insert_resource(HeightMap {
         heights: grid_heights,
-        grid_size: GRID_SIZE,
+        grid_size: actual_grid_size,
         step,
+        map_size: actual_map_size,
+        half_map: actual_half_map,
     });
 
     // Insert BiomeMap resource
     commands.insert_resource(BiomeMap {
         data: biome_data,
-        grid_size: GRID_SIZE,
-        map_size: MAP_SIZE,
+        grid_size: actual_grid_size,
+        map_size: actual_map_size,
     });
 }

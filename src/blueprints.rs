@@ -214,27 +214,23 @@ impl ResourceCost {
 
     /// Check if stored + carried resources are enough to afford this cost.
     pub fn can_afford_with_carried(&self, stored: &PlayerResources, carried: &PlayerResources) -> bool {
-        stored.wood + carried.wood >= self.wood
-            && stored.copper + carried.copper >= self.copper
-            && stored.iron + carried.iron >= self.iron
-            && stored.gold + carried.gold >= self.gold
-            && stored.oil + carried.oil >= self.oil
+        let costs = [self.wood, self.copper, self.iron, self.gold, self.oil];
+        ResourceType::ALL.iter().enumerate().all(|(i, rt)| {
+            stored.get(*rt) + carried.get(*rt) >= costs[i]
+        })
     }
 
     /// Deduct from stored first, return the deficit that must come from carried workers.
     /// Returns (wood, copper, iron, gold, oil) deficits.
     pub fn deduct_with_carried(&self, stored: &mut PlayerResources) -> (u32, u32, u32, u32, u32) {
-        let def_w = self.wood.saturating_sub(stored.wood);
-        let def_c = self.copper.saturating_sub(stored.copper);
-        let def_i = self.iron.saturating_sub(stored.iron);
-        let def_g = self.gold.saturating_sub(stored.gold);
-        let def_o = self.oil.saturating_sub(stored.oil);
-        stored.wood = stored.wood.saturating_sub(self.wood);
-        stored.copper = stored.copper.saturating_sub(self.copper);
-        stored.iron = stored.iron.saturating_sub(self.iron);
-        stored.gold = stored.gold.saturating_sub(self.gold);
-        stored.oil = stored.oil.saturating_sub(self.oil);
-        (def_w, def_c, def_i, def_g, def_o)
+        let costs = [self.wood, self.copper, self.iron, self.gold, self.oil];
+        let mut deficits = [0u32; 5];
+        for (i, rt) in ResourceType::ALL.iter().enumerate() {
+            let have = stored.get(*rt);
+            deficits[i] = costs[i].saturating_sub(have);
+            stored.amounts[rt.index()] = have.saturating_sub(costs[i]);
+        }
+        (deficits[0], deficits[1], deficits[2], deficits[3], deficits[4])
     }
 
     pub fn cost_entries(&self) -> Vec<(ResourceType, u32)> {
@@ -1514,14 +1510,12 @@ pub fn spawn_from_blueprint_with_faction(
             // Base and Storage are deposit points with per-resource capacities
             if kind == EntityKind::Base {
                 entity_cmds.insert((DepositPoint, StorageInventory {
-                    wood_cap: 500, copper_cap: 30, iron_cap: 50,
-                    gold_cap: 0, oil_cap: 0,
+                    caps: [500, 30, 50, 0, 0],
                     ..default()
                 }));
             } else if kind == EntityKind::Storage {
                 entity_cmds.insert((DepositPoint, StorageInventory {
-                    wood_cap: 300, copper_cap: 300, iron_cap: 300,
-                    gold_cap: 300, oil_cap: 200,
+                    caps: [300, 300, 300, 300, 200],
                     ..default()
                 }));
             }
@@ -1531,8 +1525,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory {
-                            wood_cap: 3000,
-                            copper_cap: 0, iron_cap: 0, gold_cap: 0, oil_cap: 0,
+                            caps: [3000, 0, 0, 0, 0],
                             ..default()
                         },
                         AssignedWorkers::default(),
@@ -1560,8 +1553,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory {
-                            wood_cap: 0, copper_cap: 1000, iron_cap: 1000,
-                            gold_cap: 0, oil_cap: 0,
+                            caps: [0, 1000, 1000, 0, 0],
                             ..default()
                         },
                         AssignedWorkers::default(),
@@ -1589,8 +1581,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory {
-                            wood_cap: 0, copper_cap: 0, iron_cap: 0,
-                            gold_cap: 0, oil_cap: 500,
+                            caps: [0, 0, 0, 0, 500],
                             ..default()
                         },
                         AssignedWorkers::default(),

@@ -1,4 +1,7 @@
 use bevy::prelude::*;
+use rand::SeedableRng;
+use rand::Rng;
+use rand::rngs::StdRng;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
 use crate::components::*;
@@ -9,10 +12,11 @@ pub struct MobsPlugin;
 
 impl Plugin for MobsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(PostStartup, spawn_mob_camps)
+        app.add_systems(OnEnter(AppState::InGame), spawn_mob_camps.after(crate::ground::spawn_ground))
             .add_systems(
                 Update,
-                (mob_patrol, mob_aggro, mob_chase, mob_return).chain(),
+                (mob_patrol, mob_aggro, mob_chase, mob_return).chain()
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -25,43 +29,155 @@ struct CampSpawn {
     boss_hp: f32,
 }
 
+/// Ring zone descriptor for procedural camp generation.
+struct RingZone {
+    min_radius_frac: f32,
+    max_radius_frac: f32,
+    kinds: &'static [EntityKind],
+    mob_count: (usize, usize), // (min, max)
+    has_boss: bool,
+    boss_hp: (f32, f32), // (min, max)
+}
+
+const RING_ZONES: &[RingZone] = &[
+    RingZone {
+        min_radius_frac: 0.0,
+        max_radius_frac: 0.3,
+        kinds: &[EntityKind::Goblin],
+        mob_count: (3, 4),
+        has_boss: false,
+        boss_hp: (0.0, 0.0),
+    },
+    RingZone {
+        min_radius_frac: 0.3,
+        max_radius_frac: 0.6,
+        kinds: &[EntityKind::Skeleton, EntityKind::Orc],
+        mob_count: (5, 6),
+        has_boss: true,
+        boss_hp: (200.0, 300.0),
+    },
+    RingZone {
+        min_radius_frac: 0.6,
+        max_radius_frac: 1.0,
+        kinds: &[EntityKind::Demon],
+        mob_count: (5, 7),
+        has_boss: true,
+        boss_hp: (400.0, 500.0),
+    },
+];
+
+fn generate_camps(
+    rng: &mut StdRng,
+    half_map: f32,
+    num_camps: usize,
+    player_spawns: &[(Faction, (f32, f32))],
+    biome_map: &BiomeMap,
+) -> Vec<CampSpawn> {
+    let mut camps = Vec::new();
+    let min_player_dist = 40.0;
+    let min_camp_dist = 50.0;
+    let max_attempts = 100;
+
+    // Distribute camps across zones roughly evenly
+    let zone_counts = distribute_camps(num_camps);
+
+    for (zone_idx, &count) in zone_counts.iter().enumerate() {
+        let zone = &RING_ZONES[zone_idx];
+        let r_min = zone.min_radius_frac * half_map;
+        let r_max = zone.max_radius_frac * half_map;
+
+        for _ in 0..count {
+            let mut placed = false;
+            for _ in 0..max_attempts {
+                let angle = rng.random_range(0.0..std::f32::consts::TAU);
+                let r = rng.random_range(r_min..r_max);
+                let x = angle.cos() * r;
+                let z = angle.sin() * r;
+
+                // Check biome
+                let biome = biome_map.get_biome(x, z);
+                if biome == Biome::Water {
+                    continue;
+                }
+
+                // Check distance from player spawns
+                let too_close_player = player_spawns.iter().any(|&(_, (sx, sz))| {
+                    let dx = x - sx;
+                    let dz = z - sz;
+                    (dx * dx + dz * dz).sqrt() < min_player_dist
+                });
+                if too_close_player {
+                    continue;
+                }
+
+                // Check distance from other camps
+                let too_close_camp = camps.iter().any(|c: &CampSpawn| {
+                    let dx = x - c.center.x;
+                    let dz = z - c.center.z;
+                    (dx * dx + dz * dz).sqrt() < min_camp_dist
+                });
+                if too_close_camp {
+                    continue;
+                }
+
+                let kind = zone.kinds[rng.random_range(0..zone.kinds.len())];
+                let mob_count = rng.random_range(zone.mob_count.0..=zone.mob_count.1);
+                let boss_hp = if zone.has_boss {
+                    rng.random_range(zone.boss_hp.0..=zone.boss_hp.1)
+                } else {
+                    0.0
+                };
+
+                camps.push(CampSpawn {
+                    kind,
+                    center: Vec3::new(x, 0.0, z),
+                    count: mob_count,
+                    has_boss: zone.has_boss,
+                    boss_hp,
+                });
+                placed = true;
+                break;
+            }
+            if !placed {
+                warn!("Could not place mob camp in zone {}", zone_idx);
+            }
+        }
+    }
+    camps
+}
+
+fn distribute_camps(total: usize) -> Vec<usize> {
+    let num_zones = RING_ZONES.len();
+    let base = total / num_zones;
+    let remainder = total % num_zones;
+    let mut counts = vec![base; num_zones];
+    for i in 0..remainder {
+        counts[i] += 1;
+    }
+    counts
+}
+
 fn spawn_mob_camps(
     mut commands: Commands,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
     unit_models: Option<Res<UnitModelAssets>>,
     height_map: Res<HeightMap>,
+    biome_map: Res<BiomeMap>,
+    config: Res<GameSetupConfig>,
+    map_seed: Res<MapSeed>,
 ) {
-    let camps = [
-        CampSpawn {
-            kind: EntityKind::Goblin,
-            center: Vec3::new(50.0, 0.0, 0.0),
-            count: 5,
-            has_boss: false,
-            boss_hp: 0.0,
-        },
-        CampSpawn {
-            kind: EntityKind::Skeleton,
-            center: Vec3::new(-40.0, 0.0, 100.0),
-            count: 5,
-            has_boss: true,
-            boss_hp: 200.0,
-        },
-        CampSpawn {
-            kind: EntityKind::Orc,
-            center: Vec3::new(80.0, 0.0, -150.0),
-            count: 6,
-            has_boss: true,
-            boss_hp: 300.0,
-        },
-        CampSpawn {
-            kind: EntityKind::Demon,
-            center: Vec3::new(-100.0, 0.0, -170.0),
-            count: 5,
-            has_boss: true,
-            boss_hp: 500.0,
-        },
-    ];
+    let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(3000));
+    let half_map = config.map_size.world_size() / 2.0;
+
+    let num_camps = match config.map_size {
+        MapSize::Small => 4,
+        MapSize::Medium => 6,
+        MapSize::Large => 8,
+    };
+
+    let player_spawns = config.spawn_positions(map_seed.0);
+    let camps = generate_camps(&mut rng, half_map, num_camps, &player_spawns, &biome_map);
 
     for camp in &camps {
         let bp = registry.get(camp.kind);

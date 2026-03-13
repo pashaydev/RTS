@@ -7,7 +7,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, T
 
 use crate::components::*;
 use crate::fog_material::{FogOfWarMaterial, FogSettings};
-use crate::ground::{HeightMap, GRID_SIZE, HALF_MAP, MAP_SIZE};
+use crate::ground::HeightMap;
 
 // ── Resources ──
 
@@ -50,7 +50,7 @@ impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<FogOfWarMaterial>::default())
             .init_resource::<FogTweakSettings>()
-            .add_systems(PostStartup, (spawn_fog_overlay, register_fog_tweaks))
+            .add_systems(OnEnter(AppState::InGame), (spawn_fog_overlay, register_fog_tweaks).after(crate::ground::spawn_ground))
             .add_systems(
                 Update,
                 (
@@ -60,7 +60,8 @@ impl Plugin for FogPlugin {
                     update_fog_material_time,
                     fog_hide_entities,
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -134,8 +135,9 @@ fn spawn_fog_overlay(
     mut images: ResMut<Assets<Image>>,
     height_map: Res<HeightMap>,
 ) {
-    let grid_size = GRID_SIZE;
-    let step = MAP_SIZE / (grid_size - 1) as f32;
+    let grid_size = height_map.grid_size;
+    let step = height_map.step;
+    let half_map = height_map.half_map;
 
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(grid_size * grid_size);
     let mut normals: Vec<[f32; 3]> = Vec::with_capacity(grid_size * grid_size);
@@ -143,8 +145,8 @@ fn spawn_fog_overlay(
 
     for iz in 0..grid_size {
         for ix in 0..grid_size {
-            let x = -HALF_MAP + ix as f32 * step;
-            let z = -HALF_MAP + iz as f32 * step;
+            let x = -half_map + ix as f32 * step;
+            let z = -half_map + iz as f32 * step;
             let y = height_map.sample(x, z) + 1.5;
             positions.push([x, y, z]);
             normals.push([0.0, 1.0, 0.0]);
@@ -206,7 +208,7 @@ fn spawn_fog_overlay(
         explored: vec![false; total],
         display: vec![0.0; total],
         grid_size,
-        map_size: MAP_SIZE,
+        map_size: height_map.map_size,
     });
 }
 
@@ -223,6 +225,7 @@ fn update_fog_visibility(
 ) {
     let grid_size = fog_map.grid_size;
     let step = fog_map.map_size / (grid_size - 1) as f32;
+    let half_map = fog_map.map_size / 2.0;
 
     // Clear visible layer each frame
     for v in fog_map.visible.iter_mut() {
@@ -250,10 +253,10 @@ fn update_fog_visibility(
         let range_sq = range * range;
         let viewer_height = pos.y + 2.0; // eye height above ground
 
-        let min_x = ((pos.x - range + HALF_MAP) / step).floor().max(0.0) as usize;
-        let max_x = ((pos.x + range + HALF_MAP) / step).ceil().min((grid_size - 1) as f32) as usize;
-        let min_z = ((pos.z - range + HALF_MAP) / step).floor().max(0.0) as usize;
-        let max_z = ((pos.z + range + HALF_MAP) / step).ceil().min((grid_size - 1) as f32) as usize;
+        let min_x = ((pos.x - range + half_map) / step).floor().max(0.0) as usize;
+        let max_x = ((pos.x + range + half_map) / step).ceil().min((grid_size - 1) as f32) as usize;
+        let min_z = ((pos.z - range + half_map) / step).floor().max(0.0) as usize;
+        let max_z = ((pos.z + range + half_map) / step).ceil().min((grid_size - 1) as f32) as usize;
 
         if enable_los {
             // Terrain-aware LOS using elevation angle raycasting.
@@ -278,8 +281,8 @@ fn update_fog_visibility(
                     let wz = pos.z + dir_z * dist;
 
                     // Convert to grid indices
-                    let fix = ((wx + HALF_MAP) / step).round();
-                    let fiz = ((wz + HALF_MAP) / step).round();
+                    let fix = ((wx + half_map) / step).round();
+                    let fiz = ((wz + half_map) / step).round();
                     if fix < 0.0 || fiz < 0.0 {
                         continue;
                     }
@@ -310,8 +313,8 @@ fn update_fog_visibility(
             }
 
             // Also mark the viewer's own cell as fully visible
-            let vix = ((pos.x + HALF_MAP) / step).round() as usize;
-            let viz = ((pos.z + HALF_MAP) / step).round() as usize;
+            let vix = ((pos.x + half_map) / step).round() as usize;
+            let viz = ((pos.z + half_map) / step).round() as usize;
             if vix < grid_size && viz < grid_size {
                 fog_map.visible[viz * grid_size + vix] = 1.0;
             }
@@ -319,8 +322,8 @@ fn update_fog_visibility(
             // Simple radial distance (no terrain occlusion) — original behavior
             for iz in min_z..=max_z {
                 for ix in min_x..=max_x {
-                    let wx = -HALF_MAP + ix as f32 * step;
-                    let wz = -HALF_MAP + iz as f32 * step;
+                    let wx = -half_map + ix as f32 * step;
+                    let wz = -half_map + iz as f32 * step;
                     let dx = wx - pos.x;
                     let dz = wz - pos.z;
                     let dist_sq = dx * dx + dz * dz;

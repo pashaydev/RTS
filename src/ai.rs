@@ -254,9 +254,9 @@ impl Plugin for AiPlugin {
             .init_resource::<AiControlledFactions>()
             .init_resource::<AllyNotifications>()
             .init_resource::<AiFactionSettings>()
-            .add_systems(Update, (ai_strategy_system, ai_economy_system))
-            .add_systems(Update, (ai_military_system, ai_tactical_system))
-            .add_systems(Update, sync_ai_settings);
+            .add_systems(Update, (ai_strategy_system, ai_economy_system).run_if(in_state(AppState::InGame)))
+            .add_systems(Update, (ai_military_system, ai_tactical_system).run_if(in_state(AppState::InGame)))
+            .add_systems(Update, sync_ai_settings.run_if(in_state(AppState::InGame)));
     }
 }
 
@@ -392,22 +392,18 @@ fn ai_strategy_system(
         brain.build_queue.clear();
         let tc = &building_counts;
 
-        match brain.personality {
-            AiPersonality::Aggressive => build_queue_aggressive(brain, tc),
-            AiPersonality::Defensive => build_queue_defensive(brain, tc),
-            AiPersonality::Economic => build_queue_economic(brain, tc),
-            AiPersonality::Supportive => {
-                // Check what player has to complement
-                let mut player_buildings: HashMap<EntityKind, usize> = HashMap::new();
-                for (f, kind, state) in buildings_q.iter() {
-                    if *f == active_player.0 && *state == BuildingState::Complete {
-                        *player_buildings.entry(*kind).or_default() += 1;
-                    }
+        let player_buildings = if brain.personality == AiPersonality::Supportive {
+            let mut pb: HashMap<EntityKind, usize> = HashMap::new();
+            for (f, kind, state) in buildings_q.iter() {
+                if *f == active_player.0 && *state == BuildingState::Complete {
+                    *pb.entry(*kind).or_default() += 1;
                 }
-                build_queue_supportive(brain, tc, &player_buildings);
             }
-            AiPersonality::Balanced => build_queue_balanced(brain, tc),
-        }
+            Some(pb)
+        } else {
+            None
+        };
+        build_queue_for_personality(brain, tc, player_buildings.as_ref());
 
         // Sort by priority
         brain.build_queue.sort_by_key(|r| r.priority);
@@ -433,137 +429,86 @@ fn ai_strategy_system(
     }
 }
 
-// ── Personality-driven build queues ──
+// ── Personality-driven build queues (data-driven) ──
 
-fn build_queue_balanced(brain: &mut AiFactionBrain, tc: &HashMap<EntityKind, usize>) {
-    match brain.phase {
-        StrategyPhase::EarlyGame => {
-            push_if_missing(brain, tc, EntityKind::Barracks, 1, 0);
-            push_if_missing(brain, tc, EntityKind::Storage, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Sawmill, 1, 2);
-            push_if_missing(brain, tc, EntityKind::Tower, 1, 3);
-        }
-        StrategyPhase::MidGame => {
-            push_if_missing(brain, tc, EntityKind::Barracks, 2, 0);
-            push_if_missing(brain, tc, EntityKind::Workshop, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Stable, 1, 2);
-            push_if_missing(brain, tc, EntityKind::Tower, 2, 1);
-            push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
-            push_if_missing(brain, tc, EntityKind::MageTower, 1, 3);
-        }
-        StrategyPhase::LateGame => {
-            push_if_missing(brain, tc, EntityKind::SiegeWorks, 1, 0);
-            push_if_missing(brain, tc, EntityKind::Temple, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Tower, 4, 2);
-            push_if_missing(brain, tc, EntityKind::OilRig, 1, 2);
-            push_if_missing(brain, tc, EntityKind::Storage, 2, 3);
-        }
+/// (EntityKind, max_count, priority)
+type BuildPlan = &'static [(EntityKind, usize, u8)];
+
+// Build plans per personality per phase: [Early, Mid, Late]
+const BALANCED_PLANS: [BuildPlan; 3] = [
+    &[(EntityKind::Barracks, 1, 0), (EntityKind::Storage, 1, 1), (EntityKind::Sawmill, 1, 2), (EntityKind::Tower, 1, 3)],
+    &[(EntityKind::Barracks, 2, 0), (EntityKind::Workshop, 1, 1), (EntityKind::Stable, 1, 2), (EntityKind::Tower, 2, 1), (EntityKind::Mine, 1, 3), (EntityKind::MageTower, 1, 3)],
+    &[(EntityKind::SiegeWorks, 1, 0), (EntityKind::Temple, 1, 1), (EntityKind::Tower, 4, 2), (EntityKind::OilRig, 1, 2), (EntityKind::Storage, 2, 3)],
+];
+
+const AGGRESSIVE_PLANS: [BuildPlan; 3] = [
+    &[(EntityKind::Barracks, 2, 0), (EntityKind::Storage, 1, 1), (EntityKind::Sawmill, 1, 2)],
+    &[(EntityKind::Barracks, 3, 0), (EntityKind::Stable, 1, 1), (EntityKind::Workshop, 1, 2), (EntityKind::Mine, 1, 3)],
+    &[(EntityKind::SiegeWorks, 1, 0), (EntityKind::Tower, 2, 2), (EntityKind::OilRig, 1, 2)],
+];
+
+const DEFENSIVE_PLANS: [BuildPlan; 3] = [
+    &[(EntityKind::Tower, 2, 0), (EntityKind::Barracks, 1, 1), (EntityKind::Storage, 1, 1), (EntityKind::Sawmill, 1, 2)],
+    &[(EntityKind::Tower, 4, 0), (EntityKind::Barracks, 2, 1), (EntityKind::Workshop, 1, 2), (EntityKind::Mine, 1, 3), (EntityKind::MageTower, 1, 3)],
+    &[(EntityKind::Temple, 1, 0), (EntityKind::SiegeWorks, 1, 1), (EntityKind::Storage, 2, 2), (EntityKind::OilRig, 1, 3)],
+];
+
+const ECONOMIC_PLANS: [BuildPlan; 3] = [
+    &[(EntityKind::Sawmill, 1, 0), (EntityKind::Mine, 1, 1), (EntityKind::Storage, 1, 1), (EntityKind::Barracks, 1, 2), (EntityKind::Tower, 1, 3)],
+    &[(EntityKind::Storage, 2, 0), (EntityKind::Barracks, 2, 1), (EntityKind::Workshop, 1, 2), (EntityKind::Stable, 1, 2), (EntityKind::Tower, 2, 3)],
+    &[(EntityKind::OilRig, 1, 0), (EntityKind::SiegeWorks, 1, 1), (EntityKind::Temple, 1, 2), (EntityKind::Tower, 4, 3)],
+];
+
+// Supportive early/late are static; mid-game has dynamic logic
+const SUPPORTIVE_EARLY: BuildPlan = &[(EntityKind::Storage, 1, 0), (EntityKind::Barracks, 1, 1), (EntityKind::Sawmill, 1, 2), (EntityKind::Tower, 1, 3)];
+const SUPPORTIVE_LATE: BuildPlan = &[(EntityKind::Temple, 1, 0), (EntityKind::SiegeWorks, 1, 1), (EntityKind::Storage, 2, 2), (EntityKind::OilRig, 1, 3)];
+
+fn apply_build_plan(brain: &mut AiFactionBrain, tc: &HashMap<EntityKind, usize>, plan: BuildPlan) {
+    for &(kind, max, priority) in plan {
+        push_if_missing(brain, tc, kind, max, priority);
     }
 }
 
-fn build_queue_aggressive(brain: &mut AiFactionBrain, tc: &HashMap<EntityKind, usize>) {
-    match brain.phase {
-        StrategyPhase::EarlyGame => {
-            push_if_missing(brain, tc, EntityKind::Barracks, 2, 0); // 2 barracks early
-            push_if_missing(brain, tc, EntityKind::Storage, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Sawmill, 1, 2);
-            // No tower for aggressive
-        }
-        StrategyPhase::MidGame => {
-            push_if_missing(brain, tc, EntityKind::Barracks, 3, 0);
-            push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
-            push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
-        }
-        StrategyPhase::LateGame => {
-            push_if_missing(brain, tc, EntityKind::SiegeWorks, 1, 0);
-            push_if_missing(brain, tc, EntityKind::Tower, 2, 2);
-            push_if_missing(brain, tc, EntityKind::OilRig, 1, 2);
-        }
-    }
-}
+fn build_queue_for_personality(
+    brain: &mut AiFactionBrain,
+    tc: &HashMap<EntityKind, usize>,
+    player_buildings: Option<&HashMap<EntityKind, usize>>,
+) {
+    let phase_idx = match brain.phase {
+        StrategyPhase::EarlyGame => 0,
+        StrategyPhase::MidGame => 1,
+        StrategyPhase::LateGame => 2,
+    };
 
-fn build_queue_defensive(brain: &mut AiFactionBrain, tc: &HashMap<EntityKind, usize>) {
-    match brain.phase {
-        StrategyPhase::EarlyGame => {
-            push_if_missing(brain, tc, EntityKind::Tower, 2, 0); // Early towers
-            push_if_missing(brain, tc, EntityKind::Barracks, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Storage, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Sawmill, 1, 2);
-        }
-        StrategyPhase::MidGame => {
-            push_if_missing(brain, tc, EntityKind::Tower, 4, 0);
-            push_if_missing(brain, tc, EntityKind::Barracks, 2, 1);
-            push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
-            push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
-            push_if_missing(brain, tc, EntityKind::MageTower, 1, 3);
-        }
-        StrategyPhase::LateGame => {
-            push_if_missing(brain, tc, EntityKind::Temple, 1, 0);
-            push_if_missing(brain, tc, EntityKind::SiegeWorks, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Storage, 2, 2);
-            push_if_missing(brain, tc, EntityKind::OilRig, 1, 3);
-        }
-    }
-}
-
-fn build_queue_economic(brain: &mut AiFactionBrain, tc: &HashMap<EntityKind, usize>) {
-    match brain.phase {
-        StrategyPhase::EarlyGame => {
-            push_if_missing(brain, tc, EntityKind::Sawmill, 1, 0); // Economy first
-            push_if_missing(brain, tc, EntityKind::Mine, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Storage, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Barracks, 1, 2);
-            push_if_missing(brain, tc, EntityKind::Tower, 1, 3);
-        }
-        StrategyPhase::MidGame => {
-            push_if_missing(brain, tc, EntityKind::Storage, 2, 0);
-            push_if_missing(brain, tc, EntityKind::Barracks, 2, 1);
-            push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
-            push_if_missing(brain, tc, EntityKind::Stable, 1, 2);
-            push_if_missing(brain, tc, EntityKind::Tower, 2, 3);
-        }
-        StrategyPhase::LateGame => {
-            push_if_missing(brain, tc, EntityKind::OilRig, 1, 0);
-            push_if_missing(brain, tc, EntityKind::SiegeWorks, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Temple, 1, 2);
-            push_if_missing(brain, tc, EntityKind::Tower, 4, 3);
-        }
-    }
-}
-
-fn build_queue_supportive(brain: &mut AiFactionBrain, tc: &HashMap<EntityKind, usize>, player_buildings: &HashMap<EntityKind, usize>) {
-    // Complement what the player has built
-    let player_has_barracks = player_buildings.get(&EntityKind::Barracks).copied().unwrap_or(0) >= 2;
-    let player_has_workshop = player_buildings.get(&EntityKind::Workshop).copied().unwrap_or(0) > 0;
-
-    match brain.phase {
-        StrategyPhase::EarlyGame => {
-            push_if_missing(brain, tc, EntityKind::Storage, 1, 0);
-            push_if_missing(brain, tc, EntityKind::Barracks, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Sawmill, 1, 2);
-            push_if_missing(brain, tc, EntityKind::Tower, 1, 3);
-        }
-        StrategyPhase::MidGame => {
-            // If player has barracks, focus on Workshop/Stable instead
-            if player_has_barracks {
-                push_if_missing(brain, tc, EntityKind::Workshop, 1, 0);
-                push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
-            } else {
-                push_if_missing(brain, tc, EntityKind::Barracks, 2, 0);
+    match brain.personality {
+        AiPersonality::Balanced => apply_build_plan(brain, tc, BALANCED_PLANS[phase_idx]),
+        AiPersonality::Aggressive => apply_build_plan(brain, tc, AGGRESSIVE_PLANS[phase_idx]),
+        AiPersonality::Defensive => apply_build_plan(brain, tc, DEFENSIVE_PLANS[phase_idx]),
+        AiPersonality::Economic => apply_build_plan(brain, tc, ECONOMIC_PLANS[phase_idx]),
+        AiPersonality::Supportive => {
+            match brain.phase {
+                StrategyPhase::EarlyGame => apply_build_plan(brain, tc, SUPPORTIVE_EARLY),
+                StrategyPhase::MidGame => {
+                    // Dynamic: complement player's buildings
+                    if let Some(pb) = player_buildings {
+                        let player_has_barracks = pb.get(&EntityKind::Barracks).copied().unwrap_or(0) >= 2;
+                        let player_has_workshop = pb.get(&EntityKind::Workshop).copied().unwrap_or(0) > 0;
+                        if player_has_barracks {
+                            push_if_missing(brain, tc, EntityKind::Workshop, 1, 0);
+                            push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
+                        } else {
+                            push_if_missing(brain, tc, EntityKind::Barracks, 2, 0);
+                        }
+                        if !player_has_workshop {
+                            push_if_missing(brain, tc, EntityKind::Workshop, 1, 1);
+                        }
+                    }
+                    push_if_missing(brain, tc, EntityKind::Tower, 2, 2);
+                    push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
+                    push_if_missing(brain, tc, EntityKind::MageTower, 1, 3);
+                }
+                StrategyPhase::LateGame => apply_build_plan(brain, tc, SUPPORTIVE_LATE),
             }
-            if !player_has_workshop {
-                push_if_missing(brain, tc, EntityKind::Workshop, 1, 1);
-            }
-            push_if_missing(brain, tc, EntityKind::Tower, 2, 2);
-            push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
-            push_if_missing(brain, tc, EntityKind::MageTower, 1, 3);
-        }
-        StrategyPhase::LateGame => {
-            push_if_missing(brain, tc, EntityKind::Temple, 1, 0);
-            push_if_missing(brain, tc, EntityKind::SiegeWorks, 1, 1);
-            push_if_missing(brain, tc, EntityKind::Storage, 2, 2);
-            push_if_missing(brain, tc, EntityKind::OilRig, 1, 3);
         }
     }
 }
@@ -637,8 +582,8 @@ fn ai_economy_system(
             let res = all_resources.get_mut(&faction);
             // Small trickle bonus each economy tick
             let trickle = (5.0 * bonus) as u32;
-            res.wood += trickle;
-            res.copper += trickle;
+            res.add(ResourceType::Wood, trickle);
+            res.add(ResourceType::Copper, trickle);
         }
 
         // Cache base position
@@ -684,7 +629,7 @@ fn ai_economy_system(
             if bp.cost.can_afford_with_carried(all_resources.get(&faction), carried) {
                 if try_train(&mut train_queues, &faction, EntityKind::Worker, &registry) {
                     let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
-                    let drain = SpendFromCarried { faction, wood: dw, copper: dc, iron: di, gold: dg, oil: do_ };
+                    let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
                     if drain.has_deficit() { pending_drains.drains.push(drain); }
                 }
             }
@@ -693,7 +638,7 @@ fn ai_economy_system(
         // ── Assign idle workers to gather squads ──
         let pr = all_resources.get(&faction);
         let player_res = PlayerResources {
-            wood: pr.wood, copper: pr.copper, iron: pr.iron, gold: pr.gold, oil: pr.oil,
+            amounts: pr.amounts,
         };
         let mut idle_workers: Vec<(Entity, Vec3)> = Vec::new();
         for (entity, f, tf, task) in workers_q.iter() {
@@ -837,7 +782,7 @@ fn ai_economy_system(
                 );
 
                 let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
-                let drain = SpendFromCarried { faction, wood: dw, copper: dc, iron: di, gold: dg, oil: do_ };
+                let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
                 if drain.has_deficit() { pending_drains.drains.push(drain); }
                 spawn_ai_building(
                     &mut commands,
@@ -871,11 +816,7 @@ fn ai_economy_system(
                         continue;
                     }
                     let mut res = PlayerResources {
-                        wood: all_resources.get(&faction).wood,
-                        copper: all_resources.get(&faction).copper,
-                        iron: all_resources.get(&faction).iron,
-                        gold: all_resources.get(&faction).gold,
-                        oil: all_resources.get(&faction).oil,
+                        amounts: all_resources.get(&faction).amounts,
                     };
                     let carried = carried_totals.get(&faction);
                     if start_upgrade(
@@ -999,7 +940,7 @@ fn ai_military_system(
             if bp.cost.can_afford_with_carried(all_resources.get(&faction), carried) {
                 if try_train(&mut train_queues, &faction, unit_kind, &registry) {
                     let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
-                    let drain = SpendFromCarried { faction, wood: dw, copper: dc, iron: di, gold: dg, oil: do_ };
+                    let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
                     if drain.has_deficit() { pending_drains.drains.push(drain); }
                 }
             }
@@ -1567,13 +1508,7 @@ fn pick_most_needed_resource(res: &PlayerResources, phase: StrategyPhase) -> Res
     };
 
     let get_amount = |rt: ResourceType| -> u32 {
-        match rt {
-            ResourceType::Wood => res.wood,
-            ResourceType::Copper => res.copper,
-            ResourceType::Iron => res.iron,
-            ResourceType::Gold => res.gold,
-            ResourceType::Oil => res.oil,
-        }
+        res.get(rt)
     };
 
     let mut best_rt = ResourceType::Wood;

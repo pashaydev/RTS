@@ -14,7 +14,8 @@ impl Plugin for UnitAiPlugin {
                 task_queue_advance_system,
                 unit_state_executor_system,
             )
-                .chain(),
+                .chain()
+                .run_if(in_state(AppState::InGame)),
         );
     }
 }
