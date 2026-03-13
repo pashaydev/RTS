@@ -10,7 +10,9 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 - **Biomes** — Each biome has unique vertex coloring, biome-appropriate resource distribution, and scattered decorations (grass, bushes, rocks, dead trees)
 - **3D Assets** — KayKit Forest Nature Pack (trees, rocks, props), KayKit Adventurers (Barbarian, Knight, Ranger, Mage, Rogue characters), KayKit Skeletons (Skeleton Warrior, Rogue, Minion, Mage), and KayKit Character Animations (shared Idle/Walk/Attack/Die animation sets)
 - **Animation** — Skeletal GLTF character animations with state machine (Idle, Walk, Attack, Die), 200ms blended transitions, and smooth directional facing via slerp
-- **Buildings** — 9 building types with placement preview, construction timer, prerequisite system, and 3-level upgrade system with unique bonuses per level
+- **Opening Loop** — Each faction starts with 2 Workers and no Base; the first major action is founding a settlement
+- **Buildings** — Expanded building roster with placement preview, construction timer, prerequisite system, and 3-level upgrades
+- **Fortifications** — Specialized defenses: Watch Tower, Guard Tower, Ballista Tower, Bombard Tower, Outpost, plotted walls, and Gatehouse conversion
 - **Units** — 8 types: Worker, Soldier, Archer (ranged), Tank, Knight, Mage, Priest, Cavalry — trained from buildings. Soldiers can upgrade to Knights
 - **Siege** — 2 siege units: Catapult (long-range AoE) and Battering Ram (melee anti-structure)
 - **Abilities** — Knights (Charge, Shield Bash), Mages (Fireball, Frost Nova), Priests (Heal, Holy Smite), Catapults (Boulder Throw)
@@ -89,8 +91,13 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 | Input | Action |
 |---|---|
 | Click building button | Enter placement mode |
+| Click `Found Base` | Enter first-base founding mode |
+| Click `Wall` | Enter wall plotting mode |
+| Click `Gatehouse` | Enter gate conversion mode |
 | Left click (placing) | Confirm building placement |
+| Left click (wall) | Set wall start / confirm wall end |
 | Right click / Escape | Cancel building placement |
+| Hover wall segment + left click | Replace with Gatehouse |
 | Click rally point button | Enter rally point mode |
 | Left click (rally mode) | Set rally point for trained units |
 | Right click (rally mode) | Cancel rally point mode |
@@ -113,20 +120,17 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 
 ## How to Play
 
-1. You start with a pre-built **Base**, **3 Workers**, and **300 Wood / 60 Copper / 20 Iron**
-2. Once the Base is ready, **Barracks, Workshop, Tower, Storage, Mage Tower, Temple, Stable, and Siege Works** unlock
-3. Click a building button at the bottom bar to enter placement mode
-4. A green ghost preview follows your cursor — left-click to place, right-click or Escape to cancel
-5. Buildings construct over time (shown with translucent material and scale animation)
-6. Select a completed building to train units or upgrade it (up to level 3)
-7. Select a completed **Barracks** to train Workers, Soldiers, and Archers
-8. Select a completed **Workshop** to train Tanks
-9. Select a completed **Mage Tower** to train Mages and Priests
-10. Select a completed **Stable** to train Cavalry and Knights
-11. Select a completed **Siege Works** to train Catapults and Battering Rams
-12. **Towers** automatically attack nearby mobs with projectiles
-13. Send workers near resource nodes to auto-gather — resources are distributed by biome
-14. Buildings can be demolished for a 50% resource refund
+1. You start with **2 Workers**, **no Base**, and a light stockpile of **200 Wood / 40 Copper / 20 Iron**
+2. Use the **Settlement** action to **Found Base**
+3. Place the Base at a strong starting position, then let workers construct it
+4. Once the Base completes, early economy and fortification options unlock
+5. Build **Storage**, **Barracks**, and early defenses like **Watch Tower** or **Outpost**
+6. Use the **Wall** tool to plot a straight wall line in one gesture
+7. Use **Gatehouse** to replace an owned wall segment and create a chokepoint opening
+8. Select completed production buildings to train units or upgrade structures to level 3
+9. **Watch Towers**, **Guard Towers**, **Ballista Towers**, and **Bombard Towers** fill different defensive roles
+10. Send workers near resource nodes to auto-gather; resource processors and depots improve efficiency
+11. Buildings can be demolished for a 50% refund after completion
 
 ## Biomes
 
@@ -145,7 +149,14 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 | Base | 100W 20C | 15s | — | Unlocks other buildings, trains Workers |
 | Barracks | 80W 40C 20I | 12s | Base | Trains Workers, Soldiers, Archers |
 | Workshop | 60W 60C 40I 10G | 18s | Base | Trains Tanks |
-| Tower | 40W 30C 30I | 10s | Base | Auto-attacks nearby mobs (range 15) |
+| Watch Tower | 30W 20C 10I | 8s | Base | Cheap early anti-raider defense |
+| Guard Tower | 55W 35C 30I | 11s | Base | Durable general-purpose tower |
+| Ballista Tower | 60W 40C 55I | 14s | Workshop | Long-range anti-heavy / anti-siege tower |
+| Bombard Tower | 70W 50C 40I 20G | 15s | Mage Tower | Splash-oriented tower for swarm defense |
+| Outpost | 25W 10C | 6s | Base | Vision structure for map control and wall anchoring |
+| Wall Segment | 12W 4C | 4s | Base | Built through wall plotting flow |
+| Wall Post | 16W 6C | 5s | Base | Endpoint / junction support for plotted walls |
+| Gatehouse | 45W 15C 20I | 10s | Base | Replaces a wall segment to create a fortified opening |
 | Storage | 60W 10C | 8s | Base | Resource depot; gather aura at level 1+ |
 | Mage Tower | 60W 30I 40G | 20s | Base | Trains Mages, Priests |
 | Temple | 80W 20C 50G | 22s | Base | Trains Priests; healing aura at level 1+ |
@@ -242,12 +253,12 @@ src/
 
 | Plugin | Description |
 |---|---|
-| `BlueprintPlugin` | Unified entity blueprint registry — stats, costs, visuals, abilities, upgrades for all 26 entity types |
+| `BlueprintPlugin` | Unified entity blueprint registry — units, economy buildings, defense towers, walls, gates, mobs, summons |
 | `GroundPlugin` | Generates 500x500 heightmap mesh with biome-based vertex colors, inserts BiomeMap |
 | `CameraPlugin` | WASD pan, scroll zoom, Q/E orbit camera |
 | `LightingPlugin` | Day/night cycle with keyframed sun/ambient/sky, volumetric atmospheric fog, dynamic entity cluster lights |
-| `UnitsPlugin` | Spawns 3 starting workers, handles movement and avoidance |
-| `BuildingsPlugin` | Building placement preview, construction progress, unit training queues, tower auto-attack, upgrades, demolish |
+| `UnitsPlugin` | Spawns 2 starting workers with no initial Base, handles movement and avoidance |
+| `BuildingsPlugin` | Base founding, building placement preview, wall plotting, gate conversion, construction, training, fortification auto-attack, upgrades, demolish |
 | `SelectionPlugin` | Click/box/shift selection, right-click smart commands, hotkey orders (A/P/H/S), control groups |
 | `UiPlugin` | Widget-based HUD — 12x8 grid layout with closable/pinnable panels, building grid, production queue, army overview, tech tree, event log |
 | `ModelAssetsPlugin` | Loads KayKit 3D models — Forest Nature Pack, Adventurers, Skeletons, Character Animations |
@@ -259,7 +270,7 @@ src/
 | `PathVisPlugin` | Terrain-following dashed path lines with destination ring |
 | `VfxPlugin` | Projectile flight, melee flash, impact flash |
 | `AnimationPlugin` | GLTF skeletal animation discovery, state-driven playback (Idle/Walk/Attack/Die), smooth directional facing |
-| `SavePlugin` | JSON save/load with stable entity IDs, two-pass world reconstruction, resource node position matching |
+| `SavePlugin` | JSON save/load with stable entity IDs, fortification transform persistence, two-pass world reconstruction, resource node position matching |
 | `DebugPlugin` | F3 debug panel — organized Visuals/Entities/Game sections, real-time parameter tweaking, entity spawn/manipulate tools, JSON config persistence |
 
 ## Tech Stack

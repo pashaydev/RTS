@@ -10,6 +10,7 @@ pub struct TechTreeContent;
 pub fn update_tech_tree(
     mut commands: Commands,
     active_player: Res<ActivePlayer>,
+    base_state: Res<FactionBaseState>,
     icons: Res<IconAssets>,
     widget_q: Query<(&super::widget_framework::Widget, &Children)>,
     content_q: Query<Entity, With<super::widget_framework::WidgetContent>>,
@@ -32,6 +33,7 @@ pub fn update_tech_tree(
     }
 
     let completed = all_completed.completed_for(&active_player.0);
+    let founded = base_state.is_founded(&active_player.0);
     let building_kinds = blueprint_reg.building_kinds();
 
     let container = commands
@@ -49,12 +51,21 @@ pub fn update_tech_tree(
     // Build dependency tree: Base is root, others depend on their prerequisite
     // Group by depth level
     for kind in &building_kinds {
+        if founded && *kind == crate::blueprints::EntityKind::Base {
+            continue;
+        }
+
         let bp = blueprint_reg.get(*kind);
         let building_data = bp.building.as_ref();
 
         let is_built = completed.contains(kind);
         let prereq = building_data.and_then(|b| b.prerequisite);
-        let prereq_met = prereq.map_or(true, |p| completed.contains(&p));
+        let prereq_met = match (founded, *kind, prereq) {
+            (false, crate::blueprints::EntityKind::Base, _) => true,
+            (false, _, _) => false,
+            (true, _, None) => true,
+            (true, _, Some(p)) => completed.contains(&p),
+        };
 
         let (border_color, text_color) = if is_built {
             (theme::SUCCESS, theme::TEXT_PRIMARY)

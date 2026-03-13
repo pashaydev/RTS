@@ -12,6 +12,7 @@ pub fn handle_build_buttons(
     interactions: Query<(Entity, &Interaction, &BuildButton, Option<&super::actions_widget::BuildGridButton>), Changed<Interaction>>,
     mut placement: ResMut<BuildingPlacementState>,
     all_completed: Res<AllCompletedBuildings>,
+    base_state: Res<FactionBaseState>,
     all_resources: Res<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
     carried_totals: Res<CarriedResourceTotals>,
@@ -22,6 +23,36 @@ pub fn handle_build_buttons(
         if *interaction == Interaction::Pressed {
             ui_clicked.0 = 2;
             let kind = build_btn.0;
+            let founded = base_state.is_founded(&active_player.0);
+
+            if kind == EntityKind::Base && !founded {
+                let player_res = all_resources.get(&active_player.0);
+                let carried = carried_totals.get(&active_player.0);
+                let bp = registry.get(kind);
+                if !bp.cost.can_afford_with_carried(player_res, carried) {
+                    continue;
+                }
+
+                placement.mode = PlacementMode::PlotBase;
+                placement.awaiting_release = true;
+                placement.hint_text = Some("Plot your first Base".to_string());
+                continue;
+            }
+
+            if kind == EntityKind::WallSegment && founded {
+                placement.mode = PlacementMode::PlotWall { start: Vec3::ZERO };
+                placement.awaiting_release = false;
+                placement.hint_text = Some("Click ground to start wall".to_string());
+                continue;
+            }
+
+            if kind == EntityKind::Gatehouse && founded {
+                placement.mode = PlacementMode::PlotGate;
+                placement.awaiting_release = false;
+                placement.hint_text = Some("Hover an owned wall segment to place gate".to_string());
+                continue;
+            }
+
             let bp = registry.get(kind);
 
             let prereq_met = if let Some(ref bd) = bp.building {
@@ -44,6 +75,7 @@ pub fn handle_build_buttons(
 
             placement.mode = PlacementMode::Placing(kind);
             placement.awaiting_release = true;
+            placement.hint_text = None;
         }
     }
 }

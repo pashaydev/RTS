@@ -15,7 +15,7 @@ pub fn update_action_bar(
         (With<Building>, With<Selected>),
     >,
     assigned_workers_q: Query<&AssignedWorkers>,
-    player_state: (Res<AllCompletedBuildings>, Res<ActivePlayer>, Res<AllPlayerResources>),
+    player_state: (Res<AllCompletedBuildings>, Res<FactionBaseState>, Res<ActivePlayer>, Res<AllPlayerResources>),
     registry: Res<BlueprintRegistry>,
     action_bar: Query<(Entity, Option<&Children>), With<ActionBarInner>>,
     changed_buildings: Query<Entity, Or<(Changed<BuildingState>, Changed<BuildingLevel>, Changed<UpgradeProgress>, Changed<TowerAutoAttackEnabled>, Changed<AssignedWorkers>)>>,
@@ -25,7 +25,7 @@ pub fn update_action_bar(
     confirm_panels: Query<Entity, With<DemolishConfirmPanel>>,
     children_q_readonly: Query<&Children>,
 ) {
-    let (all_completed, active_player, all_resources) = player_state;
+    let (all_completed, base_state, active_player, all_resources) = player_state;
     let (icons, rally_mode) = ui_state;
 
     if !confirm_panels.is_empty() {
@@ -39,6 +39,7 @@ pub fn update_action_bar(
     let mode_changed = ui_mode.is_changed();
     let has_building_change = !changed_buildings.is_empty();
     let completed_changed = all_completed.is_changed();
+    let founded_changed = base_state.is_changed();
     let rally_changed = rally_mode.is_changed();
     let resources_changed = all_resources.is_changed();
 
@@ -48,7 +49,7 @@ pub fn update_action_bar(
     let queue_changed = current_queue_len != *last_queue_len;
     *last_queue_len = current_queue_len;
 
-    if !mode_changed && !has_building_change && !completed_changed && !queue_changed && !rally_changed && !resources_changed {
+    if !mode_changed && !has_building_change && !completed_changed && !founded_changed && !queue_changed && !rally_changed && !resources_changed {
         return;
     }
 
@@ -56,7 +57,7 @@ pub fn update_action_bar(
         return;
     };
 
-    if !mode_changed && *ui_mode == UiMode::Idle && !existing_cards.is_empty() && !completed_changed && !resources_changed {
+    if !mode_changed && *ui_mode == UiMode::Idle && !existing_cards.is_empty() && !completed_changed && !founded_changed && !resources_changed {
         return;
     }
 
@@ -94,9 +95,14 @@ pub fn update_action_bar(
         }
         _ => {
             is_building_grid = true;
-            let completed = all_completed.completed_for(&active_player.0);
             let player_res = all_resources.get(&active_player.0);
-            spawn_building_grid(&mut commands, bar_entity, completed, &icons, &registry, player_res);
+            let founded = base_state.is_founded(&active_player.0);
+            if founded {
+                let completed = all_completed.completed_for(&active_player.0);
+                spawn_building_grid(&mut commands, bar_entity, completed, founded, &icons, &registry, player_res);
+            } else {
+                spawn_found_base_panel(&mut commands, bar_entity, &icons, &registry, player_res);
+            }
         }
     }
 
@@ -817,7 +823,7 @@ fn spawn_building_action_bar(
     }
 
     // Tower auto-attack toggle
-    if kind == EntityKind::Tower {
+    if kind.uses_tower_auto_attack() {
         let is_enabled = auto_attack.map_or(true, |a| a.0);
         let toggle_bg = if is_enabled {
             Color::srgba(0.30, 0.69, 0.31, 0.15)
@@ -1127,16 +1133,141 @@ fn spawn_construction_action_bar(
 #[derive(Component)]
 pub struct BuildGridButton(pub EntityKind);
 
+fn spawn_found_base_panel(
+    commands: &mut Commands,
+    parent: Entity,
+    icons: &IconAssets,
+    registry: &BlueprintRegistry,
+    player_res: &PlayerResources,
+) {
+    let kind = EntityKind::Base;
+    let bp = registry.get(kind);
+    let can_afford = bp.cost.can_afford(player_res);
+    let cost_str = format_cost(&bp.cost);
+
+    let container = commands
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(Val::Px(10.0)),
+                row_gap: Val::Px(8.0),
+                border_radius: BorderRadius::all(Val::Px(8.0)),
+                max_width: Val::Px(280.0),
+                ..default()
+            },
+            BackgroundColor(theme::BG_PANEL),
+            BoxShadow::new(
+                Color::srgba(0.0, 0.0, 0.0, 0.4),
+                Val::Px(0.0),
+                Val::Px(3.0),
+                Val::Px(0.0),
+                Val::Px(8.0),
+            ),
+            Interaction::None,
+        ))
+        .id();
+    commands.entity(parent).add_child(container);
+
+    commands.entity(container).with_children(|panel| {
+        panel.spawn((
+            Text::new("Settlement"),
+            TextFont { font_size: theme::FONT_SMALL, ..default() },
+            TextColor(theme::TEXT_SECONDARY),
+        ));
+        panel.spawn((
+            Text::new("Found your first Base to unlock construction and unit production."),
+            TextFont { font_size: theme::FONT_BODY, ..default() },
+            TextColor(theme::TEXT_PRIMARY),
+        ));
+    });
+
+    let mut tooltip_lines = vec![
+        "Found Base".to_string(),
+        "Establish your first headquarters.".to_string(),
+        format!("Cost: {}", cost_str),
+    ];
+    if let Some(ref bd) = bp.building {
+        tooltip_lines.push(format!("Build time: {:.0}s", bd.construction_time_secs));
+    }
+    if !can_afford {
+        tooltip_lines.push("Not enough resources!".to_string());
+    }
+    tooltip_lines.push("Drag & Drop to choose your settlement site".to_string());
+
+    let btn = commands
+        .spawn((
+            BuildGridButton(kind),
+            BuildButton(kind),
+            Button,
+            ButtonAnimState::new(if can_afford { [0.12, 0.12, 0.12, 0.94] } else { [0.06, 0.06, 0.06, 0.94] }),
+            ButtonStyle::Filled,
+            ActionTooltipTrigger { text: tooltip_lines.join("\n") },
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(10.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(8.0)),
+                ..default()
+            },
+            BackgroundColor(if can_afford { theme::BG_SURFACE } else { Color::srgba(0.08, 0.08, 0.08, 0.7) }),
+            BorderColor::all(if can_afford {
+                Color::srgba(0.25, 0.25, 0.30, 0.4)
+            } else {
+                Color::srgba(0.80, 0.27, 0.27, 0.25)
+            }),
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                ImageNode {
+                    image: icons.entity_icon(kind),
+                    color: if can_afford { Color::WHITE } else { Color::srgba(1.0, 1.0, 1.0, 0.35) },
+                    ..default()
+                },
+                Node {
+                    width: Val::Px(48.0),
+                    height: Val::Px(48.0),
+                    ..default()
+                },
+            ));
+
+            btn.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(2.0),
+                ..default()
+            })
+            .with_children(|text_col| {
+                text_col.spawn((
+                    Text::new("Found Base"),
+                    TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                    TextColor(if can_afford { theme::TEXT_PRIMARY } else { theme::TEXT_DISABLED }),
+                ));
+                text_col.spawn((
+                    Text::new(cost_str),
+                    TextFont { font_size: theme::FONT_SMALL, ..default() },
+                    TextColor(if can_afford { theme::TEXT_SECONDARY } else { theme::DESTRUCTIVE }),
+                ));
+            });
+        })
+        .id();
+    commands.entity(container).add_child(btn);
+}
+
 fn spawn_building_grid(
     commands: &mut Commands,
     parent: Entity,
     completed: &[EntityKind],
+    founded: bool,
     icons: &IconAssets,
     registry: &BlueprintRegistry,
     player_res: &PlayerResources,
 ) {
     let building_kinds = registry.building_kinds();
     let available: Vec<EntityKind> = building_kinds.iter().copied().filter(|kind| {
+        if founded && *kind == EntityKind::Base {
+            return false;
+        }
         let bp = registry.get(*kind);
         let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
         match prereq {
@@ -1153,7 +1284,9 @@ fn spawn_building_grid(
         EntityKind::Barracks | EntityKind::Stable | EntityKind::SiegeWorks | EntityKind::Workshop | EntityKind::MageTower | EntityKind::Temple
     )).collect();
     let defense: Vec<EntityKind> = available.iter().copied().filter(|k| matches!(k,
-        EntityKind::Tower
+        EntityKind::WatchTower | EntityKind::GuardTower | EntityKind::BallistaTower
+        | EntityKind::BombardTower | EntityKind::Outpost | EntityKind::WallSegment
+        | EntityKind::Gatehouse
     )).collect();
 
     let container = commands

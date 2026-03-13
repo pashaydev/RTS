@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint_with_faction};
 use crate::components::*;
 use crate::ground::HeightMap;
-use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
+use crate::model_assets::UnitModelAssets;
 use std::f32::consts::PI;
 
 pub struct UnitsPlugin;
@@ -14,6 +14,7 @@ impl Plugin for UnitsPlugin {
         app.init_resource::<ActivePlayer>()
             .init_resource::<AllPlayerResources>()
             .init_resource::<AllCompletedBuildings>()
+            .init_resource::<FactionBaseState>()
             .init_resource::<TeamConfig>()
             .add_systems(OnEnter(AppState::InGame), apply_game_config)
             .add_systems(OnEnter(AppState::InGame), spawn_all_players.after(crate::ground::spawn_ground))
@@ -76,9 +77,8 @@ fn spawn_all_players(
     mut commands: Commands,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
-    building_models: Option<Res<BuildingModelAssets>>,
     unit_models: Option<Res<UnitModelAssets>>,
-    mut all_completed: ResMut<AllCompletedBuildings>,
+    mut base_state: ResMut<FactionBaseState>,
     mut all_resources: ResMut<AllPlayerResources>,
     height_map: Res<HeightMap>,
     biome_map: Res<BiomeMap>,
@@ -119,42 +119,24 @@ fn spawn_all_players(
     }
 
     for &(faction, (sx, sz)) in &positions {
-        let base_pos = Vec3::new(sx, 0.0, sz);
-        let base_entity = spawn_from_blueprint_with_faction(
-            &mut commands, &cache, EntityKind::Base, base_pos,
-            &registry, building_models.as_deref(), None, &height_map, faction,
-        );
-
-        // Mark as already complete
-        commands.entity(base_entity).remove::<ConstructionProgress>();
-        commands.entity(base_entity).insert(BuildingState::Complete);
-        commands.entity(base_entity).insert(TrainingQueue {
-            queue: vec![],
-            timer: None,
-        });
-
-        // Register Base as completed for this faction
-        let completed = all_completed.per_faction.entry(faction).or_default();
-        if !completed.contains(&EntityKind::Base) {
-            completed.push(EntityKind::Base);
-        }
+        let spawn_pos = Vec3::new(sx, 0.0, sz);
+        base_state.set_founded(faction, false);
 
         // Initialize resources for this faction with starting multiplier
-        let mut res = PlayerResources::default();
-        for amount in res.amounts.iter_mut() {
-            *amount = (*amount as f32 * config.starting_resources_mult) as u32;
-        }
+        let mut res = PlayerResources::empty();
+        res.add(ResourceType::Wood, (200.0 * config.starting_resources_mult) as u32);
+        res.add(ResourceType::Copper, (40.0 * config.starting_resources_mult) as u32);
+        res.add(ResourceType::Iron, (20.0 * config.starting_resources_mult) as u32);
         all_resources.resources.insert(faction, res);
 
-        // Spawn 3 workers near the base
+        // Spawn 2 workers near the starting settlement area.
         let worker_offsets = [
             Vec3::new(3.0, 0.0, 0.0),
             Vec3::new(-3.0, 0.0, 2.0),
-            Vec3::new(0.0, 0.0, -3.0),
         ];
         for offset in worker_offsets {
             spawn_from_blueprint_with_faction(
-                &mut commands, &cache, EntityKind::Worker, base_pos + offset,
+                &mut commands, &cache, EntityKind::Worker, spawn_pos + offset,
                 &registry, None, unit_models.as_deref(), &height_map, faction,
             );
         }
@@ -229,4 +211,3 @@ fn move_units(
         transform.translation.y = height_map.sample(transform.translation.x, transform.translation.z) + y_offset_for(*kind, &registry);
     }
 }
-

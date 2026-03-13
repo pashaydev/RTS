@@ -298,8 +298,8 @@ fn update_placement_hint(
     let Ok((mut text, mut vis)) = hint_q.single_mut() else {
         return;
     };
-    if let Some(hint) = placement.hint_text {
-        **text = hint.to_string();
+    if let Some(ref hint) = placement.hint_text {
+        **text = hint.clone();
         *vis = Visibility::Inherited;
     } else {
         *vis = Visibility::Hidden;
@@ -312,16 +312,20 @@ fn compute_ui_mode(
     selected_units: Query<Entity, (With<Unit>, With<Selected>)>,
     selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
 ) {
-    let new_mode = if let PlacementMode::Placing(kind) = placement.mode {
-        UiMode::PlacingBuilding(kind)
-    } else if let Ok(building_entity) = selected_buildings.single() {
-        UiMode::SelectedBuilding(building_entity)
-    } else {
-        let units: Vec<Entity> = selected_units.iter().collect();
-        if units.is_empty() {
-            UiMode::Idle
-        } else {
-            UiMode::SelectedUnits(units)
+    let new_mode = match placement.mode {
+        PlacementMode::Placing(kind) => UiMode::PlacingBuilding(kind),
+        PlacementMode::PlotBase => UiMode::PlacingBuilding(crate::blueprints::EntityKind::Base),
+        PlacementMode::None | PlacementMode::PlotWall { .. } | PlacementMode::PlotGate => {
+            if let Ok(building_entity) = selected_buildings.single() {
+                UiMode::SelectedBuilding(building_entity)
+            } else {
+                let units: Vec<Entity> = selected_units.iter().collect();
+                if units.is_empty() {
+                    UiMode::Idle
+                } else {
+                    UiMode::SelectedUnits(units)
+                }
+            }
         }
     };
 

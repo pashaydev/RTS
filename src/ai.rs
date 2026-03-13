@@ -270,6 +270,7 @@ fn ai_strategy_system(
     teams: Res<TeamConfig>,
     ai_controlled: Res<AiControlledFactions>,
     mut ai_state: ResMut<AiState>,
+    base_state: Res<FactionBaseState>,
     all_completed: Res<AllCompletedBuildings>,
     buildings_q: Query<(&Faction, &EntityKind, &BuildingState), With<Building>>,
     units_q: Query<(&Faction, &EntityKind), With<Unit>>,
@@ -390,6 +391,15 @@ fn ai_strategy_system(
 
         // Build queue — personality-driven
         brain.build_queue.clear();
+        if !base_state.is_founded(&faction) && !all_completed.has(&faction, EntityKind::Base) {
+            brain.build_queue.push(BuildRequest {
+                kind: EntityKind::Base,
+                priority: 0,
+                near_position: None,
+            });
+            continue;
+        }
+
         let tc = &building_counts;
 
         let player_buildings = if brain.personality == AiPersonality::Supportive {
@@ -436,31 +446,31 @@ type BuildPlan = &'static [(EntityKind, usize, u8)];
 
 // Build plans per personality per phase: [Early, Mid, Late]
 const BALANCED_PLANS: [BuildPlan; 3] = [
-    &[(EntityKind::Barracks, 1, 0), (EntityKind::Storage, 1, 1), (EntityKind::Sawmill, 1, 2), (EntityKind::Tower, 1, 3)],
-    &[(EntityKind::Barracks, 2, 0), (EntityKind::Workshop, 1, 1), (EntityKind::Stable, 1, 2), (EntityKind::Tower, 2, 1), (EntityKind::Mine, 1, 3), (EntityKind::MageTower, 1, 3)],
-    &[(EntityKind::SiegeWorks, 1, 0), (EntityKind::Temple, 1, 1), (EntityKind::Tower, 4, 2), (EntityKind::OilRig, 1, 2), (EntityKind::Storage, 2, 3)],
+    &[(EntityKind::Barracks, 1, 0), (EntityKind::Storage, 1, 1), (EntityKind::Sawmill, 1, 2), (EntityKind::WatchTower, 1, 3)],
+    &[(EntityKind::Barracks, 2, 0), (EntityKind::Workshop, 1, 1), (EntityKind::Stable, 1, 2), (EntityKind::GuardTower, 2, 1), (EntityKind::Mine, 1, 3), (EntityKind::MageTower, 1, 3)],
+    &[(EntityKind::SiegeWorks, 1, 0), (EntityKind::Temple, 1, 1), (EntityKind::GuardTower, 4, 2), (EntityKind::OilRig, 1, 2), (EntityKind::Storage, 2, 3)],
 ];
 
 const AGGRESSIVE_PLANS: [BuildPlan; 3] = [
     &[(EntityKind::Barracks, 2, 0), (EntityKind::Storage, 1, 1), (EntityKind::Sawmill, 1, 2)],
     &[(EntityKind::Barracks, 3, 0), (EntityKind::Stable, 1, 1), (EntityKind::Workshop, 1, 2), (EntityKind::Mine, 1, 3)],
-    &[(EntityKind::SiegeWorks, 1, 0), (EntityKind::Tower, 2, 2), (EntityKind::OilRig, 1, 2)],
+    &[(EntityKind::SiegeWorks, 1, 0), (EntityKind::GuardTower, 2, 2), (EntityKind::OilRig, 1, 2)],
 ];
 
 const DEFENSIVE_PLANS: [BuildPlan; 3] = [
-    &[(EntityKind::Tower, 2, 0), (EntityKind::Barracks, 1, 1), (EntityKind::Storage, 1, 1), (EntityKind::Sawmill, 1, 2)],
-    &[(EntityKind::Tower, 4, 0), (EntityKind::Barracks, 2, 1), (EntityKind::Workshop, 1, 2), (EntityKind::Mine, 1, 3), (EntityKind::MageTower, 1, 3)],
+    &[(EntityKind::WatchTower, 2, 0), (EntityKind::Barracks, 1, 1), (EntityKind::Storage, 1, 1), (EntityKind::Sawmill, 1, 2)],
+    &[(EntityKind::GuardTower, 4, 0), (EntityKind::Barracks, 2, 1), (EntityKind::Workshop, 1, 2), (EntityKind::Mine, 1, 3), (EntityKind::MageTower, 1, 3)],
     &[(EntityKind::Temple, 1, 0), (EntityKind::SiegeWorks, 1, 1), (EntityKind::Storage, 2, 2), (EntityKind::OilRig, 1, 3)],
 ];
 
 const ECONOMIC_PLANS: [BuildPlan; 3] = [
-    &[(EntityKind::Sawmill, 1, 0), (EntityKind::Mine, 1, 1), (EntityKind::Storage, 1, 1), (EntityKind::Barracks, 1, 2), (EntityKind::Tower, 1, 3)],
-    &[(EntityKind::Storage, 2, 0), (EntityKind::Barracks, 2, 1), (EntityKind::Workshop, 1, 2), (EntityKind::Stable, 1, 2), (EntityKind::Tower, 2, 3)],
-    &[(EntityKind::OilRig, 1, 0), (EntityKind::SiegeWorks, 1, 1), (EntityKind::Temple, 1, 2), (EntityKind::Tower, 4, 3)],
+    &[(EntityKind::Sawmill, 1, 0), (EntityKind::Mine, 1, 1), (EntityKind::Storage, 1, 1), (EntityKind::Barracks, 1, 2), (EntityKind::WatchTower, 1, 3)],
+    &[(EntityKind::Storage, 2, 0), (EntityKind::Barracks, 2, 1), (EntityKind::Workshop, 1, 2), (EntityKind::Stable, 1, 2), (EntityKind::GuardTower, 2, 3)],
+    &[(EntityKind::OilRig, 1, 0), (EntityKind::SiegeWorks, 1, 1), (EntityKind::Temple, 1, 2), (EntityKind::GuardTower, 4, 3)],
 ];
 
 // Supportive early/late are static; mid-game has dynamic logic
-const SUPPORTIVE_EARLY: BuildPlan = &[(EntityKind::Storage, 1, 0), (EntityKind::Barracks, 1, 1), (EntityKind::Sawmill, 1, 2), (EntityKind::Tower, 1, 3)];
+const SUPPORTIVE_EARLY: BuildPlan = &[(EntityKind::Storage, 1, 0), (EntityKind::Barracks, 1, 1), (EntityKind::Sawmill, 1, 2), (EntityKind::WatchTower, 1, 3)];
 const SUPPORTIVE_LATE: BuildPlan = &[(EntityKind::Temple, 1, 0), (EntityKind::SiegeWorks, 1, 1), (EntityKind::Storage, 2, 2), (EntityKind::OilRig, 1, 3)];
 
 fn apply_build_plan(brain: &mut AiFactionBrain, tc: &HashMap<EntityKind, usize>, plan: BuildPlan) {
@@ -503,7 +513,7 @@ fn build_queue_for_personality(
                             push_if_missing(brain, tc, EntityKind::Workshop, 1, 1);
                         }
                     }
-                    push_if_missing(brain, tc, EntityKind::Tower, 2, 2);
+                    push_if_missing(brain, tc, EntityKind::GuardTower, 2, 2);
                     push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
                     push_if_missing(brain, tc, EntityKind::MageTower, 1, 3);
                 }
@@ -530,9 +540,12 @@ fn push_if_missing(brain: &mut AiFactionBrain, tc: &HashMap<EntityKind, usize>, 
 fn ai_economy_system(
     mut commands: Commands,
     time: Res<Time>,
-    active_player: Res<ActivePlayer>,
-    teams: Res<TeamConfig>,
-    ai_controlled: Res<AiControlledFactions>,
+    context: (
+        Res<ActivePlayer>,
+        Res<TeamConfig>,
+        Res<AiControlledFactions>,
+        Res<FactionBaseState>,
+    ),
     mut ai_state: ResMut<AiState>,
     mut all_resources: ResMut<AllPlayerResources>,
     all_completed: Res<AllCompletedBuildings>,
@@ -556,6 +569,7 @@ fn ai_economy_system(
     ),
 ) {
     let dt = time.delta_secs();
+    let (active_player, teams, ai_controlled, base_state) = context;
     let (workers_q, resource_nodes_q, buildings_q, building_levels_q, construction_workers_q, mut train_queues, footprints_q, processor_q, assigned_workers_q) = queries;
 
     for &faction in &ai_controlled.factions {
@@ -564,6 +578,7 @@ fn ai_economy_system(
         }
 
         let is_friendly = teams.is_allied(&faction, &active_player.0);
+        let is_founded = base_state.is_founded(&faction) || all_completed.has(&faction, EntityKind::Base);
 
         let brain = match ai_state.factions.get_mut(&faction) {
             Some(b) => b,
@@ -597,11 +612,57 @@ fn ai_economy_system(
                 }
             }
         }
-        let base_pos = match base_pos {
+        let worker_positions: Vec<Vec3> = workers_q
+            .iter()
+            .filter(|(_, f, _, _)| **f == faction)
+            .map(|(_, _, tf, _)| tf.translation)
+            .collect();
+
+        let fallback_pos = if worker_positions.is_empty() {
+            None
+        } else {
+            let sum = worker_positions.iter().copied().fold(Vec3::ZERO, |acc, p| acc + p);
+            Some(sum / worker_positions.len() as f32)
+        };
+
+        let base_pos = match base_pos.or(fallback_pos) {
             Some(p) => p,
             None => continue,
         };
         brain.base_position = Some(base_pos);
+
+        if !is_founded {
+            let bp = registry.get(EntityKind::Base);
+            let carried = carried_totals.get(&faction);
+            if bp.cost.can_afford_with_carried(all_resources.get(&faction), carried) {
+                let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
+                let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
+                if drain.has_deficit() {
+                    pending_drains.drains.push(drain);
+                }
+
+                let pos = find_build_pos(
+                    base_pos,
+                    &our_building_positions,
+                    EntityKind::Base,
+                    &footprints_q,
+                    &height_map,
+                    Some(base_pos),
+                );
+                spawn_ai_building(
+                    &mut commands,
+                    &cache,
+                    EntityKind::Base,
+                    pos,
+                    &registry,
+                    building_models.as_deref(),
+                    &height_map,
+                    faction,
+                );
+                brain.pending_builds += 1;
+            }
+            continue;
+        }
 
         // Get player base pos for friendly AI resource avoidance
         let player_base_pos = if is_friendly {
@@ -802,7 +863,8 @@ fn ai_economy_system(
         // ── Building upgrades (MidGame+) ──
         if matches!(phase, StrategyPhase::MidGame | StrategyPhase::LateGame) {
             let upgrade_priorities = [
-                EntityKind::Tower,
+                EntityKind::GuardTower,
+                EntityKind::WatchTower,
                 EntityKind::Barracks,
                 EntityKind::Storage,
             ];

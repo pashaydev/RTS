@@ -978,7 +978,7 @@ fn handle_unit_command_hotkeys(
     ui_press: Res<UiPressActive>,
     placement: Res<BuildingPlacementState>,
 ) {
-    if matches!(placement.mode, PlacementMode::Placing(_)) { return; }
+    if placement.mode != PlacementMode::None { return; }
 
     let has_selected = selected_units.iter().any(|(_, _, f)| *f == active_player.0);
 

@@ -89,6 +89,8 @@ pub struct SavedEntity {
     pub kind: EntityKind,
     pub faction: Faction,
     pub position: [f32; 3],
+    pub rotation: [f32; 4],
+    pub scale: [f32; 3],
     pub health_current: f32,
     pub health_max: f32,
 
@@ -123,6 +125,12 @@ pub struct SavedEntity {
     pub tower_auto_attack: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub storage: Option<SavedStorage>,
+    #[serde(default)]
+    pub wall_segment_piece: bool,
+    #[serde(default)]
+    pub wall_post_piece: bool,
+    #[serde(default)]
+    pub gate_piece: bool,
 
     // Mob fields
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -249,6 +257,9 @@ fn save_game(
         Option<&RallyPoint>,
         Option<&TowerAutoAttackEnabled>,
         Option<&StorageInventory>,
+        Option<&WallSegmentPiece>,
+        Option<&WallPostPiece>,
+        Option<&GatePiece>,
     )>,
     patrol_q: Query<(&GameId, &PatrolState)>,
     // Entity→GameId lookup for cross-references
@@ -285,6 +296,17 @@ fn save_game(
                 transform.translation.y,
                 transform.translation.z,
             ],
+            rotation: [
+                transform.rotation.x,
+                transform.rotation.y,
+                transform.rotation.z,
+                transform.rotation.w,
+            ],
+            scale: [
+                transform.scale.x,
+                transform.scale.y,
+                transform.scale.z,
+            ],
             health_current: health.map(|h| h.current).unwrap_or(100.0),
             health_max: health.map(|h| h.max).unwrap_or(100.0),
             move_target: move_target.map(|mt| [mt.0.x, mt.0.y, mt.0.z]),
@@ -307,6 +329,9 @@ fn save_game(
             rally_point: None,
             tower_auto_attack: None,
             storage: None,
+            wall_segment_piece: false,
+            wall_post_piece: false,
+            gate_piece: false,
             patrol_center: None,
             patrol_radius: None,
         };
@@ -322,6 +347,9 @@ fn save_game(
             b_rally,
             b_tower,
             b_storage,
+            b_wall_segment,
+            b_wall_post,
+            b_gate,
         )) = building_q.get(id_lookup.iter().find(|(_, gid)| gid.0 == game_id.0).unwrap().0)
         {
             saved.building_state = b_state.copied();
@@ -345,6 +373,9 @@ fn save_game(
             saved.upgrade_target_level = b_upgrade.map(|up| up.target_level);
             saved.rally_point = b_rally.map(|rp| [rp.0.x, rp.0.y, rp.0.z]);
             saved.tower_auto_attack = b_tower.map(|ta| ta.0);
+            saved.wall_segment_piece = b_wall_segment.is_some();
+            saved.wall_post_piece = b_wall_post.is_some();
+            saved.gate_piece = b_gate.is_some();
             saved.storage = b_storage.map(|si| SavedStorage {
                 wood: si.amounts[ResourceType::Wood.index()],
                 copper: si.amounts[ResourceType::Copper.index()],
@@ -605,6 +636,17 @@ fn apply_load_overrides(
         // Faction override (blueprint default may differ)
         commands.entity(entity).insert(saved.faction);
 
+        commands.entity(entity).insert(Transform {
+            translation: Vec3::new(saved.position[0], saved.position[1], saved.position[2]),
+            rotation: Quat::from_xyzw(
+                saved.rotation[0],
+                saved.rotation[1],
+                saved.rotation[2],
+                saved.rotation[3],
+            ),
+            scale: Vec3::new(saved.scale[0], saved.scale[1], saved.scale[2]),
+        });
+
         // Move target
         if let Some(mt) = saved.move_target {
             commands
@@ -699,6 +741,16 @@ fn apply_load_overrides(
                 caps: [st.wood_cap, st.copper_cap, st.iron_cap, st.gold_cap, st.oil_cap],
                 last_total: 0,
             });
+        }
+
+        if saved.wall_segment_piece {
+            commands.entity(entity).insert(WallSegmentPiece);
+        }
+        if saved.wall_post_piece {
+            commands.entity(entity).insert(WallPostPiece);
+        }
+        if saved.gate_piece {
+            commands.entity(entity).insert(GatePiece);
         }
 
         // Patrol state

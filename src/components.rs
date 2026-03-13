@@ -1140,6 +1140,22 @@ impl AllCompletedBuildings {
     }
 }
 
+/// Tracks whether each faction has completed its first base.
+#[derive(Resource, Default)]
+pub struct FactionBaseState {
+    pub founded: std::collections::HashMap<Faction, bool>,
+}
+
+impl FactionBaseState {
+    pub fn is_founded(&self, faction: &Faction) -> bool {
+        self.founded.get(faction).copied().unwrap_or(false)
+    }
+
+    pub fn set_founded(&mut self, faction: Faction, founded: bool) {
+        self.founded.insert(faction, founded);
+    }
+}
+
 /// Spawn positions for each faction (map corners, avoiding mob camps).
 pub const SPAWN_POSITIONS: [(Faction, (f32, f32)); 4] = [
     (Faction::Player1, (-200.0, -200.0)),
@@ -1355,6 +1371,14 @@ impl IconAssets {
             EntityKind::Barracks => self.barracks.clone(),
             EntityKind::Workshop => self.workshop.clone(),
             EntityKind::Tower => self.tower.clone(),
+            EntityKind::WatchTower => self.tower.clone(),
+            EntityKind::GuardTower => self.tower.clone(),
+            EntityKind::BallistaTower => self.tower.clone(),
+            EntityKind::BombardTower => self.tower.clone(),
+            EntityKind::Outpost => self.tower.clone(),
+            EntityKind::Gatehouse => self.tower.clone(),
+            EntityKind::WallSegment => self.tower.clone(),
+            EntityKind::WallPost => self.tower.clone(),
             EntityKind::Storage => self.storage.clone(),
             // Units
             EntityKind::Worker => self.worker.clone(),
@@ -1533,10 +1557,22 @@ pub struct BuildButton(pub EntityKind);
 #[derive(Component)]
 pub struct TrainButton(pub EntityKind);
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Component)]
+pub struct WallSegmentPiece;
+
+#[derive(Component)]
+pub struct WallPostPiece;
+
+#[derive(Component)]
+pub struct GatePiece;
+
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PlacementMode {
     None,
     Placing(EntityKind),
+    PlotBase,
+    PlotWall { start: Vec3 },
+    PlotGate,
 }
 
 #[derive(Resource)]
@@ -1545,7 +1581,7 @@ pub struct BuildingPlacementState {
     pub preview_entity: Option<Entity>,
     pub awaiting_release: bool,
     /// Feedback text shown during placement (e.g. biome requirement hint)
-    pub hint_text: Option<&'static str>,
+    pub hint_text: Option<String>,
 }
 
 impl Default for BuildingPlacementState {
@@ -1557,6 +1593,15 @@ impl Default for BuildingPlacementState {
             hint_text: None,
         }
     }
+}
+
+#[derive(Resource, Default)]
+pub struct WallPlotPreview {
+    pub start: Option<Vec3>,
+    pub snapped_points: Vec<Vec3>,
+    pub ghost_entities: Vec<Entity>,
+    pub total_cost: crate::blueprints::ResourceCost,
+    pub valid: bool,
 }
 
 #[derive(Resource, Default)]
