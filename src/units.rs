@@ -1,7 +1,9 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
-use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint_with_faction};
+use crate::blueprints::{
+    spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache,
+};
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::model_assets::UnitModelAssets;
@@ -17,10 +19,14 @@ impl Plugin for UnitsPlugin {
             .init_resource::<FactionBaseState>()
             .init_resource::<TeamConfig>()
             .add_systems(OnEnter(AppState::InGame), apply_game_config)
-            .add_systems(OnEnter(AppState::InGame), spawn_all_players.after(crate::ground::spawn_ground))
+            .add_systems(
+                OnEnter(AppState::InGame),
+                spawn_all_players.after(crate::ground::spawn_ground),
+            )
             .add_systems(
                 Update,
-                (steer_avoidance, move_units).chain()
+                (steer_avoidance, move_units)
+                    .chain()
                     .run_if(in_state(AppState::InGame)),
             );
     }
@@ -32,7 +38,12 @@ fn apply_game_config(
     mut teams: ResMut<TeamConfig>,
     mut ai_controlled: ResMut<AiControlledFactions>,
 ) {
-    let all_factions = [Faction::Player1, Faction::Player2, Faction::Player3, Faction::Player4];
+    let all_factions = [
+        Faction::Player1,
+        Faction::Player2,
+        Faction::Player3,
+        Faction::Player4,
+    ];
     let count = (1 + config.num_ai_opponents as usize).min(4);
     let factions = &all_factions[..count];
 
@@ -65,7 +76,10 @@ fn apply_game_config(
         }
     }
     teams.teams = team_map.clone();
-    info!("apply_game_config: mode={:?}, count={}, teams={:?}", config.team_mode, count, team_map);
+    info!(
+        "apply_game_config: mode={:?}, count={}, teams={:?}",
+        config.team_mode, count, team_map
+    );
 }
 
 pub fn y_offset_for(kind: EntityKind, registry: &BlueprintRegistry) -> f32 {
@@ -124,36 +138,43 @@ fn spawn_all_players(
 
         // Initialize resources for this faction with starting multiplier
         let mut res = PlayerResources::empty();
-        res.add(ResourceType::Wood, (200.0 * config.starting_resources_mult) as u32);
-        res.add(ResourceType::Copper, (40.0 * config.starting_resources_mult) as u32);
-        res.add(ResourceType::Iron, (20.0 * config.starting_resources_mult) as u32);
+        res.add(
+            ResourceType::Wood,
+            (200.0 * config.starting_resources_mult) as u32,
+        );
+        res.add(
+            ResourceType::Copper,
+            (40.0 * config.starting_resources_mult) as u32,
+        );
+        res.add(
+            ResourceType::Iron,
+            (20.0 * config.starting_resources_mult) as u32,
+        );
         all_resources.resources.insert(faction, res);
 
         // Spawn 2 workers near the starting settlement area.
-        let worker_offsets = [
-            Vec3::new(3.0, 0.0, 0.0),
-            Vec3::new(-3.0, 0.0, 2.0),
-        ];
+        let worker_offsets = [Vec3::new(3.0, 0.0, 0.0), Vec3::new(-3.0, 0.0, 2.0)];
         for offset in worker_offsets {
             spawn_from_blueprint_with_faction(
-                &mut commands, &cache, EntityKind::Worker, spawn_pos + offset,
-                &registry, None, unit_models.as_deref(), &height_map, faction,
+                &mut commands,
+                &cache,
+                EntityKind::Worker,
+                spawn_pos + offset,
+                &registry,
+                None,
+                unit_models.as_deref(),
+                &height_map,
+                faction,
             );
         }
     }
 }
 
-fn steer_avoidance(
-    time: Res<Time>,
-    mut units: Query<(Entity, &mut Transform), With<Unit>>,
-) {
+fn steer_avoidance(time: Res<Time>, mut units: Query<(Entity, &mut Transform), With<Unit>>) {
     let avoidance_radius = 1.8;
     let strength = 4.0;
 
-    let positions: Vec<(Entity, Vec3)> = units
-        .iter()
-        .map(|(e, t)| (e, t.translation))
-        .collect();
+    let positions: Vec<(Entity, Vec3)> = units.iter().map(|(e, t)| (e, t.translation)).collect();
 
     for (entity, mut transform) in &mut units {
         let my_pos = transform.translation;
@@ -182,7 +203,18 @@ fn move_units(
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
     height_map: Res<HeightMap>,
-    mut query: Query<(Entity, &mut Transform, &MoveTarget, &UnitSpeed, &EntityKind, Option<&Carrying>, Option<&CarryCapacity>), With<Unit>>,
+    mut query: Query<
+        (
+            Entity,
+            &mut Transform,
+            &MoveTarget,
+            &UnitSpeed,
+            &EntityKind,
+            Option<&Carrying>,
+            Option<&CarryCapacity>,
+        ),
+        With<Unit>,
+    >,
 ) {
     for (entity, mut transform, target, unit_speed, kind, carrying, capacity) in &mut query {
         let direction = target.0 - transform.translation;
@@ -208,6 +240,8 @@ fn move_units(
             transform.translation += step;
         }
         // Snap Y to terrain
-        transform.translation.y = height_map.sample(transform.translation.x, transform.translation.z) + y_offset_for(*kind, &registry);
+        transform.translation.y = height_map
+            .sample(transform.translation.x, transform.translation.z)
+            + y_offset_for(*kind, &registry);
     }
 }

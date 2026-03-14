@@ -18,7 +18,8 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 - **Abilities** — Knights (Charge, Shield Bash), Mages (Fireball, Frost Nova), Priests (Heal, Holy Smite), Catapults (Boulder Throw)
 - **Summons** — Skeleton Minion, Spirit Wolf, Fire Elemental
 - **Enemies** — 4 mob camps (Goblin, Skeleton, Orc, Demon) with patrol AI, aggro detection, and boss variants
-- **Combat** — Melee and ranged attacks, auto-targeting idle units, projectiles, hit-flash VFX, tower auto-attack
+- **Combat** — Melee and ranged attacks, stance-aware auto-targeting (Passive/Defensive/Aggressive), projectiles, hit-flash VFX, tower auto-attack, explosive props with chain reactions
+- **Unit AI** — Decision priority system (0.2s tick): manual orders > survival retreat (hp <25%) > stance-based threat response > auto-role. Defensive leash (12u) returns units that chase too far
 - **Economy** — 5 resource types (Wood, Copper, Iron, Gold, Oil) procedurally distributed across biomes with auto-gathering workers
 - **Tree Growth** — Saplings spawn and grow through stages into harvestable mature trees over time
 - **Day/Night Cycle** — 600-second animated cycle (Dawn/Day/Dusk/Night) with keyframed sun illuminance, color, pitch, ambient light, and sky color
@@ -27,9 +28,9 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 - **Fog of War** — Texture-based fog of war with per-entity vision ranges, edge glow, noise overlay, and explored/unexplored tinting
 - **Save/Load** — JSON game state serialization with stable entity IDs, cross-reference resolution, and resource node position matching
 - **Minimap** — Interactive minimap with real-time unit and building positions, camera viewport indicator
-- **Controls** — Click, box-select, shift-toggle selection; formation movement; right-click smart commands; hotkey-based unit orders (A-move, Patrol, Hold, Stop); Ctrl+1-9 control groups
+- **Controls** — Click, box-select, shift-toggle selection; formation movement; contextual right-click (attack enemies, gather resources, assist builds, assign processors, move to allies); hotkey-based unit orders (A-move, Patrol, Hold, Stop, Stance cycle); Ctrl+1-9 control groups
 - **Camera** — WASD pan, Q/E rotate, scroll zoom, edge-scroll
-- **UI** — Widget-based HUD system with 12x8 snap-to-grid layout, closable/pinnable panels (F1-F10 toggles), resource bar, selection panel, building grid, production queue, army overview, tech tree, control groups, event log
+- **UI** — Widget-based HUD system with 12x8 snap-to-grid layout, closable/pinnable panels (F1-F10 toggles), integrated tile content styling (no nested panel shells), responsive action/build grids, resource bar, selection panel, production queue, army overview, tech tree, control groups, event log
 - **Pathfinding** — Thin dashed lines with destination ring, terrain-following
 - **Debug Tools** — F3 debug panel with organized sections (Visuals, Entities, Game), real-time tweaking of lighting/fog/shader parameters, entity spawning/manipulation, save/load controls, JSON config persistence
 
@@ -76,14 +77,16 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 | Input | Action |
 |---|---|
 | Right click ground | Move selected units (formation spread) |
-| Right click enemy | Attack target |
+| Right click enemy unit/building | Attack target |
 | Right click resource | Gather (workers) / move (combat units) |
 | Right click construction | Assign workers to build |
 | Right click processor | Assign workers to processor building |
+| Right click allied building | Move to building |
 | A + left click | Attack-move to location (engage enemies on the way) |
 | P + left click | Patrol to location |
 | H | Hold position (stop and clear orders) |
 | S | Stop (clear all orders, workers go idle) |
+| V | Cycle unit stance: Passive → Defensive → Aggressive |
 | Escape | Cancel attack-move / patrol mode |
 
 ### Building
@@ -184,7 +187,7 @@ All buildings support 3-level upgrades with bonuses like vision boost, train tim
 
 | Type | HP | Speed | Damage | Range | Cooldown | Abilities |
 |---|---|---|---|---|---|---|
-| Worker | 100 | 5.0 | 3 | 1.5 | 1.5s | — |
+| Worker | 115 | 5.0 | 6 | 1.8 | 1.2s | — |
 | Soldier | 100 | 4.5 | 12 | 2.0 | 1.0s | Upgrades to Knight |
 | Archer | 100 | 5.5 | 8 | 12.0 | 1.5s | — |
 | Tank | 100 | 3.0 | 18 | 2.5 | 2.0s | — |
@@ -238,6 +241,7 @@ src/
 ├── model_assets.rs   Loads KayKit 3D models (characters, trees, rocks, props)
 ├── resources.rs      Biome-based resource node spawning, auto-gathering, tree growth
 ├── mobs.rs           Enemy camps, patrol / aggro / chase AI
+├── unit_ai.rs        Unit AI decision layer, task queue, state executor, leash system
 ├── combat.rs         Melee and ranged attacks, auto-targeting, death + event logging
 ├── fog.rs            Fog of war system
 ├── fog_material.rs   Custom fog shader material
@@ -259,12 +263,13 @@ src/
 | `LightingPlugin` | Day/night cycle with keyframed sun/ambient/sky, volumetric atmospheric fog, dynamic entity cluster lights |
 | `UnitsPlugin` | Spawns 2 starting workers with no initial Base, handles movement and avoidance |
 | `BuildingsPlugin` | Base founding, building placement preview, wall plotting, gate conversion, construction, training, fortification auto-attack, upgrades, demolish |
-| `SelectionPlugin` | Click/box/shift selection, right-click smart commands, hotkey orders (A/P/H/S), control groups |
+| `SelectionPlugin` | Click/box/shift selection, contextual right-click resolver, hotkey orders (A/P/H/S/V stance), control groups |
 | `UiPlugin` | Widget-based HUD — 12x8 grid layout with closable/pinnable panels, building grid, production queue, army overview, tech tree, event log |
 | `ModelAssetsPlugin` | Loads KayKit 3D models — Forest Nature Pack, Adventurers, Skeletons, Character Animations |
 | `ResourcesPlugin` | Procedural biome-based resource node spawning with 3D models, auto-gather + deposit loop, tree growth, biome-aware decoration scatter |
 | `MobsPlugin` | Spawns 4 enemy camps with patrol, aggro, chase, and return AI |
-| `CombatPlugin` | Melee/ranged attacks, auto-acquire targets, death cleanup |
+| `UnitAiPlugin` | Decision priority system (0.2s tick), task queue processing, unit state executor, defensive leash return |
+| `CombatPlugin` | Melee/ranged attacks, stance-aware auto-acquire, explosive prop chain reactions, death cleanup |
 | `FogPlugin` | Texture-based fog of war with per-entity vision ranges, edge glow, noise overlay |
 | `MinimapPlugin` | Interactive 200x200 minimap with real-time entity tracking and camera viewport |
 | `PathVisPlugin` | Terrain-following dashed path lines with destination ring |

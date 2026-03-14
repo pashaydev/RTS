@@ -1,8 +1,8 @@
-use bevy::prelude::*;
-use std::collections::HashMap;
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
-use bevy::window::PrimaryWindow;
 use bevy::ecs::message::MessageReader;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
+use std::collections::HashMap;
 
 use crate::theme;
 
@@ -94,7 +94,12 @@ pub struct GridSlot {
 
 impl GridSlot {
     pub const fn new(col: u8, row: u8, col_span: u8, row_span: u8) -> Self {
-        Self { col, row, col_span, row_span }
+        Self {
+            col,
+            row,
+            col_span,
+            row_span,
+        }
     }
 }
 
@@ -152,16 +157,16 @@ pub struct WidgetRegistry {
 impl Default for WidgetRegistry {
     fn default() -> Self {
         let mut slots = HashMap::new();
-        slots.insert(WidgetId::Resources,      GridSlot::new(0, 0, 1, 2));
-        slots.insert(WidgetId::ArmyOverview,   GridSlot::new(0, 2, 1, 1));
-        slots.insert(WidgetId::EventLog,       GridSlot::new(10, 0, 2, 4));
-        slots.insert(WidgetId::GroupHotkeys,   GridSlot::new(0, 4, 1, 3));
-        slots.insert(WidgetId::Selection,      GridSlot::new(0, 9, 3, 3));
-        slots.insert(WidgetId::Actions,        GridSlot::new(3, 8, 4, 4));
+        slots.insert(WidgetId::Resources, GridSlot::new(0, 0, 1, 2));
+        slots.insert(WidgetId::ArmyOverview, GridSlot::new(0, 2, 1, 1));
+        slots.insert(WidgetId::EventLog, GridSlot::new(10, 0, 2, 4));
+        slots.insert(WidgetId::GroupHotkeys, GridSlot::new(0, 4, 1, 3));
+        slots.insert(WidgetId::Selection, GridSlot::new(0, 9, 3, 3));
+        slots.insert(WidgetId::Actions, GridSlot::new(3, 8, 4, 4));
         slots.insert(WidgetId::ProductionQueue, GridSlot::new(7, 8, 2, 4));
-        slots.insert(WidgetId::Minimap,        GridSlot::new(9, 8, 3, 4));
-        slots.insert(WidgetId::TechTree,       GridSlot::new(3, 4, 6, 4));
-        slots.insert(WidgetId::Debug,          GridSlot::new(10, 0, 2, 12));
+        slots.insert(WidgetId::Minimap, GridSlot::new(9, 8, 3, 4));
+        slots.insert(WidgetId::TechTree, GridSlot::new(3, 4, 6, 4));
+        slots.insert(WidgetId::Debug, GridSlot::new(10, 0, 2, 12));
 
         let mut visibility = HashMap::new();
         visibility.insert(WidgetId::Resources, true);
@@ -245,7 +250,11 @@ pub fn spawn_widget_frame(
                 Val::Px(0.0),
                 Val::Px(8.0),
             ),
-            if visible { Visibility::Inherited } else { Visibility::Hidden },
+            if visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
         ))
         .id();
     commands.entity(parent).add_child(widget_entity);
@@ -270,7 +279,10 @@ pub fn spawn_widget_frame(
             // Title text
             bar.spawn((
                 Text::new(id.display_name().to_uppercase()),
-                TextFont { font_size: theme::FONT_SMALL, ..default() },
+                TextFont {
+                    font_size: theme::FONT_SMALL,
+                    ..default()
+                },
                 TextColor(theme::TEXT_SECONDARY),
             ));
 
@@ -291,7 +303,10 @@ pub fn spawn_widget_frame(
             .with_children(|close| {
                 close.spawn((
                     Text::new("X"),
-                    TextFont { font_size: theme::FONT_TINY, ..default() },
+                    TextFont {
+                        font_size: theme::FONT_TINY,
+                        ..default()
+                    },
                     TextColor(theme::TEXT_DISABLED),
                 ));
             });
@@ -381,7 +396,11 @@ pub fn sync_widget_visibility(
     }
     for (widget, mut vis) in &mut widgets {
         let should_show = registry.is_visible(widget.id);
-        let new_vis = if should_show { Visibility::Inherited } else { Visibility::Hidden };
+        let new_vis = if should_show {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
         if *vis != new_vis {
             *vis = new_vis;
         }
@@ -406,7 +425,10 @@ pub fn handle_widget_buttons(
 pub fn handle_widget_scroll(
     mut mouse_wheel: MessageReader<MouseWheel>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    mut scroll_q: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform), With<WidgetContent>>,
+    mut scroll_q: Query<
+        (&mut ScrollPosition, &ComputedNode, &UiGlobalTransform),
+        With<WidgetContent>,
+    >,
 ) {
     let mut dy: f32 = 0.0;
     for ev in mouse_wheel.read() {
@@ -415,13 +437,22 @@ pub fn handle_widget_scroll(
             MouseScrollUnit::Pixel => -ev.y,
         };
     }
-    if dy.abs() < 0.001 { return; }
+    if dy.abs() < 0.001 {
+        return;
+    }
 
-    let Some(cursor_phys) = windows.single().ok().and_then(|w| w.physical_cursor_position()) else { return; };
+    let Some(cursor_phys) = windows
+        .single()
+        .ok()
+        .and_then(|w| w.physical_cursor_position())
+    else {
+        return;
+    };
 
     for (mut scroll_pos, computed, ui_tf) in &mut scroll_q {
         if computed.contains_point(*ui_tf, cursor_phys) {
-            let max_scroll = (computed.content_size().y - computed.size().y).max(0.0) * computed.inverse_scale_factor();
+            let max_scroll = (computed.content_size().y - computed.size().y).max(0.0)
+                * computed.inverse_scale_factor();
             scroll_pos.y = (scroll_pos.y + dy).clamp(0.0, max_scroll);
         }
     }
@@ -487,13 +518,24 @@ pub fn toggle_grid_overlay(
         return;
     }
     for mut vis in &mut overlay {
-        *vis = if interaction.0 { Visibility::Inherited } else { Visibility::Hidden };
+        *vis = if interaction.0 {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
     }
 }
 
 // ── Snap Helper ──
 
-fn pixel_to_grid_slot(px_x: f32, px_y: f32, px_w: f32, px_h: f32, win_w: f32, win_h: f32) -> GridSlot {
+fn pixel_to_grid_slot(
+    px_x: f32,
+    px_y: f32,
+    px_w: f32,
+    px_h: f32,
+    win_w: f32,
+    win_h: f32,
+) -> GridSlot {
     let cell_w = win_w / GRID_COLS;
     let cell_h = win_h / GRID_ROWS;
 
@@ -516,8 +558,12 @@ pub fn handle_widget_drag(
     interactions: Query<(&Interaction, &WidgetDragHandle)>,
     mut widget_nodes: Query<(&mut Node, &mut ZIndex, &Widget, &ComputedNode), With<Widget>>,
 ) {
-    let Ok(window) = windows.single() else { return; };
-    let Some(cursor) = window.cursor_position() else { return; };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
 
     // Snap on release (before clearing active_widget)
     if mouse.just_released(MouseButton::Left) {
@@ -613,8 +659,12 @@ pub fn handle_widget_resize(
     interactions: Query<(&Interaction, &WidgetResizeHandle)>,
     mut widget_nodes: Query<(&mut Node, &ComputedNode, &mut ZIndex, &Widget), With<Widget>>,
 ) {
-    let Ok(window) = windows.single() else { return; };
-    let Some(cursor) = window.cursor_position() else { return; };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
 
     // Snap on release (before clearing active_widget)
     if mouse.just_released(MouseButton::Left) {

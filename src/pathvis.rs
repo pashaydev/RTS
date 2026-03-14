@@ -62,7 +62,13 @@ fn spawn_path_visualization(
     height_map: Res<HeightMap>,
     active_player: Res<ActivePlayer>,
     mut units: Query<
-        (Entity, &Transform, &MoveTarget, &Faction, Option<&mut PathVisEntities>),
+        (
+            Entity,
+            &Transform,
+            &MoveTarget,
+            &Faction,
+            Option<&mut PathVisEntities>,
+        ),
         With<Unit>,
     >,
 ) {
@@ -191,10 +197,7 @@ fn animate_path_ring(time: Res<Time>, mut rings: Query<&mut Transform, With<Path
 /// Clean up path vis when a unit stops moving (no longer has MoveTarget)
 fn cleanup_path_vis(
     mut commands: Commands,
-    units_without_target: Query<
-        (Entity, &PathVisEntities),
-        (With<Unit>, Without<MoveTarget>),
-    >,
+    units_without_target: Query<(Entity, &PathVisEntities), (With<Unit>, Without<MoveTarget>)>,
 ) {
     for (unit_entity, vis) in &units_without_target {
         for &e in &vis.entities {

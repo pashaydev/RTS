@@ -15,6 +15,7 @@ impl Plugin for CombatPlugin {
                 player_auto_acquire_target,
                 approach_attack_target,
                 execute_attacks,
+                explode_props,
                 handle_death,
             )
                 .chain()
@@ -23,24 +24,100 @@ impl Plugin for CombatPlugin {
     }
 }
 
+fn explode_props(
+    mut commands: Commands,
+    vfx_assets: Option<Res<VfxAssets>>,
+    mut queries: ParamSet<(
+        Query<(Entity, &Transform, &ExplosiveProp, &Health)>,
+        Query<(Entity, &mut Transform, &mut Health), Without<Projectile>>,
+    )>,
+) {
+    let Some(vfx) = vfx_assets else { return };
+
+    let detonations: Vec<_> = queries
+        .p0()
+        .iter()
+        .filter(|(_, _, _, health)| health.current <= 0.0)
+        .map(|(entity, tf, prop, _)| (entity, tf.translation, *prop))
+        .collect();
+
+    for (source_entity, origin, prop) in detonations {
+        commands.spawn((
+            VfxFlash {
+                timer: Timer::from_seconds(0.3, TimerMode::Once),
+                start_scale: 0.4,
+                end_scale: prop.radius * 0.55,
+            },
+            FogHideable::Vfx,
+            Mesh3d(vfx.sphere_mesh.clone()),
+            MeshMaterial3d(vfx.impact_material.clone()),
+            Transform::from_translation(origin).with_scale(Vec3::splat(0.4)),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+
+        for (target_entity, mut target_tf, mut health) in &mut queries.p1() {
+            if target_entity == source_entity {
+                continue;
+            }
+
+            let offset = target_tf.translation - origin;
+            let dist = offset.length();
+            if dist > prop.radius {
+                continue;
+            }
+
+            let falloff = 1.0 - (dist / prop.radius).min(1.0);
+            if falloff <= 0.0 {
+                continue;
+            }
+
+            health.current -= prop.damage * falloff;
+            if dist > 0.05 {
+                let push = Vec3::new(offset.x, 0.0, offset.z).normalize_or_zero() * falloff * 0.9;
+                target_tf.translation += push;
+            }
+        }
+    }
+}
+
 fn player_auto_acquire_target(
     mut commands: Commands,
     teams: Res<TeamConfig>,
     idle_units: Query<
-        (Entity, &Transform, &AttackRange, &Faction, Option<&UnitState>),
+        (
+            Entity,
+            &Transform,
+            &AttackRange,
+            &Faction,
+            Option<&UnitState>,
+            Option<&UnitStance>,
+        ),
         (With<Unit>, Without<MoveTarget>, Without<AttackTarget>),
     >,
     potential_targets: Query<(Entity, &Transform, &Faction), Or<(With<Mob>, With<Unit>)>>,
     buildings_with_faction: Query<(Entity, &Transform, &Faction), With<Building>>,
 ) {
-    for (unit_entity, unit_tf, range, faction, unit_state) in &idle_units {
+    for (unit_entity, unit_tf, range, faction, unit_state, opt_stance) in &idle_units {
         // Skip units that are busy (not idle)
         if let Some(state) = unit_state {
             if !matches!(state, UnitState::Idle) {
                 continue;
             }
         }
-        let scan_range = range.0 * 2.0;
+
+        let stance = opt_stance.copied().unwrap_or_default();
+
+        // Passive units never auto-acquire
+        if stance == UnitStance::Passive {
+            continue;
+        }
+
+        let scan_range = range.0 * stance.scan_multiplier();
+        if scan_range <= 0.0 {
+            continue;
+        }
+
         let mut closest_dist = f32::MAX;
         let mut closest_target = None;
 
@@ -59,19 +136,27 @@ fn player_auto_acquire_target(
             }
         }
 
-        // Also check hostile buildings
-        for (target_entity, target_tf, target_faction) in &buildings_with_faction {
-            if !teams.is_hostile(faction, target_faction) {
-                continue;
-            }
-            let dist = unit_tf.translation.distance(target_tf.translation);
-            if dist < scan_range && dist < closest_dist {
-                closest_dist = dist;
-                closest_target = Some(target_entity);
+        // Aggressive stance also auto-acquires hostile buildings
+        if stance == UnitStance::Aggressive {
+            for (target_entity, target_tf, target_faction) in &buildings_with_faction {
+                if !teams.is_hostile(faction, target_faction) {
+                    continue;
+                }
+                let dist = unit_tf.translation.distance(target_tf.translation);
+                if dist < scan_range && dist < closest_dist {
+                    closest_dist = dist;
+                    closest_target = Some(target_entity);
+                }
             }
         }
 
         if let Some(target) = closest_target {
+            // Record leash origin for defensive stance
+            if stance == UnitStance::Defensive {
+                commands
+                    .entity(unit_entity)
+                    .insert(LeashOrigin(unit_tf.translation));
+            }
             commands.entity(unit_entity).insert(AttackTarget(target));
         }
     }
@@ -81,9 +166,13 @@ fn approach_attack_target(
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
     height_map: Res<HeightMap>,
-    mut attackers: Query<
-        (&mut Transform, &AttackTarget, &UnitSpeed, &AttackRange, Option<&EntityKind>),
-    >,
+    mut attackers: Query<(
+        &mut Transform,
+        &AttackTarget,
+        &UnitSpeed,
+        &AttackRange,
+        Option<&EntityKind>,
+    )>,
     targets: Query<&Transform, Without<AttackTarget>>,
 ) {
     for (mut tf, attack_target, speed, range, opt_kind) in &mut attackers {
@@ -103,7 +192,12 @@ fn approach_attack_target(
             tf.translation += step;
 
             let y_off = if let Some(kind) = opt_kind {
-                registry.get(*kind).movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8)
+                registry
+                    .get(*kind)
+                    .movement
+                    .as_ref()
+                    .map(|m| m.y_offset)
+                    .unwrap_or(0.8)
             } else {
                 0.8
             };
@@ -116,9 +210,14 @@ fn execute_attacks(
     mut commands: Commands,
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
-    mut attackers: Query<
-        (&Transform, &AttackTarget, &mut AttackCooldown, &AttackDamage, &AttackRange, Option<&IsRanged>),
-    >,
+    mut attackers: Query<(
+        &Transform,
+        &AttackTarget,
+        &mut AttackCooldown,
+        &AttackDamage,
+        &AttackRange,
+        Option<&IsRanged>,
+    )>,
     mut healths: Query<(&Transform, &mut Health)>,
 ) {
     let Some(vfx) = vfx_assets else { return };
@@ -167,8 +266,7 @@ fn execute_attacks(
                 FogHideable::Vfx,
                 Mesh3d(vfx.sphere_mesh.clone()),
                 MeshMaterial3d(vfx.melee_material.clone()),
-                Transform::from_translation(target_tf.translation)
-                    .with_scale(Vec3::splat(0.3)),
+                Transform::from_translation(target_tf.translation).with_scale(Vec3::splat(0.3)),
                 NotShadowCaster,
                 NotShadowReceiver,
             ));
@@ -178,7 +276,16 @@ fn execute_attacks(
 
 fn handle_death(
     mut commands: Commands,
-    dead: Query<(Entity, &Health, Option<&Building>, Option<&Selected>, Option<&EntityKind>, Option<&Transform>, Option<&UnitState>, Option<&Faction>)>,
+    dead: Query<(
+        Entity,
+        &Health,
+        Option<&Building>,
+        Option<&Selected>,
+        Option<&EntityKind>,
+        Option<&Transform>,
+        Option<&UnitState>,
+        Option<&Faction>,
+    )>,
     mut attackers_with_target: Query<(Entity, &AttackTarget, Option<&mut PatrolState>)>,
     mut all_assigned_workers: Query<&mut AssignedWorkers>,
     workers_with_state: Query<(Entity, &UnitState), With<Unit>>,
@@ -186,15 +293,43 @@ fn handle_death(
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
     // Collect dead entities first to avoid borrow issues
-    let dead_list: Vec<_> = dead.iter()
+    let dead_list: Vec<_> = dead
+        .iter()
         .filter(|(_, health, ..)| health.current <= 0.0)
-        .map(|(entity, _, opt_building, opt_selected, opt_kind, opt_transform, opt_unit_state, opt_faction)| {
-            (entity, opt_building.is_some(), opt_selected.is_some(),
-             opt_kind.map(|k| *k), opt_transform.map(|t| *t), opt_unit_state.copied(), opt_faction.copied())
-        })
+        .map(
+            |(
+                entity,
+                _,
+                opt_building,
+                opt_selected,
+                opt_kind,
+                opt_transform,
+                opt_unit_state,
+                opt_faction,
+            )| {
+                (
+                    entity,
+                    opt_building.is_some(),
+                    opt_selected.is_some(),
+                    opt_kind.map(|k| *k),
+                    opt_transform.map(|t| *t),
+                    opt_unit_state.copied(),
+                    opt_faction.copied(),
+                )
+            },
+        )
         .collect();
 
-    for (dead_entity, is_building, is_selected, opt_kind, opt_transform, opt_unit_state, opt_faction) in &dead_list {
+    for (
+        dead_entity,
+        is_building,
+        is_selected,
+        opt_kind,
+        opt_transform,
+        opt_unit_state,
+        opt_faction,
+    ) in &dead_list
+    {
         for (attacker_entity, attack_target, opt_patrol) in &mut attackers_with_target {
             if attack_target.0 == *dead_entity {
                 commands.entity(attacker_entity).remove::<AttackTarget>();
@@ -204,8 +339,10 @@ fn handle_death(
             }
         }
 
-        // If a worker dies while inside a processor, remove it from the building's AssignedWorkers
-        if let Some(UnitState::InsideProcessor(building)) = opt_unit_state {
+        // If a worker dies while assigned to a processor, remove it from AssignedWorkers
+        if let Some(UnitState::InsideProcessor(building) | UnitState::MovingToProcessor(building)) =
+            opt_unit_state
+        {
             if let Ok(mut aw) = all_assigned_workers.get_mut(*building) {
                 aw.workers.retain(|&w| w != *dead_entity);
             }
@@ -217,10 +354,13 @@ fn handle_death(
                 let workers_to_eject: Vec<Entity> = aw.workers.clone();
                 for worker in workers_to_eject {
                     if let Ok((_, worker_state)) = workers_with_state.get(worker) {
-                        if matches!(worker_state, UnitState::InsideProcessor(b) if *b == *dead_entity) {
+                        if matches!(worker_state, UnitState::InsideProcessor(b) if *b == *dead_entity)
+                        {
                             crate::resources::unassign_worker_from_processor(&mut commands, worker);
                             if let Some(building_tf) = opt_transform {
-                                commands.entity(worker).insert(Transform::from_translation(building_tf.translation));
+                                commands
+                                    .entity(worker)
+                                    .insert(Transform::from_translation(building_tf.translation));
                             }
                         }
                     }

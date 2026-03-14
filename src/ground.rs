@@ -1,5 +1,5 @@
-use bevy::prelude::*;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
+use bevy::prelude::*;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::components::{AppState, Biome, BiomeMap, GameSetupConfig, Ground, MapSeed};
@@ -67,7 +67,9 @@ impl TerrainNoise {
     }
 
     pub fn terrain_height(&self, x: f32, z: f32) -> f32 {
-        let val = self.height_fbm.get([x as f64 * NOISE_SCALE, z as f64 * NOISE_SCALE]) as f32;
+        let val = self
+            .height_fbm
+            .get([x as f64 * NOISE_SCALE, z as f64 * NOISE_SCALE]) as f32;
         val * AMPLITUDE
     }
 
@@ -75,12 +77,16 @@ impl TerrainNoise {
         let height = self.terrain_height(x, z);
         let height_norm = ((height / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0);
 
-        let moisture = (self.moisture_fbm.get([x as f64 * MOISTURE_SCALE, z as f64 * MOISTURE_SCALE]) as f32
+        let moisture = (self
+            .moisture_fbm
+            .get([x as f64 * MOISTURE_SCALE, z as f64 * MOISTURE_SCALE])
+            as f32
             * 0.5
             + 0.5)
             .clamp(0.0, 1.0);
 
-        let temperature = (self.temperature_fbm
+        let temperature = (self
+            .temperature_fbm
             .get([x as f64 * TEMPERATURE_SCALE, z as f64 * TEMPERATURE_SCALE])
             as f32
             * 0.5
@@ -104,10 +110,7 @@ impl TerrainNoise {
 }
 
 /// Resolves the map seed: if 0, generates a random one. Inserts MapSeed resource.
-pub fn resolve_map_seed(
-    mut commands: Commands,
-    config: Res<GameSetupConfig>,
-) {
+pub fn resolve_map_seed(mut commands: Commands, config: Res<GameSetupConfig>) {
     let seed = if config.map_seed == 0 {
         rand::random::<u64>()
     } else {
@@ -121,12 +124,7 @@ fn biome_color(biome: Biome, height_norm: f32) -> [f32; 4] {
     match biome {
         Biome::Forest => {
             let t = ((height_norm - 0.3) / 0.45).clamp(0.0, 1.0);
-            [
-                0.1 + t * 0.1,
-                0.45 + t * 0.2,
-                0.08 + t * 0.07,
-                1.0,
-            ]
+            [0.1 + t * 0.1, 0.45 + t * 0.2, 0.08 + t * 0.07, 1.0]
         }
         Biome::Desert => [
             0.85 + height_norm * 0.1,
@@ -151,12 +149,7 @@ fn biome_color(biome: Biome, height_norm: f32) -> [f32; 4] {
         }
         Biome::Mountain => {
             let t = ((height_norm - 0.75) / 0.25).clamp(0.0, 1.0);
-            [
-                0.5 + t * 0.35,
-                0.48 + t * 0.35,
-                0.45 + t * 0.35,
-                1.0,
-            ]
+            [0.5 + t * 0.35, 0.48 + t * 0.35, 0.45 + t * 0.35, 1.0]
         }
     }
 }
@@ -165,7 +158,10 @@ pub struct GroundPlugin;
 
 impl Plugin for GroundPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppState::InGame), (resolve_map_seed, spawn_ground).chain());
+        app.add_systems(
+            OnEnter(AppState::InGame),
+            (resolve_map_seed, spawn_ground).chain(),
+        );
     }
 }
 
@@ -220,7 +216,8 @@ pub fn spawn_ground(
     }
 
     // Generate indices
-    let mut indices: Vec<u32> = Vec::with_capacity((actual_grid_size - 1) * (actual_grid_size - 1) * 6);
+    let mut indices: Vec<u32> =
+        Vec::with_capacity((actual_grid_size - 1) * (actual_grid_size - 1) * 6);
     for iz in 0..(actual_grid_size - 1) {
         for ix in 0..(actual_grid_size - 1) {
             let tl = (iz * actual_grid_size + ix) as u32;

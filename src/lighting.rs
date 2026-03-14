@@ -15,12 +15,14 @@ impl Plugin for LightingPlugin {
             .add_systems(OnEnter(AppState::InGame), setup_lighting)
             .add_systems(
                 Update,
-                (advance_day_cycle, update_lighting, update_volumetric_fog).chain()
+                (advance_day_cycle, update_lighting, update_volumetric_fog)
+                    .chain()
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
-                (update_entity_light_grid, manage_cluster_lights).chain()
+                (update_entity_light_grid, manage_cluster_lights)
+                    .chain()
                     .run_if(in_state(AppState::InGame)),
             );
     }
@@ -30,14 +32,32 @@ fn register_lighting_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
     let cycle = DayCycle::default();
 
     // Time of Day folder
-    tweaks.add_float("Visuals/Time of Day", "Cycle Duration", cycle.cycle_duration, 10.0, 3600.0, 10.0);
+    tweaks.add_float(
+        "Visuals/Time of Day",
+        "Cycle Duration",
+        cycle.cycle_duration,
+        10.0,
+        3600.0,
+        10.0,
+    );
     tweaks.add_float("Visuals/Time of Day", "Time", cycle.time, 0.0, 1.0, 0.01);
     tweaks.add_bool("Visuals/Time of Day", "Paused", cycle.paused);
-    tweaks.add_readonly("Visuals/Time of Day", "Phase", &format!("{:?}", cycle.phase));
+    tweaks.add_readonly(
+        "Visuals/Time of Day",
+        "Phase",
+        &format!("{:?}", cycle.phase),
+    );
 
     // Sunlight folder
     tweaks.add_bool("Visuals/Sunlight", "Override", false);
-    tweaks.add_float("Visuals/Sunlight", "Illuminance", 6000.0, 0.0, 15000.0, 100.0);
+    tweaks.add_float(
+        "Visuals/Sunlight",
+        "Illuminance",
+        6000.0,
+        0.0,
+        15000.0,
+        100.0,
+    );
     tweaks.add_float("Visuals/Sunlight", "Color R", 0.85, 0.0, 1.0, 0.01);
     tweaks.add_float("Visuals/Sunlight", "Color G", 0.80, 0.0, 1.0, 0.01);
     tweaks.add_float("Visuals/Sunlight", "Color B", 0.70, 0.0, 1.0, 0.01);
@@ -47,7 +67,14 @@ fn register_lighting_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
 
     // Ambient Light folder
     tweaks.add_bool("Visuals/Ambient Light", "Override", false);
-    tweaks.add_float("Visuals/Ambient Light", "Brightness", 300.0, 0.0, 1000.0, 5.0);
+    tweaks.add_float(
+        "Visuals/Ambient Light",
+        "Brightness",
+        300.0,
+        0.0,
+        1000.0,
+        5.0,
+    );
     tweaks.add_float("Visuals/Ambient Light", "Color R", 0.9, 0.0, 1.0, 0.01);
     tweaks.add_float("Visuals/Ambient Light", "Color G", 0.85, 0.0, 1.0, 0.01);
     tweaks.add_float("Visuals/Ambient Light", "Color B", 0.80, 0.0, 1.0, 0.01);
@@ -62,8 +89,22 @@ fn register_lighting_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
     tweaks.add_bool("Visuals/Entity Lights", "Enabled", true);
     tweaks.add_float("Visuals/Entity Lights", "Cell Size", 15.0, 5.0, 30.0, 1.0);
     tweaks.add_float("Visuals/Entity Lights", "Max Lights", 64.0, 8.0, 128.0, 4.0);
-    tweaks.add_float("Visuals/Entity Lights", "Building Intensity", 150000.0, 0.0, 500000.0, 5000.0);
-    tweaks.add_float("Visuals/Entity Lights", "Unit Intensity", 80000.0, 0.0, 300000.0, 5000.0);
+    tweaks.add_float(
+        "Visuals/Entity Lights",
+        "Building Intensity",
+        150000.0,
+        0.0,
+        500000.0,
+        5000.0,
+    );
+    tweaks.add_float(
+        "Visuals/Entity Lights",
+        "Unit Intensity",
+        80000.0,
+        0.0,
+        300000.0,
+        5000.0,
+    );
     tweaks.add_float("Visuals/Entity Lights", "Night Factor", 1.0, 0.0, 1.0, 0.05);
     tweaks.add_float("Visuals/Entity Lights", "Day Factor", 0.3, 0.0, 1.0, 0.05);
     tweaks.add_readonly("Visuals/Entity Lights", "Active Lights", "0");
@@ -470,7 +511,12 @@ fn manage_cluster_lights(
     cycle: Res<DayCycle>,
     config: Res<EntityLightConfig>,
     time: Res<Time>,
-    mut existing: Query<(Entity, &mut EntityClusterLight, &mut PointLight, &mut Transform)>,
+    mut existing: Query<(
+        Entity,
+        &mut EntityClusterLight,
+        &mut PointLight,
+        &mut Transform,
+    )>,
 ) {
     if !config.enabled {
         for (entity, _, _, _) in &existing {
@@ -503,7 +549,11 @@ fn manage_cluster_lights(
 
             let (color, base_intensity, range, y_offset) = if cell_data.has_building {
                 (
-                    Color::srgb(BUILDING_LIGHT_COLOR.0, BUILDING_LIGHT_COLOR.1, BUILDING_LIGHT_COLOR.2),
+                    Color::srgb(
+                        BUILDING_LIGHT_COLOR.0,
+                        BUILDING_LIGHT_COLOR.1,
+                        BUILDING_LIGHT_COLOR.2,
+                    ),
                     config.building_base_intensity,
                     BUILDING_RANGE,
                     BUILDING_Y_OFFSET,
@@ -548,7 +598,11 @@ fn manage_cluster_lights(
         }
         let (color, base_intensity, range, y_offset) = if cell_data.has_building {
             (
-                Color::srgb(BUILDING_LIGHT_COLOR.0, BUILDING_LIGHT_COLOR.1, BUILDING_LIGHT_COLOR.2),
+                Color::srgb(
+                    BUILDING_LIGHT_COLOR.0,
+                    BUILDING_LIGHT_COLOR.1,
+                    BUILDING_LIGHT_COLOR.2,
+                ),
                 config.building_base_intensity,
                 BUILDING_RANGE,
                 BUILDING_Y_OFFSET,

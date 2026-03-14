@@ -1,17 +1,17 @@
-pub mod widget_framework;
-pub mod widget_toolbar;
+pub mod actions_widget;
+pub mod animations;
+pub mod army_overview_widget;
+pub mod buttons;
+pub mod event_log_widget;
+pub mod group_hotkeys_widget;
+pub mod notifications;
+pub mod production_queue_widget;
 pub mod resources_widget;
 pub mod selection_widget;
-pub mod actions_widget;
-pub mod production_queue_widget;
-pub mod army_overview_widget;
-pub mod tech_tree_widget;
-pub mod group_hotkeys_widget;
-pub mod event_log_widget;
-pub mod animations;
-pub mod buttons;
-pub mod notifications;
 pub mod shared;
+pub mod tech_tree_widget;
+pub mod widget_framework;
+pub mod widget_toolbar;
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -20,7 +20,7 @@ use crate::components::*;
 use crate::selection::SelectionSet;
 use crate::theme;
 
-use widget_framework::{WidgetRegistry, spawn_widget_frame, WidgetId};
+use widget_framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 
 pub struct UiPlugin;
 
@@ -28,6 +28,7 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RallyPointMode>()
             .init_resource::<UiMode>()
+            .init_resource::<actions_widget::ActionBarLayoutRevision>()
             .init_resource::<WidgetRegistry>()
             .init_resource::<widget_framework::WidgetResizeState>()
             .init_resource::<widget_framework::WidgetDragState>()
@@ -35,7 +36,10 @@ impl Plugin for UiPlugin {
             .init_resource::<group_hotkeys_widget::ControlGroups>()
             .init_resource::<event_log_widget::GameEventLog>()
             .init_resource::<event_log_widget::EventLogRenderState>()
-            .add_systems(OnEnter(AppState::InGame), (spawn_hud, widget_framework::spawn_grid_overlay))
+            .add_systems(
+                OnEnter(AppState::InGame),
+                (spawn_hud, widget_framework::spawn_grid_overlay),
+            )
             .add_systems(
                 Update,
                 (ApplyDeferred, compute_ui_mode)
@@ -43,7 +47,10 @@ impl Plugin for UiPlugin {
                     .after(SelectionSet)
                     .run_if(in_state(AppState::InGame)),
             )
-            .add_systems(Update, update_placement_hint.run_if(in_state(AppState::InGame)))
+            .add_systems(
+                Update,
+                update_placement_hint.run_if(in_state(AppState::InGame)),
+            )
             .add_systems(
                 Update,
                 (
@@ -56,13 +63,19 @@ impl Plugin for UiPlugin {
                     .after(compute_ui_mode)
                     .run_if(in_state(AppState::InGame)),
             )
-            .add_systems(Update, actions_widget::update_action_bar.after(compute_ui_mode).run_if(in_state(AppState::InGame)))
             .add_systems(
                 Update,
                 (
-                    buttons::handle_build_buttons,
-                    buttons::handle_train_buttons,
+                    actions_widget::track_action_bar_layout,
+                    actions_widget::update_action_bar,
                 )
+                    .chain()
+                    .after(compute_ui_mode)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (buttons::handle_build_buttons, buttons::handle_train_buttons)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
@@ -71,6 +84,7 @@ impl Plugin for UiPlugin {
                     buttons::handle_upgrade_button,
                     buttons::handle_demolish_button,
                     buttons::handle_demolish_confirm,
+                    buttons::handle_scuttle_unit_button,
                     buttons::handle_rally_point_button,
                     buttons::handle_toggle_auto_attack,
                     buttons::handle_cancel_train,
@@ -87,10 +101,14 @@ impl Plugin for UiPlugin {
                 Update,
                 (
                     buttons::update_upgrade_progress_display,
-                    // button_hover_visual and animated_button_hover_system run always (needed for menu)
                     buttons::action_bar_transition_system,
                     buttons::show_action_tooltips,
                     buttons::cleanup_action_tooltips,
+                    buttons::handle_attack_move_button,
+                    buttons::handle_patrol_button,
+                    buttons::handle_hold_position_button,
+                    buttons::handle_stop_button,
+                    buttons::handle_cycle_stance_button,
                 )
                     .run_if(in_state(AppState::InGame)),
             )
@@ -117,7 +135,14 @@ impl Plugin for UiPlugin {
                 )
                     .run_if(in_state(AppState::InGame)),
             )
-            .add_systems(Update, (notifications::update_ally_notifications, notifications::handle_notification_click).run_if(in_state(AppState::InGame)))
+            .add_systems(
+                Update,
+                (
+                    notifications::update_ally_notifications,
+                    notifications::handle_notification_click,
+                )
+                    .run_if(in_state(AppState::InGame)),
+            )
             .add_systems(
                 Update,
                 (
@@ -201,7 +226,9 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
 
     // Spawn Resources widget
     let resources_content = spawn_widget_frame(
-        &mut commands, root, WidgetId::Resources,
+        &mut commands,
+        root,
+        WidgetId::Resources,
         registry.slots.get(&WidgetId::Resources).unwrap(),
         registry.is_visible(WidgetId::Resources),
     );
@@ -209,16 +236,22 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
 
     // Spawn Selection widget (content is dynamic, rebuilt by rebuild_selection_panel)
     let selection_content = spawn_widget_frame(
-        &mut commands, root, WidgetId::Selection,
+        &mut commands,
+        root,
+        WidgetId::Selection,
         registry.slots.get(&WidgetId::Selection).unwrap(),
         registry.is_visible(WidgetId::Selection),
     );
     // Tag the content entity so rebuild_selection_panel can find it
-    commands.entity(selection_content).insert(SelectionInfoPanel);
+    commands
+        .entity(selection_content)
+        .insert(SelectionInfoPanel);
 
     // Spawn Actions widget (content is dynamic, rebuilt by update_action_bar)
     let actions_content = spawn_widget_frame(
-        &mut commands, root, WidgetId::Actions,
+        &mut commands,
+        root,
+        WidgetId::Actions,
         registry.slots.get(&WidgetId::Actions).unwrap(),
         registry.is_visible(WidgetId::Actions),
     );
@@ -227,46 +260,60 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
 
     // Spawn Army Overview widget
     spawn_widget_frame(
-        &mut commands, root, WidgetId::ArmyOverview,
+        &mut commands,
+        root,
+        WidgetId::ArmyOverview,
         registry.slots.get(&WidgetId::ArmyOverview).unwrap(),
         registry.is_visible(WidgetId::ArmyOverview),
     );
 
     // Spawn Production Queue widget
     spawn_widget_frame(
-        &mut commands, root, WidgetId::ProductionQueue,
+        &mut commands,
+        root,
+        WidgetId::ProductionQueue,
         registry.slots.get(&WidgetId::ProductionQueue).unwrap(),
         registry.is_visible(WidgetId::ProductionQueue),
     );
 
     // Spawn Tech Tree widget (overlay, closed by default)
     spawn_widget_frame(
-        &mut commands, root, WidgetId::TechTree,
+        &mut commands,
+        root,
+        WidgetId::TechTree,
         registry.slots.get(&WidgetId::TechTree).unwrap(),
         registry.is_visible(WidgetId::TechTree),
     );
 
     // Spawn Group Hotkeys widget
     spawn_widget_frame(
-        &mut commands, root, WidgetId::GroupHotkeys,
+        &mut commands,
+        root,
+        WidgetId::GroupHotkeys,
         registry.slots.get(&WidgetId::GroupHotkeys).unwrap(),
         registry.is_visible(WidgetId::GroupHotkeys),
     );
 
     // Spawn Event Log widget
     spawn_widget_frame(
-        &mut commands, root, WidgetId::EventLog,
+        &mut commands,
+        root,
+        WidgetId::EventLog,
         registry.slots.get(&WidgetId::EventLog).unwrap(),
         registry.is_visible(WidgetId::EventLog),
     );
 
     // Spawn Minimap widget (content populated by MinimapPlugin in PostStartup)
     let minimap_content = spawn_widget_frame(
-        &mut commands, root, WidgetId::Minimap,
+        &mut commands,
+        root,
+        WidgetId::Minimap,
         registry.slots.get(&WidgetId::Minimap).unwrap(),
         registry.is_visible(WidgetId::Minimap),
     );
-    commands.entity(minimap_content).insert(crate::minimap::MinimapWidgetContent);
+    commands
+        .entity(minimap_content)
+        .insert(crate::minimap::MinimapWidgetContent);
 
     // Spawn notification container
     notifications::spawn_notification_container(&mut commands, root);

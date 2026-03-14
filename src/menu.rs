@@ -88,11 +88,7 @@ impl Plugin for MenuPlugin {
             .add_systems(OnExit(AppState::MainMenu), cleanup_menu)
             .add_systems(
                 Update,
-                (
-                    handle_menu_buttons,
-                    handle_selector_clicks,
-                )
-                    .run_if(in_state(AppState::MainMenu)),
+                (handle_menu_buttons, handle_selector_clicks).run_if(in_state(AppState::MainMenu)),
             )
             .add_systems(
                 Update,
@@ -128,16 +124,42 @@ impl Plugin for MenuPlugin {
 // ── Constants ──
 
 const RANDOM_NAMES: &[&str] = &[
-    "Commander", "General", "Warlord", "Captain", "Marshal",
-    "Overlord", "Strategist", "Vanguard", "Centurion", "Paladin",
-    "Sentinel", "Arbiter", "Conqueror", "Vindicator", "Sovereign",
-    "Crusader", "Phantom", "Templar", "Warmaster", "Executor",
-    "Pathfinder", "Nomad", "Ironclad", "Stormcaller",
+    "Commander",
+    "General",
+    "Warlord",
+    "Captain",
+    "Marshal",
+    "Overlord",
+    "Strategist",
+    "Vanguard",
+    "Centurion",
+    "Paladin",
+    "Sentinel",
+    "Arbiter",
+    "Conqueror",
+    "Vindicator",
+    "Sovereign",
+    "Crusader",
+    "Phantom",
+    "Templar",
+    "Warmaster",
+    "Executor",
+    "Pathfinder",
+    "Nomad",
+    "Ironclad",
+    "Stormcaller",
 ];
 const DAY_CYCLE_OPTIONS: &[(f32, &str)] = &[(300.0, "5min"), (600.0, "10min"), (1200.0, "20min")];
 const STARTING_RES_OPTIONS: &[(f32, &str)] = &[(0.5, "0.5x"), (1.0, "1x"), (2.0, "2x")];
 const RESOLUTION_OPTIONS: &[(u32, u32)] = &[(1280, 720), (1920, 1080)];
-const UI_SCALE_OPTIONS: &[(f32, &str)] = &[(0.75, "75%"), (0.85, "85%"), (1.0, "100%"), (1.15, "115%"), (1.25, "125%"), (1.5, "150%")];
+const UI_SCALE_OPTIONS: &[(f32, &str)] = &[
+    (0.75, "75%"),
+    (0.85, "85%"),
+    (1.0, "100%"),
+    (1.15, "115%"),
+    (1.25, "125%"),
+    (1.5, "150%"),
+];
 
 const NUM_PARTICLES: usize = 12;
 
@@ -326,11 +348,7 @@ fn spawn_title_page(commands: &mut Commands, container: Entity) {
 
 // ── New Game Page ──
 
-fn spawn_new_game_page(
-    commands: &mut Commands,
-    container: Entity,
-    config: &GameSetupConfig,
-) {
+fn spawn_new_game_page(commands: &mut Commands, container: Entity, config: &GameSetupConfig) {
     spawn_page_header(commands, container, "NEW GAME");
 
     spawn_animated_section_divider(commands, container, "PLAYER");
@@ -344,8 +362,12 @@ fn spawn_new_game_page(
     spawn_animated_section_divider(commands, container, "OPPONENTS");
 
     spawn_selector_row(
-        commands, container, "Count:", &["1", "2", "3"],
-        (config.num_ai_opponents - 1) as usize, SelectorField::AiCount,
+        commands,
+        container,
+        "Count:",
+        &["1", "2", "3"],
+        (config.num_ai_opponents - 1) as usize,
+        SelectorField::AiCount,
     );
 
     for i in 0..3 {
@@ -354,29 +376,47 @@ fn spawn_new_game_page(
     }
 
     let team_idx = match config.team_mode {
-        TeamMode::FFA => 0, TeamMode::Teams => 1, TeamMode::Custom => 2,
+        TeamMode::FFA => 0,
+        TeamMode::Teams => 1,
+        TeamMode::Custom => 2,
     };
     spawn_selector_row(
-        commands, container, "Teams:", &["FFA", "2v2", "Custom"],
-        team_idx, SelectorField::TeamMode,
+        commands,
+        container,
+        "Teams:",
+        &["FFA", "2v2", "Custom"],
+        team_idx,
+        SelectorField::TeamMode,
     );
 
     spawn_animated_section_divider(commands, container, "WORLD");
 
     let map_idx = match config.map_size {
-        MapSize::Small => 0, MapSize::Medium => 1, MapSize::Large => 2,
+        MapSize::Small => 0,
+        MapSize::Medium => 1,
+        MapSize::Large => 2,
     };
     spawn_selector_row(
-        commands, container, "Map Size:", &["Small", "Medium", "Large"],
-        map_idx, SelectorField::MapSize,
+        commands,
+        container,
+        "Map Size:",
+        &["Small", "Medium", "Large"],
+        map_idx,
+        SelectorField::MapSize,
     );
 
     let res_idx = match config.resource_density {
-        ResourceDensity::Sparse => 0, ResourceDensity::Normal => 1, ResourceDensity::Dense => 2,
+        ResourceDensity::Sparse => 0,
+        ResourceDensity::Normal => 1,
+        ResourceDensity::Dense => 2,
     };
     spawn_selector_row(
-        commands, container, "Resources:", &["Sparse", "Normal", "Dense"],
-        res_idx, SelectorField::ResourceDensity,
+        commands,
+        container,
+        "Resources:",
+        &["Sparse", "Normal", "Dense"],
+        res_idx,
+        SelectorField::ResourceDensity,
     );
 
     let day_idx = DAY_CYCLE_OPTIONS
@@ -385,7 +425,12 @@ fn spawn_new_game_page(
         .unwrap_or(1);
     let day_labels: Vec<&str> = DAY_CYCLE_OPTIONS.iter().map(|&(_, l)| l).collect();
     spawn_selector_row(
-        commands, container, "Day Cycle:", &day_labels, day_idx, SelectorField::DayCycle,
+        commands,
+        container,
+        "Day Cycle:",
+        &day_labels,
+        day_idx,
+        SelectorField::DayCycle,
     );
 
     let start_idx = STARTING_RES_OPTIONS
@@ -394,7 +439,12 @@ fn spawn_new_game_page(
         .unwrap_or(1);
     let start_labels: Vec<&str> = STARTING_RES_OPTIONS.iter().map(|&(_, l)| l).collect();
     spawn_selector_row(
-        commands, container, "Start Res:", &start_labels, start_idx, SelectorField::StartingRes,
+        commands,
+        container,
+        "Start Res:",
+        &start_labels,
+        start_idx,
+        SelectorField::StartingRes,
     );
 
     // Seed row
@@ -414,7 +464,10 @@ fn spawn_new_game_page(
         .with_children(|parent| {
             parent.spawn((
                 Text::new("Seed:"),
-                TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                TextFont {
+                    font_size: theme::FONT_MEDIUM,
+                    ..default()
+                },
                 TextColor(theme::TEXT_SECONDARY),
                 Node {
                     width: Val::Px(120.0),
@@ -424,33 +477,41 @@ fn spawn_new_game_page(
             parent.spawn((
                 SeedDisplay,
                 Text::new(seed_text),
-                TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                TextFont {
+                    font_size: theme::FONT_MEDIUM,
+                    ..default()
+                },
                 TextColor(theme::TEXT_PRIMARY),
                 Node {
                     width: Val::Px(140.0),
                     ..default()
                 },
             ));
-            parent.spawn((
-                RandomizeSeedButton,
-                Button,
-                ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
-                ButtonStyle::Filled,
-                Node {
-                    padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
-                    margin: UiRect::horizontal(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                    ..default()
-                },
-                BackgroundColor(theme::BTN_PRIMARY),
-            )).with_children(|btn| {
-                btn.spawn((
-                    Text::new("Randomize"),
-                    TextFont { font_size: theme::FONT_MEDIUM, ..default() },
-                    TextColor(theme::TEXT_SECONDARY),
-                    Pickable::IGNORE,
-                ));
-            });
+            parent
+                .spawn((
+                    RandomizeSeedButton,
+                    Button,
+                    ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
+                    ButtonStyle::Filled,
+                    Node {
+                        padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
+                        margin: UiRect::horizontal(Val::Px(2.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(theme::BTN_PRIMARY),
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        Text::new("Randomize"),
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
+                        TextColor(theme::TEXT_SECONDARY),
+                        Pickable::IGNORE,
+                    ));
+                });
         })
         .id();
     commands.entity(container).add_child(seed_row);
@@ -505,11 +566,7 @@ fn spawn_new_game_page(
 
 // ── Options Page ──
 
-fn spawn_options_page(
-    commands: &mut Commands,
-    container: Entity,
-    graphics: &GraphicsSettings,
-) {
+fn spawn_options_page(commands: &mut Commands, container: Entity, graphics: &GraphicsSettings) {
     spawn_page_header(commands, container, "OPTIONS");
 
     spawn_animated_section_divider(commands, container, "GRAPHICS");
@@ -519,28 +576,46 @@ fn spawn_options_page(
         .position(|&r| r == graphics.resolution)
         .unwrap_or(0);
     spawn_selector_row(
-        commands, container, "Resolution:", &["1280x720", "1920x1080"],
-        res_idx, SelectorField::Resolution,
+        commands,
+        container,
+        "Resolution:",
+        &["1280x720", "1920x1080"],
+        res_idx,
+        SelectorField::Resolution,
     );
 
     let fs_idx = if graphics.fullscreen { 0 } else { 1 };
     spawn_selector_row(
-        commands, container, "Fullscreen:", &["ON", "OFF"],
-        fs_idx, SelectorField::Fullscreen,
+        commands,
+        container,
+        "Fullscreen:",
+        &["ON", "OFF"],
+        fs_idx,
+        SelectorField::Fullscreen,
     );
 
     let shadow_idx = match graphics.shadow_quality {
-        ShadowQuality::Off => 0, ShadowQuality::Low => 1, ShadowQuality::High => 2,
+        ShadowQuality::Off => 0,
+        ShadowQuality::Low => 1,
+        ShadowQuality::High => 2,
     };
     spawn_selector_row(
-        commands, container, "Shadows:", &["Off", "Low", "High"],
-        shadow_idx, SelectorField::Shadows,
+        commands,
+        container,
+        "Shadows:",
+        &["Off", "Low", "High"],
+        shadow_idx,
+        SelectorField::Shadows,
     );
 
     let lights_idx = if graphics.entity_lights { 0 } else { 1 };
     spawn_selector_row(
-        commands, container, "Lights:", &["ON", "OFF"],
-        lights_idx, SelectorField::EntityLights,
+        commands,
+        container,
+        "Lights:",
+        &["ON", "OFF"],
+        lights_idx,
+        SelectorField::EntityLights,
     );
 
     let scale_labels: Vec<&str> = UI_SCALE_OPTIONS.iter().map(|&(_, s)| s).collect();
@@ -549,8 +624,12 @@ fn spawn_options_page(
         .position(|&(v, _)| (v - graphics.ui_scale).abs() < 0.01)
         .unwrap_or(2);
     spawn_selector_row(
-        commands, container, "UI Scale:", &scale_labels,
-        scale_idx, SelectorField::UiScale,
+        commands,
+        container,
+        "UI Scale:",
+        &scale_labels,
+        scale_idx,
+        SelectorField::UiScale,
     );
 
     let apply_btn = spawn_menu_button(commands, "APPLY", MenuAction::ApplySettings, true);
@@ -604,7 +683,11 @@ fn spawn_menu_button(
     action: MenuAction,
     accent: bool,
 ) -> Entity {
-    let bg = if accent { theme::ACCENT } else { theme::BTN_PRIMARY };
+    let bg = if accent {
+        theme::ACCENT
+    } else {
+        theme::BTN_PRIMARY
+    };
 
     let mut entity_commands = commands.spawn((
         MenuButton(action),
@@ -663,29 +746,37 @@ fn spawn_page_header(commands: &mut Commands, container: Entity, title: &str) {
             ..default()
         })
         .with_children(|parent| {
-            parent.spawn((
-                MenuButton(MenuAction::Back),
-                Button,
-                ButtonAnimState::new([0.0, 0.0, 0.0, 0.0]),
-                ButtonStyle::Ghost,
-                Node {
-                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            )).with_children(|btn| {
-                btn.spawn((
-                    Text::new("<< BACK"),
-                    TextFont { font_size: theme::FONT_MEDIUM, ..default() },
-                    TextColor(theme::TEXT_SECONDARY),
-                    Pickable::IGNORE,
-                ));
-            });
+            parent
+                .spawn((
+                    MenuButton(MenuAction::Back),
+                    Button,
+                    ButtonAnimState::new([0.0, 0.0, 0.0, 0.0]),
+                    ButtonStyle::Ghost,
+                    Node {
+                        padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::NONE),
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        Text::new("<< BACK"),
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
+                        TextColor(theme::TEXT_SECONDARY),
+                        Pickable::IGNORE,
+                    ));
+                });
 
             parent.spawn((
                 Text::new(title),
-                TextFont { font_size: theme::FONT_HEADING, ..default() },
+                TextFont {
+                    font_size: theme::FONT_HEADING,
+                    ..default()
+                },
                 TextColor(Color::WHITE),
             ));
         })
@@ -694,11 +785,7 @@ fn spawn_page_header(commands: &mut Commands, container: Entity, title: &str) {
 }
 
 /// Section divider with expanding line animation.
-fn spawn_animated_section_divider(
-    commands: &mut Commands,
-    container: Entity,
-    label: &str,
-) {
+fn spawn_animated_section_divider(commands: &mut Commands, container: Entity, label: &str) {
     let row = commands
         .spawn(Node {
             width: Val::Percent(100.0),
@@ -724,7 +811,10 @@ fn spawn_animated_section_divider(
 
             parent.spawn((
                 Text::new(label),
-                TextFont { font_size: theme::FONT_SMALL, ..default() },
+                TextFont {
+                    font_size: theme::FONT_SMALL,
+                    ..default()
+                },
                 TextColor(theme::TEXT_SECONDARY),
                 Node {
                     margin: UiRect::horizontal(Val::Px(4.0)),
@@ -770,7 +860,10 @@ fn spawn_selector_row(
         .with_children(|parent| {
             parent.spawn((
                 Text::new(label),
-                TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                TextFont {
+                    font_size: theme::FONT_MEDIUM,
+                    ..default()
+                },
                 TextColor(theme::TEXT_SECONDARY),
                 Node {
                     width: Val::Px(120.0),
@@ -780,8 +873,16 @@ fn spawn_selector_row(
 
             for (i, &opt) in options.iter().enumerate() {
                 let is_selected = i == selected;
-                let bg = if is_selected { theme::ACCENT } else { theme::BTN_PRIMARY };
-                let text_color = if is_selected { Color::WHITE } else { theme::TEXT_SECONDARY };
+                let bg = if is_selected {
+                    theme::ACCENT
+                } else {
+                    theme::BTN_PRIMARY
+                };
+                let text_color = if is_selected {
+                    Color::WHITE
+                } else {
+                    theme::TEXT_SECONDARY
+                };
 
                 let mut btn = parent.spawn((
                     MenuSelector { field, index: i },
@@ -808,7 +909,10 @@ fn spawn_selector_row(
                 btn.with_children(|btn_parent| {
                     btn_parent.spawn((
                         Text::new(opt),
-                        TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
                         TextColor(text_color),
                         Pickable::IGNORE,
                     ));
@@ -833,7 +937,10 @@ fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Entity {
         .with_children(|parent| {
             parent.spawn((
                 Text::new("Name:"),
-                TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                TextFont {
+                    font_size: theme::FONT_MEDIUM,
+                    ..default()
+                },
                 TextColor(theme::TEXT_SECONDARY),
                 Node {
                     width: Val::Px(120.0),
@@ -841,61 +948,74 @@ fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Entity {
                 },
             ));
 
-            parent.spawn((
-                TextInputField {
-                    value: current_name.to_string(),
-                    cursor_pos: current_name.len(),
-                    max_len: 20,
-                },
-                Button,
-                Node {
-                    width: Val::Px(280.0),
-                    height: Val::Px(32.0),
-                    padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                    align_items: AlignItems::Center,
-                    overflow: Overflow::clip(),
-                    ..default()
-                },
-                BackgroundColor(theme::INPUT_BG),
-                BorderColor::all(theme::INPUT_BORDER),
-            )).with_children(|input| {
-                input.spawn((
-                    Text::new(current_name),
-                    TextFont { font_size: theme::FONT_MEDIUM, ..default() },
-                    TextColor(theme::TEXT_PRIMARY),
-                    Pickable::IGNORE,
-                ));
-                input.spawn((
-                    TextInputCursor,
-                    Text::new("|"),
-                    TextFont { font_size: theme::FONT_MEDIUM, ..default() },
-                    TextColor(Color::NONE),
-                    Pickable::IGNORE,
-                ));
-            });
+            parent
+                .spawn((
+                    TextInputField {
+                        value: current_name.to_string(),
+                        cursor_pos: current_name.len(),
+                        max_len: 20,
+                    },
+                    Button,
+                    Node {
+                        width: Val::Px(280.0),
+                        height: Val::Px(32.0),
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        align_items: AlignItems::Center,
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                    BackgroundColor(theme::INPUT_BG),
+                    BorderColor::all(theme::INPUT_BORDER),
+                ))
+                .with_children(|input| {
+                    input.spawn((
+                        Text::new(current_name),
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
+                        TextColor(theme::TEXT_PRIMARY),
+                        Pickable::IGNORE,
+                    ));
+                    input.spawn((
+                        TextInputCursor,
+                        Text::new("|"),
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
+                        TextColor(Color::NONE),
+                        Pickable::IGNORE,
+                    ));
+                });
 
-            parent.spawn((
-                RandomNameButton,
-                Button,
-                ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
-                ButtonStyle::Ghost,
-                Node {
-                    padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                    margin: UiRect::left(Val::Px(6.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            )).with_children(|btn| {
-                btn.spawn((
-                    Text::new("Random"),
-                    TextFont { font_size: theme::FONT_MEDIUM, ..default() },
-                    TextColor(theme::ACCENT),
-                    Pickable::IGNORE,
-                ));
-            });
+            parent
+                .spawn((
+                    RandomNameButton,
+                    Button,
+                    ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
+                    ButtonStyle::Ghost,
+                    Node {
+                        padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                        margin: UiRect::left(Val::Px(6.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::NONE),
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        Text::new("Random"),
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
+                        TextColor(theme::ACCENT),
+                        Pickable::IGNORE,
+                    ));
+                });
         })
         .id()
 }
@@ -921,7 +1041,10 @@ fn spawn_color_picker(commands: &mut Commands, selected: usize) -> Entity {
         .with_children(|parent| {
             parent.spawn((
                 Text::new("Color:"),
-                TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                TextFont {
+                    font_size: theme::FONT_MEDIUM,
+                    ..default()
+                },
                 TextColor(theme::TEXT_SECONDARY),
                 Node {
                     width: Val::Px(120.0),
@@ -932,7 +1055,11 @@ fn spawn_color_picker(commands: &mut Commands, selected: usize) -> Entity {
             for (i, &color) in colors.iter().enumerate() {
                 let is_selected = i == selected;
                 let size = if is_selected { 36.0 } else { 32.0 };
-                let border_color = if is_selected { Color::WHITE } else { Color::NONE };
+                let border_color = if is_selected {
+                    Color::WHITE
+                } else {
+                    Color::NONE
+                };
                 let border_width = if is_selected { 3.0 } else { 2.0 };
 
                 let mut dot = parent.spawn((
@@ -983,7 +1110,11 @@ fn spawn_ai_card(
     config: &GameSetupConfig,
     visible: bool,
 ) {
-    let display = if visible { Display::Flex } else { Display::None };
+    let display = if visible {
+        Display::Flex
+    } else {
+        Display::None
+    };
     let faction_idx = ai_index + 1;
     let faction_color = match faction_idx {
         1 => Faction::Player2.color(),
@@ -1021,10 +1152,14 @@ fn spawn_ai_card(
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 ..default()
-            }).with_children(|row| {
+            })
+            .with_children(|row| {
                 row.spawn((
                     Text::new(format!("AI {}", ai_index + 1)),
-                    TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                    TextFont {
+                        font_size: theme::FONT_MEDIUM,
+                        ..default()
+                    },
                     TextColor(theme::TEXT_PRIMARY),
                     Node {
                         margin: UiRect::right(Val::Px(8.0)),
@@ -1074,10 +1209,14 @@ fn spawn_ai_card(
                         ..default()
                     },
                     BackgroundColor(toggle_bg),
-                )).with_children(|btn| {
+                ))
+                .with_children(|btn| {
                     btn.spawn((
                         Text::new(toggle_text),
-                        TextFont { font_size: theme::FONT_BODY, ..default() },
+                        TextFont {
+                            font_size: theme::FONT_BODY,
+                            ..default()
+                        },
                         TextColor(Color::WHITE),
                         Pickable::IGNORE,
                     ));
@@ -1090,10 +1229,14 @@ fn spawn_ai_card(
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 ..default()
-            }).with_children(|row| {
+            })
+            .with_children(|row| {
                 row.spawn((
                     Text::new("Difficulty:"),
-                    TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                    TextFont {
+                        font_size: theme::FONT_MEDIUM,
+                        ..default()
+                    },
                     TextColor(theme::TEXT_SECONDARY),
                     Node {
                         width: Val::Px(80.0),
@@ -1105,8 +1248,16 @@ fn spawn_ai_card(
                 let diff_names = ["Easy", "Medium", "Hard"];
                 for (i, &opt) in diff_names.iter().enumerate() {
                     let is_selected = i == diff_idx;
-                    let bg = if is_selected { theme::ACCENT } else { theme::BTN_PRIMARY };
-                    let text_color = if is_selected { Color::WHITE } else { theme::TEXT_SECONDARY };
+                    let bg = if is_selected {
+                        theme::ACCENT
+                    } else {
+                        theme::BTN_PRIMARY
+                    };
+                    let text_color = if is_selected {
+                        Color::WHITE
+                    } else {
+                        theme::TEXT_SECONDARY
+                    };
 
                     let mut btn = row.spawn((
                         MenuSelector {
@@ -1136,7 +1287,10 @@ fn spawn_ai_card(
                     btn.with_children(|btn_parent| {
                         btn_parent.spawn((
                             Text::new(opt),
-                            TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                            TextFont {
+                                font_size: theme::FONT_MEDIUM,
+                                ..default()
+                            },
                             TextColor(text_color),
                             Pickable::IGNORE,
                         ));
@@ -1392,41 +1546,63 @@ fn update_selector_visuals(
                 selector.index == diff_idx
             }
             SelectorField::TeamMode => {
-                selector.index == match config.team_mode { TeamMode::FFA => 0, TeamMode::Teams => 1, TeamMode::Custom => 2 }
+                selector.index
+                    == match config.team_mode {
+                        TeamMode::FFA => 0,
+                        TeamMode::Teams => 1,
+                        TeamMode::Custom => 2,
+                    }
             }
             SelectorField::MapSize => {
-                selector.index == match config.map_size { MapSize::Small => 0, MapSize::Medium => 1, MapSize::Large => 2 }
+                selector.index
+                    == match config.map_size {
+                        MapSize::Small => 0,
+                        MapSize::Medium => 1,
+                        MapSize::Large => 2,
+                    }
             }
             SelectorField::ResourceDensity => {
-                selector.index == match config.resource_density { ResourceDensity::Sparse => 0, ResourceDensity::Normal => 1, ResourceDensity::Dense => 2 }
+                selector.index
+                    == match config.resource_density {
+                        ResourceDensity::Sparse => 0,
+                        ResourceDensity::Normal => 1,
+                        ResourceDensity::Dense => 2,
+                    }
             }
-            SelectorField::DayCycle => {
-                DAY_CYCLE_OPTIONS.get(selector.index).map_or(false, |&(v, _)| (v - config.day_cycle_secs).abs() < 1.0)
-            }
-            SelectorField::StartingRes => {
-                STARTING_RES_OPTIONS.get(selector.index).map_or(false, |&(v, _)| (v - config.starting_resources_mult).abs() < 0.01)
-            }
-            SelectorField::Resolution => {
-                RESOLUTION_OPTIONS.get(selector.index).map_or(false, |&r| r == graphics.resolution)
-            }
-            SelectorField::Fullscreen => {
-                (selector.index == 0) == graphics.fullscreen
-            }
+            SelectorField::DayCycle => DAY_CYCLE_OPTIONS
+                .get(selector.index)
+                .map_or(false, |&(v, _)| (v - config.day_cycle_secs).abs() < 1.0),
+            SelectorField::StartingRes => STARTING_RES_OPTIONS
+                .get(selector.index)
+                .map_or(false, |&(v, _)| {
+                    (v - config.starting_resources_mult).abs() < 0.01
+                }),
+            SelectorField::Resolution => RESOLUTION_OPTIONS
+                .get(selector.index)
+                .map_or(false, |&r| r == graphics.resolution),
+            SelectorField::Fullscreen => (selector.index == 0) == graphics.fullscreen,
             SelectorField::Shadows => {
-                selector.index == match graphics.shadow_quality { ShadowQuality::Off => 0, ShadowQuality::Low => 1, ShadowQuality::High => 2 }
+                selector.index
+                    == match graphics.shadow_quality {
+                        ShadowQuality::Off => 0,
+                        ShadowQuality::Low => 1,
+                        ShadowQuality::High => 2,
+                    }
             }
-            SelectorField::EntityLights => {
-                (selector.index == 0) == graphics.entity_lights
-            }
-            SelectorField::UiScale => {
-                UI_SCALE_OPTIONS.get(selector.index).map_or(false, |&(v, _)| (v - graphics.ui_scale).abs() < 0.01)
-            }
+            SelectorField::EntityLights => (selector.index == 0) == graphics.entity_lights,
+            SelectorField::UiScale => UI_SCALE_OPTIONS
+                .get(selector.index)
+                .map_or(false, |&(v, _)| (v - graphics.ui_scale).abs() < 0.01),
             SelectorField::MapSeed => false,
         };
 
         // Color picker dots
         if selector.field == SelectorField::PlayerColor {
-            let border = if should_be_selected { Color::WHITE } else { Color::NONE };
+            let border = if should_be_selected {
+                Color::WHITE
+            } else {
+                Color::NONE
+            };
             commands.entity(entity).insert(BorderColor::all(border));
             if should_be_selected {
                 let color = match selector.index {
@@ -1461,18 +1637,26 @@ fn update_selector_visuals(
             continue;
         }
 
-        let new_bg = if should_be_selected { theme::ACCENT } else { theme::BTN_PRIMARY };
-        let text_col = if should_be_selected { Color::WHITE } else { theme::TEXT_SECONDARY };
+        let new_bg = if should_be_selected {
+            theme::ACCENT
+        } else {
+            theme::BTN_PRIMARY
+        };
+        let text_col = if should_be_selected {
+            Color::WHITE
+        } else {
+            theme::TEXT_SECONDARY
+        };
 
         *bg = BackgroundColor(new_bg);
 
-        commands.entity(entity).insert(BorderColor::all(
-            if should_be_selected {
+        commands
+            .entity(entity)
+            .insert(BorderColor::all(if should_be_selected {
                 Color::srgba(0.29, 0.62, 1.0, 0.3)
             } else {
                 Color::NONE
-            },
-        ));
+            }));
 
         if let Some(mut anim) = anim_state {
             anim.bg_current = new_bg.to_srgba().to_f32_array();
@@ -1500,7 +1684,11 @@ fn update_ai_card_visibility(
 ) {
     for (card, mut node) in &mut cards {
         let visible = card.0 < config.num_ai_opponents as usize;
-        node.display = if visible { Display::Flex } else { Display::None };
+        node.display = if visible {
+            Display::Flex
+        } else {
+            Display::None
+        };
     }
 }
 
@@ -1540,8 +1728,7 @@ fn menu_scroll_system(
         if !computed.contains_point(*ui_tf, cursor_phys) {
             continue;
         }
-        let max_scroll = (computed.content_size().y - computed.size().y)
-            .max(0.0)
+        let max_scroll = (computed.content_size().y - computed.size().y).max(0.0)
             * computed.inverse_scale_factor();
         scroll_pos.y = (scroll_pos.y + dy).clamp(0.0, max_scroll);
     }
@@ -1550,7 +1737,13 @@ fn menu_scroll_system(
 // ── Text Input System ──
 
 fn text_input_system(
-    mut inputs: Query<(Entity, &mut TextInputField, &Interaction, &Children, Option<&TextInputFocused>)>,
+    mut inputs: Query<(
+        Entity,
+        &mut TextInputField,
+        &Interaction,
+        &Children,
+        Option<&TextInputFocused>,
+    )>,
     mut commands: Commands,
     mut config: ResMut<GameSetupConfig>,
     mut keyboard_events: MessageReader<KeyboardInput>,
@@ -1569,11 +1762,15 @@ fn text_input_system(
             if entity == clicked {
                 if focused.is_none() {
                     commands.entity(entity).insert(TextInputFocused);
-                    commands.entity(entity).insert(BorderColor::all(theme::INPUT_BORDER_FOCUSED));
+                    commands
+                        .entity(entity)
+                        .insert(BorderColor::all(theme::INPUT_BORDER_FOCUSED));
                 }
             } else if focused.is_some() {
                 commands.entity(entity).remove::<TextInputFocused>();
-                commands.entity(entity).insert(BorderColor::all(theme::INPUT_BORDER));
+                commands
+                    .entity(entity)
+                    .insert(BorderColor::all(theme::INPUT_BORDER));
             }
         }
     }
@@ -1626,7 +1823,9 @@ fn text_input_system(
                 }
                 KeyCode::Enter | KeyCode::Escape => {
                     commands.entity(entity).remove::<TextInputFocused>();
-                    commands.entity(entity).insert(BorderColor::all(theme::INPUT_BORDER));
+                    commands
+                        .entity(entity)
+                        .insert(BorderColor::all(theme::INPUT_BORDER));
                 }
                 KeyCode::Space => {
                     if field.value.len() < field.max_len {
@@ -1788,7 +1987,12 @@ fn ally_toggle_system(
 
 fn update_ally_toggle_visuals(
     config: Res<GameSetupConfig>,
-    mut toggles: Query<(&AllyToggleButton, &mut BackgroundColor, &mut ButtonAnimState, &Children)>,
+    mut toggles: Query<(
+        &AllyToggleButton,
+        &mut BackgroundColor,
+        &mut ButtonAnimState,
+        &Children,
+    )>,
     mut text_colors: Query<(&mut TextColor, &mut Text), Without<AllyToggleButton>>,
 ) {
     for (toggle, mut bg, mut anim, children) in &mut toggles {

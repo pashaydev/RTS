@@ -4,11 +4,14 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
-use crate::blueprints::{BlueprintRegistry, EntityCategory, EntityKind, EntityVisualCache, LevelBonus, spawn_from_blueprint_with_faction};
+use crate::blueprints::{
+    spawn_from_blueprint_with_faction, BlueprintRegistry, EntityCategory, EntityKind,
+    EntityVisualCache, LevelBonus,
+};
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
+use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
 
 pub fn footprint_for_kind(kind: EntityKind) -> f32 {
     match kind {
@@ -94,10 +97,7 @@ impl Plugin for BuildingsPlugin {
 
 // ── Asset creation (ghost materials only) ──
 
-fn create_ghost_materials(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
+fn create_ghost_materials(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
     commands.insert_resource(BuildingGhostMaterials {
         ghost_valid: materials.add(StandardMaterial {
             base_color: Color::srgba(0.2, 0.8, 0.3, 0.4),
@@ -202,7 +202,10 @@ fn update_placement_preview(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut ghosts: Query<&mut Transform, With<GhostBuilding>>,
     mut ghost_valid_q: Query<&mut GhostValid, With<GhostBuilding>>,
-    existing_buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<GhostBuilding>)>,
+    existing_buildings: Query<
+        (&Transform, &BuildingFootprint),
+        (With<Building>, Without<GhostBuilding>),
+    >,
     biome_map: Option<Res<BiomeMap>>,
     height_map: Res<HeightMap>,
 ) {
@@ -212,7 +215,11 @@ fn update_placement_preview(
 
     let bp = registry.get(kind);
     let is_gltf = bp.visual.mesh_kind.is_gltf();
-    let half_h = if is_gltf { 0.0 } else { bp.building.as_ref().map(|b| b.half_height).unwrap_or(1.0) };
+    let half_h = if is_gltf {
+        0.0
+    } else {
+        bp.building.as_ref().map(|b| b.half_height).unwrap_or(1.0)
+    };
     let new_footprint = footprint_for_kind(kind);
 
     // Spawn ghost if it doesn't exist
@@ -246,15 +253,17 @@ fn update_placement_preview(
         } else {
             // Non-GLTF: use cache mesh with ghost material directly
             let mesh = cache.meshes.get(&kind).expect("Missing mesh").clone();
-            commands.spawn((
-                GhostBuilding,
-                GhostValid(true),
-                Mesh3d(mesh),
-                MeshMaterial3d(ghost_mats.ghost_valid.clone()),
-                Transform::from_translation(Vec3::new(0.0, -100.0, 0.0)),
-                NotShadowCaster,
-                NotShadowReceiver,
-            )).id()
+            commands
+                .spawn((
+                    GhostBuilding,
+                    GhostValid(true),
+                    Mesh3d(mesh),
+                    MeshMaterial3d(ghost_mats.ghost_valid.clone()),
+                    Transform::from_translation(Vec3::new(0.0, -100.0, 0.0)),
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                ))
+                .id()
         };
         placement.preview_entity = Some(ghost);
     }
@@ -312,7 +321,10 @@ fn update_wall_plot_preview(
     ghost_mats: Res<BuildingGhostMaterials>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    existing_buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<GhostBuilding>)>,
+    existing_buildings: Query<
+        (&Transform, &BuildingFootprint),
+        (With<Building>, Without<GhostBuilding>),
+    >,
     height_map: Res<HeightMap>,
 ) {
     if !matches!(placement.mode, PlacementMode::PlotWall { .. }) {
@@ -349,7 +361,8 @@ fn update_wall_plot_preview(
     for point in &points {
         let blocked = existing_buildings.iter().any(|(building_tf, existing_fp)| {
             let check_pos = Vec3::new(point.x, building_tf.translation.y, point.z);
-            building_tf.translation.distance(check_pos) < existing_fp.0 + footprint_for_kind(EntityKind::WallPost)
+            building_tf.translation.distance(check_pos)
+                < existing_fp.0 + footprint_for_kind(EntityKind::WallPost)
         });
         if blocked {
             wall_preview.valid = false;
@@ -360,7 +373,8 @@ fn update_wall_plot_preview(
         let mid = (window[0] + window[1]) * 0.5;
         let blocked = existing_buildings.iter().any(|(building_tf, existing_fp)| {
             let check_pos = Vec3::new(mid.x, building_tf.translation.y, mid.z);
-            building_tf.translation.distance(check_pos) < existing_fp.0 + footprint_for_kind(EntityKind::WallSegment)
+            building_tf.translation.distance(check_pos)
+                < existing_fp.0 + footprint_for_kind(EntityKind::WallSegment)
         });
         if blocked {
             wall_preview.valid = false;
@@ -368,22 +382,32 @@ fn update_wall_plot_preview(
     }
 
     let post_mesh = meshes.add(Cuboid::new(0.6, 2.0, 0.6));
-    let post_mat = if wall_preview.valid { ghost_mats.ghost_valid.clone() } else { ghost_mats.ghost_invalid.clone() };
+    let post_mat = if wall_preview.valid {
+        ghost_mats.ghost_valid.clone()
+    } else {
+        ghost_mats.ghost_invalid.clone()
+    };
     for point in &points {
         let y = height_map.sample(point.x, point.z);
-        let entity = commands.spawn((
-            GhostBuilding,
-            GhostValid(wall_preview.valid),
-            Mesh3d(post_mesh.clone()),
-            MeshMaterial3d(post_mat.clone()),
-            Transform::from_translation(Vec3::new(point.x, y + 1.0, point.z)),
-            NotShadowCaster,
-            NotShadowReceiver,
-        )).id();
+        let entity = commands
+            .spawn((
+                GhostBuilding,
+                GhostValid(wall_preview.valid),
+                Mesh3d(post_mesh.clone()),
+                MeshMaterial3d(post_mat.clone()),
+                Transform::from_translation(Vec3::new(point.x, y + 1.0, point.z)),
+                NotShadowCaster,
+                NotShadowReceiver,
+            ))
+            .id();
         wall_preview.ghost_entities.push(entity);
     }
 
-    let seg_mat = if wall_preview.valid { ghost_mats.ghost_valid.clone() } else { ghost_mats.ghost_invalid.clone() };
+    let seg_mat = if wall_preview.valid {
+        ghost_mats.ghost_valid.clone()
+    } else {
+        ghost_mats.ghost_invalid.clone()
+    };
     for window in points.windows(2) {
         let a = window[0];
         let b = window[1];
@@ -392,16 +416,18 @@ fn update_wall_plot_preview(
         let angle = (b.z - a.z).atan2(b.x - a.x);
         let seg_mesh = meshes.add(Cuboid::new(seg_len, 1.1, 0.4));
         let y = height_map.sample(mid.x, mid.z);
-        let entity = commands.spawn((
-            GhostBuilding,
-            GhostValid(wall_preview.valid),
-            Mesh3d(seg_mesh),
-            MeshMaterial3d(seg_mat.clone()),
-            Transform::from_translation(Vec3::new(mid.x, y + 0.55, mid.z))
-                .with_rotation(Quat::from_rotation_y(-angle)),
-            NotShadowCaster,
-            NotShadowReceiver,
-        )).id();
+        let entity = commands
+            .spawn((
+                GhostBuilding,
+                GhostValid(wall_preview.valid),
+                Mesh3d(seg_mesh),
+                MeshMaterial3d(seg_mat.clone()),
+                Transform::from_translation(Vec3::new(mid.x, y + 0.55, mid.z))
+                    .with_rotation(Quat::from_rotation_y(-angle)),
+                NotShadowCaster,
+                NotShadowReceiver,
+            ))
+            .id();
         wall_preview.ghost_entities.push(entity);
     }
 
@@ -409,7 +435,10 @@ fn update_wall_plot_preview(
     let posts = points.len();
     let cost = &wall_preview.total_cost;
     placement.hint_text = Some(if wall_preview.valid {
-        format!("Wall: {segments} segments, {posts} posts | Cost: {}W {}C", cost.wood, cost.copper)
+        format!(
+            "Wall: {segments} segments, {posts} posts | Cost: {}W {}C",
+            cost.wood, cost.copper
+        )
     } else {
         "Wall path blocked".to_string()
     });
@@ -426,7 +455,14 @@ fn update_gate_plot_preview(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut ghosts: Query<&mut Transform, With<GhostBuilding>>,
     mut ghost_valid_q: Query<&mut GhostValid, With<GhostBuilding>>,
-    wall_segments: Query<(&Transform, &Faction), (With<WallSegmentPiece>, With<Building>, Without<GhostBuilding>)>,
+    wall_segments: Query<
+        (&Transform, &Faction),
+        (
+            With<WallSegmentPiece>,
+            With<Building>,
+            Without<GhostBuilding>,
+        ),
+    >,
     active_player: Res<ActivePlayer>,
 ) {
     if placement.mode != PlacementMode::PlotGate {
@@ -453,7 +489,8 @@ fn update_gate_plot_preview(
                     let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
                     ghost_cmds.with_child((
                         SceneRoot(scene_handle.clone()),
-                        Transform::from_scale(Vec3::splat(scale)).with_translation(Vec3::new(0.0, y_off, 0.0)),
+                        Transform::from_scale(Vec3::splat(scale))
+                            .with_translation(Vec3::new(0.0, y_off, 0.0)),
                         NotShadowCaster,
                         NotShadowReceiver,
                     ));
@@ -462,15 +499,17 @@ fn update_gate_plot_preview(
             ghost_cmds.id()
         } else {
             let mesh = cache.meshes.get(&kind).expect("Missing mesh").clone();
-            commands.spawn((
-                GhostBuilding,
-                GhostValid(false),
-                Mesh3d(mesh),
-                MeshMaterial3d(ghost_mats.ghost_invalid.clone()),
-                Transform::from_translation(Vec3::new(0.0, -100.0, 0.0)),
-                NotShadowCaster,
-                NotShadowReceiver,
-            )).id()
+            commands
+                .spawn((
+                    GhostBuilding,
+                    GhostValid(false),
+                    Mesh3d(mesh),
+                    MeshMaterial3d(ghost_mats.ghost_invalid.clone()),
+                    Transform::from_translation(Vec3::new(0.0, -100.0, 0.0)),
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                ))
+                .id()
         };
         placement.preview_entity = Some(ghost);
     }
@@ -478,16 +517,23 @@ fn update_gate_plot_preview(
     let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
         return;
     };
-    let nearest = wall_segments.iter()
+    let nearest = wall_segments
+        .iter()
         .filter(|(_, faction)| **faction == active_player.0)
         .filter_map(|(tf, _)| {
-            let d = tf.translation.distance(Vec3::new(world_pos.x, tf.translation.y, world_pos.z));
+            let d = tf
+                .translation
+                .distance(Vec3::new(world_pos.x, tf.translation.y, world_pos.z));
             (d <= 6.0).then_some((tf, d))
         })
         .min_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-    let Some(ghost_entity) = placement.preview_entity else { return; };
-    let Ok(mut ghost_tf) = ghosts.get_mut(ghost_entity) else { return; };
+    let Some(ghost_entity) = placement.preview_entity else {
+        return;
+    };
+    let Ok(mut ghost_tf) = ghosts.get_mut(ghost_entity) else {
+        return;
+    };
 
     if let Some((segment_tf, _)) = nearest {
         ghost_tf.translation = segment_tf.translation;
@@ -512,7 +558,10 @@ fn apply_ghost_materials(
     ghosts: Query<(Entity, &GhostValid), With<GhostBuilding>>,
     children_q: Query<&Children>,
     mesh_q: Query<Entity, (With<Mesh3d>, Without<GhostMaterialApplied>)>,
-    mut applied_q: Query<(Entity, &mut MeshMaterial3d<StandardMaterial>), With<GhostMaterialApplied>>,
+    mut applied_q: Query<
+        (Entity, &mut MeshMaterial3d<StandardMaterial>),
+        With<GhostMaterialApplied>,
+    >,
 ) {
     for (ghost_entity, ghost_valid) in &ghosts {
         let mat = if ghost_valid.0 {
@@ -557,13 +606,13 @@ fn confirm_placement(
     carried_totals: Res<CarriedResourceTotals>,
     mut pending_drains: ResMut<PendingCarriedDrains>,
     registry: Res<BlueprintRegistry>,
-    extras: (
-        Res<AllCompletedBuildings>,
-        Option<Res<BiomeMap>>,
-    ),
+    extras: (Res<AllCompletedBuildings>, Option<Res<BiomeMap>>),
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    existing_buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<GhostBuilding>)>,
+    existing_buildings: Query<
+        (&Transform, &BuildingFootprint),
+        (With<Building>, Without<GhostBuilding>),
+    >,
     workers: Query<(Entity, &Transform, &UnitState, &Faction, &EntityKind), With<Unit>>,
 ) {
     let (all_completed, biome_map) = extras;
@@ -580,15 +629,16 @@ fn confirm_placement(
             placement.awaiting_release = false;
 
             if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) {
-                let bad_biome = biome_map.as_ref()
-                    .map_or(false, |bm| !is_biome_valid_for(kind, bm.get_biome(world_pos.x, world_pos.z)));
+                let bad_biome = biome_map.as_ref().map_or(false, |bm| {
+                    !is_biome_valid_for(kind, bm.get_biome(world_pos.x, world_pos.z))
+                });
                 let too_close = existing_buildings.iter().any(|(building_tf, existing_fp)| {
                     let check_pos = Vec3::new(world_pos.x, building_tf.translation.y, world_pos.z);
                     building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
                 });
                 let half_map = 250.0;
-                let out_of_bounds = world_pos.x.abs() > half_map - 5.0
-                    || world_pos.z.abs() > half_map - 5.0;
+                let out_of_bounds =
+                    world_pos.x.abs() > half_map - 5.0 || world_pos.z.abs() > half_map - 5.0;
 
                 if !bad_biome && !too_close && !out_of_bounds {
                     // Valid drag-and-drop
@@ -612,7 +662,9 @@ fn confirm_placement(
     let bp = registry.get(kind);
 
     let faction = active_player.0;
-    let is_initial_base_plot = matches!(mode, PlacementMode::PlotBase) && kind == EntityKind::Base && !base_state.is_founded(&faction);
+    let is_initial_base_plot = matches!(mode, PlacementMode::PlotBase)
+        && kind == EntityKind::Base
+        && !base_state.is_founded(&faction);
 
     // Check prerequisite
     let prereq_met = if let Some(ref bd) = bp.building {
@@ -656,11 +708,11 @@ fn confirm_placement(
         let available = matches!(
             w_state,
             UnitState::Idle
-            | UnitState::Gathering(_)
-            | UnitState::ReturningToDeposit { .. }
-            | UnitState::Depositing { .. }
-            | UnitState::WaitingForStorage { .. }
-            | UnitState::Moving(_)
+                | UnitState::Gathering(_)
+                | UnitState::ReturningToDeposit { .. }
+                | UnitState::Depositing { .. }
+                | UnitState::WaitingForStorage { .. }
+                | UnitState::Moving(_)
         );
         if !available {
             continue;
@@ -687,7 +739,10 @@ fn confirm_placement(
     // Deduct from stored first, queue carried drain for any deficit
     let player_res_mut = all_resources.get_mut(&faction);
     let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(player_res_mut);
-    let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
+    let drain = SpendFromCarried {
+        faction,
+        amounts: [dw, dc, di, dg, do_],
+    };
     if drain.has_deficit() {
         pending_drains.drains.push(drain);
     }
@@ -698,7 +753,8 @@ fn confirm_placement(
     }
 
     // Assign worker to move to the build site (building spawns on arrival)
-    commands.entity(worker_entity)
+    commands
+        .entity(worker_entity)
         .remove::<MoveTarget>()
         .remove::<AttackTarget>()
         .insert(UnitState::MovingToPlot(build_pos))
@@ -710,7 +766,10 @@ fn confirm_placement(
         })
         .insert(MoveTarget(build_pos));
     // Clear any queued tasks
-    commands.entity(worker_entity).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
+    commands
+        .entity(worker_entity)
+        .entry::<TaskQueue>()
+        .and_modify(|mut tq| tq.queue.clear());
 
     // Reset placement
     placement.mode = PlacementMode::None;
@@ -744,7 +803,8 @@ fn confirm_wall_plot(
                     let first = Vec3::new(world_pos.x, 0.0, world_pos.z);
                     wall_preview.start = Some(first);
                     placement.mode = PlacementMode::PlotWall { start: first };
-                    placement.hint_text = Some("Move cursor and click again to confirm wall".to_string());
+                    placement.hint_text =
+                        Some("Move cursor and click again to confirm wall".to_string());
                 }
                 return;
             }
@@ -760,7 +820,9 @@ fn confirm_wall_plot(
             placement.hint_text = Some("Not enough resources for wall".to_string());
             return;
         }
-        wall_preview.total_cost.deduct(all_resources.get_mut(&faction));
+        wall_preview
+            .total_cost
+            .deduct(all_resources.get_mut(&faction));
 
         let mut spawned_entities = Vec::new();
         for (idx, point) in wall_preview.snapped_points.iter().enumerate() {
@@ -770,8 +832,15 @@ fn confirm_wall_plot(
                 EntityKind::WallPost
             };
             let entity = spawn_from_blueprint_with_faction(
-                &mut commands, &cache, kind, *point, &registry,
-                building_models.as_deref(), None, &height_map, faction,
+                &mut commands,
+                &cache,
+                kind,
+                *point,
+                &registry,
+                building_models.as_deref(),
+                None,
+                &height_map,
+                faction,
             );
             commands.entity(entity).insert(WallPostPiece);
             spawned_entities.push(entity);
@@ -784,8 +853,15 @@ fn confirm_wall_plot(
             let seg_len = a.distance(b).max(0.8);
             let angle = (b.z - a.z).atan2(b.x - a.x);
             let entity = spawn_from_blueprint_with_faction(
-                &mut commands, &cache, EntityKind::WallSegment, mid, &registry,
-                building_models.as_deref(), None, &height_map, faction,
+                &mut commands,
+                &cache,
+                EntityKind::WallSegment,
+                mid,
+                &registry,
+                building_models.as_deref(),
+                None,
+                &height_map,
+                faction,
             );
             commands.entity(entity).insert((
                 WallSegmentPiece,
@@ -800,38 +876,48 @@ fn confirm_wall_plot(
             spawned_entities.push(entity);
         }
 
-        if let Some(worker_entity) = workers.iter()
+        if let Some(worker_entity) = workers
+            .iter()
             .filter(|(_, _, state, worker_faction, kind)| {
                 **kind == EntityKind::Worker
                     && **worker_faction == faction
                     && matches!(
                         state,
                         UnitState::Idle
-                        | UnitState::Gathering(_)
-                        | UnitState::ReturningToDeposit { .. }
-                        | UnitState::Depositing { .. }
-                        | UnitState::WaitingForStorage { .. }
-                        | UnitState::Moving(_)
+                            | UnitState::Gathering(_)
+                            | UnitState::ReturningToDeposit { .. }
+                            | UnitState::Depositing { .. }
+                            | UnitState::WaitingForStorage { .. }
+                            | UnitState::Moving(_)
                     )
             })
             .min_by(|(_, a_tf, _, _, _), (_, b_tf, _, _, _)| {
                 let a_dist = a_tf.translation.distance(wall_preview.snapped_points[0]);
                 let b_dist = b_tf.translation.distance(wall_preview.snapped_points[0]);
-                a_dist.partial_cmp(&b_dist).unwrap_or(std::cmp::Ordering::Equal)
+                a_dist
+                    .partial_cmp(&b_dist)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(worker, _, _, _, _)| worker)
         {
             let target_building = spawned_entities[0];
-            commands.entity(worker_entity)
+            commands
+                .entity(worker_entity)
                 .remove::<AttackTarget>()
                 .remove::<MoveTarget>()
                 .insert(UnitState::MovingToBuild(target_building))
                 .insert(TaskSource::Manual);
-            commands.entity(target_building).entry::<AssignedWorkers>().and_modify(move |mut aw| {
-                if !aw.workers.contains(&worker_entity) {
-                    aw.workers.push(worker_entity);
-                }
-            }).or_insert(AssignedWorkers { workers: vec![worker_entity] });
+            commands
+                .entity(target_building)
+                .entry::<AssignedWorkers>()
+                .and_modify(move |mut aw| {
+                    if !aw.workers.contains(&worker_entity) {
+                        aw.workers.push(worker_entity);
+                    }
+                })
+                .or_insert(AssignedWorkers {
+                    workers: vec![worker_entity],
+                });
         }
 
         clear_wall_preview(&mut commands, &mut wall_preview);
@@ -864,10 +950,13 @@ fn confirm_gate_plot(
         return;
     };
 
-    let Some((segment_entity, segment_tf, faction)) = wall_segments.iter()
+    let Some((segment_entity, segment_tf, faction)) = wall_segments
+        .iter()
         .filter(|(_, _, faction)| **faction == active_player.0)
         .filter_map(|(entity, tf, faction)| {
-            let d = tf.translation.distance(Vec3::new(world_pos.x, tf.translation.y, world_pos.z));
+            let d = tf
+                .translation
+                .distance(Vec3::new(world_pos.x, tf.translation.y, world_pos.z));
             (d <= 6.0).then_some((entity, tf, faction, d))
         })
         .min_by(|(_, _, _, a), (_, _, _, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
@@ -891,41 +980,54 @@ fn confirm_gate_plot(
     }
 
     let gate_entity = spawn_from_blueprint_with_faction(
-        &mut commands, &cache, EntityKind::Gatehouse, segment_tf.translation,
-        &registry, building_models.as_deref(), None, &height_map, *faction,
+        &mut commands,
+        &cache,
+        EntityKind::Gatehouse,
+        segment_tf.translation,
+        &registry,
+        building_models.as_deref(),
+        None,
+        &height_map,
+        *faction,
     );
-    commands.entity(gate_entity)
+    commands
+        .entity(gate_entity)
         .insert(GatePiece)
         .insert(*segment_tf);
 
-    if let Some(worker_entity) = workers.iter()
+    if let Some(worker_entity) = workers
+        .iter()
         .filter(|(_, _, state, worker_faction, kind)| {
             **kind == EntityKind::Worker
                 && **worker_faction == *faction
                 && matches!(
                     state,
                     UnitState::Idle
-                    | UnitState::Gathering(_)
-                    | UnitState::ReturningToDeposit { .. }
-                    | UnitState::Depositing { .. }
-                    | UnitState::WaitingForStorage { .. }
-                    | UnitState::Moving(_)
+                        | UnitState::Gathering(_)
+                        | UnitState::ReturningToDeposit { .. }
+                        | UnitState::Depositing { .. }
+                        | UnitState::WaitingForStorage { .. }
+                        | UnitState::Moving(_)
                 )
         })
         .min_by(|(_, a_tf, _, _, _), (_, b_tf, _, _, _)| {
             let a_dist = a_tf.translation.distance(segment_tf.translation);
             let b_dist = b_tf.translation.distance(segment_tf.translation);
-            a_dist.partial_cmp(&b_dist).unwrap_or(std::cmp::Ordering::Equal)
+            a_dist
+                .partial_cmp(&b_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
         })
         .map(|(worker, _, _, _, _)| worker)
     {
-        commands.entity(worker_entity)
+        commands
+            .entity(worker_entity)
             .remove::<AttackTarget>()
             .remove::<MoveTarget>()
             .insert(UnitState::MovingToBuild(gate_entity))
             .insert(TaskSource::Manual);
-        commands.entity(gate_entity)
-            .insert(AssignedWorkers { workers: vec![worker_entity] });
+        commands.entity(gate_entity).insert(AssignedWorkers {
+            workers: vec![worker_entity],
+        });
     }
 
     placement.mode = PlacementMode::None;
@@ -966,7 +1068,10 @@ fn pending_build_arrival_system(
     ghost_mats: Res<BuildingGhostMaterials>,
     height_map: Res<HeightMap>,
     building_models: Option<Res<BuildingModelAssets>>,
-    existing_buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<GhostBuilding>)>,
+    existing_buildings: Query<
+        (&Transform, &BuildingFootprint),
+        (With<Building>, Without<GhostBuilding>),
+    >,
     mut all_resources: ResMut<AllPlayerResources>,
 ) {
     let plot_range = 4.0;
@@ -1003,7 +1108,8 @@ fn pending_build_arrival_system(
             res.add(ResourceType::Gold, bp.cost.gold);
             res.add(ResourceType::Oil, bp.cost.oil);
 
-            commands.entity(w_entity)
+            commands
+                .entity(w_entity)
                 .remove::<PendingBuildOrder>()
                 .remove::<MoveTarget>()
                 .insert(UnitState::Idle)
@@ -1015,18 +1121,26 @@ fn pending_build_arrival_system(
         let bp = registry.get(kind);
         let is_gltf = bp.visual.mesh_kind.is_gltf();
         let building_entity = spawn_from_blueprint_with_faction(
-            &mut commands, &cache, kind, build_pos, &registry,
-            building_models.as_deref(), None, &height_map, faction,
+            &mut commands,
+            &cache,
+            kind,
+            build_pos,
+            &registry,
+            building_models.as_deref(),
+            None,
+            &height_map,
+            faction,
         );
 
         if !is_gltf {
-            commands.entity(building_entity).insert(
-                MeshMaterial3d(ghost_mats.under_construction.clone()),
-            );
+            commands
+                .entity(building_entity)
+                .insert(MeshMaterial3d(ghost_mats.under_construction.clone()));
         }
 
         // Transition worker to actively building
-        commands.entity(w_entity)
+        commands
+            .entity(w_entity)
             .remove::<PendingBuildOrder>()
             .remove::<MoveTarget>()
             .insert(UnitState::Building(building_entity))
@@ -1105,7 +1219,9 @@ fn construction_progress_system(
         let bp = registry.get(*kind);
         let base_scale = bp.visual.scale;
 
-        progress.timer.tick(Duration::from_secs_f32(time.delta_secs() * speed_mult));
+        progress
+            .timer
+            .tick(Duration::from_secs_f32(time.delta_secs() * speed_mult));
 
         // Lerp scale during construction
         let fraction = progress.timer.fraction();
@@ -1127,7 +1243,8 @@ fn construction_progress_system(
                     commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                 }
             }
-            commands.entity(entity)
+            commands
+                .entity(entity)
                 .remove::<ConstructionProgress>()
                 .remove::<ConstructionWorkers>();
 
@@ -1177,7 +1294,9 @@ fn tower_auto_attack(
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (tower_tf, kind, state, mut cooldown, damage, range, auto_attack, tower_faction) in &mut towers {
+    for (tower_tf, kind, state, mut cooldown, damage, range, auto_attack, tower_faction) in
+        &mut towers
+    {
         if !kind.uses_tower_auto_attack() || *state != BuildingState::Complete {
             continue;
         }
@@ -1234,7 +1353,16 @@ fn training_queue_system(
     cache: Res<EntityVisualCache>,
     unit_models: Option<Res<UnitModelAssets>>,
     height_map: Res<HeightMap>,
-    mut buildings: Query<(&Transform, &EntityKind, &mut TrainingQueue, Option<&RallyPoint>, &Faction), With<Building>>,
+    mut buildings: Query<
+        (
+            &Transform,
+            &EntityKind,
+            &mut TrainingQueue,
+            Option<&RallyPoint>,
+            &Faction,
+        ),
+        With<Building>,
+    >,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
     for (transform, _kind, mut queue, rally_point, building_faction) in &mut buildings {
@@ -1254,7 +1382,17 @@ fn training_queue_system(
             if timer.is_finished() {
                 let unit_kind = queue.queue.remove(0);
                 let spawn_pos = transform.translation + Vec3::new(3.0, 0.0, 3.0);
-                let unit_entity = spawn_from_blueprint_with_faction(&mut commands, &cache, unit_kind, spawn_pos, &registry, None, unit_models.as_deref(), &height_map, *building_faction);
+                let unit_entity = spawn_from_blueprint_with_faction(
+                    &mut commands,
+                    &cache,
+                    unit_kind,
+                    spawn_pos,
+                    &registry,
+                    None,
+                    unit_models.as_deref(),
+                    &height_map,
+                    *building_faction,
+                );
 
                 // Log training complete
                 event_log.push(
@@ -1283,7 +1421,8 @@ fn update_completed_buildings_tracker(
     mut base_state: ResMut<FactionBaseState>,
     buildings: Query<(&EntityKind, &BuildingState, &Faction), With<Building>>,
 ) {
-    let mut per_faction: std::collections::HashMap<Faction, Vec<EntityKind>> = std::collections::HashMap::new();
+    let mut per_faction: std::collections::HashMap<Faction, Vec<EntityKind>> =
+        std::collections::HashMap::new();
     let mut founded: std::collections::HashMap<Faction, bool> = std::collections::HashMap::new();
 
     for (kind, state, faction) in &buildings {
@@ -1347,7 +1486,10 @@ pub fn start_upgrade(
 
     // Deduct from stored first, queue carried drain for deficit
     let (dw, dc, di, dg, do_) = level_data.cost.deduct_with_carried(player_res);
-    let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
+    let drain = SpendFromCarried {
+        faction,
+        amounts: [dw, dc, di, dg, do_],
+    };
     if drain.has_deficit() {
         pending_drains.drains.push(drain);
     }
@@ -1368,24 +1510,41 @@ fn building_upgrade_system(
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     building_models: Option<Res<BuildingModelAssets>>,
     vfx_assets: Option<Res<VfxAssets>>,
-    mut buildings: Query<(
-        Entity,
-        &EntityKind,
-        &mut BuildingLevel,
-        &mut UpgradeProgress,
-        &Transform,
-        &Faction,
-        Option<&mut VisionRange>,
-        Option<&mut AttackRange>,
-        Option<&mut AttackDamage>,
-        Option<&mut StorageInventory>,
-        Option<&mut ResourceProcessor>,
-        Option<&mut ResourceRespawnConfig>,
-    ), With<Building>>,
+    mut buildings: Query<
+        (
+            Entity,
+            &EntityKind,
+            &mut BuildingLevel,
+            &mut UpgradeProgress,
+            &Transform,
+            &Faction,
+            Option<&mut VisionRange>,
+            Option<&mut AttackRange>,
+            Option<&mut AttackDamage>,
+            Option<&mut StorageInventory>,
+            Option<&mut ResourceProcessor>,
+            Option<&mut ResourceRespawnConfig>,
+        ),
+        With<Building>,
+    >,
     children_q: Query<&Children>,
     scene_child_q: Query<Entity, With<BuildingSceneChild>>,
 ) {
-    for (entity, kind, mut level, mut upgrade, transform, faction, vision, attack_range, attack_damage, storage_inv, processor, respawn_config) in &mut buildings {
+    for (
+        entity,
+        kind,
+        mut level,
+        mut upgrade,
+        transform,
+        faction,
+        vision,
+        attack_range,
+        attack_damage,
+        storage_inv,
+        processor,
+        respawn_config,
+    ) in &mut buildings
+    {
         upgrade.timer.tick(time.delta());
 
         if !upgrade.timer.is_finished() {
@@ -1429,14 +1588,16 @@ fn building_upgrade_system(
                     let cal = models.calibration.get(kind);
                     let scale = cal.map(|c| c.scale).unwrap_or(1.0);
                     let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
-                    let child = commands.spawn((
-                        SceneRoot(new_scene.clone()),
-                        BuildingSceneChild,
-                        InheritOutline,
-                        AsyncSceneInheritOutline::default(),
-                        Transform::from_scale(Vec3::splat(scale))
-                            .with_translation(Vec3::new(0.0, y_off, 0.0)),
-                    )).id();
+                    let child = commands
+                        .spawn((
+                            SceneRoot(new_scene.clone()),
+                            BuildingSceneChild,
+                            InheritOutline,
+                            AsyncSceneInheritOutline::default(),
+                            Transform::from_scale(Vec3::splat(scale))
+                                .with_translation(Vec3::new(0.0, y_off, 0.0)),
+                        ))
+                        .id();
                     commands.entity(entity).add_child(child);
                 }
             }
@@ -1468,7 +1629,10 @@ fn building_upgrade_system(
             LevelBonus::TrainedStatBoost { .. } => {
                 // Affects trained units, not the building itself
             }
-            LevelBonus::RangeAndDamage { range_boost, damage_boost } => {
+            LevelBonus::RangeAndDamage {
+                range_boost,
+                damage_boost,
+            } => {
                 if let Some(mut ar) = attack_range {
                     ar.0 += range_boost;
                 }
@@ -1485,7 +1649,10 @@ fn building_upgrade_system(
                     range: *range,
                 });
             }
-            LevelBonus::HealAura { heal_per_sec, range } => {
+            LevelBonus::HealAura {
+                heal_per_sec,
+                range,
+            } => {
                 commands.entity(entity).insert(HealingAura {
                     heal_per_sec: *heal_per_sec,
                     range: *range,
@@ -1494,7 +1661,12 @@ fn building_upgrade_system(
             LevelBonus::UnlocksTraining(_kinds) => {
                 // Handled at UI level — train button filtering checks building level
             }
-            LevelBonus::ProcessorUpgrade { harvest_rate_boost, radius_boost, extra_worker_slots, ref unlock_resources } => {
+            LevelBonus::ProcessorUpgrade {
+                harvest_rate_boost,
+                radius_boost,
+                extra_worker_slots,
+                ref unlock_resources,
+            } => {
                 if let Some(mut proc) = processor {
                     proc.harvest_rate += harvest_rate_boost;
                     proc.harvest_radius += radius_boost;
@@ -1515,7 +1687,8 @@ fn building_upgrade_system(
                     rc.max_nodes = (rc.max_nodes + 2).min(12);
                     // Reduce respawn timer slightly
                     let current_secs = rc.respawn_timer.duration().as_secs_f32();
-                    rc.respawn_timer = Timer::from_seconds((current_secs * 0.75).max(10.0), TimerMode::Repeating);
+                    rc.respawn_timer =
+                        Timer::from_seconds((current_secs * 0.75).max(10.0), TimerMode::Repeating);
                 }
             }
         }
@@ -1540,8 +1713,7 @@ fn building_upgrade_system(
                     },
                     Mesh3d(vfx.sphere_mesh.clone()),
                     MeshMaterial3d(vfx.impact_material.clone()),
-                    Transform::from_translation(center + offset)
-                        .with_scale(Vec3::splat(0.8)),
+                    Transform::from_translation(center + offset).with_scale(Vec3::splat(0.8)),
                     NotShadowCaster,
                     NotShadowReceiver,
                 ));
@@ -1578,13 +1750,16 @@ fn demolish_system(
     registry: Res<BlueprintRegistry>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     mut all_resources: ResMut<AllPlayerResources>,
-    mut buildings: Query<(
-        Entity,
-        &EntityKind,
-        &mut Transform,
-        &mut DemolishAnimation,
-        &Faction,
-    ), With<Building>>,
+    mut buildings: Query<
+        (
+            Entity,
+            &EntityKind,
+            &mut Transform,
+            &mut DemolishAnimation,
+            &Faction,
+        ),
+        With<Building>,
+    >,
 ) {
     for (entity, kind, mut transform, mut demolish, faction) in &mut buildings {
         demolish.timer.tick(time.delta());
@@ -1721,7 +1896,8 @@ fn level_indicator_system(
 
         let bp = registry.get(*kind);
         let base_y = if bp.visual.mesh_kind.is_gltf() {
-            let height = building_models.as_ref()
+            let height = building_models
+                .as_ref()
                 .and_then(|m| m.calibration.get(kind))
                 .map(|c| c.building_height)
                 .unwrap_or(4.0);
@@ -1770,7 +1946,9 @@ fn sync_storage_on_spend(
     // Collect per-faction storage totals
     let mut faction_totals: HashMap<Faction, [u32; ResourceType::COUNT]> = HashMap::new();
     for (faction, inv) in &storages {
-        let totals = faction_totals.entry(*faction).or_insert([0; ResourceType::COUNT]);
+        let totals = faction_totals
+            .entry(*faction)
+            .or_insert([0; ResourceType::COUNT]);
         for rt in ResourceType::ALL {
             totals[rt.index()] += inv.get(rt);
         }
@@ -1811,7 +1989,12 @@ fn update_storage_piles(
     pile_assets: Option<Res<StoragePileAssets>>,
     height_map: Res<HeightMap>,
     mut storages: Query<
-        (Entity, &Transform, &mut StorageInventory, Option<&ResourcePileVisuals>),
+        (
+            Entity,
+            &Transform,
+            &mut StorageInventory,
+            Option<&ResourcePileVisuals>,
+        ),
         (With<Building>, With<DepositPoint>),
     >,
 ) {
@@ -1835,12 +2018,16 @@ fn update_storage_piles(
 
         // Collect accepted resource types that have items stored
         let accepted = inventory.accepted_types();
-        let stored: Vec<ResourceType> = accepted.iter().copied()
+        let stored: Vec<ResourceType> = accepted
+            .iter()
+            .copied()
             .filter(|rt| inventory.get(*rt) > 0)
             .collect();
 
         if stored.is_empty() {
-            commands.entity(entity).insert(ResourcePileVisuals { entities: pile_entities });
+            commands.entity(entity).insert(ResourcePileVisuals {
+                entities: pile_entities,
+            });
             continue;
         }
 
@@ -1864,10 +2051,22 @@ fn update_storage_piles(
             let local_z = col * grid_spacing - grid_width * 0.5 + row * grid_spacing * 0.5;
 
             let (mesh, mat) = match rt {
-                ResourceType::Wood => (assets.cube_mesh.clone(), assets.materials.get(rt).cloned().unwrap_or_default()),
-                ResourceType::Gold => (assets.sphere_mesh.clone(), assets.materials.get(rt).cloned().unwrap_or_default()),
-                ResourceType::Oil => (assets.cylinder_mesh.clone(), assets.materials.get(rt).cloned().unwrap_or_default()),
-                _ => (assets.cube_mesh.clone(), assets.materials.get(rt).cloned().unwrap_or_default()),
+                ResourceType::Wood => (
+                    assets.cube_mesh.clone(),
+                    assets.materials.get(rt).cloned().unwrap_or_default(),
+                ),
+                ResourceType::Gold => (
+                    assets.sphere_mesh.clone(),
+                    assets.materials.get(rt).cloned().unwrap_or_default(),
+                ),
+                ResourceType::Oil => (
+                    assets.cylinder_mesh.clone(),
+                    assets.materials.get(rt).cloned().unwrap_or_default(),
+                ),
+                _ => (
+                    assets.cube_mesh.clone(),
+                    assets.materials.get(rt).cloned().unwrap_or_default(),
+                ),
             };
 
             let world_x = transform.translation.x + local_x;
@@ -1878,8 +2077,12 @@ fn update_storage_piles(
                 .spawn((
                     Mesh3d(mesh),
                     MeshMaterial3d(mat),
-                    Transform::from_translation(Vec3::new(world_x, ground_y + half_pile_height, world_z))
-                        .with_scale(Vec3::splat(scale)),
+                    Transform::from_translation(Vec3::new(
+                        world_x,
+                        ground_y + half_pile_height,
+                        world_z,
+                    ))
+                    .with_scale(Vec3::splat(scale)),
                     NotShadowCaster,
                     NotShadowReceiver,
                 ))
@@ -1887,6 +2090,8 @@ fn update_storage_piles(
             pile_entities.push(pile);
         }
 
-        commands.entity(entity).insert(ResourcePileVisuals { entities: pile_entities });
+        commands.entity(entity).insert(ResourcePileVisuals {
+            entities: pile_entities,
+        });
     }
 }

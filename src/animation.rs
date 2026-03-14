@@ -47,7 +47,8 @@ fn discover_animation_players(
         }
 
         // Walk the hierarchy of the scene child to find AnimationPlayer
-        if let Some(player_entity) = find_animation_player(scene_entity, &children_q, &anim_players) {
+        if let Some(player_entity) = find_animation_player(scene_entity, &children_q, &anim_players)
+        {
             commands.entity(parent).insert((
                 AnimPlayerRef(player_entity),
                 AnimationController {
@@ -94,6 +95,7 @@ fn drive_animations(
         &mut AnimationController,
         &AnimPlayerRef,
         &Health,
+        Option<&UnitState>,
         Option<&MoveTarget>,
         Option<&AttackTarget>,
         Option<&AttackRange>,
@@ -107,9 +109,22 @@ fn drive_animations(
         return;
     };
 
-    for (mut controller, anim_ref, health, move_target, attack_target, attack_range, my_tf) in &mut anim_controllers {
+    for (
+        mut controller,
+        anim_ref,
+        health,
+        unit_state,
+        move_target,
+        attack_target,
+        attack_range,
+        my_tf,
+    ) in &mut anim_controllers
+    {
         let desired = if health.current <= 0.0 {
             AnimState::Die
+        } else if unit_state.map_or(false, |s| matches!(s, UnitState::Gathering(_))) {
+            // Reuse the attack clip as a short work-loop while harvesting.
+            AnimState::Attack
         } else if let Some(at) = attack_target {
             if let Ok(target_tf) = target_transforms.get(at.0) {
                 let dist = my_tf.translation.distance(target_tf.translation);
@@ -133,8 +148,11 @@ fn drive_animations(
 
             if let Some(&node_idx) = assets.node_indices.get(&desired) {
                 if let Ok((mut player, mut transitions)) = anim_players.get_mut(anim_ref.0) {
-                    let transition = transitions
-                        .play(&mut player, node_idx, std::time::Duration::from_millis(200));
+                    let transition = transitions.play(
+                        &mut player,
+                        node_idx,
+                        std::time::Duration::from_millis(200),
+                    );
                     if desired != AnimState::Die {
                         transition.repeat();
                     }
@@ -147,11 +165,10 @@ fn drive_animations(
 /// Rotate the parent entity to face toward MoveTarget or AttackTarget.
 fn face_movement_direction(
     time: Res<Time>,
-    mut query: Query<(
-        &mut Transform,
-        Option<&MoveTarget>,
-        Option<&AttackTarget>,
-    ), Or<(With<Unit>, With<Mob>)>>,
+    mut query: Query<
+        (&mut Transform, Option<&MoveTarget>, Option<&AttackTarget>),
+        Or<(With<Unit>, With<Mob>)>,
+    >,
     target_transforms: Query<&Transform, (Without<Unit>, Without<Mob>)>,
 ) {
     let rate = 8.0;

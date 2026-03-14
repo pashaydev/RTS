@@ -1,8 +1,8 @@
+use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 
 use crate::components::*;
@@ -50,7 +50,10 @@ impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<FogOfWarMaterial>::default())
             .init_resource::<FogTweakSettings>()
-            .add_systems(OnEnter(AppState::InGame), (spawn_fog_overlay, register_fog_tweaks).after(crate::ground::spawn_ground))
+            .add_systems(
+                OnEnter(AppState::InGame),
+                (spawn_fog_overlay, register_fog_tweaks).after(crate::ground::spawn_ground),
+            )
             .add_systems(
                 Update,
                 (
@@ -71,39 +74,242 @@ impl Plugin for FogPlugin {
 fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
     let s = FogSettings::default();
 
-    tweaks.add_float("Visuals/FoW Shader", "Noise Scale", s.noise_scale, 0.0, 30.0, 0.5);
-    tweaks.add_float("Visuals/FoW Shader", "Edge Glow Width", s.edge_glow_width, 0.0, 0.5, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Edge Glow Intensity", s.edge_glow_intensity, 0.0, 2.0, 0.05);
-    tweaks.add_float("Visuals/FoW Shader", "Fog Color R", s.fog_color.x, 0.0, 1.0, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Fog Color G", s.fog_color.y, 0.0, 1.0, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Fog Color B", s.fog_color.z, 0.0, 1.0, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Fog Color A", s.fog_color.w, 0.0, 1.0, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Glow Color R", s.glow_color.x, 0.0, 1.0, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Glow Color G", s.glow_color.y, 0.0, 1.0, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Glow Color B", s.glow_color.z, 0.0, 1.0, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Glow Color A", s.glow_color.w, 0.0, 1.0, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Explored Tint R", s.explored_tint.x, 0.0, 1.0, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Explored Tint G", s.explored_tint.y, 0.0, 1.0, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Explored Tint B", s.explored_tint.z, 0.0, 1.0, 0.01);
-    tweaks.add_float("Visuals/FoW Shader", "Explored Tint A", s.explored_tint.w, 0.0, 1.0, 0.01);
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Noise Scale",
+        s.noise_scale,
+        0.0,
+        30.0,
+        0.5,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Edge Glow Width",
+        s.edge_glow_width,
+        0.0,
+        0.5,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Edge Glow Intensity",
+        s.edge_glow_intensity,
+        0.0,
+        2.0,
+        0.05,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Fog Color R",
+        s.fog_color.x,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Fog Color G",
+        s.fog_color.y,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Fog Color B",
+        s.fog_color.z,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Fog Color A",
+        s.fog_color.w,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Glow Color R",
+        s.glow_color.x,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Glow Color G",
+        s.glow_color.y,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Glow Color B",
+        s.glow_color.z,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Glow Color A",
+        s.glow_color.w,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Explored Tint R",
+        s.explored_tint.x,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Explored Tint G",
+        s.explored_tint.y,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Explored Tint B",
+        s.explored_tint.z,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Shader",
+        "Explored Tint A",
+        s.explored_tint.w,
+        0.0,
+        1.0,
+        0.01,
+    );
 
     // Unexplored fog noise pattern
-    tweaks.add_float("Visuals/FoW Fog Noise", "Scale", s.fog_noise_scale, 1.0, 20.0, 0.5);
-    tweaks.add_float("Visuals/FoW Fog Noise", "Speed", s.fog_noise_speed, 0.0, 0.1, 0.005);
-    tweaks.add_float("Visuals/FoW Fog Noise", "Warp", s.fog_noise_warp, 0.0, 3.0, 0.1);
-    tweaks.add_float("Visuals/FoW Fog Noise", "Contrast", s.fog_noise_contrast, 0.0, 1.0, 0.05);
-    tweaks.add_float("Visuals/FoW Fog Noise", "Octaves", s.fog_noise_octaves, 1.0, 6.0, 1.0);
-    tweaks.add_float("Visuals/FoW Fog Noise", "Tendril Scale", s.fog_tendril_scale, 1.0, 20.0, 0.5);
-    tweaks.add_float("Visuals/FoW Fog Noise", "Tendril Strength", s.fog_tendril_strength, 0.0, 2.0, 0.05);
-    tweaks.add_float("Visuals/FoW Fog Noise", "Warp Speed", s.fog_warp_speed, 0.0, 3.0, 0.1);
+    tweaks.add_float(
+        "Visuals/FoW Fog Noise",
+        "Scale",
+        s.fog_noise_scale,
+        1.0,
+        20.0,
+        0.5,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Fog Noise",
+        "Speed",
+        s.fog_noise_speed,
+        0.0,
+        0.1,
+        0.005,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Fog Noise",
+        "Warp",
+        s.fog_noise_warp,
+        0.0,
+        3.0,
+        0.1,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Fog Noise",
+        "Contrast",
+        s.fog_noise_contrast,
+        0.0,
+        1.0,
+        0.05,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Fog Noise",
+        "Octaves",
+        s.fog_noise_octaves,
+        1.0,
+        6.0,
+        1.0,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Fog Noise",
+        "Tendril Scale",
+        s.fog_tendril_scale,
+        1.0,
+        20.0,
+        0.5,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Fog Noise",
+        "Tendril Strength",
+        s.fog_tendril_strength,
+        0.0,
+        2.0,
+        0.05,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Fog Noise",
+        "Warp Speed",
+        s.fog_warp_speed,
+        0.0,
+        3.0,
+        0.1,
+    );
 
     let t = FogTweakSettings::default();
-    tweaks.add_float("Visuals/FoW Gameplay", "Mob Threshold", t.mob_threshold, 0.0, 1.0, 0.05);
-    tweaks.add_float("Visuals/FoW Gameplay", "Object Threshold", t.object_threshold, 0.0, 1.0, 0.05);
-    tweaks.add_float("Visuals/FoW Gameplay", "VFX Threshold", t.vfx_threshold, 0.0, 1.0, 0.05);
-    tweaks.add_float("Visuals/FoW Gameplay", "Transition Speed", t.transition_speed, 0.5, 20.0, 0.5);
-    tweaks.add_float("Visuals/FoW Gameplay", "Enable LOS", if t.enable_los { 1.0 } else { 0.0 }, 0.0, 1.0, 1.0);
-    tweaks.add_float("Visuals/FoW Gameplay", "LOS Ray Count", t.los_ray_count as f32, 8.0, 128.0, 8.0);
+    tweaks.add_float(
+        "Visuals/FoW Gameplay",
+        "Mob Threshold",
+        t.mob_threshold,
+        0.0,
+        1.0,
+        0.05,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Gameplay",
+        "Object Threshold",
+        t.object_threshold,
+        0.0,
+        1.0,
+        0.05,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Gameplay",
+        "VFX Threshold",
+        t.vfx_threshold,
+        0.0,
+        1.0,
+        0.05,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Gameplay",
+        "Transition Speed",
+        t.transition_speed,
+        0.5,
+        20.0,
+        0.5,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Gameplay",
+        "Enable LOS",
+        if t.enable_los { 1.0 } else { 0.0 },
+        0.0,
+        1.0,
+        1.0,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Gameplay",
+        "LOS Ray Count",
+        t.los_ray_count as f32,
+        8.0,
+        128.0,
+        8.0,
+    );
 }
 
 // ── Texture Creation ──
@@ -254,9 +460,13 @@ fn update_fog_visibility(
         let viewer_height = pos.y + 2.0; // eye height above ground
 
         let min_x = ((pos.x - range + half_map) / step).floor().max(0.0) as usize;
-        let max_x = ((pos.x + range + half_map) / step).ceil().min((grid_size - 1) as f32) as usize;
+        let max_x = ((pos.x + range + half_map) / step)
+            .ceil()
+            .min((grid_size - 1) as f32) as usize;
         let min_z = ((pos.z - range + half_map) / step).floor().max(0.0) as usize;
-        let max_z = ((pos.z + range + half_map) / step).ceil().min((grid_size - 1) as f32) as usize;
+        let max_z = ((pos.z + range + half_map) / step)
+            .ceil()
+            .min((grid_size - 1) as f32) as usize;
 
         if enable_los {
             // Terrain-aware LOS using elevation angle raycasting.
@@ -423,31 +633,77 @@ fn update_fog_material_time(
     mat.settings.time = time.elapsed_secs();
 
     // Apply shader tweaks
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Noise Scale") { mat.settings.noise_scale = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Edge Glow Width") { mat.settings.edge_glow_width = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Edge Glow Intensity") { mat.settings.edge_glow_intensity = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Fog Color R") { mat.settings.fog_color.x = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Fog Color G") { mat.settings.fog_color.y = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Fog Color B") { mat.settings.fog_color.z = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Fog Color A") { mat.settings.fog_color.w = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Glow Color R") { mat.settings.glow_color.x = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Glow Color G") { mat.settings.glow_color.y = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Glow Color B") { mat.settings.glow_color.z = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Glow Color A") { mat.settings.glow_color.w = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Explored Tint R") { mat.settings.explored_tint.x = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Explored Tint G") { mat.settings.explored_tint.y = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Explored Tint B") { mat.settings.explored_tint.z = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Explored Tint A") { mat.settings.explored_tint.w = v; }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Noise Scale") {
+        mat.settings.noise_scale = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Edge Glow Width") {
+        mat.settings.edge_glow_width = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Edge Glow Intensity") {
+        mat.settings.edge_glow_intensity = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Fog Color R") {
+        mat.settings.fog_color.x = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Fog Color G") {
+        mat.settings.fog_color.y = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Fog Color B") {
+        mat.settings.fog_color.z = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Fog Color A") {
+        mat.settings.fog_color.w = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Glow Color R") {
+        mat.settings.glow_color.x = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Glow Color G") {
+        mat.settings.glow_color.y = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Glow Color B") {
+        mat.settings.glow_color.z = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Glow Color A") {
+        mat.settings.glow_color.w = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Explored Tint R") {
+        mat.settings.explored_tint.x = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Explored Tint G") {
+        mat.settings.explored_tint.y = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Explored Tint B") {
+        mat.settings.explored_tint.z = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Explored Tint A") {
+        mat.settings.explored_tint.w = v;
+    }
 
     // Apply fog noise tweaks
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Scale") { mat.settings.fog_noise_scale = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Speed") { mat.settings.fog_noise_speed = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Warp") { mat.settings.fog_noise_warp = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Contrast") { mat.settings.fog_noise_contrast = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Octaves") { mat.settings.fog_noise_octaves = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Tendril Scale") { mat.settings.fog_tendril_scale = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Tendril Strength") { mat.settings.fog_tendril_strength = v; }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Warp Speed") { mat.settings.fog_warp_speed = v; }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Scale") {
+        mat.settings.fog_noise_scale = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Speed") {
+        mat.settings.fog_noise_speed = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Warp") {
+        mat.settings.fog_noise_warp = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Contrast") {
+        mat.settings.fog_noise_contrast = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Octaves") {
+        mat.settings.fog_noise_octaves = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Tendril Scale") {
+        mat.settings.fog_tendril_scale = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Tendril Strength") {
+        mat.settings.fog_tendril_strength = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Warp Speed") {
+        mat.settings.fog_warp_speed = v;
+    }
 }
 
 // ── Unified Entity Hiding ──

@@ -55,7 +55,12 @@ impl Default for GameSetupConfig {
 
 impl GameSetupConfig {
     pub fn spawn_positions(&self, seed: u64) -> Vec<(Faction, (f32, f32))> {
-        let factions = [Faction::Player1, Faction::Player2, Faction::Player3, Faction::Player4];
+        let factions = [
+            Faction::Player1,
+            Faction::Player2,
+            Faction::Player3,
+            Faction::Player4,
+        ];
         let count = (1 + self.num_ai_opponents as usize).min(4);
         let half_map = self.map_size.world_size() / 2.0;
         let radius = 0.6 * half_map;
@@ -247,6 +252,18 @@ impl ResourceType {
         }
     }
 
+    /// Relative per-second gather throughput for workers.
+    /// Lower values make resource extraction slower for that type.
+    pub fn gather_rate_multiplier(self) -> f32 {
+        match self {
+            Self::Wood => 1.0,
+            Self::Copper => 0.75,
+            Self::Iron => 0.65,
+            Self::Gold => 0.45,
+            Self::Oil => 0.85,
+        }
+    }
+
     pub fn carry_color(self) -> Color {
         match self {
             Self::Wood => Color::srgb(0.55, 0.35, 0.15),
@@ -325,7 +342,7 @@ impl Default for Health {
     }
 }
 
-// ── Gathering ──
+// ── Unit Stance & Role ──
 
 /// Whether a unit's current state was set by the player or the AI.
 #[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
@@ -337,6 +354,88 @@ pub enum TaskSource {
     Auto,
 }
 
+/// Combat stance — governs automatic threat response behavior.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum UnitStance {
+    /// Never auto-engage. Only attacks when manually ordered.
+    Passive,
+    /// Auto-engage enemies within scan range, but don't chase far (leash).
+    #[default]
+    Defensive,
+    /// Actively seek enemies at extended range. Chase aggressively.
+    Aggressive,
+}
+
+impl UnitStance {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::Passive => "Passive",
+            Self::Defensive => "Defensive",
+            Self::Aggressive => "Aggressive",
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Passive => Self::Defensive,
+            Self::Defensive => Self::Aggressive,
+            Self::Aggressive => Self::Passive,
+        }
+    }
+
+    /// Scan range multiplier for auto-acquiring targets.
+    pub fn scan_multiplier(self) -> f32 {
+        match self {
+            Self::Passive => 0.0,
+            Self::Defensive => 1.5,
+            Self::Aggressive => 2.5,
+        }
+    }
+
+    /// Max chase distance before leashing back (0 = no leash).
+    pub fn leash_distance(self) -> f32 {
+        match self {
+            Self::Passive => 0.0,
+            Self::Defensive => 12.0,
+            Self::Aggressive => 50.0,
+        }
+    }
+}
+
+/// High-level role hint for the AI decision layer.
+#[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
+pub enum AutoRole {
+    /// No automatic behavior — wait for orders.
+    #[default]
+    None,
+    /// Gather resources and build.
+    Economy,
+    /// Explore the map and pick up loot.
+    Explore,
+    /// Defend a specific area.
+    DefendArea(Vec3),
+}
+
+/// Remembers where a unit was when it started chasing a target (for leash return).
+#[derive(Component, Clone, Copy, Debug)]
+pub struct LeashOrigin(pub Vec3);
+
+/// Timer that controls decision priority ticks (every 0.2s).
+#[derive(Resource)]
+pub struct DecisionTimer {
+    pub timer: Timer,
+}
+
+impl Default for DecisionTimer {
+    fn default() -> Self {
+        Self {
+            timer: Timer::from_seconds(0.2, TimerMode::Repeating),
+        }
+    }
+}
+
+// ── Gathering ──
+
 /// Unified unit state machine — replaces WorkerTask, ProcessorWorkerState, and ad-hoc combat states.
 #[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
 pub enum UnitState {
@@ -345,9 +444,18 @@ pub enum UnitState {
     Moving(Vec3),
     Attacking(Entity),
     Gathering(Entity),
-    ReturningToDeposit { depot: Entity, gather_node: Option<Entity> },
-    Depositing { depot: Entity, gather_node: Option<Entity> },
-    WaitingForStorage { depot: Entity, gather_node: Option<Entity> },
+    ReturningToDeposit {
+        depot: Entity,
+        gather_node: Option<Entity>,
+    },
+    Depositing {
+        depot: Entity,
+        gather_node: Option<Entity>,
+    },
+    WaitingForStorage {
+        depot: Entity,
+        gather_node: Option<Entity>,
+    },
     /// Worker moving to a location to plot (start) a new building
     MovingToPlot(Vec3),
     MovingToBuild(Entity),
@@ -356,7 +464,10 @@ pub enum UnitState {
     InsideProcessor(Entity),
     /// Worker walking to processor building before being absorbed
     MovingToProcessor(Entity),
-    Patrolling { target: Vec3, origin: Vec3 },
+    Patrolling {
+        target: Vec3,
+        origin: Vec3,
+    },
     AttackMoving(Vec3),
     HoldPosition,
 }
@@ -427,6 +538,9 @@ pub struct GatherSpeed(pub f32);
 #[derive(Component)]
 pub struct CarryCapacity(pub f32);
 
+#[derive(Component, Default)]
+pub struct GatherAccumulator(pub f32);
+
 #[derive(Component)]
 pub struct DepositPoint;
 
@@ -466,7 +580,10 @@ impl StorageInventory {
     }
 
     pub fn remaining_capacity(&self) -> u32 {
-        ResourceType::ALL.iter().map(|rt| self.remaining_capacity_for(*rt)).sum()
+        ResourceType::ALL
+            .iter()
+            .map(|rt| self.remaining_capacity_for(*rt))
+            .sum()
     }
 
     pub fn remaining_capacity_for(&self, rt: ResourceType) -> u32 {
@@ -498,7 +615,11 @@ impl StorageInventory {
     }
 
     pub fn accepted_types(&self) -> Vec<ResourceType> {
-        ResourceType::ALL.iter().filter(|rt| self.caps[rt.index()] > 0).copied().collect()
+        ResourceType::ALL
+            .iter()
+            .filter(|rt| self.caps[rt.index()] > 0)
+            .copied()
+            .collect()
     }
 }
 
@@ -543,9 +664,14 @@ pub enum ProcessorWorkerState {
     #[default]
     Idle,
     MovingToNode(Entity),
-    Harvesting { node: Entity, timer_secs: f32 },
+    Harvesting {
+        node: Entity,
+        timer_secs: f32,
+    },
     ReturningToBuilding,
-    Depositing { timer_secs: f32 },
+    Depositing {
+        timer_secs: f32,
+    },
 }
 
 /// Config for resource respawn around processing buildings
@@ -599,7 +725,8 @@ pub struct CarriedResourceTotals {
 
 impl CarriedResourceTotals {
     pub fn get(&self, faction: &Faction) -> &PlayerResources {
-        static DEFAULT: std::sync::LazyLock<PlayerResources> = std::sync::LazyLock::new(PlayerResources::empty);
+        static DEFAULT: std::sync::LazyLock<PlayerResources> =
+            std::sync::LazyLock::new(PlayerResources::empty);
         self.per_faction.get(faction).unwrap_or(&DEFAULT)
     }
 }
@@ -657,7 +784,9 @@ impl Default for PlayerResources {
 
 impl PlayerResources {
     pub fn empty() -> Self {
-        Self { amounts: [0; ResourceType::COUNT] }
+        Self {
+            amounts: [0; ResourceType::COUNT],
+        }
     }
 
     pub fn add(&mut self, rt: ResourceType, amount: u32) {
@@ -670,7 +799,10 @@ impl PlayerResources {
 
     pub fn can_afford(&self, wood: u32, copper: u32, iron: u32, gold: u32, oil: u32) -> bool {
         let costs = [wood, copper, iron, gold, oil];
-        self.amounts.iter().zip(costs.iter()).all(|(have, need)| have >= need)
+        self.amounts
+            .iter()
+            .zip(costs.iter())
+            .all(|(have, need)| have >= need)
     }
 
     pub fn subtract(&mut self, wood: u32, copper: u32, iron: u32, gold: u32, oil: u32) {
@@ -709,6 +841,24 @@ pub struct ModelAssets {
 
 #[derive(Component)]
 pub struct Decoration;
+
+#[derive(Component)]
+pub struct DenseGrass;
+
+#[derive(Resource)]
+pub struct GrassGltfHandle(pub Handle<bevy::gltf::Gltf>);
+
+#[derive(Resource, Clone)]
+pub struct GrassInstanceAssets {
+    pub mesh: Handle<Mesh>,
+    pub material: Handle<StandardMaterial>,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct ExplosiveProp {
+    pub damage: f32,
+    pub radius: f32,
+}
 
 // ── Resource node materials ──
 
@@ -831,7 +981,12 @@ pub enum Faction {
 }
 
 impl Faction {
-    pub const PLAYERS: [Faction; 4] = [Faction::Player1, Faction::Player2, Faction::Player3, Faction::Player4];
+    pub const PLAYERS: [Faction; 4] = [
+        Faction::Player1,
+        Faction::Player2,
+        Faction::Player3,
+        Faction::Player4,
+    ];
 
     pub fn display_name(&self) -> &'static str {
         match self {
@@ -845,10 +1000,10 @@ impl Faction {
 
     pub fn color(&self) -> Color {
         match self {
-            Faction::Player1 => Color::srgb(0.2, 0.6, 1.0),   // Blue
-            Faction::Player2 => Color::srgb(1.0, 0.3, 0.2),   // Red
-            Faction::Player3 => Color::srgb(0.7, 0.3, 0.9),   // Purple
-            Faction::Player4 => Color::srgb(0.2, 0.8, 0.3),   // Green
+            Faction::Player1 => Color::srgb(0.2, 0.6, 1.0), // Blue
+            Faction::Player2 => Color::srgb(1.0, 0.3, 0.2), // Red
+            Faction::Player3 => Color::srgb(0.7, 0.3, 0.9), // Purple
+            Faction::Player4 => Color::srgb(0.2, 0.8, 0.3), // Green
             Faction::Neutral => Color::srgb(0.8, 0.2, 0.2),
         }
     }
@@ -875,8 +1030,12 @@ impl Default for TeamConfig {
 impl TeamConfig {
     /// Two factions are allied if they share the same team number.
     pub fn is_allied(&self, a: &Faction, b: &Faction) -> bool {
-        if a == b { return true; }
-        if *a == Faction::Neutral || *b == Faction::Neutral { return false; }
+        if a == b {
+            return true;
+        }
+        if *a == Faction::Neutral || *b == Faction::Neutral {
+            return false;
+        }
         match (self.teams.get(a), self.teams.get(b)) {
             (Some(ta), Some(tb)) => ta == tb,
             _ => false,
@@ -890,10 +1049,14 @@ impl TeamConfig {
 
     /// All factions on the same team as `faction` (including itself).
     pub fn allies_of(&self, faction: &Faction) -> Vec<Faction> {
-        if *faction == Faction::Neutral { return vec![Faction::Neutral]; }
+        if *faction == Faction::Neutral {
+            return vec![Faction::Neutral];
+        }
         let team = self.teams.get(faction).copied();
         match team {
-            Some(t) => self.teams.iter()
+            Some(t) => self
+                .teams
+                .iter()
                 .filter(|(_, &team_num)| team_num == t)
                 .map(|(&f, _)| f)
                 .collect(),
@@ -1044,7 +1207,13 @@ pub struct AllyNotifications {
 }
 
 impl AllyNotifications {
-    pub fn push(&mut self, kind: AllyNotifyKind, message: String, world_pos: Option<Vec3>, game_time: f32) {
+    pub fn push(
+        &mut self,
+        kind: AllyNotifyKind,
+        message: String,
+        world_pos: Option<Vec3>,
+        game_time: f32,
+    ) {
         // Throttle: max 1 per kind per 10s
         if let Some(&last) = self.last_per_kind.get(&kind) {
             if game_time - last < 10.0 {
@@ -1114,12 +1283,15 @@ pub struct AllPlayerResources {
 
 impl AllPlayerResources {
     pub fn get(&self, faction: &Faction) -> &PlayerResources {
-        static DEFAULT: std::sync::LazyLock<PlayerResources> = std::sync::LazyLock::new(PlayerResources::empty);
+        static DEFAULT: std::sync::LazyLock<PlayerResources> =
+            std::sync::LazyLock::new(PlayerResources::empty);
         self.resources.get(faction).unwrap_or(&DEFAULT)
     }
 
     pub fn get_mut(&mut self, faction: &Faction) -> &mut PlayerResources {
-        self.resources.entry(*faction).or_insert_with(PlayerResources::empty)
+        self.resources
+            .entry(*faction)
+            .or_insert_with(PlayerResources::empty)
     }
 }
 
@@ -1131,12 +1303,16 @@ pub struct AllCompletedBuildings {
 
 impl AllCompletedBuildings {
     pub fn has(&self, faction: &Faction, kind: EntityKind) -> bool {
-        self.per_faction.get(faction).map_or(false, |v| v.contains(&kind))
+        self.per_faction
+            .get(faction)
+            .map_or(false, |v| v.contains(&kind))
     }
 
     pub fn completed_for(&self, faction: &Faction) -> &[EntityKind] {
         static EMPTY: Vec<EntityKind> = Vec::new();
-        self.per_faction.get(faction).map_or(&EMPTY, |v| v.as_slice())
+        self.per_faction
+            .get(faction)
+            .map_or(&EMPTY, |v| v.as_slice())
     }
 }
 
@@ -1287,13 +1463,15 @@ pub struct VfxAssets {
     pub impact_material: Handle<StandardMaterial>,
     pub deposit_material: Handle<StandardMaterial>,
     pub dust_material: Handle<StandardMaterial>,
-    pub resource_particle_materials: std::collections::HashMap<ResourceType, Handle<StandardMaterial>>,
+    pub resource_particle_materials:
+        std::collections::HashMap<ResourceType, Handle<StandardMaterial>>,
 }
 
 #[derive(Component)]
 pub struct GatherParticle {
     pub timer: Timer,
     pub velocity: Vec3,
+    pub start_scale: f32,
 }
 
 #[derive(Component)]
@@ -1301,9 +1479,6 @@ pub struct FootstepDust {
     pub timer: Timer,
     pub velocity: Vec3,
 }
-
-#[derive(Component)]
-pub struct GatherParticleTimer(pub Timer);
 
 #[derive(Component)]
 pub struct FootstepTimer(pub Timer);
@@ -1673,6 +1848,9 @@ pub struct DemolishButton;
 pub struct RallyPointButton;
 
 #[derive(Component)]
+pub struct ScuttleUnitButton;
+
+#[derive(Component)]
 pub struct ConfirmDemolishButton;
 
 #[derive(Component)]
@@ -1707,6 +1885,21 @@ pub struct ToggleAutoAttackButton;
 
 #[derive(Component)]
 pub struct CancelTrainButton(pub usize);
+
+#[derive(Component)]
+pub struct AttackMoveButton;
+
+#[derive(Component)]
+pub struct PatrolButton;
+
+#[derive(Component)]
+pub struct HoldPositionButton;
+
+#[derive(Component)]
+pub struct StopButton;
+
+#[derive(Component)]
+pub struct CycleStanceButton;
 
 #[derive(Component)]
 pub struct ActionTooltip {

@@ -120,7 +120,11 @@ pub fn update_event_log(
     }
     render_state.last_revision = event_log.revision;
 
-    let Some(content) = super::widget_framework::find_widget_content(WidgetId::EventLog, &widget_q, &content_q) else { return; };
+    let Some(content) =
+        super::widget_framework::find_widget_content(WidgetId::EventLog, &widget_q, &content_q)
+    else {
+        return;
+    };
 
     // Clear existing
     for entity in &existing {
@@ -153,7 +157,10 @@ pub fn update_event_log(
         let empty = commands
             .spawn((
                 Text::new("No events yet"),
-                TextFont { font_size: theme::FONT_CAPTION, ..default() },
+                TextFont {
+                    font_size: theme::FONT_CAPTION,
+                    ..default()
+                },
                 TextColor(theme::TEXT_DISABLED),
             ))
             .id();
@@ -167,13 +174,14 @@ pub fn update_event_log(
     let header = commands
         .spawn((
             Node {
+                width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Row,
                 justify_content: JustifyContent::SpaceBetween,
                 padding: UiRect::axes(Val::Px(2.0), Val::Px(1.0)),
                 margin: UiRect::bottom(Val::Px(2.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.4)),
+            BackgroundColor(Color::NONE),
         ))
         .id();
     commands.entity(container).add_child(header);
@@ -181,7 +189,10 @@ pub fn update_event_log(
     let header_text = commands
         .spawn((
             Text::new(format!("Events: {} (showing {})", total, showing)),
-            TextFont { font_size: theme::FONT_MICRO, ..default() },
+            TextFont {
+                font_size: theme::FONT_MICRO,
+                ..default()
+            },
             TextColor(theme::TEXT_DISABLED),
         ))
         .id();
@@ -194,8 +205,10 @@ pub fn update_event_log(
                 EventLogEntry(event.world_pos),
                 Button,
                 Node {
+                    width: Val::Percent(100.0),
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
+                    flex_wrap: FlexWrap::Wrap,
                     column_gap: Val::Px(3.0),
                     padding: UiRect::axes(Val::Px(2.0), Val::Px(1.0)),
                     border_radius: BorderRadius::all(Val::Px(2.0)),
@@ -210,7 +223,10 @@ pub fn update_event_log(
         let prefix = commands
             .spawn((
                 Text::new(event.category.prefix()),
-                TextFont { font_size: theme::FONT_TINY, ..default() },
+                TextFont {
+                    font_size: theme::FONT_TINY,
+                    ..default()
+                },
                 TextColor(event.category.color()),
             ))
             .id();
@@ -223,7 +239,10 @@ pub fn update_event_log(
         let time_text = commands
             .spawn((
                 Text::new(time_str),
-                TextFont { font_size: theme::FONT_MICRO, ..default() },
+                TextFont {
+                    font_size: theme::FONT_MICRO,
+                    ..default()
+                },
                 TextColor(theme::TEXT_DISABLED),
             ))
             .id();
@@ -234,7 +253,10 @@ pub fn update_event_log(
             let tag = commands
                 .spawn((
                     Text::new(faction.display_name()),
-                    TextFont { font_size: theme::FONT_MICRO, ..default() },
+                    TextFont {
+                        font_size: theme::FONT_MICRO,
+                        ..default()
+                    },
                     TextColor(faction.color()),
                 ))
                 .id();
@@ -245,7 +267,10 @@ pub fn update_event_log(
         let msg = commands
             .spawn((
                 Text::new(&event.message),
-                TextFont { font_size: theme::FONT_TINY, ..default() },
+                TextFont {
+                    font_size: theme::FONT_TINY,
+                    ..default()
+                },
                 TextColor(theme::TEXT_SECONDARY),
             ))
             .id();

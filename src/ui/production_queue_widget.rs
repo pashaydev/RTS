@@ -13,10 +13,7 @@ pub fn update_production_queue(
     icons: Res<IconAssets>,
     content_q: Query<Entity, With<super::widget_framework::WidgetContent>>,
     widget_q: Query<(&super::widget_framework::Widget, &Children)>,
-    buildings: Query<
-        (Entity, &EntityKind, &TrainingQueue, &Faction),
-        With<Building>,
-    >,
+    buildings: Query<(Entity, &EntityKind, &TrainingQueue, &Faction), With<Building>>,
     existing_rows: Query<Entity, With<GlobalQueueRow>>,
     registry: Res<super::widget_framework::WidgetRegistry>,
 ) {
@@ -26,7 +23,13 @@ pub fn update_production_queue(
         return;
     }
 
-    let Some(content) = super::widget_framework::find_widget_content(WidgetId::ProductionQueue, &widget_q, &content_q) else { return; };
+    let Some(content) = super::widget_framework::find_widget_content(
+        WidgetId::ProductionQueue,
+        &widget_q,
+        &content_q,
+    ) else {
+        return;
+    };
 
     // Clear existing rows
     for row in &existing_rows {
@@ -50,7 +53,10 @@ pub fn update_production_queue(
             .spawn((
                 GlobalQueueRow(Entity::PLACEHOLDER),
                 Text::new("No active queues"),
-                TextFont { font_size: theme::FONT_SMALL, ..default() },
+                TextFont {
+                    font_size: theme::FONT_SMALL,
+                    ..default()
+                },
                 TextColor(theme::TEXT_DISABLED),
             ))
             .id();
@@ -64,9 +70,12 @@ pub fn update_production_queue(
                 GlobalQueueRow(*building_entity),
                 Button,
                 Node {
+                    width: Val::Percent(100.0),
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     column_gap: Val::Px(6.0),
+                    row_gap: Val::Px(4.0),
+                    flex_wrap: FlexWrap::Wrap,
                     padding: UiRect::axes(Val::Px(4.0), Val::Px(3.0)),
                     border_radius: BorderRadius::all(Val::Px(4.0)),
                     ..default()
@@ -93,7 +102,9 @@ pub fn update_production_queue(
         let icons_row = commands
             .spawn(Node {
                 flex_direction: FlexDirection::Row,
+                flex_wrap: FlexWrap::Wrap,
                 column_gap: Val::Px(2.0),
+                row_gap: Val::Px(2.0),
                 ..default()
             })
             .id();
@@ -117,7 +128,10 @@ pub fn update_production_queue(
             let more = commands
                 .spawn((
                     Text::new(format!("+{}", queue.queue.len() - 5)),
-                    TextFont { font_size: theme::FONT_CAPTION, ..default() },
+                    TextFont {
+                        font_size: theme::FONT_CAPTION,
+                        ..default()
+                    },
                     TextColor(theme::TEXT_SECONDARY),
                 ))
                 .id();
@@ -132,7 +146,7 @@ pub fn update_production_queue(
             let bar_bg = commands
                 .spawn((
                     Node {
-                        width: Val::Px(50.0),
+                        width: Val::Px(64.0),
                         height: Val::Px(4.0),
                         border_radius: BorderRadius::all(Val::Px(2.0)),
                         ..default()
@@ -156,7 +170,10 @@ pub fn update_production_queue(
             let time_text = commands
                 .spawn((
                     Text::new(format!("{:.0}s", remaining)),
-                    TextFont { font_size: theme::FONT_CAPTION, ..default() },
+                    TextFont {
+                        font_size: theme::FONT_CAPTION,
+                        ..default()
+                    },
                     TextColor(theme::TEXT_SECONDARY),
                 ))
                 .id();

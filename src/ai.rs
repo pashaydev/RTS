@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use crate::blueprints::{
-    BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint_with_faction,
+    spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache,
 };
 use crate::buildings::{footprint_for_kind, start_upgrade};
 use crate::components::*;
@@ -170,7 +170,12 @@ struct AiFactionBrain {
 }
 
 impl AiFactionBrain {
-    fn new_with_offsets(offset: f32, relation: AiRelation, personality: AiPersonality, difficulty: AiDifficulty) -> Self {
+    fn new_with_offsets(
+        offset: f32,
+        relation: AiRelation,
+        personality: AiPersonality,
+        difficulty: AiDifficulty,
+    ) -> Self {
         Self {
             strategy_timer: 0.0,
             economy_timer: offset,
@@ -254,8 +259,14 @@ impl Plugin for AiPlugin {
             .init_resource::<AiControlledFactions>()
             .init_resource::<AllyNotifications>()
             .init_resource::<AiFactionSettings>()
-            .add_systems(Update, (ai_strategy_system, ai_economy_system).run_if(in_state(AppState::InGame)))
-            .add_systems(Update, (ai_military_system, ai_tactical_system).run_if(in_state(AppState::InGame)))
+            .add_systems(
+                Update,
+                (ai_strategy_system, ai_economy_system).run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (ai_military_system, ai_tactical_system).run_if(in_state(AppState::InGame)),
+            )
             .add_systems(Update, sync_ai_settings.run_if(in_state(AppState::InGame)));
     }
 }
@@ -290,7 +301,10 @@ fn ai_strategy_system(
         };
 
         let brain = ai_state.factions.entry(faction).or_insert_with(|| {
-            let idx = Faction::PLAYERS.iter().position(|f| *f == faction).unwrap_or(0);
+            let idx = Faction::PLAYERS
+                .iter()
+                .position(|f| *f == faction)
+                .unwrap_or(0);
             let personality = match relation {
                 AiRelation::Friendly => AiPersonality::Supportive,
                 AiRelation::Enemy => match idx % 3 {
@@ -299,7 +313,12 @@ fn ai_strategy_system(
                     _ => AiPersonality::Defensive,
                 },
             };
-            AiFactionBrain::new_with_offsets(idx as f32 * 0.3, relation, personality, AiDifficulty::Medium)
+            AiFactionBrain::new_with_offsets(
+                idx as f32 * 0.3,
+                relation,
+                personality,
+                AiDifficulty::Medium,
+            )
         });
 
         // Update relation dynamically (teams can change in debug)
@@ -348,10 +367,18 @@ fn ai_strategy_system(
         brain.pending_builds = under_construction;
 
         // Phase transitions — friendly AI transitions slightly faster
-        let phase_speed_factor = if brain.relation == AiRelation::Friendly { 0.8 } else { 1.0 };
+        let phase_speed_factor = if brain.relation == AiRelation::Friendly {
+            0.8
+        } else {
+            1.0
+        };
         match brain.phase {
             StrategyPhase::EarlyGame => {
-                let worker_threshold = if brain.relation == AiRelation::Friendly { 5 } else { 6 };
+                let worker_threshold = if brain.relation == AiRelation::Friendly {
+                    5
+                } else {
+                    6
+                };
                 if worker_count >= worker_threshold
                     && all_completed.has(&faction, EntityKind::Barracks)
                     && all_completed.has(&faction, EntityKind::Storage)
@@ -361,7 +388,11 @@ fn ai_strategy_system(
                 }
             }
             StrategyPhase::MidGame => {
-                let mil_threshold = if brain.relation == AiRelation::Friendly { 10 } else { 12 };
+                let mil_threshold = if brain.relation == AiRelation::Friendly {
+                    10
+                } else {
+                    12
+                };
                 if military_count >= mil_threshold
                     && (all_completed.has(&faction, EntityKind::Workshop)
                         || all_completed.has(&faction, EntityKind::Stable))
@@ -433,7 +464,8 @@ fn ai_strategy_system(
                 _ => 12,
             },
         };
-        let attack_threshold = (base_threshold + brain.difficulty.attack_threshold_offset()).max(3) as usize;
+        let attack_threshold =
+            (base_threshold + brain.difficulty.attack_threshold_offset()).max(3) as usize;
         let attack_squad_size = brain.squad_size(SquadRole::AttackSquad);
         brain.attack_ready = attack_squad_size >= attack_threshold;
     }
@@ -446,32 +478,106 @@ type BuildPlan = &'static [(EntityKind, usize, u8)];
 
 // Build plans per personality per phase: [Early, Mid, Late]
 const BALANCED_PLANS: [BuildPlan; 3] = [
-    &[(EntityKind::Barracks, 1, 0), (EntityKind::Storage, 1, 1), (EntityKind::Sawmill, 1, 2), (EntityKind::WatchTower, 1, 3)],
-    &[(EntityKind::Barracks, 2, 0), (EntityKind::Workshop, 1, 1), (EntityKind::Stable, 1, 2), (EntityKind::GuardTower, 2, 1), (EntityKind::Mine, 1, 3), (EntityKind::MageTower, 1, 3)],
-    &[(EntityKind::SiegeWorks, 1, 0), (EntityKind::Temple, 1, 1), (EntityKind::GuardTower, 4, 2), (EntityKind::OilRig, 1, 2), (EntityKind::Storage, 2, 3)],
+    &[
+        (EntityKind::Barracks, 1, 0),
+        (EntityKind::Storage, 1, 1),
+        (EntityKind::Sawmill, 1, 2),
+        (EntityKind::WatchTower, 1, 3),
+    ],
+    &[
+        (EntityKind::Barracks, 2, 0),
+        (EntityKind::Workshop, 1, 1),
+        (EntityKind::Stable, 1, 2),
+        (EntityKind::GuardTower, 2, 1),
+        (EntityKind::Mine, 1, 3),
+        (EntityKind::MageTower, 1, 3),
+    ],
+    &[
+        (EntityKind::SiegeWorks, 1, 0),
+        (EntityKind::Temple, 1, 1),
+        (EntityKind::GuardTower, 4, 2),
+        (EntityKind::OilRig, 1, 2),
+        (EntityKind::Storage, 2, 3),
+    ],
 ];
 
 const AGGRESSIVE_PLANS: [BuildPlan; 3] = [
-    &[(EntityKind::Barracks, 2, 0), (EntityKind::Storage, 1, 1), (EntityKind::Sawmill, 1, 2)],
-    &[(EntityKind::Barracks, 3, 0), (EntityKind::Stable, 1, 1), (EntityKind::Workshop, 1, 2), (EntityKind::Mine, 1, 3)],
-    &[(EntityKind::SiegeWorks, 1, 0), (EntityKind::GuardTower, 2, 2), (EntityKind::OilRig, 1, 2)],
+    &[
+        (EntityKind::Barracks, 2, 0),
+        (EntityKind::Storage, 1, 1),
+        (EntityKind::Sawmill, 1, 2),
+    ],
+    &[
+        (EntityKind::Barracks, 3, 0),
+        (EntityKind::Stable, 1, 1),
+        (EntityKind::Workshop, 1, 2),
+        (EntityKind::Mine, 1, 3),
+    ],
+    &[
+        (EntityKind::SiegeWorks, 1, 0),
+        (EntityKind::GuardTower, 2, 2),
+        (EntityKind::OilRig, 1, 2),
+    ],
 ];
 
 const DEFENSIVE_PLANS: [BuildPlan; 3] = [
-    &[(EntityKind::WatchTower, 2, 0), (EntityKind::Barracks, 1, 1), (EntityKind::Storage, 1, 1), (EntityKind::Sawmill, 1, 2)],
-    &[(EntityKind::GuardTower, 4, 0), (EntityKind::Barracks, 2, 1), (EntityKind::Workshop, 1, 2), (EntityKind::Mine, 1, 3), (EntityKind::MageTower, 1, 3)],
-    &[(EntityKind::Temple, 1, 0), (EntityKind::SiegeWorks, 1, 1), (EntityKind::Storage, 2, 2), (EntityKind::OilRig, 1, 3)],
+    &[
+        (EntityKind::WatchTower, 2, 0),
+        (EntityKind::Barracks, 1, 1),
+        (EntityKind::Storage, 1, 1),
+        (EntityKind::Sawmill, 1, 2),
+    ],
+    &[
+        (EntityKind::GuardTower, 4, 0),
+        (EntityKind::Barracks, 2, 1),
+        (EntityKind::Workshop, 1, 2),
+        (EntityKind::Mine, 1, 3),
+        (EntityKind::MageTower, 1, 3),
+    ],
+    &[
+        (EntityKind::Temple, 1, 0),
+        (EntityKind::SiegeWorks, 1, 1),
+        (EntityKind::Storage, 2, 2),
+        (EntityKind::OilRig, 1, 3),
+    ],
 ];
 
 const ECONOMIC_PLANS: [BuildPlan; 3] = [
-    &[(EntityKind::Sawmill, 1, 0), (EntityKind::Mine, 1, 1), (EntityKind::Storage, 1, 1), (EntityKind::Barracks, 1, 2), (EntityKind::WatchTower, 1, 3)],
-    &[(EntityKind::Storage, 2, 0), (EntityKind::Barracks, 2, 1), (EntityKind::Workshop, 1, 2), (EntityKind::Stable, 1, 2), (EntityKind::GuardTower, 2, 3)],
-    &[(EntityKind::OilRig, 1, 0), (EntityKind::SiegeWorks, 1, 1), (EntityKind::Temple, 1, 2), (EntityKind::GuardTower, 4, 3)],
+    &[
+        (EntityKind::Sawmill, 1, 0),
+        (EntityKind::Mine, 1, 1),
+        (EntityKind::Storage, 1, 1),
+        (EntityKind::Barracks, 1, 2),
+        (EntityKind::WatchTower, 1, 3),
+    ],
+    &[
+        (EntityKind::Storage, 2, 0),
+        (EntityKind::Barracks, 2, 1),
+        (EntityKind::Workshop, 1, 2),
+        (EntityKind::Stable, 1, 2),
+        (EntityKind::GuardTower, 2, 3),
+    ],
+    &[
+        (EntityKind::OilRig, 1, 0),
+        (EntityKind::SiegeWorks, 1, 1),
+        (EntityKind::Temple, 1, 2),
+        (EntityKind::GuardTower, 4, 3),
+    ],
 ];
 
 // Supportive early/late are static; mid-game has dynamic logic
-const SUPPORTIVE_EARLY: BuildPlan = &[(EntityKind::Storage, 1, 0), (EntityKind::Barracks, 1, 1), (EntityKind::Sawmill, 1, 2), (EntityKind::WatchTower, 1, 3)];
-const SUPPORTIVE_LATE: BuildPlan = &[(EntityKind::Temple, 1, 0), (EntityKind::SiegeWorks, 1, 1), (EntityKind::Storage, 2, 2), (EntityKind::OilRig, 1, 3)];
+const SUPPORTIVE_EARLY: BuildPlan = &[
+    (EntityKind::Storage, 1, 0),
+    (EntityKind::Barracks, 1, 1),
+    (EntityKind::Sawmill, 1, 2),
+    (EntityKind::WatchTower, 1, 3),
+];
+const SUPPORTIVE_LATE: BuildPlan = &[
+    (EntityKind::Temple, 1, 0),
+    (EntityKind::SiegeWorks, 1, 1),
+    (EntityKind::Storage, 2, 2),
+    (EntityKind::OilRig, 1, 3),
+];
 
 fn apply_build_plan(brain: &mut AiFactionBrain, tc: &HashMap<EntityKind, usize>, plan: BuildPlan) {
     for &(kind, max, priority) in plan {
@@ -501,8 +607,10 @@ fn build_queue_for_personality(
                 StrategyPhase::MidGame => {
                     // Dynamic: complement player's buildings
                     if let Some(pb) = player_buildings {
-                        let player_has_barracks = pb.get(&EntityKind::Barracks).copied().unwrap_or(0) >= 2;
-                        let player_has_workshop = pb.get(&EntityKind::Workshop).copied().unwrap_or(0) > 0;
+                        let player_has_barracks =
+                            pb.get(&EntityKind::Barracks).copied().unwrap_or(0) >= 2;
+                        let player_has_workshop =
+                            pb.get(&EntityKind::Workshop).copied().unwrap_or(0) > 0;
                         if player_has_barracks {
                             push_if_missing(brain, tc, EntityKind::Workshop, 1, 0);
                             push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
@@ -523,7 +631,13 @@ fn build_queue_for_personality(
     }
 }
 
-fn push_if_missing(brain: &mut AiFactionBrain, tc: &HashMap<EntityKind, usize>, kind: EntityKind, max: usize, priority: u8) {
+fn push_if_missing(
+    brain: &mut AiFactionBrain,
+    tc: &HashMap<EntityKind, usize>,
+    kind: EntityKind,
+    max: usize,
+    priority: u8,
+) {
     if tc.get(&kind).copied().unwrap_or(0) < max {
         brain.build_queue.push(BuildRequest {
             kind,
@@ -560,7 +674,16 @@ fn ai_economy_system(
         Query<(Entity, &Faction, &Transform, &UnitState), (With<Unit>, With<GatherSpeed>)>,
         Query<(Entity, &Transform, &ResourceNode), Without<Unit>>,
         Query<(Entity, &Faction, &EntityKind, &Transform, &BuildingState), With<Building>>,
-        Query<(&Faction, &EntityKind, &BuildingLevel, Entity, &BuildingState), With<Building>>,
+        Query<
+            (
+                &Faction,
+                &EntityKind,
+                &BuildingLevel,
+                Entity,
+                &BuildingState,
+            ),
+            With<Building>,
+        >,
         Query<(&Faction, &ConstructionWorkers, &BuildingState), With<Building>>,
         Query<(&Faction, &EntityKind, &mut TrainingQueue), With<Building>>,
         Query<&BuildingFootprint>,
@@ -570,7 +693,17 @@ fn ai_economy_system(
 ) {
     let dt = time.delta_secs();
     let (active_player, teams, ai_controlled, base_state) = context;
-    let (workers_q, resource_nodes_q, buildings_q, building_levels_q, construction_workers_q, mut train_queues, footprints_q, processor_q, assigned_workers_q) = queries;
+    let (
+        workers_q,
+        resource_nodes_q,
+        buildings_q,
+        building_levels_q,
+        construction_workers_q,
+        mut train_queues,
+        footprints_q,
+        processor_q,
+        assigned_workers_q,
+    ) = queries;
 
     for &faction in &ai_controlled.factions {
         if faction == active_player.0 {
@@ -578,7 +711,8 @@ fn ai_economy_system(
         }
 
         let is_friendly = teams.is_allied(&faction, &active_player.0);
-        let is_founded = base_state.is_founded(&faction) || all_completed.has(&faction, EntityKind::Base);
+        let is_founded =
+            base_state.is_founded(&faction) || all_completed.has(&faction, EntityKind::Base);
 
         let brain = match ai_state.factions.get_mut(&faction) {
             Some(b) => b,
@@ -621,7 +755,10 @@ fn ai_economy_system(
         let fallback_pos = if worker_positions.is_empty() {
             None
         } else {
-            let sum = worker_positions.iter().copied().fold(Vec3::ZERO, |acc, p| acc + p);
+            let sum = worker_positions
+                .iter()
+                .copied()
+                .fold(Vec3::ZERO, |acc, p| acc + p);
             Some(sum / worker_positions.len() as f32)
         };
 
@@ -634,9 +771,16 @@ fn ai_economy_system(
         if !is_founded {
             let bp = registry.get(EntityKind::Base);
             let carried = carried_totals.get(&faction);
-            if bp.cost.can_afford_with_carried(all_resources.get(&faction), carried) {
-                let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
-                let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
+            if bp
+                .cost
+                .can_afford_with_carried(all_resources.get(&faction), carried)
+            {
+                let (dw, dc, di, dg, do_) =
+                    bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
+                let drain = SpendFromCarried {
+                    faction,
+                    amounts: [dw, dc, di, dg, do_],
+                };
                 if drain.has_deficit() {
                     pending_drains.drains.push(drain);
                 }
@@ -666,7 +810,8 @@ fn ai_economy_system(
 
         // Get player base pos for friendly AI resource avoidance
         let player_base_pos = if is_friendly {
-            buildings_q.iter()
+            buildings_q
+                .iter()
                 .find(|(_, f, kind, _, _)| **f == active_player.0 && **kind == EntityKind::Base)
                 .map(|(_, _, _, tf, _)| tf.translation)
         } else {
@@ -687,11 +832,20 @@ fn ai_economy_system(
         if worker_count < desired {
             let bp = registry.get(EntityKind::Worker);
             let carried = carried_totals.get(&faction);
-            if bp.cost.can_afford_with_carried(all_resources.get(&faction), carried) {
+            if bp
+                .cost
+                .can_afford_with_carried(all_resources.get(&faction), carried)
+            {
                 if try_train(&mut train_queues, &faction, EntityKind::Worker, &registry) {
-                    let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
-                    let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
-                    if drain.has_deficit() { pending_drains.drains.push(drain); }
+                    let (dw, dc, di, dg, do_) =
+                        bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
+                    let drain = SpendFromCarried {
+                        faction,
+                        amounts: [dw, dc, di, dg, do_],
+                    };
+                    if drain.has_deficit() {
+                        pending_drains.drains.push(drain);
+                    }
                 }
             }
         }
@@ -739,7 +893,8 @@ fn ai_economy_system(
             if processor.max_workers == 0 {
                 continue;
             }
-            let current_count = assigned_workers_q.get(proc_entity)
+            let current_count = assigned_workers_q
+                .get(proc_entity)
                 .map(|aw| aw.workers.len())
                 .unwrap_or(0);
             if current_count >= processor.max_workers as usize {
@@ -759,11 +914,17 @@ fn ai_economy_system(
                 }
                 crate::resources::assign_worker_to_processor(&mut commands, w_entity, proc_entity);
                 // Also add to AssignedWorkers on the building
-                commands.entity(proc_entity).entry::<AssignedWorkers>().and_modify(move |mut aw| {
-                    if !aw.workers.contains(&w_entity) {
-                        aw.workers.push(w_entity);
-                    }
-                }).or_insert(AssignedWorkers { workers: vec![w_entity] });
+                commands
+                    .entity(proc_entity)
+                    .entry::<AssignedWorkers>()
+                    .and_modify(move |mut aw| {
+                        if !aw.workers.contains(&w_entity) {
+                            aw.workers.push(w_entity);
+                        }
+                    })
+                    .or_insert(AssignedWorkers {
+                        workers: vec![w_entity],
+                    });
                 brain.add_to_squad(w_entity, SquadRole::GatherCopper); // Generic resource role
                 assigned += 1;
             }
@@ -825,7 +986,10 @@ fn ai_economy_system(
                 }
 
                 let carried = carried_totals.get(&faction);
-                if !bp.cost.can_afford_with_carried(all_resources.get(&faction), carried) {
+                if !bp
+                    .cost
+                    .can_afford_with_carried(all_resources.get(&faction), carried)
+                {
                     continue;
                 }
 
@@ -842,9 +1006,15 @@ fn ai_economy_system(
                     near,
                 );
 
-                let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
-                let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
-                if drain.has_deficit() { pending_drains.drains.push(drain); }
+                let (dw, dc, di, dg, do_) =
+                    bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
+                let drain = SpendFromCarried {
+                    faction,
+                    amounts: [dw, dc, di, dg, do_],
+                };
+                if drain.has_deficit() {
+                    pending_drains.drains.push(drain);
+                }
                 spawn_ai_building(
                     &mut commands,
                     &cache,
@@ -919,7 +1089,15 @@ fn ai_military_system(
     mut notifications: ResMut<AllyNotifications>,
     queries: (
         Query<(Entity, &Faction, &EntityKind, &Transform), (With<Unit>, Without<Building>)>,
-        Query<(Entity, &Faction, &EntityKind, &Transform, &UnitState), (With<Unit>, Without<AttackTarget>, Without<MoveTarget>, Without<Building>)>,
+        Query<
+            (Entity, &Faction, &EntityKind, &Transform, &UnitState),
+            (
+                With<Unit>,
+                Without<AttackTarget>,
+                Without<MoveTarget>,
+                Without<Building>,
+            ),
+        >,
         Query<&Health>,
         Query<(&Faction, &Transform), With<Building>>,
         Query<(&Faction, &EntityKind, &mut TrainingQueue), With<Building>>,
@@ -973,7 +1151,8 @@ fn ai_military_system(
         }
 
         // Check for retreating posture
-        if brain.posture == TacticalPosture::Normal && military_count < 4 && brain.game_time > 120.0 {
+        if brain.posture == TacticalPosture::Normal && military_count < 4 && brain.game_time > 120.0
+        {
             brain.posture = TacticalPosture::Retreating;
             brain.posture_cooldown = 20.0;
         }
@@ -982,7 +1161,8 @@ fn ai_military_system(
         let personality = brain.personality;
 
         // ── Composition-driven training (personality-aware) ──
-        let desired_composition: Vec<(EntityKind, usize)> = get_desired_composition(phase, personality, is_friendly, &units_q, &active_player);
+        let desired_composition: Vec<(EntityKind, usize)> =
+            get_desired_composition(phase, personality, is_friendly, &units_q, &active_player);
 
         // Find most under-represented unit type and train it
         let mut best_deficit: Option<(EntityKind, f32)> = None;
@@ -999,11 +1179,20 @@ fn ai_military_system(
         if let Some((unit_kind, _)) = best_deficit {
             let bp = registry.get(unit_kind);
             let carried = carried_totals.get(&faction);
-            if bp.cost.can_afford_with_carried(all_resources.get(&faction), carried) {
+            if bp
+                .cost
+                .can_afford_with_carried(all_resources.get(&faction), carried)
+            {
                 if try_train(&mut train_queues, &faction, unit_kind, &registry) {
-                    let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
-                    let drain = SpendFromCarried { faction, amounts: [dw, dc, di, dg, do_] };
-                    if drain.has_deficit() { pending_drains.drains.push(drain); }
+                    let (dw, dc, di, dg, do_) =
+                        bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
+                    let drain = SpendFromCarried {
+                        faction,
+                        amounts: [dw, dc, di, dg, do_],
+                    };
+                    if drain.has_deficit() {
+                        pending_drains.drains.push(drain);
+                    }
                 }
             }
         }
@@ -1038,9 +1227,14 @@ fn ai_military_system(
                 .map(|s| s.members.clone())
                 .unwrap_or_default();
 
-            let scout_candidate = attack_members.iter().find(|&&e| {
-                units_q.get(e).map_or(false, |(_, _, k, _)| *k == EntityKind::Cavalry)
-            }).or_else(|| attack_members.first());
+            let scout_candidate = attack_members
+                .iter()
+                .find(|&&e| {
+                    units_q
+                        .get(e)
+                        .map_or(false, |(_, _, k, _)| *k == EntityKind::Cavalry)
+                })
+                .or_else(|| attack_members.first());
 
             if let Some(&scout_entity) = scout_candidate {
                 brain.remove_from_squad(scout_entity);
@@ -1085,14 +1279,21 @@ fn ai_military_system(
                 let mut raiders: Vec<Entity> = Vec::new();
                 // Prefer cavalry
                 for &e in &attack_members {
-                    if raiders.len() >= 3 { break; }
-                    if units_q.get(e).map_or(false, |(_, _, k, _)| *k == EntityKind::Cavalry) {
+                    if raiders.len() >= 3 {
+                        break;
+                    }
+                    if units_q
+                        .get(e)
+                        .map_or(false, |(_, _, k, _)| *k == EntityKind::Cavalry)
+                    {
                         raiders.push(e);
                     }
                 }
                 // Fill with any available
                 for &e in &attack_members {
-                    if raiders.len() >= 2 { break; }
+                    if raiders.len() >= 2 {
+                        break;
+                    }
                     if !raiders.contains(&e) {
                         raiders.push(e);
                     }
@@ -1104,7 +1305,9 @@ fn ai_military_system(
                         brain.add_to_squad(e, SquadRole::Raider);
                     }
                     // Send to enemy resource area
-                    if let Some(target) = find_enemy_resource_area(&enemy_buildings_q, &teams, &faction) {
+                    if let Some(target) =
+                        find_enemy_resource_area(&enemy_buildings_q, &teams, &faction)
+                    {
                         for &e in &raiders {
                             commands.entity(e).insert(MoveTarget(target));
                         }
@@ -1210,7 +1413,8 @@ fn ai_military_system(
         }
 
         // Notify when ally is ready to attack
-        if is_friendly && attack_ready && (game_time - last_attack_time) > ATTACK_MIN_INTERVAL * 0.8 {
+        if is_friendly && attack_ready && (game_time - last_attack_time) > ATTACK_MIN_INTERVAL * 0.8
+        {
             notifications.push(
                 AllyNotifyKind::ReadyToAttack,
                 "Ally army ready to push!".to_string(),
@@ -1437,17 +1641,22 @@ fn ai_tactical_system(
             // Friendly AI: also defend player's base area
             if is_friendly {
                 if let Some(pbp) = player_base_pos {
-                    let player_threats: Vec<Vec3> = threat_positions.iter()
+                    let player_threats: Vec<Vec3> = threat_positions
+                        .iter()
                         .filter(|p| p.distance(pbp) < BASE_THREAT_RADIUS * 2.0)
                         .copied()
                         .collect();
 
                     if !player_threats.is_empty() {
-                        let player_threat_center: Vec3 = player_threats.iter().copied().sum::<Vec3>() / player_threats.len() as f32;
+                        let player_threat_center: Vec3 =
+                            player_threats.iter().copied().sum::<Vec3>()
+                                / player_threats.len() as f32;
                         // Send defense squad to help player
                         if let Some(squad) = brain.get_squad(SquadRole::DefenseSquad) {
                             for &entity in &squad.members {
-                                commands.entity(entity).insert(MoveTarget(player_threat_center));
+                                commands
+                                    .entity(entity)
+                                    .insert(MoveTarget(player_threat_center));
                             }
                         }
                     }
@@ -1486,7 +1695,9 @@ fn get_desired_composition(
         let mut player_melee = 0usize;
         let mut player_ranged = 0usize;
         for (_, f, kind, _) in units_q.iter() {
-            if *f != active_player.0 || *kind == EntityKind::Worker { continue; }
+            if *f != active_player.0 || *kind == EntityKind::Worker {
+                continue;
+            }
             match kind {
                 EntityKind::Soldier | EntityKind::Knight | EntityKind::Cavalry => player_melee += 1,
                 EntityKind::Archer | EntityKind::Mage => player_ranged += 1,
@@ -1505,16 +1716,38 @@ fn get_desired_composition(
             }
             StrategyPhase::MidGame => {
                 if player_prefers_melee {
-                    vec![(EntityKind::Archer, 4), (EntityKind::Mage, 2), (EntityKind::Soldier, 2), (EntityKind::Priest, 1)]
+                    vec![
+                        (EntityKind::Archer, 4),
+                        (EntityKind::Mage, 2),
+                        (EntityKind::Soldier, 2),
+                        (EntityKind::Priest, 1),
+                    ]
                 } else {
-                    vec![(EntityKind::Soldier, 3), (EntityKind::Knight, 2), (EntityKind::Archer, 2), (EntityKind::Priest, 1)]
+                    vec![
+                        (EntityKind::Soldier, 3),
+                        (EntityKind::Knight, 2),
+                        (EntityKind::Archer, 2),
+                        (EntityKind::Priest, 1),
+                    ]
                 }
             }
             StrategyPhase::LateGame => {
                 if player_prefers_melee {
-                    vec![(EntityKind::Archer, 4), (EntityKind::Mage, 3), (EntityKind::Priest, 2), (EntityKind::Soldier, 2), (EntityKind::Catapult, 1)]
+                    vec![
+                        (EntityKind::Archer, 4),
+                        (EntityKind::Mage, 3),
+                        (EntityKind::Priest, 2),
+                        (EntityKind::Soldier, 2),
+                        (EntityKind::Catapult, 1),
+                    ]
                 } else {
-                    vec![(EntityKind::Knight, 3), (EntityKind::Cavalry, 2), (EntityKind::Soldier, 3), (EntityKind::Priest, 2), (EntityKind::BatteringRam, 1)]
+                    vec![
+                        (EntityKind::Knight, 3),
+                        (EntityKind::Cavalry, 2),
+                        (EntityKind::Soldier, 3),
+                        (EntityKind::Priest, 2),
+                        (EntityKind::BatteringRam, 1),
+                    ]
                 }
             }
         };
@@ -1523,23 +1756,68 @@ fn get_desired_composition(
     match personality {
         AiPersonality::Aggressive => match phase {
             StrategyPhase::EarlyGame => vec![(EntityKind::Soldier, 4), (EntityKind::Archer, 1)],
-            StrategyPhase::MidGame => vec![(EntityKind::Soldier, 5), (EntityKind::Knight, 3), (EntityKind::Archer, 2)],
-            StrategyPhase::LateGame => vec![(EntityKind::Soldier, 4), (EntityKind::Knight, 3), (EntityKind::Cavalry, 3), (EntityKind::Catapult, 2)],
+            StrategyPhase::MidGame => vec![
+                (EntityKind::Soldier, 5),
+                (EntityKind::Knight, 3),
+                (EntityKind::Archer, 2),
+            ],
+            StrategyPhase::LateGame => vec![
+                (EntityKind::Soldier, 4),
+                (EntityKind::Knight, 3),
+                (EntityKind::Cavalry, 3),
+                (EntityKind::Catapult, 2),
+            ],
         },
         AiPersonality::Defensive => match phase {
             StrategyPhase::EarlyGame => vec![(EntityKind::Soldier, 2), (EntityKind::Archer, 3)],
-            StrategyPhase::MidGame => vec![(EntityKind::Soldier, 3), (EntityKind::Archer, 4), (EntityKind::Mage, 2), (EntityKind::Priest, 1)],
-            StrategyPhase::LateGame => vec![(EntityKind::Soldier, 4), (EntityKind::Archer, 4), (EntityKind::Mage, 3), (EntityKind::Priest, 2), (EntityKind::Catapult, 1)],
+            StrategyPhase::MidGame => vec![
+                (EntityKind::Soldier, 3),
+                (EntityKind::Archer, 4),
+                (EntityKind::Mage, 2),
+                (EntityKind::Priest, 1),
+            ],
+            StrategyPhase::LateGame => vec![
+                (EntityKind::Soldier, 4),
+                (EntityKind::Archer, 4),
+                (EntityKind::Mage, 3),
+                (EntityKind::Priest, 2),
+                (EntityKind::Catapult, 1),
+            ],
         },
         AiPersonality::Economic => match phase {
             StrategyPhase::EarlyGame => vec![(EntityKind::Soldier, 2), (EntityKind::Archer, 1)],
-            StrategyPhase::MidGame => vec![(EntityKind::Soldier, 4), (EntityKind::Archer, 3), (EntityKind::Knight, 2)],
-            StrategyPhase::LateGame => vec![(EntityKind::Soldier, 4), (EntityKind::Knight, 3), (EntityKind::Mage, 3), (EntityKind::Cavalry, 2), (EntityKind::Catapult, 2), (EntityKind::BatteringRam, 1)],
+            StrategyPhase::MidGame => vec![
+                (EntityKind::Soldier, 4),
+                (EntityKind::Archer, 3),
+                (EntityKind::Knight, 2),
+            ],
+            StrategyPhase::LateGame => vec![
+                (EntityKind::Soldier, 4),
+                (EntityKind::Knight, 3),
+                (EntityKind::Mage, 3),
+                (EntityKind::Cavalry, 2),
+                (EntityKind::Catapult, 2),
+                (EntityKind::BatteringRam, 1),
+            ],
         },
-        _ => match phase { // Balanced
+        _ => match phase {
+            // Balanced
             StrategyPhase::EarlyGame => vec![(EntityKind::Soldier, 3), (EntityKind::Archer, 2)],
-            StrategyPhase::MidGame => vec![(EntityKind::Soldier, 4), (EntityKind::Archer, 3), (EntityKind::Knight, 2), (EntityKind::Mage, 1)],
-            StrategyPhase::LateGame => vec![(EntityKind::Soldier, 3), (EntityKind::Archer, 3), (EntityKind::Knight, 3), (EntityKind::Mage, 2), (EntityKind::Cavalry, 2), (EntityKind::Catapult, 1), (EntityKind::BatteringRam, 1)],
+            StrategyPhase::MidGame => vec![
+                (EntityKind::Soldier, 4),
+                (EntityKind::Archer, 3),
+                (EntityKind::Knight, 2),
+                (EntityKind::Mage, 1),
+            ],
+            StrategyPhase::LateGame => vec![
+                (EntityKind::Soldier, 3),
+                (EntityKind::Archer, 3),
+                (EntityKind::Knight, 3),
+                (EntityKind::Mage, 2),
+                (EntityKind::Cavalry, 2),
+                (EntityKind::Catapult, 1),
+                (EntityKind::BatteringRam, 1),
+            ],
         },
     }
 }
@@ -1569,9 +1847,7 @@ fn pick_most_needed_resource(res: &PlayerResources, phase: StrategyPhase) -> Res
         ],
     };
 
-    let get_amount = |rt: ResourceType| -> u32 {
-        res.get(rt)
-    };
+    let get_amount = |rt: ResourceType| -> u32 { res.get(rt) };
 
     let mut best_rt = ResourceType::Wood;
     let mut best_score = f32::MIN;
@@ -1715,7 +1991,11 @@ fn pick_attack_target(
         .iter()
         .filter(|t| t.estimated_strength > 0.0)
         .collect();
-    valid_threats.sort_by(|a, b| a.estimated_strength.partial_cmp(&b.estimated_strength).unwrap());
+    valid_threats.sort_by(|a, b| {
+        a.estimated_strength
+            .partial_cmp(&b.estimated_strength)
+            .unwrap()
+    });
 
     if let Some(threat) = valid_threats.first() {
         return Some(threat.position);
@@ -1835,7 +2115,15 @@ fn spawn_ai_building(
     faction: Faction,
 ) {
     let entity = spawn_from_blueprint_with_faction(
-        commands, cache, kind, pos, registry, building_models, None, height_map, faction,
+        commands,
+        cache,
+        kind,
+        pos,
+        registry,
+        building_models,
+        None,
+        height_map,
+        faction,
     );
 
     let bp = registry.get(kind);

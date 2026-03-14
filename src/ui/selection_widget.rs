@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 
+use super::shared::spawn_hp_bar;
 use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::theme;
-use super::shared::spawn_hp_bar;
 
 pub fn rebuild_selection_panel(
     mut commands: Commands,
@@ -15,7 +15,15 @@ pub fn rebuild_selection_panel(
     panel_q: Query<Entity, With<SelectionInfoPanel>>,
     children_q: Query<&Children>,
     selected_units: Query<
-        (Entity, &EntityKind, &Health, &AttackDamage, &AttackRange, &UnitSpeed),
+        (
+            Entity,
+            &EntityKind,
+            &Health,
+            &AttackDamage,
+            &AttackRange,
+            &UnitSpeed,
+            Option<&UnitStance>,
+        ),
         (With<Unit>, With<Selected>),
     >,
     selected_buildings: Query<
@@ -23,11 +31,28 @@ pub fn rebuild_selection_panel(
         (With<Building>, With<Selected>),
     >,
     mob_query: Query<
-        (&EntityKind, &Health, &AttackDamage, &AttackRange, &UnitSpeed, &AggroRange, Has<Boss>),
+        (
+            &EntityKind,
+            &Health,
+            &AttackDamage,
+            &AttackRange,
+            &UnitSpeed,
+            &AggroRange,
+            Has<Boss>,
+        ),
         With<Mob>,
     >,
     faction_q: Query<&Faction>,
-    inspected_unit_q: Query<(&EntityKind, &Health, &AttackDamage, &AttackRange, &UnitSpeed), With<Unit>>,
+    inspected_unit_q: Query<
+        (
+            &EntityKind,
+            &Health,
+            &AttackDamage,
+            &AttackRange,
+            &UnitSpeed,
+        ),
+        With<Unit>,
+    >,
     inspected_building_q: Query<(&EntityKind, &BuildingState, &Health), With<Building>>,
 ) {
     let Ok(panel_entity) = panel_q.single() else {
@@ -35,10 +60,15 @@ pub fn rebuild_selection_panel(
     };
 
     let has_inspected = inspected.entity.map_or(false, |e| {
-        mob_query.get(e).is_ok() || inspected_unit_q.get(e).is_ok() || inspected_building_q.get(e).is_ok()
+        mob_query.get(e).is_ok()
+            || inspected_unit_q.get(e).is_ok()
+            || inspected_building_q.get(e).is_ok()
     });
 
-    let should_show = matches!(*ui_mode, UiMode::SelectedUnits(_) | UiMode::SelectedBuilding(_)) || has_inspected;
+    let should_show = matches!(
+        *ui_mode,
+        UiMode::SelectedUnits(_) | UiMode::SelectedBuilding(_)
+    ) || has_inspected;
 
     if !should_show {
         if let Ok(children) = children_q.get(panel_entity) {
@@ -59,34 +89,58 @@ pub fn rebuild_selection_panel(
         }
     }
 
-    let has_selection = matches!(*ui_mode, UiMode::SelectedUnits(_) | UiMode::SelectedBuilding(_));
+    let has_selection = matches!(
+        *ui_mode,
+        UiMode::SelectedUnits(_) | UiMode::SelectedBuilding(_)
+    );
 
     match &*ui_mode {
         UiMode::SelectedUnits(entities) if entities.len() == 1 => {
-            if let Some((entity, kind, health, dmg, rng, spd)) = selected_units.iter().next() {
-                spawn_friendly_detail_card(&mut commands, panel_entity, entity, *kind, health, dmg, rng, spd, &icons);
+            if let Some((entity, kind, health, dmg, rng, spd, stance)) =
+                selected_units.iter().next()
+            {
+                spawn_friendly_detail_card(
+                    &mut commands,
+                    panel_entity,
+                    entity,
+                    *kind,
+                    health,
+                    dmg,
+                    rng,
+                    spd,
+                    stance.copied(),
+                    &icons,
+                );
             }
         }
         UiMode::SelectedBuilding(_) => {
             if let Some((entity, kind, state, health)) = selected_buildings.iter().next() {
-                spawn_building_detail_card(&mut commands, panel_entity, entity, *kind, *state, health, &icons);
+                spawn_building_detail_card(
+                    &mut commands,
+                    panel_entity,
+                    entity,
+                    *kind,
+                    *state,
+                    health,
+                    &icons,
+                );
             }
         }
         UiMode::SelectedUnits(entities) if entities.len() > 1 => {
             let grid_container = commands
                 .spawn(Node {
+                    width: Val::Percent(100.0),
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(4.0),
-                    max_width: Val::Px(480.0),
                     overflow: Overflow::scroll_y(),
-                    max_height: Val::Px(140.0),
+                    max_height: Val::Percent(100.0),
                     ..default()
                 })
                 .id();
             commands.entity(panel_entity).add_child(grid_container);
 
             let mut unit_groups: Vec<(EntityKind, Vec<(Entity, &Health)>)> = Vec::new();
-            for (entity, kind, health, _, _, _) in &selected_units {
+            for (entity, kind, health, _, _, _, _) in &selected_units {
                 if let Some(group) = unit_groups.iter_mut().find(|(k, _)| *k == *kind) {
                     group.1.push((entity, health));
                 } else {
@@ -103,12 +157,20 @@ pub fn rebuild_selection_panel(
             }
 
             for (kind, entities) in &unit_groups {
-                let header = commands.spawn((
-                    Text::new(format!("{} ({})", kind.display_name(), entities.len())),
-                    TextFont { font_size: theme::FONT_SMALL, ..default() },
-                    TextColor(theme::TEXT_SECONDARY),
-                    Node { margin: UiRect::bottom(Val::Px(1.0)), ..default() },
-                )).id();
+                let header = commands
+                    .spawn((
+                        Text::new(format!("{} ({})", kind.display_name(), entities.len())),
+                        TextFont {
+                            font_size: theme::FONT_SMALL,
+                            ..default()
+                        },
+                        TextColor(theme::TEXT_SECONDARY),
+                        Node {
+                            margin: UiRect::bottom(Val::Px(1.0)),
+                            ..default()
+                        },
+                    ))
+                    .id();
                 commands.entity(grid_container).add_child(header);
 
                 let grid = commands
@@ -131,12 +193,20 @@ pub fn rebuild_selection_panel(
             }
 
             for (kind, entities) in &building_groups {
-                let header = commands.spawn((
-                    Text::new(format!("{} ({})", kind.display_name(), entities.len())),
-                    TextFont { font_size: theme::FONT_SMALL, ..default() },
-                    TextColor(theme::TEXT_SECONDARY),
-                    Node { margin: UiRect::bottom(Val::Px(1.0)), ..default() },
-                )).id();
+                let header = commands
+                    .spawn((
+                        Text::new(format!("{} ({})", kind.display_name(), entities.len())),
+                        TextFont {
+                            font_size: theme::FONT_SMALL,
+                            ..default()
+                        },
+                        TextColor(theme::TEXT_SECONDARY),
+                        Node {
+                            margin: UiRect::bottom(Val::Px(1.0)),
+                            ..default()
+                        },
+                    ))
+                    .id();
                 commands.entity(grid_container).add_child(header);
 
                 let grid = commands
@@ -163,9 +233,16 @@ pub fn rebuild_selection_panel(
 
     // Inspect section (mobs, enemy/allied player entities)
     if let Some(inspected_entity) = inspected.entity {
-        let relationship = faction_q.get(inspected_entity).map(|f| {
-            if teams.is_allied(&active_player.0, f) { "Allied" } else { "Enemy" }
-        }).unwrap_or("Neutral");
+        let relationship = faction_q
+            .get(inspected_entity)
+            .map(|f| {
+                if teams.is_allied(&active_player.0, f) {
+                    "Allied"
+                } else {
+                    "Enemy"
+                }
+            })
+            .unwrap_or("Neutral");
         let relationship_color = if relationship == "Allied" {
             Color::srgb(0.3, 0.8, 0.3)
         } else {
@@ -189,38 +266,90 @@ pub fn rebuild_selection_panel(
             }
 
             spawn_enemy_detail_card(
-                &mut commands, panel_entity, inspected_entity,
-                *kind, is_boss, health, dmg, rng, spd, aggro, &icons,
+                &mut commands,
+                panel_entity,
+                inspected_entity,
+                *kind,
+                is_boss,
+                health,
+                dmg,
+                rng,
+                spd,
+                aggro,
+                &icons,
             );
         } else if let Ok((kind, health, dmg, rng, spd)) = inspected_unit_q.get(inspected_entity) {
             if has_selection {
-                let divider = commands.spawn((
-                    Node { width: Val::Px(1.0), height: Val::Px(50.0), margin: UiRect::axes(Val::Px(6.0), Val::Px(0.0)), ..default() },
-                    BackgroundColor(theme::SEPARATOR),
-                )).id();
+                let divider = commands
+                    .spawn((
+                        Node {
+                            width: Val::Px(1.0),
+                            height: Val::Px(50.0),
+                            margin: UiRect::axes(Val::Px(6.0), Val::Px(0.0)),
+                            ..default()
+                        },
+                        BackgroundColor(theme::SEPARATOR),
+                    ))
+                    .id();
                 commands.entity(panel_entity).add_child(divider);
             }
-            spawn_friendly_detail_card(&mut commands, panel_entity, inspected_entity, *kind, health, dmg, rng, spd, &icons);
-            let label = commands.spawn((
-                Text::new(relationship),
-                TextFont { font_size: theme::FONT_BODY, ..default() },
-                TextColor(relationship_color),
-            )).id();
+            spawn_friendly_detail_card(
+                &mut commands,
+                panel_entity,
+                inspected_entity,
+                *kind,
+                health,
+                dmg,
+                rng,
+                spd,
+                None,
+                &icons,
+            );
+            let label = commands
+                .spawn((
+                    Text::new(relationship),
+                    TextFont {
+                        font_size: theme::FONT_BODY,
+                        ..default()
+                    },
+                    TextColor(relationship_color),
+                ))
+                .id();
             commands.entity(panel_entity).add_child(label);
         } else if let Ok((kind, state, health)) = inspected_building_q.get(inspected_entity) {
             if has_selection {
-                let divider = commands.spawn((
-                    Node { width: Val::Px(1.0), height: Val::Px(50.0), margin: UiRect::axes(Val::Px(6.0), Val::Px(0.0)), ..default() },
-                    BackgroundColor(theme::SEPARATOR),
-                )).id();
+                let divider = commands
+                    .spawn((
+                        Node {
+                            width: Val::Px(1.0),
+                            height: Val::Px(50.0),
+                            margin: UiRect::axes(Val::Px(6.0), Val::Px(0.0)),
+                            ..default()
+                        },
+                        BackgroundColor(theme::SEPARATOR),
+                    ))
+                    .id();
                 commands.entity(panel_entity).add_child(divider);
             }
-            spawn_building_detail_card(&mut commands, panel_entity, inspected_entity, *kind, *state, health, &icons);
-            let label = commands.spawn((
-                Text::new(relationship),
-                TextFont { font_size: theme::FONT_BODY, ..default() },
-                TextColor(relationship_color),
-            )).id();
+            spawn_building_detail_card(
+                &mut commands,
+                panel_entity,
+                inspected_entity,
+                *kind,
+                *state,
+                health,
+                &icons,
+            );
+            let label = commands
+                .spawn((
+                    Text::new(relationship),
+                    TextFont {
+                        font_size: theme::FONT_BODY,
+                        ..default()
+                    },
+                    TextColor(relationship_color),
+                ))
+                .id();
             commands.entity(panel_entity).add_child(label);
         }
     }
@@ -235,16 +364,28 @@ pub fn spawn_friendly_detail_card(
     damage: &AttackDamage,
     range: &AttackRange,
     speed: &UnitSpeed,
+    stance: Option<UnitStance>,
     icons: &IconAssets,
 ) {
     let card = commands
         .spawn((
             Node {
+                width: Val::Percent(100.0),
+                min_width: Val::Px(0.0),
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                padding: UiRect { left: Val::Px(12.0), right: Val::Px(10.0), top: Val::Px(8.0), bottom: Val::Px(8.0) },
+                flex_wrap: FlexWrap::Wrap,
+                padding: UiRect {
+                    left: Val::Px(12.0),
+                    right: Val::Px(10.0),
+                    top: Val::Px(8.0),
+                    bottom: Val::Px(8.0),
+                },
                 column_gap: Val::Px(10.0),
-                border: UiRect { left: Val::Px(3.0), ..default() },
+                border: UiRect {
+                    left: Val::Px(3.0),
+                    ..default()
+                },
                 border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
@@ -290,7 +431,10 @@ pub fn spawn_friendly_detail_card(
     let name = commands
         .spawn((
             Text::new(kind.display_name()),
-            TextFont { font_size: theme::FONT_LARGE, ..default() },
+            TextFont {
+                font_size: theme::FONT_LARGE,
+                ..default()
+            },
             TextColor(theme::TEXT_PRIMARY),
         ))
         .id();
@@ -301,7 +445,10 @@ pub fn spawn_friendly_detail_card(
     let hp_text = commands
         .spawn((
             Text::new(format!("{:.0}/{:.0}", health.current, health.max)),
-            TextFont { font_size: theme::FONT_SMALL, ..default() },
+            TextFont {
+                font_size: theme::FONT_SMALL,
+                ..default()
+            },
             TextColor(theme::TEXT_SECONDARY),
         ))
         .id();
@@ -310,7 +457,9 @@ pub fn spawn_friendly_detail_card(
     let stats = commands
         .spawn(Node {
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
             column_gap: Val::Px(10.0),
+            row_gap: Val::Px(2.0),
             ..default()
         })
         .id();
@@ -321,15 +470,41 @@ pub fn spawn_friendly_detail_card(
         ("DMG", format!("{:.0}", damage.0)),
         ("RNG", format!("{:.1}", range.0)),
         ("SPD", format!("{:.1}", speed.0)),
-    ].iter().zip(stat_colors.iter()) {
+    ]
+    .iter()
+    .zip(stat_colors.iter())
+    {
         let stat = commands
             .spawn((
                 Text::new(format!("{}: {}", label, value)),
-                TextFont { font_size: theme::FONT_BODY, ..default() },
+                TextFont {
+                    font_size: theme::FONT_BODY,
+                    ..default()
+                },
                 TextColor(*color),
             ))
             .id();
         commands.entity(stats).add_child(stat);
+    }
+
+    // Stance indicator
+    if let Some(stance) = stance {
+        let (stance_text, stance_color) = match stance {
+            UnitStance::Passive => ("Passive", Color::srgb(0.5, 0.5, 0.8)),
+            UnitStance::Defensive => ("Defensive", Color::srgb(0.3, 0.7, 0.3)),
+            UnitStance::Aggressive => ("Aggressive", Color::srgb(0.9, 0.3, 0.2)),
+        };
+        let stance_label = commands
+            .spawn((
+                Text::new(format!("[{}] (V)", stance_text)),
+                TextFont {
+                    font_size: theme::FONT_SMALL,
+                    ..default()
+                },
+                TextColor(stance_color),
+            ))
+            .id();
+        commands.entity(info).add_child(stance_label);
     }
 }
 
@@ -349,11 +524,22 @@ pub fn spawn_building_detail_card(
     let card = commands
         .spawn((
             Node {
+                width: Val::Percent(100.0),
+                min_width: Val::Px(0.0),
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                padding: UiRect { left: Val::Px(12.0), right: Val::Px(10.0), top: Val::Px(8.0), bottom: Val::Px(8.0) },
+                flex_wrap: FlexWrap::Wrap,
+                padding: UiRect {
+                    left: Val::Px(12.0),
+                    right: Val::Px(10.0),
+                    top: Val::Px(8.0),
+                    bottom: Val::Px(8.0),
+                },
                 column_gap: Val::Px(10.0),
-                border: UiRect { left: Val::Px(3.0), ..default() },
+                border: UiRect {
+                    left: Val::Px(3.0),
+                    ..default()
+                },
                 border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
@@ -407,7 +593,10 @@ pub fn spawn_building_detail_card(
     let name = commands
         .spawn((
             Text::new(format!("{}{}", kind.display_name(), state_str)),
-            TextFont { font_size: theme::FONT_LARGE, ..default() },
+            TextFont {
+                font_size: theme::FONT_LARGE,
+                ..default()
+            },
             TextColor(name_color),
         ))
         .id();
@@ -433,11 +622,24 @@ fn spawn_enemy_detail_card(
         .spawn((
             EnemyInspectPanel,
             Node {
+                width: Val::Percent(100.0),
+                min_width: Val::Px(0.0),
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
-                padding: UiRect { left: Val::Px(12.0), right: Val::Px(10.0), top: Val::Px(8.0), bottom: Val::Px(8.0) },
+                flex_wrap: FlexWrap::Wrap,
+                padding: UiRect {
+                    left: Val::Px(12.0),
+                    right: Val::Px(10.0),
+                    top: Val::Px(8.0),
+                    bottom: Val::Px(8.0),
+                },
                 column_gap: Val::Px(10.0),
-                border: UiRect { left: Val::Px(3.0), top: Val::Px(1.0), right: Val::Px(1.0), bottom: Val::Px(1.0) },
+                border: UiRect {
+                    left: Val::Px(3.0),
+                    top: Val::Px(1.0),
+                    right: Val::Px(1.0),
+                    bottom: Val::Px(1.0),
+                },
                 border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
@@ -488,7 +690,10 @@ fn spawn_enemy_detail_card(
     let name = commands
         .spawn((
             Text::new(name_str),
-            TextFont { font_size: theme::FONT_LARGE, ..default() },
+            TextFont {
+                font_size: theme::FONT_LARGE,
+                ..default()
+            },
             TextColor(theme::WARNING),
         ))
         .id();
@@ -499,7 +704,10 @@ fn spawn_enemy_detail_card(
     let hp_text = commands
         .spawn((
             Text::new(format!("{:.0}/{:.0}", health.current, health.max)),
-            TextFont { font_size: theme::FONT_SMALL, ..default() },
+            TextFont {
+                font_size: theme::FONT_SMALL,
+                ..default()
+            },
             TextColor(theme::TEXT_SECONDARY),
         ))
         .id();
@@ -508,7 +716,9 @@ fn spawn_enemy_detail_card(
     let stats = commands
         .spawn(Node {
             flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
             column_gap: Val::Px(10.0),
+            row_gap: Val::Px(2.0),
             ..default()
         })
         .id();
@@ -524,7 +734,10 @@ fn spawn_enemy_detail_card(
         let stat = commands
             .spawn((
                 Text::new(format!("{}: {}", label, value)),
-                TextFont { font_size: theme::FONT_BODY, ..default() },
+                TextFont {
+                    font_size: theme::FONT_BODY,
+                    ..default()
+                },
                 TextColor(*color),
             ))
             .id();
@@ -550,7 +763,8 @@ fn spawn_unit_mini_card(
                 align_items: AlignItems::Center,
                 padding: UiRect::all(Val::Px(4.0)),
                 row_gap: Val::Px(2.0),
-                width: Val::Px(62.0),
+                min_width: Val::Px(56.0),
+                flex_grow: 1.0,
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(5.0)),
                 ..default()

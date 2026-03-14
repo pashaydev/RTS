@@ -1,9 +1,9 @@
 use bevy::prelude::*;
-use rand::SeedableRng;
-use rand::Rng;
 use rand::rngs::StdRng;
+use rand::Rng;
+use rand::SeedableRng;
 
-use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
+use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::model_assets::UnitModelAssets;
@@ -12,12 +12,16 @@ pub struct MobsPlugin;
 
 impl Plugin for MobsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppState::InGame), spawn_mob_camps.after(crate::ground::spawn_ground))
-            .add_systems(
-                Update,
-                (mob_patrol, mob_aggro, mob_chase, mob_return).chain()
-                    .run_if(in_state(AppState::InGame)),
-            );
+        app.add_systems(
+            OnEnter(AppState::InGame),
+            spawn_mob_camps.after(crate::ground::spawn_ground),
+        )
+        .add_systems(
+            Update,
+            (mob_patrol, mob_aggro, mob_chase, mob_return)
+                .chain()
+                .run_if(in_state(AppState::InGame)),
+        );
     }
 }
 
@@ -181,7 +185,11 @@ fn spawn_mob_camps(
 
     for camp in &camps {
         let bp = registry.get(camp.kind);
-        let patrol_radius = bp.mob_ai.as_ref().map(|ai| ai.patrol_radius).unwrap_or(12.0);
+        let patrol_radius = bp
+            .mob_ai
+            .as_ref()
+            .map(|ai| ai.patrol_radius)
+            .unwrap_or(12.0);
         let y_off = bp.movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8);
 
         let center = Vec3::new(
@@ -197,7 +205,16 @@ fn spawn_mob_camps(
             let x = center.x + angle.cos() * offset_r;
             let z = center.z + angle.sin() * offset_r;
 
-            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(x, 0.0, z), &registry, None, unit_models.as_deref(), &height_map);
+            let entity = spawn_from_blueprint(
+                &mut commands,
+                &cache,
+                camp.kind,
+                Vec3::new(x, 0.0, z),
+                &registry,
+                None,
+                unit_models.as_deref(),
+                &height_map,
+            );
 
             // Override patrol center
             commands.entity(entity).insert(PatrolState {
@@ -212,12 +229,24 @@ fn spawn_mob_camps(
         if camp.has_boss {
             let combat = bp.combat.as_ref().unwrap();
 
-            let entity = spawn_from_blueprint(&mut commands, &cache, camp.kind, Vec3::new(center.x, 0.0, center.z), &registry, None, unit_models.as_deref(), &height_map);
+            let entity = spawn_from_blueprint(
+                &mut commands,
+                &cache,
+                camp.kind,
+                Vec3::new(center.x, 0.0, center.z),
+                &registry,
+                None,
+                unit_models.as_deref(),
+                &height_map,
+            );
 
             // Apply boss modifiers
             commands.entity(entity).insert((
                 Boss,
-                Health { current: camp.boss_hp, max: camp.boss_hp },
+                Health {
+                    current: camp.boss_hp,
+                    max: camp.boss_hp,
+                },
                 UnitSpeed(bp.movement.as_ref().unwrap().speed * 0.9),
                 AttackDamage(combat.damage * 1.5),
                 AttackRange(combat.attack_range * 1.2),
@@ -228,7 +257,8 @@ fn spawn_mob_camps(
                     center.x,
                     height_map.sample(center.x, center.z) + y_off * 1.5,
                     center.z,
-                )).with_scale(Vec3::splat(1.5)),
+                ))
+                .with_scale(Vec3::splat(1.5)),
                 PatrolState {
                     state: PatrolStateKind::Idle,
                     center,
@@ -250,7 +280,12 @@ fn mob_patrol(
     >,
 ) {
     for (mut tf, mut patrol, speed, kind) in &mut mobs {
-        let y_off = registry.get(*kind).movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8);
+        let y_off = registry
+            .get(*kind)
+            .movement
+            .as_ref()
+            .map(|m| m.y_offset)
+            .unwrap_or(0.8);
         match patrol.state {
             PatrolStateKind::Idle => {
                 let angle = time.elapsed_secs() * 1.7 + tf.translation.x * 0.1;
@@ -305,10 +340,7 @@ fn mob_patrol(
 
 fn mob_aggro(
     mut commands: Commands,
-    mobs: Query<
-        (Entity, &Transform, &AggroRange),
-        (With<Mob>, Without<AttackTarget>),
-    >,
+    mobs: Query<(Entity, &Transform, &AggroRange), (With<Mob>, Without<AttackTarget>)>,
     players: Query<(Entity, &Transform, &Faction), With<Unit>>,
 ) {
     for (mob_entity, mob_tf, aggro) in &mobs {
@@ -369,17 +401,18 @@ fn mob_chase(
             patrol.state = PatrolStateKind::Chasing;
             let step = dir.normalize() * speed.0 * time.delta_secs();
             tf.translation += step;
-            let y_off = registry.get(*kind).movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8);
-            tf.translation.y =
-                height_map.sample(tf.translation.x, tf.translation.z) + y_off;
+            let y_off = registry
+                .get(*kind)
+                .movement
+                .as_ref()
+                .map(|m| m.y_offset)
+                .unwrap_or(0.8);
+            tf.translation.y = height_map.sample(tf.translation.x, tf.translation.z) + y_off;
         }
     }
 }
 
-fn mob_return(
-    mut commands: Commands,
-    mut mobs: Query<(Entity, &PatrolState), With<Mob>>,
-) {
+fn mob_return(mut commands: Commands, mut mobs: Query<(Entity, &PatrolState), With<Mob>>) {
     for (entity, patrol) in &mut mobs {
         if patrol.state == PatrolStateKind::Returning {
             commands.entity(entity).remove::<AttackTarget>();

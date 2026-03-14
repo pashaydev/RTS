@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use crate::theme;
 use super::widget_framework::{WidgetId, WidgetRegistry};
+use crate::theme;
 
 #[derive(Component)]
 pub struct WidgetToolbar;
@@ -73,7 +73,10 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity) {
             .with_children(|btn| {
                 btn.spawn((
                     Text::new(format!("{} {}", id.icon(), hotkey_name)),
-                    TextFont { font_size: theme::FONT_CAPTION, ..default() },
+                    TextFont {
+                        font_size: theme::FONT_CAPTION,
+                        ..default()
+                    },
                     TextColor(theme::TEXT_SECONDARY),
                 ));
             })

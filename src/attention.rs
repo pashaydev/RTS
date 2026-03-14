@@ -107,9 +107,12 @@ fn track_health_changes(
                 if let Some(ref mut timer) = opt_timer {
                     timer.0.reset();
                 } else {
-                    commands.entity(_entity).insert(UnderAttackTimer(
-                        Timer::from_seconds(UNDER_ATTACK_DURATION, TimerMode::Once),
-                    ));
+                    commands
+                        .entity(_entity)
+                        .insert(UnderAttackTimer(Timer::from_seconds(
+                            UNDER_ATTACK_DURATION,
+                            TimerMode::Once,
+                        )));
                 }
             }
         }
@@ -216,8 +219,7 @@ fn manage_attention_icons(
     }
 
     for (unit_entity, unit_state, attack_target, under_attack) in &units {
-        let desired =
-            determine_attention_kind(unit_state, attack_target.is_some(), under_attack);
+        let desired = determine_attention_kind(unit_state, attack_target.is_some(), under_attack);
 
         match (icon_map.remove(&unit_entity), desired) {
             (Some((_icon_e, existing_kind)), Some(desired_kind))
@@ -249,22 +251,10 @@ fn spawn_attention_icon(
     kind: AttentionKind,
 ) {
     let (image, tint) = match kind {
-        AttentionKind::UnderAttack => (
-            assets.under_attack.clone(),
-            Color::srgb(1.0, 0.25, 0.2),
-        ),
-        AttentionKind::Gathering => (
-            assets.gathering.clone(),
-            Color::srgb(0.95, 0.75, 0.3),
-        ),
-        AttentionKind::Attacking => (
-            assets.attacking.clone(),
-            Color::srgb(1.0, 0.4, 0.35),
-        ),
-        AttentionKind::Building => (
-            assets.building.clone(),
-            Color::srgb(0.5, 0.75, 1.0),
-        ),
+        AttentionKind::UnderAttack => (assets.under_attack.clone(), Color::srgb(1.0, 0.25, 0.2)),
+        AttentionKind::Gathering => (assets.gathering.clone(), Color::srgb(0.95, 0.75, 0.3)),
+        AttentionKind::Attacking => (assets.attacking.clone(), Color::srgb(1.0, 0.4, 0.35)),
+        AttentionKind::Building => (assets.building.clone(), Color::srgb(0.5, 0.75, 1.0)),
     };
 
     commands.spawn((
@@ -292,12 +282,18 @@ fn position_overlays(
     time: Res<Time>,
     camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     fog_map: Option<Res<FogOfWarMap>>,
-    mut popups: Query<(&DamagePopup, &mut Node, &mut Visibility), (Without<AttentionIcon>, Without<ResourcePopup>)>,
+    mut popups: Query<
+        (&DamagePopup, &mut Node, &mut Visibility),
+        (Without<AttentionIcon>, Without<ResourcePopup>),
+    >,
     mut icons: Query<
         (&AttentionIcon, &mut Node, &mut Visibility),
         (Without<DamagePopup>, Without<ResourcePopup>),
     >,
-    mut res_popups: Query<(&ResourcePopup, &mut Node, &mut Visibility), (Without<DamagePopup>, Without<AttentionIcon>)>,
+    mut res_popups: Query<
+        (&ResourcePopup, &mut Node, &mut Visibility),
+        (Without<DamagePopup>, Without<AttentionIcon>),
+    >,
     transforms: Query<&Transform>,
     ui_scale: Res<UiScale>,
 ) {
@@ -436,7 +432,9 @@ fn update_worker_overlays(
         // Build the overlay container
         let container = commands
             .spawn((
-                WorkerOverlay { building: building_entity },
+                WorkerOverlay {
+                    building: building_entity,
+                },
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(-1000.0),
@@ -497,13 +495,22 @@ fn update_worker_overlays(
         // Worker count text
         let count_text = commands
             .spawn((
-                Text::new(format!("{}/{}", assigned.workers.len(), processor.max_workers)),
-                TextFont { font_size: 10.0, ..default() },
-                TextColor(if assigned.workers.len() >= processor.max_workers as usize {
-                    theme::ACCENT
-                } else {
-                    theme::TEXT_SECONDARY
-                }),
+                Text::new(format!(
+                    "{}/{}",
+                    assigned.workers.len(),
+                    processor.max_workers
+                )),
+                TextFont {
+                    font_size: 10.0,
+                    ..default()
+                },
+                TextColor(
+                    if assigned.workers.len() >= processor.max_workers as usize {
+                        theme::ACCENT
+                    } else {
+                        theme::TEXT_SECONDARY
+                    },
+                ),
                 Node {
                     margin: UiRect::left(Val::Px(2.0)),
                     ..default()

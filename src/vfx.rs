@@ -7,15 +7,17 @@ pub struct VfxPlugin;
 
 impl Plugin for VfxPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, create_vfx_assets)
-            .add_systems(Update, (
+        app.add_systems(Startup, create_vfx_assets).add_systems(
+            Update,
+            (
                 update_projectiles,
                 update_vfx_flashes,
-                gather_particle_spawner,
                 update_gather_particles,
                 footstep_dust_spawner,
                 update_footstep_dust,
-            ).run_if(in_state(AppState::InGame)));
+            )
+                .run_if(in_state(AppState::InGame)),
+        );
     }
 }
 
@@ -68,7 +70,13 @@ fn create_vfx_assets(
 
     // Per-resource particle materials
     let mut resource_particle_materials = HashMap::new();
-    for rt in [ResourceType::Wood, ResourceType::Copper, ResourceType::Iron, ResourceType::Gold, ResourceType::Oil] {
+    for rt in [
+        ResourceType::Wood,
+        ResourceType::Copper,
+        ResourceType::Iron,
+        ResourceType::Gold,
+        ResourceType::Oil,
+    ] {
         let color = rt.carry_color();
         let srgba = color.to_srgba();
         let (r, g, b) = (srgba.red, srgba.green, srgba.blue);
@@ -128,8 +136,7 @@ fn update_projectiles(
                 FogHideable::Vfx,
                 Mesh3d(vfx.sphere_mesh.clone()),
                 MeshMaterial3d(vfx.impact_material.clone()),
-                Transform::from_translation(target_pos)
-                    .with_scale(Vec3::splat(0.2)),
+                Transform::from_translation(target_pos).with_scale(Vec3::splat(0.2)),
                 NotShadowCaster,
                 NotShadowReceiver,
             ));
@@ -160,72 +167,6 @@ fn update_vfx_flashes(
     }
 }
 
-// ── Gather Particles ──
-
-fn gather_particle_spawner(
-    mut commands: Commands,
-    time: Res<Time>,
-    vfx_assets: Option<Res<VfxAssets>>,
-    mut workers: Query<
-        (&Transform, &UnitState, &mut GatherParticleTimer),
-        With<Unit>,
-    >,
-    nodes: Query<&ResourceNode>,
-) {
-    let Some(vfx) = vfx_assets else { return };
-
-    for (tf, state, mut particle_timer) in &mut workers {
-        let UnitState::Gathering(node) = state else {
-            continue;
-        };
-        particle_timer.0.tick(time.delta());
-        if !particle_timer.0.just_finished() {
-            continue;
-        }
-
-        let rt = nodes.get(*node).ok()
-            .map(|n| n.resource_type)
-            .unwrap_or(ResourceType::Wood);
-
-        let mat = vfx.resource_particle_materials.get(&rt)
-            .cloned()
-            .unwrap_or(vfx.impact_material.clone());
-
-        let mesh = match rt {
-            ResourceType::Wood => vfx.cube_mesh.clone(),
-            _ => vfx.sphere_mesh.clone(),
-        };
-
-        // Spawn 2-3 particles
-        let count = 2 + (time.elapsed_secs() as u32 % 2);
-        for i in 0..count {
-            let angle = std::f32::consts::TAU * (i as f32 / count as f32) + time.elapsed_secs() * 3.0;
-            let vel = Vec3::new(
-                angle.cos() * 2.0,
-                1.5 + (i as f32 * 0.3),
-                angle.sin() * 2.0,
-            );
-            let scale = match rt {
-                ResourceType::Wood => 0.8,
-                ResourceType::Oil => 0.5,
-                _ => 0.6,
-            };
-            commands.spawn((
-                GatherParticle {
-                    timer: Timer::from_seconds(0.5, TimerMode::Once),
-                    velocity: vel,
-                },
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(mat.clone()),
-                Transform::from_translation(tf.translation + Vec3::Y * 0.5)
-                    .with_scale(Vec3::splat(scale)),
-                NotShadowCaster,
-                NotShadowReceiver,
-            ));
-        }
-    }
-}
-
 fn update_gather_particles(
     mut commands: Commands,
     time: Res<Time>,
@@ -241,7 +182,7 @@ fn update_gather_particles(
 
         // Shrink over lifetime
         let frac = 1.0 - particle.timer.fraction();
-        tf.scale = Vec3::splat(frac.max(0.01) * 0.8);
+        tf.scale = Vec3::splat(frac.max(0.01) * particle.start_scale);
 
         if particle.timer.is_finished() {
             commands.entity(entity).despawn();
@@ -256,7 +197,12 @@ fn footstep_dust_spawner(
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut workers: Query<
-        (&Transform, &mut FootstepTimer, Option<&Carrying>, Option<&CarryCapacity>),
+        (
+            &Transform,
+            &mut FootstepTimer,
+            Option<&Carrying>,
+            Option<&CarryCapacity>,
+        ),
         (With<Unit>, With<MoveTarget>),
     >,
 ) {
@@ -279,7 +225,9 @@ fn footstep_dust_spawner(
         } else {
             base_interval
         };
-        timer.0.set_duration(std::time::Duration::from_secs_f32(interval));
+        timer
+            .0
+            .set_duration(std::time::Duration::from_secs_f32(interval));
 
         let offset_x = (time.elapsed_secs() * 7.0).sin() * 0.3;
         let offset_z = (time.elapsed_secs() * 11.0).cos() * 0.3;

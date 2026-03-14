@@ -23,7 +23,11 @@ pub fn update_army_overview(
         return;
     }
 
-    let Some(content) = super::widget_framework::find_widget_content(WidgetId::ArmyOverview, &widget_q, &content_q) else { return; };
+    let Some(content) =
+        super::widget_framework::find_widget_content(WidgetId::ArmyOverview, &widget_q, &content_q)
+    else {
+        return;
+    };
 
     // Clear existing
     for entity in &existing {
@@ -61,6 +65,7 @@ pub fn update_army_overview(
         .spawn((
             ArmyOverviewContent,
             Node {
+                width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Row,
                 flex_wrap: FlexWrap::Wrap,
                 column_gap: Val::Px(6.0),
@@ -97,7 +102,10 @@ pub fn update_army_overview(
         let count_text = commands
             .spawn((
                 Text::new(format!("x{}", count)),
-                TextFont { font_size: theme::FONT_CAPTION, ..default() },
+                TextFont {
+                    font_size: theme::FONT_CAPTION,
+                    ..default()
+                },
                 TextColor(theme::TEXT_PRIMARY),
             ))
             .id();
@@ -107,7 +115,10 @@ pub fn update_army_overview(
             let idle_badge = commands
                 .spawn((
                     Text::new(format!("({})", idle)),
-                    TextFont { font_size: theme::FONT_TINY, ..default() },
+                    TextFont {
+                        font_size: theme::FONT_TINY,
+                        ..default()
+                    },
                     TextColor(theme::WARNING),
                 ))
                 .id();
@@ -120,9 +131,15 @@ pub fn update_army_overview(
         .spawn((
             ArmyOverviewContent,
             Text::new(format!("Total: {}", total)),
-            TextFont { font_size: theme::FONT_CAPTION, ..default() },
+            TextFont {
+                font_size: theme::FONT_CAPTION,
+                ..default()
+            },
             TextColor(theme::TEXT_SECONDARY),
-            Node { margin: UiRect::top(Val::Px(2.0)), ..default() },
+            Node {
+                margin: UiRect::top(Val::Px(2.0)),
+                ..default()
+            },
         ))
         .id();
     commands.entity(content).add_child(total_text);

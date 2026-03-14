@@ -2,14 +2,16 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, spawn_from_blueprint};
+use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 
 pub const SAVE_PATH: &str = "saves/save.json";
 
-fn default_cap() -> u32 { 500 }
+fn default_cap() -> u32 {
+    500
+}
 
 // ── Stable entity ID ────────────────────────────────────────────────────────
 
@@ -50,6 +52,7 @@ pub struct SaveFile {
     pub fog_explored: Vec<bool>,
     pub entities: Vec<SavedEntity>,
     pub resource_nodes: Vec<SavedResourceNode>,
+    pub explosive_props: Vec<SavedExplosiveProp>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -176,6 +179,17 @@ pub struct SavedResourceNode {
     pub amount_remaining: u32,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct SavedExplosiveProp {
+    pub position: [f32; 3],
+    pub rotation: [f32; 4],
+    pub scale: [f32; 3],
+    pub health_current: f32,
+    pub health_max: f32,
+    pub damage: f32,
+    pub radius: f32,
+}
+
 // ── Pending load overrides (bridges frame 1 → frame 2) ─────────────────────
 
 #[derive(Resource, Default)]
@@ -183,6 +197,7 @@ pub struct PendingLoadOverrides {
     pub entity_overrides: Vec<(u64, SavedEntity)>,
     pub gid_map: HashMap<u64, Entity>,
     pub resource_nodes: Vec<SavedResourceNode>,
+    pub explosive_props: Vec<SavedExplosiveProp>,
 }
 
 // ── Plugin ──────────────────────────────────────────────────────────────────
@@ -215,13 +230,7 @@ impl Plugin for SavePlugin {
 fn assign_game_ids(
     mut commands: Commands,
     mut counter: ResMut<GameIdCounter>,
-    untagged: Query<
-        Entity,
-        (
-            With<EntityKind>,
-            Without<GameId>,
-        ),
-    >,
+    untagged: Query<Entity, (With<EntityKind>, Without<GameId>)>,
 ) {
     for entity in &untagged {
         commands.entity(entity).insert(counter.next());
@@ -237,16 +246,19 @@ fn save_game(
     player_resources: Option<Res<PlayerResources>>,
     fog: Res<FogOfWarMap>,
     // Entity query — split into multiple queries to stay under tuple limit
-    entity_q: Query<(
-        &GameId,
-        &EntityKind,
-        &Faction,
-        &Transform,
-        Option<&Health>,
-        Option<&MoveTarget>,
-        Option<&UnitState>,
-        Option<&Carrying>,
-    ), Without<ResourceNode>>,
+    entity_q: Query<
+        (
+            &GameId,
+            &EntityKind,
+            &Faction,
+            &Transform,
+            Option<&Health>,
+            Option<&MoveTarget>,
+            Option<&UnitState>,
+            Option<&Carrying>,
+        ),
+        Without<ResourceNode>,
+    >,
     building_q: Query<(
         &GameId,
         Option<&BuildingState>,
@@ -266,6 +278,7 @@ fn save_game(
     id_lookup: Query<(Entity, &GameId)>,
     // Resource nodes (no EntityKind)
     resource_node_q: Query<(&Transform, &ResourceNode)>,
+    explosive_prop_q: Query<(&Transform, &Health, &ExplosiveProp)>,
 ) {
     if !save_req.0 {
         return;
@@ -279,62 +292,57 @@ fn save_game(
         return;
     };
 
-    let entity_to_gid: HashMap<Entity, u64> =
-        id_lookup.iter().map(|(e, gid)| (e, gid.0)).collect();
+    let entity_to_gid: HashMap<Entity, u64> = id_lookup.iter().map(|(e, gid)| (e, gid.0)).collect();
 
     let mut entities: Vec<SavedEntity> = Vec::new();
 
-    for (game_id, kind, faction, transform, health, move_target, unit_state, carrying) in
-        &entity_q
+    for (game_id, kind, faction, transform, health, move_target, unit_state, carrying) in &entity_q
     {
-        let mut saved = SavedEntity {
-            id: game_id.0,
-            kind: *kind,
-            faction: *faction,
-            position: [
-                transform.translation.x,
-                transform.translation.y,
-                transform.translation.z,
-            ],
-            rotation: [
-                transform.rotation.x,
-                transform.rotation.y,
-                transform.rotation.z,
-                transform.rotation.w,
-            ],
-            scale: [
-                transform.scale.x,
-                transform.scale.y,
-                transform.scale.z,
-            ],
-            health_current: health.map(|h| h.current).unwrap_or(100.0),
-            health_max: health.map(|h| h.max).unwrap_or(100.0),
-            move_target: move_target.map(|mt| [mt.0.x, mt.0.y, mt.0.z]),
-            worker_task: unit_state.map(|s| serialize_unit_state(s, &entity_to_gid)),
-            carrying_amount: carrying.and_then(|c| {
-                if c.amount > 0 {
-                    Some(c.amount)
-                } else {
-                    None
-                }
-            }),
-            carrying_resource: carrying.and_then(|c| c.resource_type),
-            building_state: None,
-            building_level: None,
-            construction_fraction: None,
-            training_queue: None,
-            training_fraction: None,
-            upgrade_fraction: None,
-            upgrade_target_level: None,
-            rally_point: None,
-            tower_auto_attack: None,
-            storage: None,
-            wall_segment_piece: false,
-            wall_post_piece: false,
-            gate_piece: false,
-            patrol_center: None,
-            patrol_radius: None,
-        };
+        let mut saved =
+            SavedEntity {
+                id: game_id.0,
+                kind: *kind,
+                faction: *faction,
+                position: [
+                    transform.translation.x,
+                    transform.translation.y,
+                    transform.translation.z,
+                ],
+                rotation: [
+                    transform.rotation.x,
+                    transform.rotation.y,
+                    transform.rotation.z,
+                    transform.rotation.w,
+                ],
+                scale: [transform.scale.x, transform.scale.y, transform.scale.z],
+                health_current: health.map(|h| h.current).unwrap_or(100.0),
+                health_max: health.map(|h| h.max).unwrap_or(100.0),
+                move_target: move_target.map(|mt| [mt.0.x, mt.0.y, mt.0.z]),
+                worker_task: unit_state.map(|s| serialize_unit_state(s, &entity_to_gid)),
+                carrying_amount: carrying.and_then(|c| {
+                    if c.amount > 0 {
+                        Some(c.amount)
+                    } else {
+                        None
+                    }
+                }),
+                carrying_resource: carrying.and_then(|c| c.resource_type),
+                building_state: None,
+                building_level: None,
+                construction_fraction: None,
+                training_queue: None,
+                training_fraction: None,
+                upgrade_fraction: None,
+                upgrade_target_level: None,
+                rally_point: None,
+                tower_auto_attack: None,
+                storage: None,
+                wall_segment_piece: false,
+                wall_post_piece: false,
+                gate_piece: false,
+                patrol_center: None,
+                patrol_radius: None,
+            };
 
         // Building data
         if let Ok((
@@ -350,13 +358,17 @@ fn save_game(
             b_wall_segment,
             b_wall_post,
             b_gate,
-        )) = building_q.get(id_lookup.iter().find(|(_, gid)| gid.0 == game_id.0).unwrap().0)
-        {
+        )) = building_q.get(
+            id_lookup
+                .iter()
+                .find(|(_, gid)| gid.0 == game_id.0)
+                .unwrap()
+                .0,
+        ) {
             saved.building_state = b_state.copied();
             saved.building_level = b_level.map(|l| l.0);
-            saved.construction_fraction = b_constr.map(|cp| {
-                cp.timer.elapsed_secs() / cp.timer.duration().as_secs_f32()
-            });
+            saved.construction_fraction =
+                b_constr.map(|cp| cp.timer.elapsed_secs() / cp.timer.duration().as_secs_f32());
             saved.training_queue = b_train.and_then(|tq| {
                 if tq.queue.is_empty() {
                     None
@@ -367,9 +379,8 @@ fn save_game(
             saved.training_fraction = b_train
                 .and_then(|tq| tq.timer.as_ref())
                 .map(|t| t.elapsed_secs() / t.duration().as_secs_f32());
-            saved.upgrade_fraction = b_upgrade.map(|up| {
-                up.timer.elapsed_secs() / up.timer.duration().as_secs_f32()
-            });
+            saved.upgrade_fraction =
+                b_upgrade.map(|up| up.timer.elapsed_secs() / up.timer.duration().as_secs_f32());
             saved.upgrade_target_level = b_upgrade.map(|up| up.target_level);
             saved.rally_point = b_rally.map(|rp| [rp.0.x, rp.0.y, rp.0.z]);
             saved.tower_auto_attack = b_tower.map(|ta| ta.0);
@@ -419,6 +430,28 @@ fn save_game(
         })
         .collect();
 
+    let explosive_props: Vec<SavedExplosiveProp> = explosive_prop_q
+        .iter()
+        .map(|(transform, health, prop)| SavedExplosiveProp {
+            position: [
+                transform.translation.x,
+                transform.translation.y,
+                transform.translation.z,
+            ],
+            rotation: [
+                transform.rotation.x,
+                transform.rotation.y,
+                transform.rotation.z,
+                transform.rotation.w,
+            ],
+            scale: [transform.scale.x, transform.scale.y, transform.scale.z],
+            health_current: health.current,
+            health_max: health.max,
+            damage: prop.damage,
+            radius: prop.radius,
+        })
+        .collect();
+
     let save_file = SaveFile {
         version: 1,
         id_counter: id_counter.0,
@@ -426,6 +459,7 @@ fn save_game(
         fog_explored: fog.explored.clone(),
         entities,
         resource_nodes,
+        explosive_props,
     };
 
     match serde_json::to_string_pretty(&save_file) {
@@ -433,7 +467,12 @@ fn save_game(
             std::fs::create_dir_all("saves").ok();
             match std::fs::write(SAVE_PATH, &json) {
                 Ok(_) => {
-                    info!("Game saved to {} ({} entities, {} resource nodes)", SAVE_PATH, save_file.entities.len(), save_file.resource_nodes.len());
+                    info!(
+                        "Game saved to {} ({} entities, {} resource nodes)",
+                        SAVE_PATH,
+                        save_file.entities.len(),
+                        save_file.resource_nodes.len()
+                    );
                     status.message = format!("Saved! ({} entities)", save_file.entities.len());
                     status.timer = 3.0;
                 }
@@ -452,14 +491,15 @@ fn save_game(
     }
 }
 
-fn serialize_unit_state(
-    state: &UnitState,
-    lookup: &HashMap<Entity, u64>,
-) -> SavedWorkerTask {
+fn serialize_unit_state(state: &UnitState, lookup: &HashMap<Entity, u64>) -> SavedWorkerTask {
     match state {
-        UnitState::Idle | UnitState::Moving(_) | UnitState::HoldPosition
-        | UnitState::AttackMoving(_) | UnitState::Patrolling { .. }
-        | UnitState::Attacking(_) | UnitState::MovingToProcessor(_) => SavedWorkerTask {
+        UnitState::Idle
+        | UnitState::Moving(_)
+        | UnitState::HoldPosition
+        | UnitState::AttackMoving(_)
+        | UnitState::Patrolling { .. }
+        | UnitState::Attacking(_)
+        | UnitState::MovingToProcessor(_) => SavedWorkerTask {
             variant: "Idle".into(),
             ..default()
         },
@@ -519,7 +559,7 @@ fn load_game(
     mut status: ResMut<SaveLoadStatus>,
     mut pending: ResMut<PendingLoadOverrides>,
     // Despawn all entities with EntityKind (units, buildings, mobs)
-    existing_entities: Query<Entity, With<EntityKind>>,
+    existing_entities: Query<Entity, Or<(With<EntityKind>, With<ExplosiveProp>)>>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
     height_map: Res<HeightMap>,
@@ -598,10 +638,9 @@ fn load_game(
     pending.entity_overrides = entity_overrides;
     pending.gid_map = gid_map;
     pending.resource_nodes = save.resource_nodes;
+    pending.explosive_props = save.explosive_props;
 
-    info!(
-        "Load: despawned {despawned}, spawning {entity_count} entities. Overrides pending."
-    );
+    info!("Load: despawned {despawned}, spawning {entity_count} entities. Overrides pending.");
     status.message = format!("Loaded! ({entity_count} entities)");
     status.timer = 3.0;
 }
@@ -611,14 +650,20 @@ fn load_game(
 fn apply_load_overrides(
     mut commands: Commands,
     mut pending: ResMut<PendingLoadOverrides>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     mut resource_nodes: Query<(&Transform, &mut ResourceNode)>,
 ) {
-    if pending.entity_overrides.is_empty() && pending.resource_nodes.is_empty() {
+    if pending.entity_overrides.is_empty()
+        && pending.resource_nodes.is_empty()
+        && pending.explosive_props.is_empty()
+    {
         return;
     }
 
     let overrides = std::mem::take(&mut pending.entity_overrides);
     let saved_rn = std::mem::take(&mut pending.resource_nodes);
+    let saved_props = std::mem::take(&mut pending.explosive_props);
     let map = &pending.gid_map;
 
     // Apply entity overrides
@@ -729,16 +774,20 @@ fn apply_load_overrides(
 
         // Tower auto attack
         if let Some(auto) = saved.tower_auto_attack {
-            commands
-                .entity(entity)
-                .insert(TowerAutoAttackEnabled(auto));
+            commands.entity(entity).insert(TowerAutoAttackEnabled(auto));
         }
 
         // Storage inventory
         if let Some(ref st) = saved.storage {
             commands.entity(entity).insert(StorageInventory {
                 amounts: [st.wood, st.copper, st.iron, st.gold, st.oil],
-                caps: [st.wood_cap, st.copper_cap, st.iron_cap, st.gold_cap, st.oil_cap],
+                caps: [
+                    st.wood_cap,
+                    st.copper_cap,
+                    st.iron_cap,
+                    st.gold_cap,
+                    st.oil_cap,
+                ],
                 last_total: 0,
             });
         }
@@ -781,6 +830,41 @@ fn apply_load_overrides(
                 }
             }
         }
+    }
+
+    let barrel_mesh = meshes.add(Cylinder::new(0.45, 1.1));
+    let barrel_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.62, 0.18, 0.08),
+        emissive: LinearRgba::new(0.12, 0.03, 0.01, 1.0),
+        perceptual_roughness: 0.85,
+        ..default()
+    });
+
+    for prop in saved_props {
+        commands.spawn((
+            ExplosiveProp {
+                damage: prop.damage,
+                radius: prop.radius,
+            },
+            Health {
+                current: prop.health_current,
+                max: prop.health_max,
+            },
+            FogHideable::Object,
+            PickRadius(1.0),
+            Mesh3d(barrel_mesh.clone()),
+            MeshMaterial3d(barrel_material.clone()),
+            Transform {
+                translation: Vec3::new(prop.position[0], prop.position[1], prop.position[2]),
+                rotation: Quat::from_xyzw(
+                    prop.rotation[0],
+                    prop.rotation[1],
+                    prop.rotation[2],
+                    prop.rotation[3],
+                ),
+                scale: Vec3::new(prop.scale[0], prop.scale[1], prop.scale[2]),
+            },
+        ));
     }
 }
 

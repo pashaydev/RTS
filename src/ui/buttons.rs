@@ -9,7 +9,15 @@ use crate::theme;
 // ── Build button handler ──
 
 pub fn handle_build_buttons(
-    interactions: Query<(Entity, &Interaction, &BuildButton, Option<&super::actions_widget::BuildGridButton>), Changed<Interaction>>,
+    interactions: Query<
+        (
+            Entity,
+            &Interaction,
+            &BuildButton,
+            Option<&super::actions_widget::BuildGridButton>,
+        ),
+        Changed<Interaction>,
+    >,
     mut placement: ResMut<BuildingPlacementState>,
     all_completed: Res<AllCompletedBuildings>,
     base_state: Res<FactionBaseState>,
@@ -113,7 +121,10 @@ pub fn handle_train_buttons(
             if let Ok(mut queue) = queues.get_mut(building_entity) {
                 let player_res_mut = all_resources.get_mut(&active_player.0);
                 let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(player_res_mut);
-                let drain = SpendFromCarried { faction: active_player.0, amounts: [dw, dc, di, dg, do_] };
+                let drain = SpendFromCarried {
+                    faction: active_player.0,
+                    amounts: [dw, dc, di, dg, do_],
+                };
                 if drain.has_deficit() {
                     pending_drains.drains.push(drain);
                 }
@@ -134,7 +145,13 @@ pub fn handle_upgrade_button(
     carried_totals: Res<CarriedResourceTotals>,
     mut pending_drains: ResMut<PendingCarriedDrains>,
     selected_buildings: Query<
-        (Entity, &EntityKind, &BuildingLevel, &BuildingState, &Faction),
+        (
+            Entity,
+            &EntityKind,
+            &BuildingLevel,
+            &BuildingState,
+            &Faction,
+        ),
         (With<Building>, With<Selected>, Without<UpgradeProgress>),
     >,
     registry: Res<BlueprintRegistry>,
@@ -201,7 +218,11 @@ pub fn handle_demolish_button(
 
         if let Ok((_entity, kind, state, _transform)) = selected_buildings.single() {
             let bp = registry.get(*kind);
-            let refund_pct = if *state == BuildingState::Complete { 50 } else { 100 };
+            let refund_pct = if *state == BuildingState::Complete {
+                50
+            } else {
+                100
+            };
             let refund_str = format!(
                 "Refunds ~{}% (W:{} C:{})",
                 refund_pct,
@@ -228,58 +249,71 @@ pub fn handle_demolish_button(
                 .with_children(|panel| {
                     panel.spawn((
                         Text::new("Demolish?"),
-                        TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
                         TextColor(theme::DESTRUCTIVE),
                     ));
                     panel.spawn((
                         Text::new(refund_str),
-                        TextFont { font_size: theme::FONT_SMALL, ..default() },
+                        TextFont {
+                            font_size: theme::FONT_SMALL,
+                            ..default()
+                        },
                         TextColor(theme::TEXT_SECONDARY),
                     ));
-                    panel.spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        column_gap: Val::Px(6.0),
-                        ..default()
-                    })
-                    .with_children(|row| {
-                        row.spawn((
-                            Button,
-                            StandardButton,
-                            ConfirmDemolishButton,
-                            Node {
-                                padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
-                                border_radius: BorderRadius::all(Val::Px(4.0)),
-                                ..default()
-                            },
-                            BackgroundColor(theme::DESTRUCTIVE),
-                        ))
-                        .with_children(|btn| {
-                            btn.spawn((
-                                Text::new("Yes"),
-                                TextFont { font_size: theme::FONT_BODY, ..default() },
-                                TextColor(theme::TEXT_PRIMARY),
-                            ));
-                        });
+                    panel
+                        .spawn(Node {
+                            flex_direction: FlexDirection::Row,
+                            column_gap: Val::Px(6.0),
+                            ..default()
+                        })
+                        .with_children(|row| {
+                            row.spawn((
+                                Button,
+                                StandardButton,
+                                ConfirmDemolishButton,
+                                Node {
+                                    padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
+                                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(theme::DESTRUCTIVE),
+                            ))
+                            .with_children(|btn| {
+                                btn.spawn((
+                                    Text::new("Yes"),
+                                    TextFont {
+                                        font_size: theme::FONT_BODY,
+                                        ..default()
+                                    },
+                                    TextColor(theme::TEXT_PRIMARY),
+                                ));
+                            });
 
-                        row.spawn((
-                            Button,
-                            StandardButton,
-                            CancelDemolishButton,
-                            Node {
-                                padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
-                                border_radius: BorderRadius::all(Val::Px(4.0)),
-                                ..default()
-                            },
-                            BackgroundColor(theme::BTN_PRIMARY),
-                        ))
-                        .with_children(|btn| {
-                            btn.spawn((
-                                Text::new("No"),
-                                TextFont { font_size: theme::FONT_BODY, ..default() },
-                                TextColor(theme::TEXT_PRIMARY),
-                            ));
+                            row.spawn((
+                                Button,
+                                StandardButton,
+                                CancelDemolishButton,
+                                Node {
+                                    padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
+                                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                                    ..default()
+                                },
+                                BackgroundColor(theme::BTN_PRIMARY),
+                            ))
+                            .with_children(|btn| {
+                                btn.spawn((
+                                    Text::new("No"),
+                                    TextFont {
+                                        font_size: theme::FONT_BODY,
+                                        ..default()
+                                    },
+                                    TextColor(theme::TEXT_PRIMARY),
+                                ));
+                            });
                         });
-                    });
                 })
                 .id();
             commands.entity(bar_entity).add_child(panel);
@@ -315,7 +349,13 @@ pub fn handle_demolish_confirm(
                 if let Ok(kind) = building_kinds.get(entity) {
                     let bp = registry.get(*kind);
                     let player_res = all_resources.get_mut(&active_player.0);
-                    let refund = [bp.cost.wood, bp.cost.copper, bp.cost.iron, bp.cost.gold, bp.cost.oil];
+                    let refund = [
+                        bp.cost.wood,
+                        bp.cost.copper,
+                        bp.cost.iron,
+                        bp.cost.gold,
+                        bp.cost.oil,
+                    ];
                     for (i, &amt) in refund.iter().enumerate() {
                         player_res.amounts[i] += amt;
                     }
@@ -343,6 +383,34 @@ pub fn handle_demolish_confirm(
     }
 }
 
+pub fn handle_scuttle_unit_button(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<ScuttleUnitButton>)>,
+    selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
+    active_player: Res<ActivePlayer>,
+    mut health_q: Query<&mut Health, With<Unit>>,
+    mut cmd_mode: ResMut<CommandMode>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+        *cmd_mode = CommandMode::Normal;
+
+        for (entity, kind, faction) in &selected_units {
+            if *faction != active_player.0 || *kind != EntityKind::Worker {
+                continue;
+            }
+            if let Ok(mut hp) = health_q.get_mut(entity) {
+                hp.current = 0.0;
+            }
+        }
+    }
+}
+
 // ── Rally point button handler ──
 
 pub fn handle_rally_point_button(
@@ -366,10 +434,18 @@ pub fn handle_rally_point_button(
 
     if rally_mode.0 && mouse.just_pressed(MouseButton::Left) {
         let Ok(window) = windows.single() else { return };
-        let Some(cursor) = window.cursor_position() else { return };
-        let Ok((camera, cam_gt)) = camera_q.single() else { return };
-        let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else { return };
-        let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) else { return };
+        let Some(cursor) = window.cursor_position() else {
+            return;
+        };
+        let Ok((camera, cam_gt)) = camera_q.single() else {
+            return;
+        };
+        let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
+            return;
+        };
+        let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) else {
+            return;
+        };
         let world_pos = ray.get_point(dist);
 
         for entity in &selected_buildings {
@@ -426,7 +502,8 @@ pub fn handle_assign_worker_button(
         ui_press.0 = true;
 
         for (building_entity, processor) in &selected_buildings {
-            let current_count = assigned_workers_q.get(building_entity)
+            let current_count = assigned_workers_q
+                .get(building_entity)
                 .map(|aw| aw.workers.len())
                 .unwrap_or(0);
             if current_count >= processor.max_workers as usize {
@@ -445,13 +522,23 @@ pub fn handle_assign_worker_button(
                 if assigned >= slots_available {
                     break;
                 }
-                crate::resources::assign_worker_to_processor(&mut commands, worker_entity, building_entity);
+                crate::resources::assign_worker_to_processor(
+                    &mut commands,
+                    worker_entity,
+                    building_entity,
+                );
                 // Also add to AssignedWorkers
-                commands.entity(building_entity).entry::<AssignedWorkers>().and_modify(move |mut aw| {
-                    if !aw.workers.contains(&worker_entity) {
-                        aw.workers.push(worker_entity);
-                    }
-                }).or_insert(AssignedWorkers { workers: vec![worker_entity] });
+                commands
+                    .entity(building_entity)
+                    .entry::<AssignedWorkers>()
+                    .and_modify(move |mut aw| {
+                        if !aw.workers.contains(&worker_entity) {
+                            aw.workers.push(worker_entity);
+                        }
+                    })
+                    .or_insert(AssignedWorkers {
+                        workers: vec![worker_entity],
+                    });
                 assigned += 1;
             }
         }
@@ -481,9 +568,12 @@ pub fn handle_unassign_worker_button(
                     crate::resources::unassign_worker_from_processor(&mut commands, worker_entity);
                 }
                 // Clear the building's assigned workers list
-                commands.entity(building_entity).entry::<AssignedWorkers>().and_modify(|mut aw| {
-                    aw.workers.clear();
-                });
+                commands
+                    .entity(building_entity)
+                    .entry::<AssignedWorkers>()
+                    .and_modify(|mut aw| {
+                        aw.workers.clear();
+                    });
             }
         }
     }
@@ -539,7 +629,13 @@ pub fn handle_cancel_train(
                     let removed_kind = queue.queue.remove(idx);
                     let bp = registry.get(removed_kind);
                     let player_res = all_resources.get_mut(&active_player.0);
-                    let refund = [bp.cost.wood, bp.cost.copper, bp.cost.iron, bp.cost.gold, bp.cost.oil];
+                    let refund = [
+                        bp.cost.wood,
+                        bp.cost.copper,
+                        bp.cost.iron,
+                        bp.cost.gold,
+                        bp.cost.oil,
+                    ];
                     for (i, &amt) in refund.iter().enumerate() {
                         player_res.amounts[i] += amt;
                     }
@@ -577,8 +673,17 @@ pub fn handle_unit_card_click(
 
 pub fn button_hover_visual(
     mut query: Query<
-        (&Interaction, &mut BackgroundColor, Option<&mut BorderColor>, Has<UnitCardRef>),
-        (Changed<Interaction>, With<StandardButton>, Without<ButtonAnimState>),
+        (
+            &Interaction,
+            &mut BackgroundColor,
+            Option<&mut BorderColor>,
+            Has<UnitCardRef>,
+        ),
+        (
+            Changed<Interaction>,
+            With<StandardButton>,
+            Without<ButtonAnimState>,
+        ),
     >,
 ) {
     for (interaction, mut bg, border_color, is_mini_card) in &mut query {
@@ -629,24 +734,40 @@ pub fn animated_button_hover_system(
             Interaction::Hovered => {
                 anim.scale_target = 1.04;
                 match style {
-                    ButtonStyle::Filled => { anim.bg_target = [0.25, 0.25, 0.25, 0.94]; }
-                    ButtonStyle::Ghost => { anim.bg_target = [0.29, 0.62, 1.0, 0.08]; }
-                    ButtonStyle::Destructive => { anim.bg_target = [0.80, 0.27, 0.27, 0.08]; }
+                    ButtonStyle::Filled => {
+                        anim.bg_target = [0.25, 0.25, 0.25, 0.94];
+                    }
+                    ButtonStyle::Ghost => {
+                        anim.bg_target = [0.29, 0.62, 1.0, 0.08];
+                    }
+                    ButtonStyle::Destructive => {
+                        anim.bg_target = [0.80, 0.27, 0.27, 0.08];
+                    }
                 }
             }
             Interaction::Pressed => {
                 anim.scale_target = 0.96;
                 match style {
-                    ButtonStyle::Filled => { anim.bg_target = [0.12, 0.12, 0.12, 0.94]; }
-                    ButtonStyle::Ghost => { anim.bg_target = [0.29, 0.62, 1.0, 0.14]; }
-                    ButtonStyle::Destructive => { anim.bg_target = [0.80, 0.27, 0.27, 0.14]; }
+                    ButtonStyle::Filled => {
+                        anim.bg_target = [0.12, 0.12, 0.12, 0.94];
+                    }
+                    ButtonStyle::Ghost => {
+                        anim.bg_target = [0.29, 0.62, 1.0, 0.14];
+                    }
+                    ButtonStyle::Destructive => {
+                        anim.bg_target = [0.80, 0.27, 0.27, 0.14];
+                    }
                 }
             }
             Interaction::None => {
                 anim.scale_target = 1.0;
                 match style {
-                    ButtonStyle::Filled => { anim.bg_target = [0.17, 0.17, 0.17, 0.94]; }
-                    ButtonStyle::Ghost | ButtonStyle::Destructive => { anim.bg_target = [0.0, 0.0, 0.0, 0.0]; }
+                    ButtonStyle::Filled => {
+                        anim.bg_target = [0.17, 0.17, 0.17, 0.94];
+                    }
+                    ButtonStyle::Ghost | ButtonStyle::Destructive => {
+                        anim.bg_target = [0.0, 0.0, 0.0, 0.0];
+                    }
                 }
             }
         }
@@ -671,7 +792,15 @@ pub fn action_bar_transition_system(
     mut commands: Commands,
     time: Res<Time>,
     mut fade_outs: Query<(Entity, &mut ActionBarFadeOut, &mut Transform)>,
-    mut fade_ins: Query<(Entity, &mut ActionBarFadeIn, &mut Transform, &mut Visibility), Without<ActionBarFadeOut>>,
+    mut fade_ins: Query<
+        (
+            Entity,
+            &mut ActionBarFadeIn,
+            &mut Transform,
+            &mut Visibility,
+        ),
+        Without<ActionBarFadeOut>,
+    >,
 ) {
     let dt = time.delta_secs();
 
@@ -729,7 +858,9 @@ pub fn update_training_queue_display(
     selected_buildings: Query<&TrainingQueue, (With<Building>, With<Selected>)>,
     mut progress_bars: Query<&mut Node, With<TrainingProgressBar>>,
 ) {
-    let Ok(queue) = selected_buildings.single() else { return };
+    let Ok(queue) = selected_buildings.single() else {
+        return;
+    };
     for mut node in &mut progress_bars {
         let fraction = queue.timer.as_ref().map_or(0.0, |t| t.fraction());
         node.width = Val::Percent(fraction * 100.0);
@@ -761,7 +892,9 @@ pub fn update_construction_progress_display(
     mut worker_texts: Query<(&mut Text, &mut TextColor), With<ConstructionWorkerCountText>>,
     workers: Query<&UnitState, With<Unit>>,
 ) {
-    let Ok((building_entity, progress)) = selected_buildings.single() else { return };
+    let Ok((building_entity, progress)) = selected_buildings.single() else {
+        return;
+    };
     for mut node in &mut progress_bars {
         node.width = Val::Percent(progress.timer.fraction() * 100.0);
     }
@@ -777,7 +910,12 @@ pub fn update_construction_progress_display(
             *color = TextColor(Color::srgb(0.9, 0.5, 0.3));
         } else {
             let pct = (progress.timer.fraction() * 100.0) as u32;
-            **text = format!("{}% ({} worker{})", pct, builder_count, if builder_count == 1 { "" } else { "s" });
+            **text = format!(
+                "{}% ({} worker{})",
+                pct,
+                builder_count,
+                if builder_count == 1 { "" } else { "s" }
+            );
             *color = TextColor(Color::srgb(0.6, 0.8, 0.5));
         }
     }
@@ -787,7 +925,9 @@ pub fn update_upgrade_progress_display(
     selected_buildings: Query<&UpgradeProgress, (With<Building>, With<Selected>)>,
     mut progress_bars: Query<&mut Node, With<UpgradeProgressBar>>,
 ) {
-    let Ok(progress) = selected_buildings.single() else { return };
+    let Ok(progress) = selected_buildings.single() else {
+        return;
+    };
     for mut node in &mut progress_bars {
         node.width = Val::Percent(progress.timer.fraction() * 100.0);
     }
@@ -811,7 +951,9 @@ pub fn show_action_tooltips(
                 }
 
                 // Position near cursor
-                let (cx, cy) = windows.single().ok()
+                let (cx, cy) = windows
+                    .single()
+                    .ok()
                     .and_then(|w| w.cursor_position())
                     .map(|p| (p.x, p.y))
                     .unwrap_or((0.0, 0.0));
@@ -846,8 +988,7 @@ pub fn show_action_tooltips(
                     ))
                     .with_children(|tt| {
                         spawn_tooltip_content(tt, &trigger.text);
-                    })
-                    ;
+                    });
             }
             _ => {
                 // Remove tooltip owned by this trigger
@@ -881,13 +1022,18 @@ pub fn cleanup_action_tooltips(
 fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
     let lines: Vec<&str> = text.split('\n').collect();
     for (i, line) in lines.iter().enumerate() {
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
 
         // First line = title
         if i == 0 {
             tt.spawn((
                 Text::new(*line),
-                TextFont { font_size: theme::FONT_BODY, ..default() },
+                TextFont {
+                    font_size: theme::FONT_BODY,
+                    ..default()
+                },
                 TextColor(theme::TEXT_PRIMARY),
             ));
             tt.spawn((
@@ -910,7 +1056,10 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
             (theme::TEXT_SECONDARY, theme::FONT_SMALL)
         } else if line.starts_with("HP:") || line.starts_with("DMG:") {
             (theme::STAT_DMG, theme::FONT_SMALL)
-        } else if *line == "Drag & Drop to create" || *line == "Click to train" || *line == "Click to place" {
+        } else if *line == "Drag & Drop to create"
+            || *line == "Click to train"
+            || *line == "Click to place"
+        {
             tt.spawn((
                 Node {
                     width: Val::Percent(100.0),
@@ -929,9 +1078,140 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
 
         tt.spawn((
             Text::new(*line),
-            TextFont { font_size, ..default() },
+            TextFont {
+                font_size,
+                ..default()
+            },
             TextColor(color),
         ));
+    }
+}
+
+// ── Unit command button handlers ──
+
+pub fn handle_attack_move_button(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<AttackMoveButton>)>,
+    mut cmd_mode: ResMut<CommandMode>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed {
+            ui_clicked.0 = 2;
+            ui_press.0 = true;
+            *cmd_mode = CommandMode::AttackMove;
+        }
+    }
+}
+
+pub fn handle_patrol_button(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<PatrolButton>)>,
+    mut cmd_mode: ResMut<CommandMode>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed {
+            ui_clicked.0 = 2;
+            ui_press.0 = true;
+            *cmd_mode = CommandMode::Patrol;
+        }
+    }
+}
+
+pub fn handle_hold_position_button(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<HoldPositionButton>)>,
+    mut commands: Commands,
+    selected_units: Query<(Entity, &Faction), (With<Unit>, With<Selected>)>,
+    active_player: Res<ActivePlayer>,
+    mut cmd_mode: ResMut<CommandMode>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+        *cmd_mode = CommandMode::Normal;
+        for (entity, faction) in &selected_units {
+            if *faction != active_player.0 {
+                continue;
+            }
+            commands
+                .entity(entity)
+                .remove::<MoveTarget>()
+                .remove::<AttackTarget>()
+                .insert(UnitState::HoldPosition)
+                .insert(TaskSource::Manual);
+            commands
+                .entity(entity)
+                .entry::<TaskQueue>()
+                .and_modify(|mut tq| tq.queue.clear());
+        }
+    }
+}
+
+pub fn handle_stop_button(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<StopButton>)>,
+    mut commands: Commands,
+    selected_units: Query<(Entity, &Faction), (With<Unit>, With<Selected>)>,
+    active_player: Res<ActivePlayer>,
+    mut cmd_mode: ResMut<CommandMode>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+        *cmd_mode = CommandMode::Normal;
+        for (entity, faction) in &selected_units {
+            if *faction != active_player.0 {
+                continue;
+            }
+            commands
+                .entity(entity)
+                .remove::<MoveTarget>()
+                .remove::<AttackTarget>()
+                .insert(UnitState::Idle)
+                .insert(TaskSource::Auto);
+            commands
+                .entity(entity)
+                .entry::<TaskQueue>()
+                .and_modify(|mut tq| tq.queue.clear());
+        }
+    }
+}
+
+pub fn handle_cycle_stance_button(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<CycleStanceButton>)>,
+    mut commands: Commands,
+    selected_units: Query<(Entity, &Faction), (With<Unit>, With<Selected>)>,
+    active_player: Res<ActivePlayer>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+        for (entity, faction) in &selected_units {
+            if *faction != active_player.0 {
+                continue;
+            }
+            commands
+                .entity(entity)
+                .entry::<UnitStance>()
+                .and_modify(|mut stance| {
+                    *stance = stance.cycle();
+                });
+        }
     }
 }
 
@@ -942,9 +1222,8 @@ pub fn clear_stale_inspected(
     building_query: Query<Entity, With<Building>>,
 ) {
     if let Some(e) = inspected.entity {
-        let exists = mob_query.get(e).is_ok()
-            || unit_query.get(e).is_ok()
-            || building_query.get(e).is_ok();
+        let exists =
+            mob_query.get(e).is_ok() || unit_query.get(e).is_ok() || building_query.get(e).is_ok();
         if !exists {
             inspected.entity = None;
         }

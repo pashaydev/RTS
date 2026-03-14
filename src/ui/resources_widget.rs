@@ -34,13 +34,25 @@ pub fn spawn_resource_content(commands: &mut Commands, parent: Entity, icons: &I
     for rt in resource_types {
         let row = commands
             .spawn(Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                column_gap: Val::Px(6.0),
+                ..default()
+            })
+            .id();
+        commands.entity(parent).add_child(row);
+
+        let left = commands
+            .spawn(Node {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(6.0),
                 ..default()
             })
             .id();
-        commands.entity(parent).add_child(row);
+        commands.entity(row).add_child(left);
 
         let icon = commands
             .spawn((
@@ -52,7 +64,7 @@ pub fn spawn_resource_content(commands: &mut Commands, parent: Entity, icons: &I
                 },
             ))
             .id();
-        commands.entity(row).add_child(icon);
+        commands.entity(left).add_child(icon);
 
         let text = commands
             .spawn((
@@ -65,6 +77,6 @@ pub fn spawn_resource_content(commands: &mut Commands, parent: Entity, icons: &I
                 TextColor(theme::TEXT_PRIMARY),
             ))
             .id();
-        commands.entity(row).add_child(text);
+        commands.entity(left).add_child(text);
     }
 }

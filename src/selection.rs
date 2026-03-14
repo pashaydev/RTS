@@ -28,10 +28,7 @@ impl Plugin for SelectionPlugin {
             .add_systems(First, reset_ui_clicked.run_if(in_state(AppState::InGame)))
             .add_systems(
                 Update,
-                (
-                    track_drag,
-                    update_selection_box_visual,
-                )
+                (track_drag, update_selection_box_visual)
                     .chain()
                     .in_set(SelectionSet)
                     .after(MinimapSet)
@@ -47,16 +44,9 @@ impl Plugin for SelectionPlugin {
                     .after(MinimapSet)
                     .run_if(in_state(AppState::InGame)),
             )
-            .add_systems(
-                Update,
-                (
-                    update_entity_visuals,
-                    handle_right_click_move,
-                    handle_unit_command_hotkeys,
-                )
-                    .after(SelectionSet)
-                    .run_if(in_state(AppState::InGame)),
-            )
+            .add_systems(Update, update_entity_visuals)
+            .add_systems(Update, handle_right_click_move)
+            .add_systems(Update, handle_unit_command_hotkeys)
             .add_systems(
                 Update,
                 (update_hover_ring, update_hover_tooltip)
@@ -107,6 +97,7 @@ struct PickResult {
     is_building: bool,
     is_mob: bool,
     is_resource: bool,
+    is_explosive: bool,
 }
 
 /// Pick the best entity for click selection — prioritizes units > buildings > resources > mobs.
@@ -117,8 +108,9 @@ fn pick_for_click(
     buildings: &Query<Entity, With<Building>>,
     mobs: &Query<Entity, With<Mob>>,
     resource_nodes: &Query<Entity, With<ResourceNode>>,
+    explosive_props: &Query<Entity, With<ExplosiveProp>>,
 ) -> Option<PickResult> {
-    let mut hits: Vec<(Entity, f32, bool, bool, bool, bool)> = Vec::new();
+    let mut hits: Vec<(Entity, f32, bool, bool, bool, bool, bool)> = Vec::new();
 
     for (entity, gt, pick_r, inherited_vis) in pickables {
         // Skip entities hidden by fog of war
@@ -129,14 +121,23 @@ fn pick_for_click(
         let is_building = buildings.contains(entity);
         let is_mob = mobs.contains(entity);
         let is_resource = resource_nodes.contains(entity);
+        let is_explosive = explosive_props.contains(entity);
 
-        if !is_unit && !is_building && !is_mob && !is_resource {
+        if !is_unit && !is_building && !is_mob && !is_resource && !is_explosive {
             continue;
         }
 
         let center = gt.translation();
         if let Some(dist) = ray_sphere_dist(ray, center, pick_r.0) {
-            hits.push((entity, dist, is_unit, is_building, is_mob, is_resource));
+            hits.push((
+                entity,
+                dist,
+                is_unit,
+                is_building,
+                is_mob,
+                is_resource,
+                is_explosive,
+            ));
         }
     }
 
@@ -147,23 +148,61 @@ fn pick_for_click(
     // Sort by distance
     hits.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Among close hits (within 2 units of the closest), prefer units > buildings > resources > mobs
+    // Among close hits (within 2 units of the closest), prefer units > buildings > resources > explosive > mobs
     let closest_dist = hits[0].1;
     let threshold = closest_dist + 2.0;
     let close_hits: Vec<_> = hits.into_iter().filter(|h| h.1 <= threshold).collect();
 
-    // Priority: unit > building > resource > mob
+    // Priority: unit > building > resource > explosive > mob
     if let Some(h) = close_hits.iter().find(|h| h.2) {
-        return Some(PickResult { entity: h.0, is_unit: true, is_building: false, is_mob: false, is_resource: false });
+        return Some(PickResult {
+            entity: h.0,
+            is_unit: true,
+            is_building: false,
+            is_mob: false,
+            is_resource: false,
+            is_explosive: false,
+        });
     }
     if let Some(h) = close_hits.iter().find(|h| h.3) {
-        return Some(PickResult { entity: h.0, is_unit: false, is_building: true, is_mob: false, is_resource: false });
+        return Some(PickResult {
+            entity: h.0,
+            is_unit: false,
+            is_building: true,
+            is_mob: false,
+            is_resource: false,
+            is_explosive: false,
+        });
     }
     if let Some(h) = close_hits.iter().find(|h| h.5) {
-        return Some(PickResult { entity: h.0, is_unit: false, is_building: false, is_mob: false, is_resource: true });
+        return Some(PickResult {
+            entity: h.0,
+            is_unit: false,
+            is_building: false,
+            is_mob: false,
+            is_resource: true,
+            is_explosive: false,
+        });
+    }
+    if let Some(h) = close_hits.iter().find(|h| h.6) {
+        return Some(PickResult {
+            entity: h.0,
+            is_unit: false,
+            is_building: false,
+            is_mob: false,
+            is_resource: false,
+            is_explosive: true,
+        });
     }
     if let Some(h) = close_hits.iter().find(|h| h.4) {
-        return Some(PickResult { entity: h.0, is_unit: false, is_building: false, is_mob: true, is_resource: false });
+        return Some(PickResult {
+            entity: h.0,
+            is_unit: false,
+            is_building: false,
+            is_mob: true,
+            is_resource: false,
+            is_explosive: false,
+        });
     }
 
     None
@@ -182,15 +221,10 @@ fn clear_ui_press_on_release(
     }
 }
 
-fn setup_hover_assets(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-) {
+fn setup_hover_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     // Flat plane that will show the ring shader — sized 3x3 units
     let ring_mesh = meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(1.5)));
-    commands.insert_resource(HoverRingAssets {
-        mesh: ring_mesh,
-    });
+    commands.insert_resource(HoverRingAssets { mesh: ring_mesh });
 
     // Spawn tooltip UI (hidden by default)
     commands.spawn((
@@ -205,7 +239,10 @@ fn setup_hover_assets(
         Visibility::Hidden,
         GlobalTransform::default(),
         Text::new(""),
-        TextFont { font_size: theme::FONT_BODY, ..default() },
+        TextFont {
+            font_size: theme::FONT_BODY,
+            ..default()
+        },
         TextColor(theme::TEXT_PRIMARY),
     ));
 }
@@ -225,7 +262,6 @@ fn spawn_selection_box(mut commands: Commands) {
         BorderColor::all(Color::srgba(0.29, 0.62, 1.0, 0.6)),
         Visibility::Hidden,
         GlobalTransform::default(),
-
     ));
 }
 
@@ -314,6 +350,7 @@ fn update_hover(
     buildings: Query<Entity, With<Building>>,
     mobs: Query<Entity, With<Mob>>,
     resource_nodes: Query<Entity, With<ResourceNode>>,
+    explosive_props: Query<Entity, With<ExplosiveProp>>,
     hovered: Query<Entity, With<Hovered>>,
     placement: Res<BuildingPlacementState>,
     ui_interactions: Query<&Interaction, With<Node>>,
@@ -346,7 +383,15 @@ fn update_hover(
         return;
     };
 
-    if let Some(result) = pick_for_click(&ray, &pickables, &units, &buildings, &mobs, &resource_nodes) {
+    if let Some(result) = pick_for_click(
+        &ray,
+        &pickables,
+        &units,
+        &buildings,
+        &mobs,
+        &resource_nodes,
+        &explosive_props,
+    ) {
         commands.entity(result.entity).insert(Hovered);
     }
 }
@@ -365,17 +410,23 @@ fn handle_click_select(
         Query<Entity, With<Building>>,
         Query<Entity, With<Mob>>,
         Query<Entity, With<ResourceNode>>,
+        Query<Entity, With<ExplosiveProp>>,
     ),
     selected: Query<Entity, With<Selected>>,
     unit_transforms: Query<&GlobalTransform, With<Unit>>,
-    flags: (Res<MinimapInteraction>, Res<UiClickedThisFrame>, Res<UiPressActive>),
+    flags: (
+        Res<MinimapInteraction>,
+        Res<UiClickedThisFrame>,
+        Res<UiPressActive>,
+    ),
     ui_interactions: Query<&Interaction, With<Node>>,
     active_player: Res<ActivePlayer>,
     faction_q: Query<&Faction>,
     unit_state_q: Query<&UnitState>,
 ) {
     let (ref mut drag, ref mut inspected) = state;
-    let (ref units, ref buildings, ref mobs, ref resource_nodes) = entity_queries;
+    let (ref units, ref buildings, ref mobs, ref resource_nodes, ref explosive_props) =
+        entity_queries;
     let (ref minimap_interaction, ref ui_clicked, ref ui_press) = flags;
     if !mouse.just_released(MouseButton::Left) {
         return;
@@ -441,7 +492,10 @@ fn handle_click_select(
                         continue;
                     }
                 }
-                if unit_state_q.get(entity).map_or(false, |s| matches!(s, UnitState::InsideProcessor(_))) {
+                if unit_state_q
+                    .get(entity)
+                    .map_or(false, |s| matches!(s, UnitState::InsideProcessor(_)))
+                {
                     continue;
                 }
                 if let Ok(gt) = unit_transforms.get(entity) {
@@ -465,12 +519,20 @@ fn handle_click_select(
             return;
         };
 
-        let pick = pick_for_click(&ray, &pickables, &units, &buildings, &mobs, &resource_nodes);
+        let pick = pick_for_click(
+            &ray,
+            &pickables,
+            &units,
+            &buildings,
+            &mobs,
+            &resource_nodes,
+            &explosive_props,
+        );
 
         if let Some(result) = pick {
             if result.is_mob {
                 inspected.entity = Some(result.entity);
-            } else if result.is_resource {
+            } else if result.is_resource || result.is_explosive {
                 // Resources can always be inspected/selected
                 inspected.entity = None;
                 if !shift {
@@ -481,7 +543,8 @@ fn handle_click_select(
                 commands.entity(result.entity).insert(Selected);
             } else {
                 // Units and buildings: only select if they belong to active faction
-                let is_own = faction_q.get(result.entity)
+                let is_own = faction_q
+                    .get(result.entity)
                     .map(|f| *f == active_player.0)
                     .unwrap_or(false);
 
@@ -522,7 +585,13 @@ fn update_entity_visuals(
     mut removed_selected: RemovedComponents<Selected>,
     added_hovered: Query<(Entity, &EntityKind, Has<Mesh3d>), Added<Hovered>>,
     mut removed_hovered: RemovedComponents<Hovered>,
-    all_entities: Query<(Entity, &EntityKind, Has<Selected>, Has<Hovered>, Has<Mesh3d>)>,
+    all_entities: Query<(
+        Entity,
+        &EntityKind,
+        Has<Selected>,
+        Has<Hovered>,
+        Has<Mesh3d>,
+    )>,
     mut outlines: Query<&mut OutlineVolume>,
 ) {
     // Outline colors
@@ -629,9 +698,13 @@ fn update_hover_ring(
             HoverRing,
             Mesh3d(ring_assets.mesh.clone()),
             MeshMaterial3d(mat),
-            Transform::from_translation(Vec3::new(pos.x, height_map.sample(pos.x, pos.z) + 0.1, pos.z)),
+            Transform::from_translation(Vec3::new(
+                pos.x,
+                height_map.sample(pos.x, pos.z) + 0.1,
+                pos.z,
+            )),
             NotShadowCaster,
-            NotShadowReceiver
+            NotShadowReceiver,
         ));
     }
 }
@@ -643,6 +716,7 @@ fn update_hover_tooltip(
     hovered_entities: Query<Entity, With<Hovered>>,
     entity_kinds: Query<&EntityKind>,
     resource_nodes: Query<&ResourceNode>,
+    explosive_props: Query<&ExplosiveProp>,
     healths: Query<&Health>,
     building_levels: Query<&BuildingLevel>,
 ) {
@@ -674,7 +748,16 @@ fn update_hover_tooltip(
             label.push_str(&format!(" (Lv {})", level.0));
         }
     } else if let Ok(rn) = resource_nodes.get(entity) {
-        label.push_str(&format!("{} ({})", rn.resource_type.display_name(), rn.amount_remaining));
+        label.push_str(&format!(
+            "{} ({})",
+            rn.resource_type.display_name(),
+            rn.amount_remaining
+        ));
+    } else if let Ok(prop) = explosive_props.get(entity) {
+        label.push_str(&format!(
+            "Powder Barrel\nBlast: {:.0} / r{:.1}",
+            prop.damage, prop.radius
+        ));
     }
 
     if label.is_empty() {
@@ -683,7 +766,10 @@ fn update_hover_tooltip(
     }
 
     if let Ok(health) = healths.get(entity) {
-        label.push_str(&format!("\nHP: {}/{}", health.current as u32, health.max as u32));
+        label.push_str(&format!(
+            "\nHP: {}/{}",
+            health.current as u32, health.max as u32
+        ));
     }
 
     *text = Text::new(label);
@@ -698,20 +784,39 @@ fn handle_right_click_move(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    viewport: (
+        Query<(&Camera, &GlobalTransform)>,
+        Query<&Window, With<PrimaryWindow>>,
+    ),
     selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
     active_player: Res<ActivePlayer>,
+    teams: Res<TeamConfig>,
     pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
-    mobs: Query<Entity, With<Mob>>,
-    resource_nodes: Query<Entity, With<ResourceNode>>,
-    construction_q: Query<(Entity, &GlobalTransform), (With<Building>, With<ConstructionProgress>)>,
-    processor_buildings: Query<(Entity, &ResourceProcessor, &BuildingState, &Faction), With<Building>>,
+    target_queries: (
+        Query<Entity, With<Mob>>,
+        Query<Entity, With<ResourceNode>>,
+        Query<Entity, With<ExplosiveProp>>,
+        Query<(Entity, &GlobalTransform), (With<Building>, With<ConstructionProgress>)>,
+        Query<(Entity, &ResourceProcessor, &BuildingState, &Faction), With<Building>>,
+    ),
+    // Queries for contextual right-click: enemy units, all units with faction, buildings with faction
+    enemy_detect: (
+        Query<(Entity, &Faction), (With<Unit>, Without<Selected>)>,
+        Query<(Entity, &Faction, &BuildingState), (With<Building>, Without<ConstructionProgress>)>,
+    ),
     assigned_workers_q: Query<&AssignedWorkers>,
-    minimap_interaction: Res<MinimapInteraction>,
-    ui_clicked: Res<UiClickedThisFrame>,
-    ui_press: Res<UiPressActive>,
+    ui_flags: (
+        Res<MinimapInteraction>,
+        Res<UiClickedThisFrame>,
+        Res<UiPressActive>,
+    ),
 ) {
+    let (camera_q, windows) = viewport;
+    let (mobs, resource_nodes, explosive_props, construction_q, processor_buildings) =
+        target_queries;
+    let (other_units, other_buildings) = enemy_detect;
+    let (minimap_interaction, ui_clicked, ui_press) = ui_flags;
+
     if !mouse.just_pressed(MouseButton::Right) {
         return;
     }
@@ -720,155 +825,342 @@ fn handle_right_click_move(
         return;
     }
 
-    let Ok(window) = windows.single() else { return; };
-    let Some(cursor) = window.cursor_position() else { return; };
-    let Ok((camera, cam_gt)) = camera_q.single() else { return; };
-    let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else { return; };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let Ok((camera, cam_gt)) = camera_q.single() else {
+        return;
+    };
+    let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
+        return;
+    };
 
-    let units_vec: Vec<(Entity, EntityKind)> = selected_units.iter()
+    let units_vec: Vec<(Entity, EntityKind)> = selected_units
+        .iter()
         .filter(|(_, _, faction)| **faction == active_player.0)
-        .map(|(e, k, _)| (e, *k)).collect();
-    if units_vec.is_empty() { return; }
+        .map(|(e, k, _)| (e, *k))
+        .collect();
+    if units_vec.is_empty() {
+        return;
+    }
 
-    // UX Fix: Find ALL hits and evaluate by depth + priority
-    let mut hits = Vec::new();
+    // Contextual right-click action types
+    #[derive(Clone, Copy, PartialEq)]
+    enum RClickAction {
+        AttackEnemy,     // enemy unit or mob
+        AttackExplosive, // explosive prop
+        GatherResource,  // resource node (workers)
+        AssistBuild,     // construction site (workers)
+        AssignProcessor, // processor building (workers)
+        MoveToAlly,      // allied building — just move near it
+    }
+
+    // Find ALL hits and evaluate by depth + priority
+    struct RClickHit {
+        entity: Entity,
+        dist: f32,
+        action: RClickAction,
+    }
+
+    let mut hits: Vec<RClickHit> = Vec::new();
     for (entity, gt, pick_r, inherited_vis) in &pickables {
-        if !inherited_vis.get() { continue; }
+        if !inherited_vis.get() {
+            continue;
+        }
 
         let center = gt.translation();
-        if let Some(dist) = ray_sphere_dist(&ray, center, pick_r.0) {
-            let is_mob = mobs.contains(entity);
-            let is_construction = construction_q.contains(entity);
-            let is_processor = processor_buildings.contains(entity);
-            let is_resource = resource_nodes.contains(entity);
+        let Some(dist) = ray_sphere_dist(&ray, center, pick_r.0) else {
+            continue;
+        };
 
-            if is_mob || is_construction || is_processor || is_resource {
-                hits.push((entity, dist, is_mob, is_construction, is_processor, is_resource));
+        // Determine the best action for this hit
+        let action = if mobs.contains(entity) {
+            // Mobs are always hostile
+            Some(RClickAction::AttackEnemy)
+        } else if explosive_props.contains(entity) {
+            Some(RClickAction::AttackExplosive)
+        } else if let Ok((_, unit_faction)) = other_units.get(entity) {
+            // Another unit — attack if hostile, ignore if allied (can't interact)
+            if teams.is_hostile(&active_player.0, unit_faction) {
+                Some(RClickAction::AttackEnemy)
+            } else {
+                None // Allied unit — no right-click action
             }
+        } else if construction_q.contains(entity) {
+            Some(RClickAction::AssistBuild)
+        } else if processor_buildings.contains(entity) {
+            // Check if it's our processor or enemy building
+            if let Ok((_, _, _, proc_faction)) = processor_buildings.get(entity) {
+                if teams.is_hostile(&active_player.0, proc_faction) {
+                    Some(RClickAction::AttackEnemy)
+                } else {
+                    Some(RClickAction::AssignProcessor)
+                }
+            } else {
+                None
+            }
+        } else if resource_nodes.contains(entity) {
+            Some(RClickAction::GatherResource)
+        } else if let Ok((_, bld_faction, bld_state)) = other_buildings.get(entity) {
+            // Completed building — attack if hostile, move-to if allied
+            if *bld_state != BuildingState::Complete {
+                None
+            } else if teams.is_hostile(&active_player.0, bld_faction) {
+                Some(RClickAction::AttackEnemy)
+            } else {
+                Some(RClickAction::MoveToAlly)
+            }
+        } else {
+            None
+        };
+
+        if let Some(action) = action {
+            hits.push(RClickHit {
+                entity,
+                dist,
+                action,
+            });
         }
     }
 
     // Sort hits by depth
-    hits.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    hits.sort_by(|a, b| {
+        a.dist
+            .partial_cmp(&b.dist)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
-    let mut target_action = None;
-    if !hits.is_empty() {
-        let closest_dist = hits[0].1;
-        let threshold = closest_dist + 2.0; // 2.0 units depth tolerance for tie-breaking priorities
-        let close_hits: Vec<_> = hits.into_iter().filter(|h| h.1 <= threshold).collect();
+    let target_action = if !hits.is_empty() {
+        let closest_dist = hits[0].dist;
+        let threshold = closest_dist + 2.0;
+        let close_hits: Vec<_> = hits.into_iter().filter(|h| h.dist <= threshold).collect();
 
-        // Priority tie-breaker
-        if let Some(h) = close_hits.iter().find(|h| h.2) {
-            target_action = Some((h.0, "mob"));
-        } else if let Some(h) = close_hits.iter().find(|h| h.3) {
-            target_action = Some((h.0, "construction"));
-        } else if let Some(h) = close_hits.iter().find(|h| h.4) {
-            target_action = Some((h.0, "processor"));
-        } else if let Some(h) = close_hits.iter().find(|h| h.5) {
-            target_action = Some((h.0, "resource"));
+        // Priority tie-breaker: attack enemy > explosive > resource > construction > processor > ally
+        if let Some(h) = close_hits
+            .iter()
+            .find(|h| h.action == RClickAction::AttackEnemy)
+        {
+            Some((h.entity, h.action))
+        } else if let Some(h) = close_hits
+            .iter()
+            .find(|h| h.action == RClickAction::AttackExplosive)
+        {
+            Some((h.entity, h.action))
+        } else if let Some(h) = close_hits
+            .iter()
+            .find(|h| h.action == RClickAction::GatherResource)
+        {
+            Some((h.entity, h.action))
+        } else if let Some(h) = close_hits
+            .iter()
+            .find(|h| h.action == RClickAction::AssistBuild)
+        {
+            Some((h.entity, h.action))
+        } else if let Some(h) = close_hits
+            .iter()
+            .find(|h| h.action == RClickAction::AssignProcessor)
+        {
+            Some((h.entity, h.action))
+        } else if let Some(h) = close_hits
+            .iter()
+            .find(|h| h.action == RClickAction::MoveToAlly)
+        {
+            Some((h.entity, h.action))
+        } else {
+            None
         }
-    }
+    } else {
+        None
+    };
 
     let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
 
     if let Some((target_entity, action)) = target_action {
-        if action == "mob" {
-            for (entity, _kind) in &units_vec {
-                if shift {
-                    commands.entity(*entity).entry::<TaskQueue>().and_modify(move |mut tq| {
-                        tq.queue.push_back(QueuedTask::Attack(target_entity));
-                    });
-                } else {
-                    let mut ec = commands.entity(*entity);
-                    ec.remove::<MoveTarget>()
-                        .insert(AttackTarget(target_entity))
-                        .insert(UnitState::Attacking(target_entity))
-                        .insert(TaskSource::Manual);
-                    ec.entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
-                }
-            }
-        } else if action == "processor" {
-            if let Ok((_, processor, state, proc_faction)) = processor_buildings.get(target_entity) {
-                if *state == BuildingState::Complete && *proc_faction == active_player.0 && processor.max_workers > 0 {
-                    let current_count = assigned_workers_q.get(target_entity)
-                        .map(|aw| aw.workers.len())
-                        .unwrap_or(0);
-                    let mut assigned = 0;
-                    for (entity, kind) in &units_vec {
-                        if *kind == EntityKind::Worker && current_count + assigned < processor.max_workers as usize {
-                            if shift {
-                                commands.entity(*entity).entry::<TaskQueue>().and_modify(move |mut tq| {
-                                    tq.queue.push_back(QueuedTask::AssignToProcessor(target_entity));
-                                });
-                            } else {
-                                // Walk to building first, then absorb
-                                if let Ok(gt) = pickables.get(target_entity).map(|(_, gt, _, _)| gt) {
-                                    commands.entity(*entity)
-                                        .remove::<AttackTarget>()
-                                        .insert(MoveTarget(gt.translation()))
-                                        .insert(UnitState::MovingToProcessor(target_entity))
-                                        .insert(TaskSource::Manual);
-                                    commands.entity(*entity).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
-                                }
-                            }
-                            assigned += 1;
-                        } else if let Ok(gt) = pickables.get(target_entity).map(|(_, gt, _, _)| gt) {
-                            commands.entity(*entity)
-                                .remove::<AttackTarget>()
-                                .insert(MoveTarget(gt.translation()))
-                                .insert(UnitState::Moving(gt.translation()))
-                                .insert(TaskSource::Manual);
-                        }
-                    }
-                }
-            }
-        } else if action == "construction" {
-            let construction_pos = pickables.get(target_entity).map(|(_, gt, _, _)| gt.translation());
-            for (entity, kind) in &units_vec {
-                if *kind == EntityKind::Worker {
+        match action {
+            RClickAction::AttackEnemy | RClickAction::AttackExplosive => {
+                for (entity, _kind) in &units_vec {
                     if shift {
-                        commands.entity(*entity).entry::<TaskQueue>().and_modify(move |mut tq| {
-                            tq.queue.push_back(QueuedTask::Build(target_entity));
-                        });
+                        commands
+                            .entity(*entity)
+                            .entry::<TaskQueue>()
+                            .and_modify(move |mut tq| {
+                                tq.queue.push_back(QueuedTask::Attack(target_entity));
+                            });
                     } else {
-                        commands.entity(*entity)
-                            .remove::<AttackTarget>()
-                            .remove::<MoveTarget>()
-                            .insert(UnitState::MovingToBuild(target_entity))
+                        let mut ec = commands.entity(*entity);
+                        ec.remove::<MoveTarget>()
+                            .insert(AttackTarget(target_entity))
+                            .insert(UnitState::Attacking(target_entity))
                             .insert(TaskSource::Manual);
-                        commands.entity(*entity).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
+                        ec.entry::<TaskQueue>()
+                            .and_modify(|mut tq| tq.queue.clear());
                     }
-                } else if let Ok(pos) = construction_pos {
-                    commands.entity(*entity)
-                        .remove::<AttackTarget>()
-                        .insert(MoveTarget(pos))
-                        .insert(UnitState::Moving(pos))
-                        .insert(TaskSource::Manual);
                 }
             }
-        } else if action == "resource" {
-            for (entity, kind) in &units_vec {
-                if *kind == EntityKind::Worker {
-                    if shift {
-                        commands.entity(*entity).entry::<TaskQueue>().and_modify(move |mut tq| {
-                            tq.queue.push_back(QueuedTask::Gather(target_entity));
-                        });
-                    } else {
-                        if let Ok(gt) = pickables.get(target_entity).map(|(_, gt, _, _)| gt) {
-                            commands.entity(*entity)
-                                .remove::<AttackTarget>()
-                                .insert(MoveTarget(gt.translation()))
-                                .insert(UnitState::Gathering(target_entity))
-                                .insert(TaskSource::Manual);
-                            commands.entity(*entity).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
+            RClickAction::AssignProcessor => {
+                if let Ok((_, processor, state, proc_faction)) =
+                    processor_buildings.get(target_entity)
+                {
+                    if *state == BuildingState::Complete
+                        && *proc_faction == active_player.0
+                        && processor.max_workers > 0
+                    {
+                        let current_count = assigned_workers_q
+                            .get(target_entity)
+                            .map(|aw| aw.workers.len())
+                            .unwrap_or(0);
+                        let mut assigned = 0;
+                        for (entity, kind) in &units_vec {
+                            if *kind == EntityKind::Worker
+                                && current_count + assigned < processor.max_workers as usize
+                            {
+                                if shift {
+                                    commands.entity(*entity).entry::<TaskQueue>().and_modify(
+                                        move |mut tq| {
+                                            tq.queue.push_back(QueuedTask::AssignToProcessor(
+                                                target_entity,
+                                            ));
+                                        },
+                                    );
+                                } else {
+                                    if let Ok(gt) =
+                                        pickables.get(target_entity).map(|(_, gt, _, _)| gt)
+                                    {
+                                        commands
+                                            .entity(*entity)
+                                            .remove::<AttackTarget>()
+                                            .insert(MoveTarget(gt.translation()))
+                                            .insert(UnitState::MovingToProcessor(target_entity))
+                                            .insert(TaskSource::Manual);
+                                        commands
+                                            .entity(*entity)
+                                            .entry::<TaskQueue>()
+                                            .and_modify(|mut tq| tq.queue.clear());
+                                    }
+                                }
+                                assigned += 1;
+                            } else if let Ok(gt) =
+                                pickables.get(target_entity).map(|(_, gt, _, _)| gt)
+                            {
+                                commands
+                                    .entity(*entity)
+                                    .remove::<AttackTarget>()
+                                    .insert(MoveTarget(gt.translation()))
+                                    .insert(UnitState::Moving(gt.translation()))
+                                    .insert(TaskSource::Manual);
+                            }
                         }
                     }
-                } else if let Ok(gt) = pickables.get(target_entity).map(|(_, gt, _, _)| gt) {
-                    commands.entity(*entity)
-                        .remove::<AttackTarget>()
-                        .insert(MoveTarget(gt.translation()))
-                        .insert(UnitState::Moving(gt.translation()))
-                        .insert(TaskSource::Manual);
+                }
+            }
+            RClickAction::AssistBuild => {
+                let construction_pos = pickables
+                    .get(target_entity)
+                    .map(|(_, gt, _, _)| gt.translation());
+                for (entity, kind) in &units_vec {
+                    if *kind == EntityKind::Worker {
+                        if shift {
+                            commands.entity(*entity).entry::<TaskQueue>().and_modify(
+                                move |mut tq| {
+                                    tq.queue.push_back(QueuedTask::Build(target_entity));
+                                },
+                            );
+                        } else {
+                            commands
+                                .entity(*entity)
+                                .remove::<AttackTarget>()
+                                .remove::<MoveTarget>()
+                                .insert(UnitState::MovingToBuild(target_entity))
+                                .insert(TaskSource::Manual);
+                            commands
+                                .entity(*entity)
+                                .entry::<TaskQueue>()
+                                .and_modify(|mut tq| tq.queue.clear());
+                        }
+                    } else if let Ok(pos) = construction_pos {
+                        commands
+                            .entity(*entity)
+                            .remove::<AttackTarget>()
+                            .insert(MoveTarget(pos))
+                            .insert(UnitState::Moving(pos))
+                            .insert(TaskSource::Manual);
+                    }
+                }
+            }
+            RClickAction::GatherResource => {
+                for (entity, kind) in &units_vec {
+                    if *kind == EntityKind::Worker {
+                        if shift {
+                            commands.entity(*entity).entry::<TaskQueue>().and_modify(
+                                move |mut tq| {
+                                    tq.queue.push_back(QueuedTask::Gather(target_entity));
+                                },
+                            );
+                        } else {
+                            if let Ok(gt) = pickables.get(target_entity).map(|(_, gt, _, _)| gt) {
+                                commands
+                                    .entity(*entity)
+                                    .remove::<AttackTarget>()
+                                    .insert(MoveTarget(gt.translation()))
+                                    .insert(UnitState::Gathering(target_entity))
+                                    .insert(TaskSource::Manual);
+                                commands
+                                    .entity(*entity)
+                                    .entry::<TaskQueue>()
+                                    .and_modify(|mut tq| tq.queue.clear());
+                            }
+                        }
+                    } else if let Ok(gt) = pickables.get(target_entity).map(|(_, gt, _, _)| gt) {
+                        commands
+                            .entity(*entity)
+                            .remove::<AttackTarget>()
+                            .insert(MoveTarget(gt.translation()))
+                            .insert(UnitState::Moving(gt.translation()))
+                            .insert(TaskSource::Manual);
+                    }
+                }
+            }
+            RClickAction::MoveToAlly => {
+                // Move units toward the allied building
+                if let Ok(gt) = pickables.get(target_entity).map(|(_, gt, _, _)| gt) {
+                    let pos = gt.translation();
+                    let n = units_vec.len();
+                    let spacing = 1.5;
+                    let radius = if n > 1 {
+                        (spacing * n as f32 / std::f32::consts::TAU).max(1.0)
+                    } else {
+                        0.0
+                    };
+                    for (i, (entity, _kind)) in units_vec.iter().enumerate() {
+                        let offset = if n > 1 {
+                            let angle = i as f32 / n as f32 * std::f32::consts::TAU;
+                            Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius)
+                        } else {
+                            Vec3::ZERO
+                        };
+                        let dest = pos + offset;
+                        if shift {
+                            commands.entity(*entity).entry::<TaskQueue>().and_modify(
+                                move |mut tq| {
+                                    tq.queue.push_back(QueuedTask::Move(dest));
+                                },
+                            );
+                        } else {
+                            commands
+                                .entity(*entity)
+                                .remove::<AttackTarget>()
+                                .insert(MoveTarget(dest))
+                                .insert(UnitState::Moving(dest))
+                                .insert(TaskSource::Manual);
+                            commands
+                                .entity(*entity)
+                                .entry::<TaskQueue>()
+                                .and_modify(|mut tq| tq.queue.clear());
+                        }
+                    }
                 }
             }
         }
@@ -894,19 +1186,26 @@ fn handle_right_click_move(
                 for (entity, kind) in &units_vec {
                     if *kind == EntityKind::Worker {
                         if shift {
-                            commands.entity(*entity).entry::<TaskQueue>().and_modify(move |mut tq| {
-                                tq.queue.push_back(QueuedTask::Build(site_entity));
-                            });
+                            commands.entity(*entity).entry::<TaskQueue>().and_modify(
+                                move |mut tq| {
+                                    tq.queue.push_back(QueuedTask::Build(site_entity));
+                                },
+                            );
                         } else {
-                            commands.entity(*entity)
+                            commands
+                                .entity(*entity)
                                 .remove::<AttackTarget>()
                                 .remove::<MoveTarget>()
                                 .insert(UnitState::MovingToBuild(site_entity))
                                 .insert(TaskSource::Manual);
-                            commands.entity(*entity).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
+                            commands
+                                .entity(*entity)
+                                .entry::<TaskQueue>()
+                                .and_modify(|mut tq| tq.queue.clear());
                         }
                     } else {
-                        commands.entity(*entity)
+                        commands
+                            .entity(*entity)
                             .remove::<AttackTarget>()
                             .insert(MoveTarget(point))
                             .insert(UnitState::Moving(point))
@@ -919,16 +1218,23 @@ fn handle_right_click_move(
                 if n == 1 {
                     let (ent, _kind) = &units_vec[0];
                     if shift {
-                        commands.entity(*ent).entry::<TaskQueue>().and_modify(move |mut tq| {
-                            tq.queue.push_back(QueuedTask::Move(point));
-                        });
+                        commands
+                            .entity(*ent)
+                            .entry::<TaskQueue>()
+                            .and_modify(move |mut tq| {
+                                tq.queue.push_back(QueuedTask::Move(point));
+                            });
                     } else {
-                        commands.entity(*ent)
+                        commands
+                            .entity(*ent)
                             .remove::<AttackTarget>()
                             .insert(MoveTarget(point))
                             .insert(UnitState::Moving(point))
                             .insert(TaskSource::Manual);
-                        commands.entity(*ent).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
+                        commands
+                            .entity(*ent)
+                            .entry::<TaskQueue>()
+                            .and_modify(|mut tq| tq.queue.clear());
                     }
                 } else if n > 1 {
                     let spacing = 1.5;
@@ -938,16 +1244,22 @@ fn handle_right_click_move(
                         let offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
                         let dest = point + offset;
                         if shift {
-                            commands.entity(*entity).entry::<TaskQueue>().and_modify(move |mut tq| {
-                                tq.queue.push_back(QueuedTask::Move(dest));
-                            });
+                            commands.entity(*entity).entry::<TaskQueue>().and_modify(
+                                move |mut tq| {
+                                    tq.queue.push_back(QueuedTask::Move(dest));
+                                },
+                            );
                         } else {
-                            commands.entity(*entity)
+                            commands
+                                .entity(*entity)
                                 .remove::<AttackTarget>()
                                 .insert(MoveTarget(dest))
                                 .insert(UnitState::Moving(dest))
                                 .insert(TaskSource::Manual);
-                            commands.entity(*entity).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
+                            commands
+                                .entity(*entity)
+                                .entry::<TaskQueue>()
+                                .and_modify(|mut tq| tq.queue.clear());
                         }
                     }
                 }
@@ -956,12 +1268,12 @@ fn handle_right_click_move(
     }
 }
 
-
 /// Hotkey-based unit commands:
-/// - 'Alt' + `A` → enter attack-move mode (next left-click issues attack-move)
-/// - 'Alt' + `P` → enter patrol mode (next left-click issues patrol to position)
-/// - 'Alt' + `H` → hold position (instant, clears move/attack targets)
-/// - 'Alt' + `S` → stop (instant, clears all orders)
+/// - `A` → enter attack-move mode (next left-click issues attack-move)
+/// - `P` → enter patrol mode (next left-click issues patrol to position)
+/// - `H` → hold position (instant, clears move/attack targets)
+/// - `S` → stop (instant, clears all orders)
+/// - `X` → scuttle selected workers (instant self-destruct)
 /// - `Escape` → cancel command mode
 ///
 /// In attack-move/patrol mode, left-click on ground executes the command.
@@ -978,12 +1290,11 @@ fn handle_unit_command_hotkeys(
     ui_press: Res<UiPressActive>,
     placement: Res<BuildingPlacementState>,
 ) {
-    if placement.mode != PlacementMode::None { return; }
+    if placement.mode != PlacementMode::None {
+        return;
+    }
 
     let has_selected = selected_units.iter().any(|(_, _, f)| *f == active_player.0);
-
-    // Check if Alt is held (Modifier)
-    let alt_held = keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight);
 
     // Escape cancels command mode
     if keys.just_pressed(KeyCode::Escape) {
@@ -991,45 +1302,71 @@ fn handle_unit_command_hotkeys(
         return;
     }
 
-    // Only process hotkeys if Alt is held OR we are already in a command mode (e.g., waiting for click)
-    if has_selected && (alt_held || *cmd_mode != CommandMode::Normal) {
-
+    if has_selected {
         // --- 1. Instant Commands (Hold & Stop) ---
-        if alt_held && keys.just_pressed(KeyCode::KeyH) {
+        if keys.just_pressed(KeyCode::KeyH) {
             for (entity, _, faction) in &selected_units {
-                if *faction != active_player.0 { continue; }
-                commands.entity(entity)
+                if *faction != active_player.0 {
+                    continue;
+                }
+                commands
+                    .entity(entity)
                     .remove::<MoveTarget>()
                     .remove::<AttackTarget>()
                     .insert(UnitState::HoldPosition)
                     .insert(TaskSource::Manual);
-                commands.entity(entity).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
+                commands
+                    .entity(entity)
+                    .entry::<TaskQueue>()
+                    .and_modify(|mut tq| tq.queue.clear());
             }
             *cmd_mode = CommandMode::Normal;
             return;
         }
 
-        if alt_held && keys.just_pressed(KeyCode::KeyS) {
+        if keys.just_pressed(KeyCode::KeyX) {
             for (entity, _kind, faction) in &selected_units {
-                if *faction != active_player.0 { continue; }
-                commands.entity(entity)
+                if *faction != active_player.0 {
+                    continue;
+                }
+                commands
+                    .entity(entity)
                     .remove::<MoveTarget>()
                     .remove::<AttackTarget>()
                     .insert(UnitState::Idle)
                     .insert(TaskSource::Auto);
-                commands.entity(entity).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
+                commands
+                    .entity(entity)
+                    .entry::<TaskQueue>()
+                    .and_modify(|mut tq| tq.queue.clear());
             }
             *cmd_mode = CommandMode::Normal;
             return;
         }
 
-        // --- 2. Enter Command Modes ---
-        if alt_held && keys.just_pressed(KeyCode::KeyA) {
+        // --- 2. Stance Cycle (V) ---
+        if keys.just_pressed(KeyCode::KeyV) {
+            for (entity, _, faction) in &selected_units {
+                if *faction != active_player.0 {
+                    continue;
+                }
+                commands
+                    .entity(entity)
+                    .entry::<UnitStance>()
+                    .and_modify(|mut stance| {
+                        *stance = stance.cycle();
+                    });
+            }
+            return;
+        }
+
+        // --- 3. Enter Command Modes ---
+        if keys.just_pressed(KeyCode::KeyF) {
             *cmd_mode = CommandMode::AttackMove;
             return;
         }
 
-        if alt_held && keys.just_pressed(KeyCode::KeyP) {
+        if keys.just_pressed(KeyCode::KeyP) {
             *cmd_mode = CommandMode::Patrol;
             return;
         }
@@ -1041,16 +1378,29 @@ fn handle_unit_command_hotkeys(
         return;
     }
 
-    if ui_clicked.0 > 0 || ui_press.0 { return; }
+    if ui_clicked.0 > 0 || ui_press.0 {
+        return;
+    }
 
-    let Ok(window) = windows.single() else { return; };
-    let Some(cursor) = window.cursor_position() else { return; };
-    let Ok((camera, cam_gt)) = camera_q.single() else { return; };
-    let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else { return; };
-    let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) else { return; };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return;
+    };
+    let Ok((camera, cam_gt)) = camera_q.single() else {
+        return;
+    };
+    let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
+        return;
+    };
+    let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) else {
+        return;
+    };
     let point = ray.get_point(dist);
 
-    let units_vec: Vec<(Entity, EntityKind)> = selected_units.iter()
+    let units_vec: Vec<(Entity, EntityKind)> = selected_units
+        .iter()
         .filter(|(_, _, f)| **f == active_player.0)
         .map(|(e, k, _)| (e, *k))
         .collect();
@@ -1066,7 +1416,11 @@ fn handle_unit_command_hotkeys(
         CommandMode::AttackMove => {
             let n = units_vec.len();
             let spacing = 1.5;
-            let radius = if n > 1 { (spacing * n as f32 / std::f32::consts::TAU).max(1.0) } else { 0.0 };
+            let radius = if n > 1 {
+                (spacing * n as f32 / std::f32::consts::TAU).max(1.0)
+            } else {
+                0.0
+            };
             for (i, (entity, _kind)) in units_vec.iter().enumerate() {
                 let offset = if n > 1 {
                     let angle = i as f32 / n as f32 * std::f32::consts::TAU;
@@ -1076,32 +1430,49 @@ fn handle_unit_command_hotkeys(
                 };
                 let dest = point + offset;
                 if shift {
-                    commands.entity(*entity).entry::<TaskQueue>().and_modify(move |mut tq| {
-                        tq.queue.push_back(QueuedTask::AttackMove(dest));
-                    });
+                    commands
+                        .entity(*entity)
+                        .entry::<TaskQueue>()
+                        .and_modify(move |mut tq| {
+                            tq.queue.push_back(QueuedTask::AttackMove(dest));
+                        });
                 } else {
-                    commands.entity(*entity)
+                    commands
+                        .entity(*entity)
                         .remove::<AttackTarget>()
                         .insert(MoveTarget(dest))
                         .insert(UnitState::AttackMoving(dest))
                         .insert(TaskSource::Manual);
-                    commands.entity(*entity).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
+                    commands
+                        .entity(*entity)
+                        .entry::<TaskQueue>()
+                        .and_modify(|mut tq| tq.queue.clear());
                 }
             }
         }
         CommandMode::Patrol => {
             for (entity, _kind) in &units_vec {
                 if shift {
-                    commands.entity(*entity).entry::<TaskQueue>().and_modify(move |mut tq| {
-                        tq.queue.push_back(QueuedTask::Patrol(point));
-                    });
+                    commands
+                        .entity(*entity)
+                        .entry::<TaskQueue>()
+                        .and_modify(move |mut tq| {
+                            tq.queue.push_back(QueuedTask::Patrol(point));
+                        });
                 } else {
-                    commands.entity(*entity)
+                    commands
+                        .entity(*entity)
                         .remove::<AttackTarget>()
                         .insert(MoveTarget(point))
-                        .insert(UnitState::Patrolling { target: point, origin: point })
+                        .insert(UnitState::Patrolling {
+                            target: point,
+                            origin: point,
+                        })
                         .insert(TaskSource::Manual);
-                    commands.entity(*entity).entry::<TaskQueue>().and_modify(|mut tq| tq.queue.clear());
+                    commands
+                        .entity(*entity)
+                        .entry::<TaskQueue>()
+                        .and_modify(|mut tq| tq.queue.clear());
                 }
             }
         }

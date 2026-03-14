@@ -1,7 +1,7 @@
+use bevy::ecs::message::MessageReader;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use bevy::ecs::message::MessageReader;
 
 use crate::components::{AppState, CursorOverUi, DragState, GameSetupConfig, MapSeed, RtsCamera};
 
@@ -24,7 +24,10 @@ pub struct CameraPlugin;
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CursorOverUi>()
-            .add_systems(OnEnter(AppState::InGame), spawn_camera.after(crate::ground::spawn_ground))
+            .add_systems(
+                OnEnter(AppState::InGame),
+                spawn_camera.after(crate::ground::spawn_ground),
+            )
             .add_systems(
                 Update,
                 (
@@ -89,10 +92,7 @@ fn spawn_camera(mut commands: Commands, config: Res<GameSetupConfig>, map_seed: 
     ));
 }
 
-fn camera_pan_input(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut query: Query<&mut RtsCamera>,
-) {
+fn camera_pan_input(keyboard: Res<ButtonInput<KeyCode>>, mut query: Query<&mut RtsCamera>) {
     let Ok(mut cam) = query.single_mut() else {
         return;
     };
@@ -227,10 +227,7 @@ fn camera_rotate_input(
     }
 }
 
-fn camera_smooth_update(
-    time: Res<Time>,
-    mut query: Query<(&mut RtsCamera, &mut Transform)>,
-) {
+fn camera_smooth_update(time: Res<Time>, mut query: Query<(&mut RtsCamera, &mut Transform)>) {
     let Ok((mut cam, mut transform)) = query.single_mut() else {
         return;
     };
@@ -271,11 +268,7 @@ fn camera_smooth_update(
     // e) Write Transform using pitch
     let h_dist = cam.distance * cam.pitch.cos();
     let height = cam.distance * cam.pitch.sin();
-    let offset = Vec3::new(
-        cam.angle.sin() * h_dist,
-        height,
-        cam.angle.cos() * h_dist,
-    );
+    let offset = Vec3::new(cam.angle.sin() * h_dist, height, cam.angle.cos() * h_dist);
     transform.translation = cam.pivot + offset;
     transform.look_at(cam.pivot, Vec3::Y);
 }

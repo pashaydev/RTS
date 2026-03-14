@@ -25,7 +25,11 @@ pub fn update_tech_tree(
         return;
     }
 
-    let Some(content) = super::widget_framework::find_widget_content(WidgetId::TechTree, &widget_q, &content_q) else { return; };
+    let Some(content) =
+        super::widget_framework::find_widget_content(WidgetId::TechTree, &widget_q, &content_q)
+    else {
+        return;
+    };
 
     // Clear existing
     for entity in &existing {
@@ -80,9 +84,12 @@ pub fn update_tech_tree(
 
         let row = commands
             .spawn(Node {
+                width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
+                flex_wrap: FlexWrap::Wrap,
                 column_gap: Val::Px(4.0),
+                row_gap: Val::Px(2.0),
                 padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
                 margin: UiRect::left(Val::Px(indent)),
                 border_radius: BorderRadius::all(Val::Px(3.0)),
@@ -122,7 +129,10 @@ pub fn update_tech_tree(
         let name = commands
             .spawn((
                 Text::new(kind.display_name()),
-                TextFont { font_size: theme::FONT_CAPTION, ..default() },
+                TextFont {
+                    font_size: theme::FONT_CAPTION,
+                    ..default()
+                },
                 TextColor(text_color),
             ))
             .id();
@@ -203,7 +213,10 @@ pub fn update_tech_tree(
         let text = commands
             .spawn((
                 Text::new(label),
-                TextFont { font_size: theme::FONT_TINY, ..default() },
+                TextFont {
+                    font_size: theme::FONT_TINY,
+                    ..default()
+                },
                 TextColor(theme::TEXT_SECONDARY),
             ))
             .id();

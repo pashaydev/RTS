@@ -1,6 +1,6 @@
+use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
@@ -36,7 +36,12 @@ pub struct MinimapPlugin;
 impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MinimapInteraction>()
-            .add_systems(OnEnter(AppState::InGame), setup_minimap.after(crate::ground::spawn_ground).after(crate::ui::spawn_hud))
+            .add_systems(
+                OnEnter(AppState::InGame),
+                setup_minimap
+                    .after(crate::ground::spawn_ground)
+                    .after(crate::ui::spawn_hud),
+            )
             .add_systems(
                 Update,
                 (
@@ -64,10 +69,7 @@ fn biome_color(biome: Biome) -> [u8; 4] {
 fn world_to_minimap(wx: f32, wz: f32) -> (usize, usize) {
     let px = ((wx + HALF_MAP) / MAP_SIZE * MINIMAP_TEX_SIZE as f32) as usize;
     let py = ((wz + HALF_MAP) / MAP_SIZE * MINIMAP_TEX_SIZE as f32) as usize;
-    (
-        px.min(MINIMAP_TEX_SIZE - 1),
-        py.min(MINIMAP_TEX_SIZE - 1),
-    )
+    (px.min(MINIMAP_TEX_SIZE - 1), py.min(MINIMAP_TEX_SIZE - 1))
 }
 
 fn minimap_to_world(px: f32, py: f32) -> (f32, f32) {
@@ -82,7 +84,11 @@ fn draw_dot(buf: &mut [[u8; 4]], cx: usize, cy: usize, radius: usize, color: [u8
         for dx in -r..=r {
             let px = cx as isize + dx;
             let py = cy as isize + dy;
-            if px >= 0 && py >= 0 && (px as usize) < MINIMAP_TEX_SIZE && (py as usize) < MINIMAP_TEX_SIZE {
+            if px >= 0
+                && py >= 0
+                && (px as usize) < MINIMAP_TEX_SIZE
+                && (py as usize) < MINIMAP_TEX_SIZE
+            {
                 buf[py as usize * MINIMAP_TEX_SIZE + px as usize] = color;
             }
         }
@@ -99,7 +105,11 @@ fn draw_line(buf: &mut [[u8; 4]], x0: i32, y0: i32, x1: i32, y1: i32, color: [u8
     let mut cy = y0;
 
     loop {
-        if cx >= 0 && cy >= 0 && (cx as usize) < MINIMAP_TEX_SIZE && (cy as usize) < MINIMAP_TEX_SIZE {
+        if cx >= 0
+            && cy >= 0
+            && (cx as usize) < MINIMAP_TEX_SIZE
+            && (cy as usize) < MINIMAP_TEX_SIZE
+        {
             buf[cy as usize * MINIMAP_TEX_SIZE + cx as usize] = color;
         }
         if cx == x1 && cy == y1 {
@@ -380,10 +390,7 @@ fn update_minimap_texture(
 
 fn handle_minimap_click(
     mouse: Res<ButtonInput<MouseButton>>,
-    minimap_nodes: Query<
-        (&Interaction, &RelativeCursorPosition),
-        With<MinimapNode>,
-    >,
+    minimap_nodes: Query<(&Interaction, &RelativeCursorPosition), With<MinimapNode>>,
     mut camera_q: Query<&mut RtsCamera>,
     mut minimap_interaction: ResMut<MinimapInteraction>,
 ) {

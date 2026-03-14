@@ -45,16 +45,21 @@ pub fn update_ally_notifications(
         }
     }
 
-    let visible_count = existing_toasts.iter().filter(|(_, t)| elapsed - t.spawn_time < 5.0).count();
+    let visible_count = existing_toasts
+        .iter()
+        .filter(|(_, t)| elapsed - t.spawn_time < 5.0)
+        .count();
 
     notifications.active.retain(|n| elapsed - n.timestamp < 5.0);
 
-    let Ok(container) = container_q.single() else { return; };
+    let Ok(container) = container_q.single() else {
+        return;
+    };
 
     for notif in &notifications.active {
-        let already_spawned = existing_toasts.iter().any(|(_, t)| {
-            (t.spawn_time - notif.timestamp).abs() < 0.01
-        });
+        let already_spawned = existing_toasts
+            .iter()
+            .any(|(_, t)| (t.spawn_time - notif.timestamp).abs() < 0.01);
         if already_spawned || visible_count >= 3 {
             continue;
         }
@@ -63,32 +68,33 @@ pub fn update_ally_notifications(
         let bg_color = Color::srgba(0.1, 0.1, 0.15, 0.9);
 
         commands.entity(container).with_children(|parent| {
-            parent.spawn((
-                AllyNotificationToast {
-                    spawn_time: notif.timestamp,
-                    world_pos: notif.world_pos,
-                },
-                Node {
-                    padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
-                    border_radius: BorderRadius::all(Val::Px(6.0)),
-                    margin: UiRect::left(Val::Px(-150.0)),
-                    min_width: Val::Px(200.0),
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                },
-                BackgroundColor(bg_color),
-                BorderColor::all(color),
-            ))
-            .with_children(|toast| {
-                toast.spawn((
-                    Text::new(notif.message.clone()),
-                    TextFont {
-                        font_size: theme::FONT_MEDIUM,
+            parent
+                .spawn((
+                    AllyNotificationToast {
+                        spawn_time: notif.timestamp,
+                        world_pos: notif.world_pos,
+                    },
+                    Node {
+                        padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
+                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        margin: UiRect::left(Val::Px(-150.0)),
+                        min_width: Val::Px(200.0),
+                        justify_content: JustifyContent::Center,
                         ..default()
                     },
-                    TextColor(color),
-                ));
-            });
+                    BackgroundColor(bg_color),
+                    BorderColor::all(color),
+                ))
+                .with_children(|toast| {
+                    toast.spawn((
+                        Text::new(notif.message.clone()),
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
+                        TextColor(color),
+                    ));
+                });
         });
     }
 }
@@ -104,8 +110,12 @@ pub fn handle_notification_click(
         return;
     }
 
-    let Ok(window) = windows.single() else { return; };
-    let Some(cursor_pos) = window.cursor_position() else { return; };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let Some(cursor_pos) = window.cursor_position() else {
+        return;
+    };
 
     for (entity, toast, _node, _gtf) in toasts_q.iter() {
         if let Some(world_pos) = toast.world_pos {

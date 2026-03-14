@@ -43,7 +43,11 @@ pub fn update_group_hotkeys_widget(
         return;
     }
 
-    let Some(content) = super::widget_framework::find_widget_content(WidgetId::GroupHotkeys, &widget_q, &content_q) else { return; };
+    let Some(content) =
+        super::widget_framework::find_widget_content(WidgetId::GroupHotkeys, &widget_q, &content_q)
+    else {
+        return;
+    };
 
     // Clear existing
     for entity in &existing {
@@ -66,7 +70,11 @@ pub fn update_group_hotkeys_widget(
 
     for (i, group) in control_groups.groups.iter().enumerate() {
         // Filter to alive entities
-        let alive: Vec<Entity> = group.iter().copied().filter(|e| unit_kinds.get(*e).is_ok()).collect();
+        let alive: Vec<Entity> = group
+            .iter()
+            .copied()
+            .filter(|e| unit_kinds.get(*e).is_ok())
+            .collect();
 
         let is_empty = alive.is_empty();
         let bg_color = if is_empty {
@@ -80,8 +88,9 @@ pub fn update_group_hotkeys_widget(
                 GroupSlotButton(i),
                 Button,
                 Node {
-                    width: Val::Px(44.0),
-                    height: Val::Px(36.0),
+                    width: Val::Percent(31.0),
+                    min_width: Val::Px(38.0),
+                    min_height: Val::Px(34.0),
                     flex_direction: FlexDirection::Column,
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
@@ -95,11 +104,18 @@ pub fn update_group_hotkeys_widget(
         commands.entity(container).add_child(slot);
 
         // Group number
-        let num_color = if is_empty { theme::TEXT_DISABLED } else { theme::TEXT_PRIMARY };
+        let num_color = if is_empty {
+            theme::TEXT_DISABLED
+        } else {
+            theme::TEXT_PRIMARY
+        };
         let num = commands
             .spawn((
                 Text::new(format!("{}", i + 1)),
-                TextFont { font_size: theme::FONT_SMALL, ..default() },
+                TextFont {
+                    font_size: theme::FONT_SMALL,
+                    ..default()
+                },
                 TextColor(num_color),
             ))
             .id();
@@ -135,7 +151,10 @@ pub fn update_group_hotkeys_widget(
             let count_text = commands
                 .spawn((
                     Text::new(format!("{}", alive.len())),
-                    TextFont { font_size: theme::FONT_TINY, ..default() },
+                    TextFont {
+                        font_size: theme::FONT_TINY,
+                        ..default()
+                    },
                     TextColor(theme::TEXT_SECONDARY),
                 ))
                 .id();
@@ -153,9 +172,15 @@ pub fn handle_control_group_keys(
     mut ui_press: ResMut<UiPressActive>,
 ) {
     let digit_keys = [
-        KeyCode::Digit1, KeyCode::Digit2, KeyCode::Digit3,
-        KeyCode::Digit4, KeyCode::Digit5, KeyCode::Digit6,
-        KeyCode::Digit7, KeyCode::Digit8, KeyCode::Digit9,
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
     ];
 
     let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);

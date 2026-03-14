@@ -72,18 +72,37 @@ pub enum EntityCategory {
 impl EntityKind {
     pub fn category(self) -> EntityCategory {
         match self {
-            Self::Worker | Self::Soldier | Self::Archer | Self::Tank
-            | Self::Knight | Self::Mage | Self::Priest | Self::Cavalry => EntityCategory::Unit,
+            Self::Worker
+            | Self::Soldier
+            | Self::Archer
+            | Self::Tank
+            | Self::Knight
+            | Self::Mage
+            | Self::Priest
+            | Self::Cavalry => EntityCategory::Unit,
 
             Self::Catapult | Self::BatteringRam => EntityCategory::Siege,
 
-            Self::Base | Self::Barracks | Self::Workshop | Self::Tower
-            | Self::WatchTower | Self::GuardTower | Self::BallistaTower
-            | Self::BombardTower | Self::Outpost | Self::Gatehouse
-            | Self::WallSegment | Self::WallPost
-            | Self::Storage | Self::MageTower | Self::Temple
-            | Self::Stable | Self::SiegeWorks
-            | Self::Sawmill | Self::Mine | Self::OilRig => EntityCategory::Building,
+            Self::Base
+            | Self::Barracks
+            | Self::Workshop
+            | Self::Tower
+            | Self::WatchTower
+            | Self::GuardTower
+            | Self::BallistaTower
+            | Self::BombardTower
+            | Self::Outpost
+            | Self::Gatehouse
+            | Self::WallSegment
+            | Self::WallPost
+            | Self::Storage
+            | Self::MageTower
+            | Self::Temple
+            | Self::Stable
+            | Self::SiegeWorks
+            | Self::Sawmill
+            | Self::Mine
+            | Self::OilRig => EntityCategory::Building,
 
             Self::Goblin | Self::Skeleton | Self::Orc | Self::Demon => EntityCategory::Mob,
 
@@ -134,18 +153,43 @@ impl EntityKind {
     }
 
     pub const ALL: &'static [EntityKind] = &[
-        EntityKind::Worker, EntityKind::Soldier, EntityKind::Archer, EntityKind::Tank,
-        EntityKind::Knight, EntityKind::Mage, EntityKind::Priest, EntityKind::Cavalry,
-        EntityKind::Catapult, EntityKind::BatteringRam,
-        EntityKind::Base, EntityKind::Barracks, EntityKind::Workshop, EntityKind::Tower,
-        EntityKind::WatchTower, EntityKind::GuardTower, EntityKind::BallistaTower,
-        EntityKind::BombardTower, EntityKind::Outpost, EntityKind::Gatehouse,
-        EntityKind::WallSegment, EntityKind::WallPost,
-        EntityKind::Storage, EntityKind::MageTower, EntityKind::Temple, EntityKind::Stable,
+        EntityKind::Worker,
+        EntityKind::Soldier,
+        EntityKind::Archer,
+        EntityKind::Tank,
+        EntityKind::Knight,
+        EntityKind::Mage,
+        EntityKind::Priest,
+        EntityKind::Cavalry,
+        EntityKind::Catapult,
+        EntityKind::BatteringRam,
+        EntityKind::Base,
+        EntityKind::Barracks,
+        EntityKind::Workshop,
+        EntityKind::Tower,
+        EntityKind::WatchTower,
+        EntityKind::GuardTower,
+        EntityKind::BallistaTower,
+        EntityKind::BombardTower,
+        EntityKind::Outpost,
+        EntityKind::Gatehouse,
+        EntityKind::WallSegment,
+        EntityKind::WallPost,
+        EntityKind::Storage,
+        EntityKind::MageTower,
+        EntityKind::Temple,
+        EntityKind::Stable,
         EntityKind::SiegeWorks,
-        EntityKind::Sawmill, EntityKind::Mine, EntityKind::OilRig,
-        EntityKind::Goblin, EntityKind::Skeleton, EntityKind::Orc, EntityKind::Demon,
-        EntityKind::SkeletonMinion, EntityKind::SpiritWolf, EntityKind::FireElemental,
+        EntityKind::Sawmill,
+        EntityKind::Mine,
+        EntityKind::OilRig,
+        EntityKind::Goblin,
+        EntityKind::Skeleton,
+        EntityKind::Orc,
+        EntityKind::Demon,
+        EntityKind::SkeletonMinion,
+        EntityKind::SpiritWolf,
+        EntityKind::FireElemental,
     ];
 
     pub fn description(self) -> &'static str {
@@ -196,7 +240,11 @@ impl EntityKind {
     pub fn uses_tower_auto_attack(self) -> bool {
         matches!(
             self,
-            Self::Tower | Self::WatchTower | Self::GuardTower | Self::BallistaTower | Self::BombardTower
+            Self::Tower
+                | Self::WatchTower
+                | Self::GuardTower
+                | Self::BallistaTower
+                | Self::BombardTower
         )
     }
 }
@@ -250,11 +298,16 @@ impl ResourceCost {
     }
 
     /// Check if stored + carried resources are enough to afford this cost.
-    pub fn can_afford_with_carried(&self, stored: &PlayerResources, carried: &PlayerResources) -> bool {
+    pub fn can_afford_with_carried(
+        &self,
+        stored: &PlayerResources,
+        carried: &PlayerResources,
+    ) -> bool {
         let costs = [self.wood, self.copper, self.iron, self.gold, self.oil];
-        ResourceType::ALL.iter().enumerate().all(|(i, rt)| {
-            stored.get(*rt) + carried.get(*rt) >= costs[i]
-        })
+        ResourceType::ALL
+            .iter()
+            .enumerate()
+            .all(|(i, rt)| stored.get(*rt) + carried.get(*rt) >= costs[i])
     }
 
     /// Deduct from stored first, return the deficit that must come from carried workers.
@@ -267,16 +320,32 @@ impl ResourceCost {
             deficits[i] = costs[i].saturating_sub(have);
             stored.amounts[rt.index()] = have.saturating_sub(costs[i]);
         }
-        (deficits[0], deficits[1], deficits[2], deficits[3], deficits[4])
+        (
+            deficits[0],
+            deficits[1],
+            deficits[2],
+            deficits[3],
+            deficits[4],
+        )
     }
 
     pub fn cost_entries(&self) -> Vec<(ResourceType, u32)> {
         let mut entries = Vec::new();
-        if self.wood > 0 { entries.push((ResourceType::Wood, self.wood)); }
-        if self.copper > 0 { entries.push((ResourceType::Copper, self.copper)); }
-        if self.iron > 0 { entries.push((ResourceType::Iron, self.iron)); }
-        if self.gold > 0 { entries.push((ResourceType::Gold, self.gold)); }
-        if self.oil > 0 { entries.push((ResourceType::Oil, self.oil)); }
+        if self.wood > 0 {
+            entries.push((ResourceType::Wood, self.wood));
+        }
+        if self.copper > 0 {
+            entries.push((ResourceType::Copper, self.copper));
+        }
+        if self.iron > 0 {
+            entries.push((ResourceType::Iron, self.iron));
+        }
+        if self.gold > 0 {
+            entries.push((ResourceType::Gold, self.gold));
+        }
+        if self.oil > 0 {
+            entries.push((ResourceType::Oil, self.oil));
+        }
         entries
     }
 }
@@ -294,11 +363,23 @@ pub enum LevelBonus {
     None,
     VisionBoost(f32),
     TrainTimeMultiplier(f32),
-    TrainedStatBoost { hp_mult: f32, dmg_mult: f32 },
-    RangeAndDamage { range_boost: f32, damage_boost: f32 },
+    TrainedStatBoost {
+        hp_mult: f32,
+        dmg_mult: f32,
+    },
+    RangeAndDamage {
+        range_boost: f32,
+        damage_boost: f32,
+    },
     CooldownMultiplier(f32),
-    GatherAura { speed_bonus: f32, range: f32 },
-    HealAura { heal_per_sec: f32, range: f32 },
+    GatherAura {
+        speed_bonus: f32,
+        range: f32,
+    },
+    HealAura {
+        heal_per_sec: f32,
+        range: f32,
+    },
     UnlocksTraining(Vec<EntityKind>),
     ProcessorUpgrade {
         harvest_rate_boost: f32,
@@ -348,7 +429,9 @@ impl MeshKind {
         let r = match *self {
             MeshKind::Capsule { radius, length } => length / 2.0 + radius,
             MeshKind::Cuboid { x, y, z } => (x * x + y * y + z * z).sqrt() / 2.0,
-            MeshKind::Cylinder { radius, height } => (radius * radius + (height / 2.0).powi(2)).sqrt(),
+            MeshKind::Cylinder { radius, height } => {
+                (radius * radius + (height / 2.0).powi(2)).sqrt()
+            }
             MeshKind::GltfScene { pick_radius } => return pick_radius,
             MeshKind::GltfCharacter { pick_radius } => return pick_radius,
         };
@@ -357,7 +440,10 @@ impl MeshKind {
     }
 
     pub fn is_gltf(&self) -> bool {
-        matches!(self, MeshKind::GltfScene { .. } | MeshKind::GltfCharacter { .. })
+        matches!(
+            self,
+            MeshKind::GltfScene { .. } | MeshKind::GltfCharacter { .. }
+        )
     }
 
     pub fn is_gltf_character(&self) -> bool {
@@ -477,9 +563,9 @@ pub struct BlueprintRegistry {
 
 impl BlueprintRegistry {
     pub fn get(&self, kind: EntityKind) -> &Blueprint {
-        self.blueprints.get(&kind).unwrap_or_else(|| {
-            panic!("No blueprint registered for {:?}", kind)
-        })
+        self.blueprints
+            .get(&kind)
+            .unwrap_or_else(|| panic!("No blueprint registered for {:?}", kind))
     }
 
     /// All building EntityKinds that are currently defined, in order.
@@ -503,7 +589,11 @@ impl BlueprintRegistry {
             EntityKind::Stable,
             EntityKind::SiegeWorks,
         ];
-        order.iter().copied().filter(|k| self.blueprints.contains_key(k)).collect()
+        order
+            .iter()
+            .copied()
+            .filter(|k| self.blueprints.contains_key(k))
+            .collect()
     }
 }
 
@@ -524,1198 +614,2156 @@ pub fn build_registry() -> BlueprintRegistry {
 
     // ── Player Units ──
 
-    blueprints.insert(EntityKind::Worker, Blueprint {
-        kind: EntityKind::Worker,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 100.0, damage: 3.0, attack_range: 1.5, attack_cooldown_secs: 1.5,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 5.0, y_offset: 0.8 }),
-        gathering: Some(GatheringStats { gather_speed: 5.0, carry_weight_capacity: 20.0 }),
-        vision: Some(VisionStats { range: 15.0 }),
-        cost: ResourceCost { wood: 30, ..Default::default() },
-        train_time_secs: 5.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
-            color: Color::srgb(0.9, 0.8, 0.2),
-            selected_color: Color::srgb(1.0, 1.0, 0.4),
-            selected_emissive: LinearRgba::new(0.3, 0.3, 0.0, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Worker,
+        Blueprint {
+            kind: EntityKind::Worker,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 115.0,
+                damage: 6.0,
+                attack_range: 1.8,
+                attack_cooldown_secs: 1.2,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 5.0,
+                y_offset: 0.8,
+            }),
+            gathering: Some(GatheringStats {
+                gather_speed: 5.0,
+                carry_weight_capacity: 20.0,
+            }),
+            vision: Some(VisionStats { range: 15.0 }),
+            cost: ResourceCost {
+                wood: 30,
+                ..Default::default()
+            },
+            train_time_secs: 5.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                color: Color::srgb(0.9, 0.8, 0.2),
+                selected_color: Color::srgb(1.0, 1.0, 0.4),
+                selected_emissive: LinearRgba::new(0.3, 0.3, 0.0, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Soldier, Blueprint {
-        kind: EntityKind::Soldier,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 100.0, damage: 12.0, attack_range: 2.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 4.5, y_offset: 0.9 }),
-        gathering: None,
-        vision: Some(VisionStats { range: 12.0 }),
-        cost: ResourceCost { wood: 10, copper: 20, iron: 10, ..Default::default() },
-        train_time_secs: 8.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
-            color: Color::srgb(0.8, 0.15, 0.15),
-            selected_color: Color::srgb(1.0, 0.3, 0.3),
-            selected_emissive: LinearRgba::new(0.3, 0.05, 0.05, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Soldier,
+        Blueprint {
+            kind: EntityKind::Soldier,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 100.0,
+                damage: 12.0,
+                attack_range: 2.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 4.5,
+                y_offset: 0.9,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 12.0 }),
+            cost: ResourceCost {
+                wood: 10,
+                copper: 20,
+                iron: 10,
+                ..Default::default()
+            },
+            train_time_secs: 8.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                color: Color::srgb(0.8, 0.15, 0.15),
+                selected_color: Color::srgb(1.0, 0.3, 0.3),
+                selected_emissive: LinearRgba::new(0.3, 0.05, 0.05, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![UpgradePath {
+                target: EntityKind::Knight,
+                cost: ResourceCost {
+                    iron: 30,
+                    gold: 20,
+                    ..Default::default()
+                },
+                time_secs: 12.0,
+                requires_building: Some(EntityKind::Stable),
+            }],
         },
-        children: vec![], abilities: vec![],
-        upgrades: vec![UpgradePath {
-            target: EntityKind::Knight,
-            cost: ResourceCost { iron: 30, gold: 20, ..Default::default() },
-            time_secs: 12.0,
-            requires_building: Some(EntityKind::Stable),
-        }],
-    });
+    );
 
-    blueprints.insert(EntityKind::Archer, Blueprint {
-        kind: EntityKind::Archer,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 100.0, damage: 8.0, attack_range: 12.0, attack_cooldown_secs: 1.5,
-            aggro_range: None, is_ranged: true, projectile_speed: Some(15.0),
-        }),
-        movement: Some(MovementStats { speed: 5.5, y_offset: 0.75 }),
-        gathering: None,
-        vision: Some(VisionStats { range: 18.0 }),
-        cost: ResourceCost { wood: 20, copper: 10, iron: 5, ..Default::default() },
-        train_time_secs: 7.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
-            color: Color::srgb(0.15, 0.7, 0.2),
-            selected_color: Color::srgb(0.3, 1.0, 0.4),
-            selected_emissive: LinearRgba::new(0.05, 0.3, 0.05, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Archer,
+        Blueprint {
+            kind: EntityKind::Archer,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 100.0,
+                damage: 8.0,
+                attack_range: 12.0,
+                attack_cooldown_secs: 1.5,
+                aggro_range: None,
+                is_ranged: true,
+                projectile_speed: Some(15.0),
+            }),
+            movement: Some(MovementStats {
+                speed: 5.5,
+                y_offset: 0.75,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 18.0 }),
+            cost: ResourceCost {
+                wood: 20,
+                copper: 10,
+                iron: 5,
+                ..Default::default()
+            },
+            train_time_secs: 7.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                color: Color::srgb(0.15, 0.7, 0.2),
+                selected_color: Color::srgb(0.3, 1.0, 0.4),
+                selected_emissive: LinearRgba::new(0.05, 0.3, 0.05, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Tank, Blueprint {
-        kind: EntityKind::Tank,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 100.0, damage: 18.0, attack_range: 2.5, attack_cooldown_secs: 2.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 3.0, y_offset: 1.25 }),
-        gathering: None,
-        vision: Some(VisionStats { range: 10.0 }),
-        cost: ResourceCost { copper: 30, iron: 40, gold: 10, oil: 5, ..Default::default() },
-        train_time_secs: 15.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
-            color: Color::srgb(0.35, 0.35, 0.4),
-            selected_color: Color::srgb(0.6, 0.6, 0.65),
-            selected_emissive: LinearRgba::new(0.1, 0.1, 0.12, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Tank,
+        Blueprint {
+            kind: EntityKind::Tank,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 100.0,
+                damage: 18.0,
+                attack_range: 2.5,
+                attack_cooldown_secs: 2.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 3.0,
+                y_offset: 1.25,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 10.0 }),
+            cost: ResourceCost {
+                copper: 30,
+                iron: 40,
+                gold: 10,
+                oil: 5,
+                ..Default::default()
+            },
+            train_time_secs: 15.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
+                color: Color::srgb(0.35, 0.35, 0.4),
+                selected_color: Color::srgb(0.6, 0.6, 0.65),
+                selected_emissive: LinearRgba::new(0.1, 0.1, 0.12, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Knight, Blueprint {
-        kind: EntityKind::Knight,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 200.0, damage: 18.0, attack_range: 2.5, attack_cooldown_secs: 0.8,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 6.0, y_offset: 1.2 }),
-        gathering: None,
-        vision: Some(VisionStats { range: 14.0 }),
-        cost: ResourceCost { wood: 10, copper: 20, iron: 40, gold: 20, ..Default::default() },
-        train_time_secs: 12.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
-            color: Color::srgb(0.7, 0.7, 0.75),
-            selected_color: Color::srgb(0.9, 0.9, 0.95),
-            selected_emissive: LinearRgba::new(0.2, 0.2, 0.25, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Knight,
+        Blueprint {
+            kind: EntityKind::Knight,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 200.0,
+                damage: 18.0,
+                attack_range: 2.5,
+                attack_cooldown_secs: 0.8,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 6.0,
+                y_offset: 1.2,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 14.0 }),
+            cost: ResourceCost {
+                wood: 10,
+                copper: 20,
+                iron: 40,
+                gold: 20,
+                ..Default::default()
+            },
+            train_time_secs: 12.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
+                color: Color::srgb(0.7, 0.7, 0.75),
+                selected_color: Color::srgb(0.9, 0.9, 0.95),
+                selected_emissive: LinearRgba::new(0.2, 0.2, 0.25, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![
+                AbilitySlot {
+                    id: AbilityId::Charge,
+                    cooldown_secs: 15.0,
+                    mana_cost: 0.0,
+                    range: 8.0,
+                    display_name: "Charge",
+                },
+                AbilitySlot {
+                    id: AbilityId::ShieldBash,
+                    cooldown_secs: 8.0,
+                    mana_cost: 0.0,
+                    range: 2.5,
+                    display_name: "Shield Bash",
+                },
+            ],
+            upgrades: vec![],
         },
-        children: vec![],
-        abilities: vec![
-            AbilitySlot { id: AbilityId::Charge, cooldown_secs: 15.0, mana_cost: 0.0, range: 8.0, display_name: "Charge" },
-            AbilitySlot { id: AbilityId::ShieldBash, cooldown_secs: 8.0, mana_cost: 0.0, range: 2.5, display_name: "Shield Bash" },
-        ],
-        upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Mage, Blueprint {
-        kind: EntityKind::Mage,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 70.0, damage: 15.0, attack_range: 14.0, attack_cooldown_secs: 2.0,
-            aggro_range: None, is_ranged: true, projectile_speed: Some(12.0),
-        }),
-        movement: Some(MovementStats { speed: 4.0, y_offset: 0.8 }),
-        gathering: None,
-        vision: Some(VisionStats { range: 20.0 }),
-        cost: ResourceCost { wood: 10, gold: 40, ..Default::default() },
-        train_time_secs: 15.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
-            color: Color::srgb(0.3, 0.2, 0.7),
-            selected_color: Color::srgb(0.5, 0.4, 1.0),
-            selected_emissive: LinearRgba::new(0.1, 0.05, 0.3, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Mage,
+        Blueprint {
+            kind: EntityKind::Mage,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 70.0,
+                damage: 15.0,
+                attack_range: 14.0,
+                attack_cooldown_secs: 2.0,
+                aggro_range: None,
+                is_ranged: true,
+                projectile_speed: Some(12.0),
+            }),
+            movement: Some(MovementStats {
+                speed: 4.0,
+                y_offset: 0.8,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 20.0 }),
+            cost: ResourceCost {
+                wood: 10,
+                gold: 40,
+                ..Default::default()
+            },
+            train_time_secs: 15.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                color: Color::srgb(0.3, 0.2, 0.7),
+                selected_color: Color::srgb(0.5, 0.4, 1.0),
+                selected_emissive: LinearRgba::new(0.1, 0.05, 0.3, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![
+                AbilitySlot {
+                    id: AbilityId::Fireball,
+                    cooldown_secs: 10.0,
+                    mana_cost: 30.0,
+                    range: 16.0,
+                    display_name: "Fireball",
+                },
+                AbilitySlot {
+                    id: AbilityId::FrostNova,
+                    cooldown_secs: 20.0,
+                    mana_cost: 50.0,
+                    range: 8.0,
+                    display_name: "Frost Nova",
+                },
+            ],
+            upgrades: vec![],
         },
-        children: vec![],
-        abilities: vec![
-            AbilitySlot { id: AbilityId::Fireball, cooldown_secs: 10.0, mana_cost: 30.0, range: 16.0, display_name: "Fireball" },
-            AbilitySlot { id: AbilityId::FrostNova, cooldown_secs: 20.0, mana_cost: 50.0, range: 8.0, display_name: "Frost Nova" },
-        ],
-        upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Priest, Blueprint {
-        kind: EntityKind::Priest,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 80.0, damage: 6.0, attack_range: 10.0, attack_cooldown_secs: 2.0,
-            aggro_range: None, is_ranged: true, projectile_speed: Some(10.0),
-        }),
-        movement: Some(MovementStats { speed: 4.5, y_offset: 0.8 }),
-        gathering: None,
-        vision: Some(VisionStats { range: 16.0 }),
-        cost: ResourceCost { wood: 15, gold: 30, ..Default::default() },
-        train_time_secs: 12.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
-            color: Color::srgb(0.9, 0.85, 0.6),
-            selected_color: Color::srgb(1.0, 0.95, 0.7),
-            selected_emissive: LinearRgba::new(0.3, 0.28, 0.1, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Priest,
+        Blueprint {
+            kind: EntityKind::Priest,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 80.0,
+                damage: 6.0,
+                attack_range: 10.0,
+                attack_cooldown_secs: 2.0,
+                aggro_range: None,
+                is_ranged: true,
+                projectile_speed: Some(10.0),
+            }),
+            movement: Some(MovementStats {
+                speed: 4.5,
+                y_offset: 0.8,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 16.0 }),
+            cost: ResourceCost {
+                wood: 15,
+                gold: 30,
+                ..Default::default()
+            },
+            train_time_secs: 12.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                color: Color::srgb(0.9, 0.85, 0.6),
+                selected_color: Color::srgb(1.0, 0.95, 0.7),
+                selected_emissive: LinearRgba::new(0.3, 0.28, 0.1, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![
+                AbilitySlot {
+                    id: AbilityId::Heal,
+                    cooldown_secs: 8.0,
+                    mana_cost: 25.0,
+                    range: 12.0,
+                    display_name: "Heal",
+                },
+                AbilitySlot {
+                    id: AbilityId::HolySmite,
+                    cooldown_secs: 12.0,
+                    mana_cost: 35.0,
+                    range: 10.0,
+                    display_name: "Holy Smite",
+                },
+            ],
+            upgrades: vec![],
         },
-        children: vec![],
-        abilities: vec![
-            AbilitySlot { id: AbilityId::Heal, cooldown_secs: 8.0, mana_cost: 25.0, range: 12.0, display_name: "Heal" },
-            AbilitySlot { id: AbilityId::HolySmite, cooldown_secs: 12.0, mana_cost: 35.0, range: 10.0, display_name: "Holy Smite" },
-        ],
-        upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Cavalry, Blueprint {
-        kind: EntityKind::Cavalry,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 150.0, damage: 14.0, attack_range: 2.0, attack_cooldown_secs: 0.9,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 7.0, y_offset: 1.1 }),
-        gathering: None,
-        vision: Some(VisionStats { range: 14.0 }),
-        cost: ResourceCost { wood: 20, copper: 15, iron: 20, gold: 10, ..Default::default() },
-        train_time_secs: 10.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
-            color: Color::srgb(0.55, 0.4, 0.25),
-            selected_color: Color::srgb(0.75, 0.6, 0.4),
-            selected_emissive: LinearRgba::new(0.15, 0.1, 0.05, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Cavalry,
+        Blueprint {
+            kind: EntityKind::Cavalry,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 150.0,
+                damage: 14.0,
+                attack_range: 2.0,
+                attack_cooldown_secs: 0.9,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 7.0,
+                y_offset: 1.1,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 14.0 }),
+            cost: ResourceCost {
+                wood: 20,
+                copper: 15,
+                iron: 20,
+                gold: 10,
+                ..Default::default()
+            },
+            train_time_secs: 10.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                color: Color::srgb(0.55, 0.4, 0.25),
+                selected_color: Color::srgb(0.75, 0.6, 0.4),
+                selected_emissive: LinearRgba::new(0.15, 0.1, 0.05, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
     // ── Siege ──
 
-    blueprints.insert(EntityKind::Catapult, Blueprint {
-        kind: EntityKind::Catapult,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 150.0, damage: 40.0, attack_range: 25.0, attack_cooldown_secs: 5.0,
-            aggro_range: None, is_ranged: true, projectile_speed: Some(8.0),
-        }),
-        movement: Some(MovementStats { speed: 2.0, y_offset: 1.0 }),
-        gathering: None,
-        vision: Some(VisionStats { range: 28.0 }),
-        cost: ResourceCost { wood: 80, iron: 60, gold: 20, ..Default::default() },
-        train_time_secs: 20.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 1.5, y: 1.0, z: 2.0 },
-            color: Color::srgb(0.5, 0.35, 0.2),
-            selected_color: Color::srgb(0.7, 0.5, 0.3),
-            selected_emissive: LinearRgba::new(0.1, 0.05, 0.02, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Catapult,
+        Blueprint {
+            kind: EntityKind::Catapult,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 150.0,
+                damage: 40.0,
+                attack_range: 25.0,
+                attack_cooldown_secs: 5.0,
+                aggro_range: None,
+                is_ranged: true,
+                projectile_speed: Some(8.0),
+            }),
+            movement: Some(MovementStats {
+                speed: 2.0,
+                y_offset: 1.0,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 28.0 }),
+            cost: ResourceCost {
+                wood: 80,
+                iron: 60,
+                gold: 20,
+                ..Default::default()
+            },
+            train_time_secs: 20.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::Cuboid {
+                    x: 1.5,
+                    y: 1.0,
+                    z: 2.0,
+                },
+                color: Color::srgb(0.5, 0.35, 0.2),
+                selected_color: Color::srgb(0.7, 0.5, 0.3),
+                selected_emissive: LinearRgba::new(0.1, 0.05, 0.02, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![AbilitySlot {
+                id: AbilityId::BoulderThrow,
+                cooldown_secs: 8.0,
+                mana_cost: 0.0,
+                range: 25.0,
+                display_name: "Boulder Throw",
+            }],
+            upgrades: vec![],
         },
-        children: vec![],
-        abilities: vec![
-            AbilitySlot { id: AbilityId::BoulderThrow, cooldown_secs: 8.0, mana_cost: 0.0, range: 25.0, display_name: "Boulder Throw" },
-        ],
-        upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::BatteringRam, Blueprint {
-        kind: EntityKind::BatteringRam,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 200.0, damage: 50.0, attack_range: 2.0, attack_cooldown_secs: 4.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 2.5, y_offset: 0.8 }),
-        gathering: None,
-        vision: Some(VisionStats { range: 10.0 }),
-        cost: ResourceCost { wood: 100, iron: 40, ..Default::default() },
-        train_time_secs: 18.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::Cuboid { x: 1.0, y: 0.8, z: 2.5 },
-            color: Color::srgb(0.45, 0.3, 0.15),
-            selected_color: Color::srgb(0.65, 0.45, 0.25),
-            selected_emissive: LinearRgba::new(0.08, 0.04, 0.01, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::BatteringRam,
+        Blueprint {
+            kind: EntityKind::BatteringRam,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 200.0,
+                damage: 50.0,
+                attack_range: 2.0,
+                attack_cooldown_secs: 4.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 2.5,
+                y_offset: 0.8,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 10.0 }),
+            cost: ResourceCost {
+                wood: 100,
+                iron: 40,
+                ..Default::default()
+            },
+            train_time_secs: 18.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::Cuboid {
+                    x: 1.0,
+                    y: 0.8,
+                    z: 2.5,
+                },
+                color: Color::srgb(0.45, 0.3, 0.15),
+                selected_color: Color::srgb(0.65, 0.45, 0.25),
+                selected_emissive: LinearRgba::new(0.08, 0.04, 0.01, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
     // ── Buildings ──
 
-    blueprints.insert(EntityKind::Base, Blueprint {
-        kind: EntityKind::Base,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 500.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 25.0 }),
-        cost: ResourceCost { wood: 100, copper: 20, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 15.0, half_height: 1.5,
-            trains: vec![EntityKind::Worker],
-            prerequisite: None,
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 150, copper: 40, ..Default::default() },
-                    time_secs: 20.0, scale_multiplier: 1.1,
-                    bonus: LevelBonus::VisionBoost(5.0),
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 250, copper: 80, iron: 40, ..Default::default() },
-                    time_secs: 30.0, scale_multiplier: 1.15,
-                    bonus: LevelBonus::TrainTimeMultiplier(0.7),
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
-            color: Color::srgb(0.6, 0.55, 0.45),
-            selected_color: Color::srgb(0.6, 0.55, 0.45),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Base,
+        Blueprint {
+            kind: EntityKind::Base,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 500.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 25.0 }),
+            cost: ResourceCost {
+                wood: 100,
+                copper: 20,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 15.0,
+                half_height: 1.5,
+                trains: vec![EntityKind::Worker],
+                prerequisite: None,
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 150,
+                            copper: 40,
+                            ..Default::default()
+                        },
+                        time_secs: 20.0,
+                        scale_multiplier: 1.1,
+                        bonus: LevelBonus::VisionBoost(5.0),
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 250,
+                            copper: 80,
+                            iron: 40,
+                            ..Default::default()
+                        },
+                        time_secs: 30.0,
+                        scale_multiplier: 1.15,
+                        bonus: LevelBonus::TrainTimeMultiplier(0.7),
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
+                color: Color::srgb(0.6, 0.55, 0.45),
+                selected_color: Color::srgb(0.6, 0.55, 0.45),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Barracks, Blueprint {
-        kind: EntityKind::Barracks,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 350.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 15.0 }),
-        cost: ResourceCost { wood: 80, copper: 40, iron: 20, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 12.0, half_height: 1.25,
-            trains: vec![EntityKind::Worker, EntityKind::Soldier],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 120, copper: 60, iron: 30, ..Default::default() },
-                    time_secs: 15.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::UnlocksTraining(vec![EntityKind::Archer]),
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 200, copper: 100, iron: 60, ..Default::default() },
-                    time_secs: 25.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.25, dmg_mult: 1.25 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
-            color: Color::srgb(0.7, 0.3, 0.25),
-            selected_color: Color::srgb(0.7, 0.3, 0.25),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Barracks,
+        Blueprint {
+            kind: EntityKind::Barracks,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 350.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 15.0 }),
+            cost: ResourceCost {
+                wood: 80,
+                copper: 40,
+                iron: 20,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 12.0,
+                half_height: 1.25,
+                trains: vec![EntityKind::Worker, EntityKind::Soldier],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 120,
+                            copper: 60,
+                            iron: 30,
+                            ..Default::default()
+                        },
+                        time_secs: 15.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::UnlocksTraining(vec![EntityKind::Archer]),
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 200,
+                            copper: 100,
+                            iron: 60,
+                            ..Default::default()
+                        },
+                        time_secs: 25.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::TrainedStatBoost {
+                            hp_mult: 1.25,
+                            dmg_mult: 1.25,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
+                color: Color::srgb(0.7, 0.3, 0.25),
+                selected_color: Color::srgb(0.7, 0.3, 0.25),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Workshop, Blueprint {
-        kind: EntityKind::Workshop,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 400.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 15.0 }),
-        cost: ResourceCost { wood: 60, copper: 60, iron: 40, gold: 10, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 18.0, half_height: 1.5,
-            trains: vec![EntityKind::Tank],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 100, copper: 80, iron: 60, ..Default::default() },
-                    time_secs: 18.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::TrainTimeMultiplier(0.75),
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 160, copper: 120, iron: 100, gold: 20, ..Default::default() },
-                    time_secs: 28.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.3, dmg_mult: 1.3 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
-            color: Color::srgb(0.45, 0.45, 0.5),
-            selected_color: Color::srgb(0.45, 0.45, 0.5),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Workshop,
+        Blueprint {
+            kind: EntityKind::Workshop,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 400.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 15.0 }),
+            cost: ResourceCost {
+                wood: 60,
+                copper: 60,
+                iron: 40,
+                gold: 10,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 18.0,
+                half_height: 1.5,
+                trains: vec![EntityKind::Tank],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 100,
+                            copper: 80,
+                            iron: 60,
+                            ..Default::default()
+                        },
+                        time_secs: 18.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::TrainTimeMultiplier(0.75),
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 160,
+                            copper: 120,
+                            iron: 100,
+                            gold: 20,
+                            ..Default::default()
+                        },
+                        time_secs: 28.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::TrainedStatBoost {
+                            hp_mult: 1.3,
+                            dmg_mult: 1.3,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
+                color: Color::srgb(0.45, 0.45, 0.5),
+                selected_color: Color::srgb(0.45, 0.45, 0.5),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Tower, Blueprint {
-        kind: EntityKind::Tower,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 200.0, damage: 10.0, attack_range: 15.0, attack_cooldown_secs: 2.0,
-            aggro_range: None, is_ranged: true, projectile_speed: Some(20.0),
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 20.0 }),
-        cost: ResourceCost { wood: 40, copper: 30, iron: 30, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 10.0, half_height: 3.0,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 60, copper: 40, iron: 40, ..Default::default() },
-                    time_secs: 12.0, scale_multiplier: 1.1,
-                    bonus: LevelBonus::RangeAndDamage { range_boost: 3.0, damage_boost: 5.0 },
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 100, copper: 60, iron: 60, gold: 20, ..Default::default() },
-                    time_secs: 20.0, scale_multiplier: 1.15,
-                    bonus: LevelBonus::RangeAndDamage { range_boost: 5.0, damage_boost: 8.0 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
-            color: Color::srgb(0.55, 0.55, 0.6),
-            selected_color: Color::srgb(0.55, 0.55, 0.6),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Tower,
+        Blueprint {
+            kind: EntityKind::Tower,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 200.0,
+                damage: 10.0,
+                attack_range: 15.0,
+                attack_cooldown_secs: 2.0,
+                aggro_range: None,
+                is_ranged: true,
+                projectile_speed: Some(20.0),
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 20.0 }),
+            cost: ResourceCost {
+                wood: 40,
+                copper: 30,
+                iron: 30,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 10.0,
+                half_height: 3.0,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 60,
+                            copper: 40,
+                            iron: 40,
+                            ..Default::default()
+                        },
+                        time_secs: 12.0,
+                        scale_multiplier: 1.1,
+                        bonus: LevelBonus::RangeAndDamage {
+                            range_boost: 3.0,
+                            damage_boost: 5.0,
+                        },
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 100,
+                            copper: 60,
+                            iron: 60,
+                            gold: 20,
+                            ..Default::default()
+                        },
+                        time_secs: 20.0,
+                        scale_multiplier: 1.15,
+                        bonus: LevelBonus::RangeAndDamage {
+                            range_boost: 5.0,
+                            damage_boost: 8.0,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
+                color: Color::srgb(0.55, 0.55, 0.6),
+                selected_color: Color::srgb(0.55, 0.55, 0.6),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::WatchTower, Blueprint {
-        kind: EntityKind::WatchTower,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 160.0, damage: 8.0, attack_range: 13.0, attack_cooldown_secs: 1.5,
-            aggro_range: None, is_ranged: true, projectile_speed: Some(20.0),
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 18.0 }),
-        cost: ResourceCost { wood: 30, copper: 20, iron: 10, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 8.0, half_height: 3.0,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 50, copper: 30, iron: 20, ..Default::default() },
-                    time_secs: 10.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::RangeAndDamage { range_boost: 2.0, damage_boost: 3.0 },
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 80, copper: 50, iron: 30, ..Default::default() },
-                    time_secs: 16.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::RangeAndDamage { range_boost: 3.0, damage_boost: 5.0 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
-            color: Color::srgb(0.58, 0.56, 0.52),
-            selected_color: Color::srgb(0.58, 0.56, 0.52),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::WatchTower,
+        Blueprint {
+            kind: EntityKind::WatchTower,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 160.0,
+                damage: 8.0,
+                attack_range: 13.0,
+                attack_cooldown_secs: 1.5,
+                aggro_range: None,
+                is_ranged: true,
+                projectile_speed: Some(20.0),
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 18.0 }),
+            cost: ResourceCost {
+                wood: 30,
+                copper: 20,
+                iron: 10,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 8.0,
+                half_height: 3.0,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 50,
+                            copper: 30,
+                            iron: 20,
+                            ..Default::default()
+                        },
+                        time_secs: 10.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::RangeAndDamage {
+                            range_boost: 2.0,
+                            damage_boost: 3.0,
+                        },
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 80,
+                            copper: 50,
+                            iron: 30,
+                            ..Default::default()
+                        },
+                        time_secs: 16.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::RangeAndDamage {
+                            range_boost: 3.0,
+                            damage_boost: 5.0,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
+                color: Color::srgb(0.58, 0.56, 0.52),
+                selected_color: Color::srgb(0.58, 0.56, 0.52),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::GuardTower, Blueprint {
-        kind: EntityKind::GuardTower,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 260.0, damage: 14.0, attack_range: 16.0, attack_cooldown_secs: 2.0,
-            aggro_range: None, is_ranged: true, projectile_speed: Some(20.0),
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 22.0 }),
-        cost: ResourceCost { wood: 55, copper: 35, iron: 30, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 11.0, half_height: 3.0,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 75, copper: 45, iron: 40, ..Default::default() },
-                    time_secs: 12.0, scale_multiplier: 1.1,
-                    bonus: LevelBonus::RangeAndDamage { range_boost: 3.0, damage_boost: 5.0 },
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 110, copper: 70, iron: 65, gold: 15, ..Default::default() },
-                    time_secs: 20.0, scale_multiplier: 1.15,
-                    bonus: LevelBonus::RangeAndDamage { range_boost: 5.0, damage_boost: 8.0 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
-            color: Color::srgb(0.55, 0.55, 0.6),
-            selected_color: Color::srgb(0.55, 0.55, 0.6),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::GuardTower,
+        Blueprint {
+            kind: EntityKind::GuardTower,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 260.0,
+                damage: 14.0,
+                attack_range: 16.0,
+                attack_cooldown_secs: 2.0,
+                aggro_range: None,
+                is_ranged: true,
+                projectile_speed: Some(20.0),
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 22.0 }),
+            cost: ResourceCost {
+                wood: 55,
+                copper: 35,
+                iron: 30,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 11.0,
+                half_height: 3.0,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 75,
+                            copper: 45,
+                            iron: 40,
+                            ..Default::default()
+                        },
+                        time_secs: 12.0,
+                        scale_multiplier: 1.1,
+                        bonus: LevelBonus::RangeAndDamage {
+                            range_boost: 3.0,
+                            damage_boost: 5.0,
+                        },
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 110,
+                            copper: 70,
+                            iron: 65,
+                            gold: 15,
+                            ..Default::default()
+                        },
+                        time_secs: 20.0,
+                        scale_multiplier: 1.15,
+                        bonus: LevelBonus::RangeAndDamage {
+                            range_boost: 5.0,
+                            damage_boost: 8.0,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
+                color: Color::srgb(0.55, 0.55, 0.6),
+                selected_color: Color::srgb(0.55, 0.55, 0.6),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::BallistaTower, Blueprint {
-        kind: EntityKind::BallistaTower,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 220.0, damage: 28.0, attack_range: 21.0, attack_cooldown_secs: 3.5,
-            aggro_range: None, is_ranged: true, projectile_speed: Some(24.0),
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 24.0 }),
-        cost: ResourceCost { wood: 60, copper: 40, iron: 55, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 14.0, half_height: 3.0,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Workshop),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 80, copper: 55, iron: 70, ..Default::default() },
-                    time_secs: 16.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::RangeAndDamage { range_boost: 3.0, damage_boost: 7.0 },
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 120, copper: 80, iron: 95, gold: 20, ..Default::default() },
-                    time_secs: 24.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::RangeAndDamage { range_boost: 5.0, damage_boost: 10.0 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
-            color: Color::srgb(0.5, 0.5, 0.58),
-            selected_color: Color::srgb(0.5, 0.5, 0.58),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::BallistaTower,
+        Blueprint {
+            kind: EntityKind::BallistaTower,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 220.0,
+                damage: 28.0,
+                attack_range: 21.0,
+                attack_cooldown_secs: 3.5,
+                aggro_range: None,
+                is_ranged: true,
+                projectile_speed: Some(24.0),
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 24.0 }),
+            cost: ResourceCost {
+                wood: 60,
+                copper: 40,
+                iron: 55,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 14.0,
+                half_height: 3.0,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Workshop),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 80,
+                            copper: 55,
+                            iron: 70,
+                            ..Default::default()
+                        },
+                        time_secs: 16.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::RangeAndDamage {
+                            range_boost: 3.0,
+                            damage_boost: 7.0,
+                        },
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 120,
+                            copper: 80,
+                            iron: 95,
+                            gold: 20,
+                            ..Default::default()
+                        },
+                        time_secs: 24.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::RangeAndDamage {
+                            range_boost: 5.0,
+                            damage_boost: 10.0,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
+                color: Color::srgb(0.5, 0.5, 0.58),
+                selected_color: Color::srgb(0.5, 0.5, 0.58),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::BombardTower, Blueprint {
-        kind: EntityKind::BombardTower,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 240.0, damage: 22.0, attack_range: 14.0, attack_cooldown_secs: 2.8,
-            aggro_range: None, is_ranged: true, projectile_speed: Some(18.0),
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 20.0 }),
-        cost: ResourceCost { wood: 70, copper: 50, iron: 40, gold: 20, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 15.0, half_height: 3.0,
-            trains: vec![],
-            prerequisite: Some(EntityKind::MageTower),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 90, copper: 65, iron: 55, gold: 25, ..Default::default() },
-                    time_secs: 18.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::RangeAndDamage { range_boost: 2.0, damage_boost: 6.0 },
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 130, copper: 90, iron: 75, gold: 35, ..Default::default() },
-                    time_secs: 26.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::RangeAndDamage { range_boost: 4.0, damage_boost: 9.0 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
-            color: Color::srgb(0.58, 0.5, 0.5),
-            selected_color: Color::srgb(0.58, 0.5, 0.5),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::BombardTower,
+        Blueprint {
+            kind: EntityKind::BombardTower,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 240.0,
+                damage: 22.0,
+                attack_range: 14.0,
+                attack_cooldown_secs: 2.8,
+                aggro_range: None,
+                is_ranged: true,
+                projectile_speed: Some(18.0),
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 20.0 }),
+            cost: ResourceCost {
+                wood: 70,
+                copper: 50,
+                iron: 40,
+                gold: 20,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 15.0,
+                half_height: 3.0,
+                trains: vec![],
+                prerequisite: Some(EntityKind::MageTower),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 90,
+                            copper: 65,
+                            iron: 55,
+                            gold: 25,
+                            ..Default::default()
+                        },
+                        time_secs: 18.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::RangeAndDamage {
+                            range_boost: 2.0,
+                            damage_boost: 6.0,
+                        },
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 130,
+                            copper: 90,
+                            iron: 75,
+                            gold: 35,
+                            ..Default::default()
+                        },
+                        time_secs: 26.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::RangeAndDamage {
+                            range_boost: 4.0,
+                            damage_boost: 9.0,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
+                color: Color::srgb(0.58, 0.5, 0.5),
+                selected_color: Color::srgb(0.58, 0.5, 0.5),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Outpost, Blueprint {
-        kind: EntityKind::Outpost,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 140.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 30.0 }),
-        cost: ResourceCost { wood: 25, copper: 10, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 6.0, half_height: 2.5,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 40, copper: 20, ..Default::default() },
-                    time_secs: 8.0, scale_multiplier: 1.05,
-                    bonus: LevelBonus::VisionBoost(6.0),
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 60, copper: 30, iron: 10, ..Default::default() },
-                    time_secs: 12.0, scale_multiplier: 1.1,
-                    bonus: LevelBonus::VisionBoost(10.0),
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 3.5 },
-            color: Color::srgb(0.5, 0.45, 0.35),
-            selected_color: Color::srgb(0.5, 0.45, 0.35),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Outpost,
+        Blueprint {
+            kind: EntityKind::Outpost,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 140.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 30.0 }),
+            cost: ResourceCost {
+                wood: 25,
+                copper: 10,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 6.0,
+                half_height: 2.5,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 40,
+                            copper: 20,
+                            ..Default::default()
+                        },
+                        time_secs: 8.0,
+                        scale_multiplier: 1.05,
+                        bonus: LevelBonus::VisionBoost(6.0),
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 60,
+                            copper: 30,
+                            iron: 10,
+                            ..Default::default()
+                        },
+                        time_secs: 12.0,
+                        scale_multiplier: 1.1,
+                        bonus: LevelBonus::VisionBoost(10.0),
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 3.5 },
+                color: Color::srgb(0.5, 0.45, 0.35),
+                selected_color: Color::srgb(0.5, 0.45, 0.35),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Gatehouse, Blueprint {
-        kind: EntityKind::Gatehouse,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 300.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 16.0 }),
-        cost: ResourceCost { wood: 45, copper: 15, iron: 20, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 10.0, half_height: 2.0,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
-            color: Color::srgb(0.46, 0.43, 0.4),
-            selected_color: Color::srgb(0.46, 0.43, 0.4),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Gatehouse,
+        Blueprint {
+            kind: EntityKind::Gatehouse,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 300.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 16.0 }),
+            cost: ResourceCost {
+                wood: 45,
+                copper: 15,
+                iron: 20,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 10.0,
+                half_height: 2.0,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
+                color: Color::srgb(0.46, 0.43, 0.4),
+                selected_color: Color::srgb(0.46, 0.43, 0.4),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::WallSegment, Blueprint {
-        kind: EntityKind::WallSegment,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 180.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 8.0 }),
-        cost: ResourceCost { wood: 12, copper: 4, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 4.0, half_height: 1.0,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 2.0 },
-            color: Color::srgb(0.45, 0.45, 0.45),
-            selected_color: Color::srgb(0.45, 0.45, 0.45),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::WallSegment,
+        Blueprint {
+            kind: EntityKind::WallSegment,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 180.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 8.0 }),
+            cost: ResourceCost {
+                wood: 12,
+                copper: 4,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 4.0,
+                half_height: 1.0,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 2.0 },
+                color: Color::srgb(0.45, 0.45, 0.45),
+                selected_color: Color::srgb(0.45, 0.45, 0.45),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::WallPost, Blueprint {
-        kind: EntityKind::WallPost,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 220.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 10.0 }),
-        cost: ResourceCost { wood: 16, copper: 6, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 5.0, half_height: 1.2,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 2.2 },
-            color: Color::srgb(0.48, 0.48, 0.48),
-            selected_color: Color::srgb(0.48, 0.48, 0.48),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::WallPost,
+        Blueprint {
+            kind: EntityKind::WallPost,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 220.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 10.0 }),
+            cost: ResourceCost {
+                wood: 16,
+                copper: 6,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 5.0,
+                half_height: 1.2,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 2.2 },
+                color: Color::srgb(0.48, 0.48, 0.48),
+                selected_color: Color::srgb(0.48, 0.48, 0.48),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Storage, Blueprint {
-        kind: EntityKind::Storage,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 200.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 10.0 }),
-        cost: ResourceCost { wood: 60, copper: 10, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 8.0, half_height: 0.15,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 80, copper: 20, ..Default::default() },
-                    time_secs: 10.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::GatherAura { speed_bonus: 0.15, range: 20.0 },
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 140, copper: 40, iron: 20, ..Default::default() },
-                    time_secs: 18.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::GatherAura { speed_bonus: 0.30, range: 30.0 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 4.5 },
-            color: Color::srgb(0.45, 0.32, 0.18),
-            selected_color: Color::srgb(0.45, 0.32, 0.18),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Storage,
+        Blueprint {
+            kind: EntityKind::Storage,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 200.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 10.0 }),
+            cost: ResourceCost {
+                wood: 60,
+                copper: 10,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 8.0,
+                half_height: 0.15,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 80,
+                            copper: 20,
+                            ..Default::default()
+                        },
+                        time_secs: 10.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::GatherAura {
+                            speed_bonus: 0.15,
+                            range: 20.0,
+                        },
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 140,
+                            copper: 40,
+                            iron: 20,
+                            ..Default::default()
+                        },
+                        time_secs: 18.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::GatherAura {
+                            speed_bonus: 0.30,
+                            range: 30.0,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.5 },
+                color: Color::srgb(0.45, 0.32, 0.18),
+                selected_color: Color::srgb(0.45, 0.32, 0.18),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::MageTower, Blueprint {
-        kind: EntityKind::MageTower,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 300.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 22.0 }),
-        cost: ResourceCost { wood: 60, iron: 30, gold: 40, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 20.0, half_height: 2.5,
-            trains: vec![EntityKind::Mage, EntityKind::Priest],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 80, iron: 40, gold: 60, ..Default::default() },
-                    time_secs: 20.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::TrainTimeMultiplier(0.85),
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 120, iron: 60, gold: 100, ..Default::default() },
-                    time_secs: 30.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.15, dmg_mult: 1.2 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
-            color: Color::srgb(0.35, 0.25, 0.55),
-            selected_color: Color::srgb(0.35, 0.25, 0.55),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::MageTower,
+        Blueprint {
+            kind: EntityKind::MageTower,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 300.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 22.0 }),
+            cost: ResourceCost {
+                wood: 60,
+                iron: 30,
+                gold: 40,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 20.0,
+                half_height: 2.5,
+                trains: vec![EntityKind::Mage, EntityKind::Priest],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 80,
+                            iron: 40,
+                            gold: 60,
+                            ..Default::default()
+                        },
+                        time_secs: 20.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::TrainTimeMultiplier(0.85),
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 120,
+                            iron: 60,
+                            gold: 100,
+                            ..Default::default()
+                        },
+                        time_secs: 30.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::TrainedStatBoost {
+                            hp_mult: 1.15,
+                            dmg_mult: 1.2,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
+                color: Color::srgb(0.35, 0.25, 0.55),
+                selected_color: Color::srgb(0.35, 0.25, 0.55),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Temple, Blueprint {
-        kind: EntityKind::Temple,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 250.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 18.0 }),
-        cost: ResourceCost { wood: 80, copper: 20, gold: 50, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 22.0, half_height: 2.0,
-            trains: vec![EntityKind::Priest],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 100, copper: 30, gold: 60, ..Default::default() },
-                    time_secs: 18.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::HealAura { heal_per_sec: 2.0, range: 15.0 },
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 160, copper: 50, gold: 100, ..Default::default() },
-                    time_secs: 28.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::HealAura { heal_per_sec: 5.0, range: 20.0 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
-            color: Color::srgb(0.85, 0.8, 0.65),
-            selected_color: Color::srgb(0.85, 0.8, 0.65),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Temple,
+        Blueprint {
+            kind: EntityKind::Temple,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 250.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 18.0 }),
+            cost: ResourceCost {
+                wood: 80,
+                copper: 20,
+                gold: 50,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 22.0,
+                half_height: 2.0,
+                trains: vec![EntityKind::Priest],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 100,
+                            copper: 30,
+                            gold: 60,
+                            ..Default::default()
+                        },
+                        time_secs: 18.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::HealAura {
+                            heal_per_sec: 2.0,
+                            range: 15.0,
+                        },
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 160,
+                            copper: 50,
+                            gold: 100,
+                            ..Default::default()
+                        },
+                        time_secs: 28.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::HealAura {
+                            heal_per_sec: 5.0,
+                            range: 20.0,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
+                color: Color::srgb(0.85, 0.8, 0.65),
+                selected_color: Color::srgb(0.85, 0.8, 0.65),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Stable, Blueprint {
-        kind: EntityKind::Stable,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 300.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 12.0 }),
-        cost: ResourceCost { wood: 70, copper: 30, iron: 20, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 14.0, half_height: 1.25,
-            trains: vec![EntityKind::Cavalry],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 100, copper: 40, iron: 30, ..Default::default() },
-                    time_secs: 16.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::UnlocksTraining(vec![EntityKind::Knight]),
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 160, copper: 60, iron: 50, gold: 20, ..Default::default() },
-                    time_secs: 25.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.2, dmg_mult: 1.2 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
-            color: Color::srgb(0.5, 0.35, 0.2),
-            selected_color: Color::srgb(0.5, 0.35, 0.2),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Stable,
+        Blueprint {
+            kind: EntityKind::Stable,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 300.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 12.0 }),
+            cost: ResourceCost {
+                wood: 70,
+                copper: 30,
+                iron: 20,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 14.0,
+                half_height: 1.25,
+                trains: vec![EntityKind::Cavalry],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 100,
+                            copper: 40,
+                            iron: 30,
+                            ..Default::default()
+                        },
+                        time_secs: 16.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::UnlocksTraining(vec![EntityKind::Knight]),
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 160,
+                            copper: 60,
+                            iron: 50,
+                            gold: 20,
+                            ..Default::default()
+                        },
+                        time_secs: 25.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::TrainedStatBoost {
+                            hp_mult: 1.2,
+                            dmg_mult: 1.2,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 5.0 },
+                color: Color::srgb(0.5, 0.35, 0.2),
+                selected_color: Color::srgb(0.5, 0.35, 0.2),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::SiegeWorks, Blueprint {
-        kind: EntityKind::SiegeWorks,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 350.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 12.0 }),
-        cost: ResourceCost { wood: 80, iron: 60, gold: 20, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 20.0, half_height: 1.5,
-            trains: vec![EntityKind::Catapult, EntityKind::BatteringRam],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 120, iron: 80, gold: 30, ..Default::default() },
-                    time_secs: 20.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::TrainTimeMultiplier(0.8),
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 200, iron: 120, gold: 60, ..Default::default() },
-                    time_secs: 30.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::TrainedStatBoost { hp_mult: 1.25, dmg_mult: 1.0 },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 5.5 },
-            color: Color::srgb(0.4, 0.35, 0.3),
-            selected_color: Color::srgb(0.4, 0.35, 0.3),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::SiegeWorks,
+        Blueprint {
+            kind: EntityKind::SiegeWorks,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 350.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 12.0 }),
+            cost: ResourceCost {
+                wood: 80,
+                iron: 60,
+                gold: 20,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 20.0,
+                half_height: 1.5,
+                trains: vec![EntityKind::Catapult, EntityKind::BatteringRam],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 120,
+                            iron: 80,
+                            gold: 30,
+                            ..Default::default()
+                        },
+                        time_secs: 20.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::TrainTimeMultiplier(0.8),
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 200,
+                            iron: 120,
+                            gold: 60,
+                            ..Default::default()
+                        },
+                        time_secs: 30.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::TrainedStatBoost {
+                            hp_mult: 1.25,
+                            dmg_mult: 1.0,
+                        },
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 5.5 },
+                color: Color::srgb(0.4, 0.35, 0.3),
+                selected_color: Color::srgb(0.4, 0.35, 0.3),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
     // ── Resource Processing Buildings ──
 
-    blueprints.insert(EntityKind::Sawmill, Blueprint {
-        kind: EntityKind::Sawmill,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 150.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 10.0 }),
-        cost: ResourceCost { wood: 60, copper: 20, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 12.0, half_height: 1.0,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 80, copper: 30, ..Default::default() },
-                    time_secs: 10.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::ProcessorUpgrade {
-                        harvest_rate_boost: 1.5,
-                        radius_boost: 5.0,
-                        extra_worker_slots: 1,
-                        unlock_resources: vec![],
+    blueprints.insert(
+        EntityKind::Sawmill,
+        Blueprint {
+            kind: EntityKind::Sawmill,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 150.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 10.0 }),
+            cost: ResourceCost {
+                wood: 60,
+                copper: 20,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 12.0,
+                half_height: 1.0,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 80,
+                            copper: 30,
+                            ..Default::default()
+                        },
+                        time_secs: 10.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::ProcessorUpgrade {
+                            harvest_rate_boost: 1.5,
+                            radius_boost: 5.0,
+                            extra_worker_slots: 1,
+                            unlock_resources: vec![],
+                        },
                     },
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 120, copper: 40, iron: 20, ..Default::default() },
-                    time_secs: 15.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::ProcessorUpgrade {
-                        harvest_rate_boost: 1.5,
-                        radius_boost: 5.0,
-                        extra_worker_slots: 1,
-                        unlock_resources: vec![],
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 120,
+                            copper: 40,
+                            iron: 20,
+                            ..Default::default()
+                        },
+                        time_secs: 15.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::ProcessorUpgrade {
+                            harvest_rate_boost: 1.5,
+                            radius_boost: 5.0,
+                            extra_worker_slots: 1,
+                            unlock_resources: vec![],
+                        },
                     },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
-            color: Color::srgb(0.55, 0.35, 0.15),
-            selected_color: Color::srgb(0.7, 0.45, 0.2),
-            selected_emissive: LinearRgba::new(0.3, 0.2, 0.05, 1.0),
-            scale: 1.0,
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
+                color: Color::srgb(0.55, 0.35, 0.15),
+                selected_color: Color::srgb(0.7, 0.45, 0.2),
+                selected_emissive: LinearRgba::new(0.3, 0.2, 0.05, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Mine, Blueprint {
-        kind: EntityKind::Mine,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 200.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 10.0 }),
-        cost: ResourceCost { wood: 80, copper: 40, iron: 10, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 15.0, half_height: 1.2,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 60, copper: 60, iron: 30, ..Default::default() },
-                    time_secs: 12.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::ProcessorUpgrade {
-                        harvest_rate_boost: 1.0,
-                        radius_boost: 3.0,
-                        extra_worker_slots: 1,
-                        unlock_resources: vec![ResourceType::Iron],
+    blueprints.insert(
+        EntityKind::Mine,
+        Blueprint {
+            kind: EntityKind::Mine,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 200.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 10.0 }),
+            cost: ResourceCost {
+                wood: 80,
+                copper: 40,
+                iron: 10,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 15.0,
+                half_height: 1.2,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 60,
+                            copper: 60,
+                            iron: 30,
+                            ..Default::default()
+                        },
+                        time_secs: 12.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::ProcessorUpgrade {
+                            harvest_rate_boost: 1.0,
+                            radius_boost: 3.0,
+                            extra_worker_slots: 1,
+                            unlock_resources: vec![ResourceType::Iron],
+                        },
                     },
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 100, copper: 80, iron: 50, gold: 20, ..Default::default() },
-                    time_secs: 20.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::ProcessorUpgrade {
-                        harvest_rate_boost: 1.5,
-                        radius_boost: 5.0,
-                        extra_worker_slots: 1,
-                        unlock_resources: vec![ResourceType::Gold],
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 100,
+                            copper: 80,
+                            iron: 50,
+                            gold: 20,
+                            ..Default::default()
+                        },
+                        time_secs: 20.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::ProcessorUpgrade {
+                            harvest_rate_boost: 1.5,
+                            radius_boost: 5.0,
+                            extra_worker_slots: 1,
+                            unlock_resources: vec![ResourceType::Gold],
+                        },
                     },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
-            color: Color::srgb(0.45, 0.4, 0.35),
-            selected_color: Color::srgb(0.55, 0.5, 0.45),
-            selected_emissive: LinearRgba::new(0.15, 0.12, 0.08, 1.0),
-            scale: 1.0,
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
+                color: Color::srgb(0.45, 0.4, 0.35),
+                selected_color: Color::srgb(0.55, 0.5, 0.45),
+                selected_emissive: LinearRgba::new(0.15, 0.12, 0.08, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::OilRig, Blueprint {
-        kind: EntityKind::OilRig,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 150.0, damage: 0.0, attack_range: 0.0, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: None, gathering: None,
-        vision: Some(VisionStats { range: 10.0 }),
-        cost: ResourceCost { wood: 60, copper: 30, iron: 20, ..Default::default() },
-        train_time_secs: 0.0,
-        building: Some(BuildingData {
-            construction_time_secs: 14.0, half_height: 1.5,
-            trains: vec![],
-            prerequisite: Some(EntityKind::Base),
-            level_upgrades: vec![
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 80, copper: 40, iron: 30, ..Default::default() },
-                    time_secs: 12.0, scale_multiplier: 1.08,
-                    bonus: LevelBonus::ProcessorUpgrade {
-                        harvest_rate_boost: 1.0,
-                        radius_boost: 4.0,
-                        extra_worker_slots: 0,
-                        unlock_resources: vec![],
+    blueprints.insert(
+        EntityKind::OilRig,
+        Blueprint {
+            kind: EntityKind::OilRig,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 150.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 10.0 }),
+            cost: ResourceCost {
+                wood: 60,
+                copper: 30,
+                iron: 20,
+                ..Default::default()
+            },
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 14.0,
+                half_height: 1.5,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 80,
+                            copper: 40,
+                            iron: 30,
+                            ..Default::default()
+                        },
+                        time_secs: 12.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::ProcessorUpgrade {
+                            harvest_rate_boost: 1.0,
+                            radius_boost: 4.0,
+                            extra_worker_slots: 0,
+                            unlock_resources: vec![],
+                        },
                     },
-                },
-                BuildingLevelData {
-                    cost: ResourceCost { wood: 120, copper: 60, iron: 50, gold: 10, ..Default::default() },
-                    time_secs: 18.0, scale_multiplier: 1.12,
-                    bonus: LevelBonus::ProcessorUpgrade {
-                        harvest_rate_boost: 1.5,
-                        radius_boost: 2.0,
-                        extra_worker_slots: 0,
-                        unlock_resources: vec![],
+                    BuildingLevelData {
+                        cost: ResourceCost {
+                            wood: 120,
+                            copper: 60,
+                            iron: 50,
+                            gold: 10,
+                            ..Default::default()
+                        },
+                        time_secs: 18.0,
+                        scale_multiplier: 1.12,
+                        bonus: LevelBonus::ProcessorUpgrade {
+                            harvest_rate_boost: 1.5,
+                            radius_boost: 2.0,
+                            extra_worker_slots: 0,
+                            unlock_resources: vec![],
+                        },
                     },
-                },
-            ],
-        }),
-        mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
-            color: Color::srgb(0.15, 0.15, 0.15),
-            selected_color: Color::srgb(0.25, 0.25, 0.25),
-            selected_emissive: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
-            scale: 1.0,
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
+                color: Color::srgb(0.15, 0.15, 0.15),
+                selected_color: Color::srgb(0.25, 0.25, 0.25),
+                selected_emissive: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
     // ── Mobs ──
 
-    blueprints.insert(EntityKind::Goblin, Blueprint {
-        kind: EntityKind::Goblin,
-        faction: Faction::Neutral,
-        combat: Some(CombatStats {
-            hp: 50.0, damage: 5.0, attack_range: 1.5, attack_cooldown_secs: 1.2,
-            aggro_range: Some(15.0), is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 3.5, y_offset: 0.65 }),
-        gathering: None, vision: None,
-        cost: ResourceCost::default(), train_time_secs: 0.0,
-        building: None,
-        mob_ai: Some(MobAiData { patrol_radius: 12.0 }),
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
-            color: Color::srgb(0.3, 0.6, 0.15),
-            selected_color: Color::srgb(0.3, 0.6, 0.15),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Goblin,
+        Blueprint {
+            kind: EntityKind::Goblin,
+            faction: Faction::Neutral,
+            combat: Some(CombatStats {
+                hp: 50.0,
+                damage: 5.0,
+                attack_range: 1.5,
+                attack_cooldown_secs: 1.2,
+                aggro_range: Some(15.0),
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 3.5,
+                y_offset: 0.65,
+            }),
+            gathering: None,
+            vision: None,
+            cost: ResourceCost::default(),
+            train_time_secs: 0.0,
+            building: None,
+            mob_ai: Some(MobAiData {
+                patrol_radius: 12.0,
+            }),
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                color: Color::srgb(0.3, 0.6, 0.15),
+                selected_color: Color::srgb(0.3, 0.6, 0.15),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Skeleton, Blueprint {
-        kind: EntityKind::Skeleton,
-        faction: Faction::Neutral,
-        combat: Some(CombatStats {
-            hp: 80.0, damage: 10.0, attack_range: 1.8, attack_cooldown_secs: 1.2,
-            aggro_range: Some(18.0), is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 3.0, y_offset: 0.78 }),
-        gathering: None, vision: None,
-        cost: ResourceCost::default(), train_time_secs: 0.0,
-        building: None,
-        mob_ai: Some(MobAiData { patrol_radius: 15.0 }),
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
-            color: Color::srgb(0.85, 0.82, 0.75),
-            selected_color: Color::srgb(0.85, 0.82, 0.75),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Skeleton,
+        Blueprint {
+            kind: EntityKind::Skeleton,
+            faction: Faction::Neutral,
+            combat: Some(CombatStats {
+                hp: 80.0,
+                damage: 10.0,
+                attack_range: 1.8,
+                attack_cooldown_secs: 1.2,
+                aggro_range: Some(18.0),
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 3.0,
+                y_offset: 0.78,
+            }),
+            gathering: None,
+            vision: None,
+            cost: ResourceCost::default(),
+            train_time_secs: 0.0,
+            building: None,
+            mob_ai: Some(MobAiData {
+                patrol_radius: 15.0,
+            }),
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                color: Color::srgb(0.85, 0.82, 0.75),
+                selected_color: Color::srgb(0.85, 0.82, 0.75),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Orc, Blueprint {
-        kind: EntityKind::Orc,
-        faction: Faction::Neutral,
-        combat: Some(CombatStats {
-            hp: 120.0, damage: 15.0, attack_range: 2.0, attack_cooldown_secs: 1.2,
-            aggro_range: Some(20.0), is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 2.5, y_offset: 1.05 }),
-        gathering: None, vision: None,
-        cost: ResourceCost::default(), train_time_secs: 0.0,
-        building: None,
-        mob_ai: Some(MobAiData { patrol_radius: 18.0 }),
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
-            color: Color::srgb(0.4, 0.3, 0.15),
-            selected_color: Color::srgb(0.4, 0.3, 0.15),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Orc,
+        Blueprint {
+            kind: EntityKind::Orc,
+            faction: Faction::Neutral,
+            combat: Some(CombatStats {
+                hp: 120.0,
+                damage: 15.0,
+                attack_range: 2.0,
+                attack_cooldown_secs: 1.2,
+                aggro_range: Some(20.0),
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 2.5,
+                y_offset: 1.05,
+            }),
+            gathering: None,
+            vision: None,
+            cost: ResourceCost::default(),
+            train_time_secs: 0.0,
+            building: None,
+            mob_ai: Some(MobAiData {
+                patrol_radius: 18.0,
+            }),
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
+                color: Color::srgb(0.4, 0.3, 0.15),
+                selected_color: Color::srgb(0.4, 0.3, 0.15),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::Demon, Blueprint {
-        kind: EntityKind::Demon,
-        faction: Faction::Neutral,
-        combat: Some(CombatStats {
-            hp: 200.0, damage: 25.0, attack_range: 2.2, attack_cooldown_secs: 1.2,
-            aggro_range: Some(25.0), is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 3.0, y_offset: 1.15 }),
-        gathering: None, vision: None,
-        cost: ResourceCost::default(), train_time_secs: 0.0,
-        building: None,
-        mob_ai: Some(MobAiData { patrol_radius: 20.0 }),
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 2.0 },
-            color: Color::srgb(0.6, 0.1, 0.1),
-            selected_color: Color::srgb(0.6, 0.1, 0.1),
-            selected_emissive: LinearRgba::NONE,
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::Demon,
+        Blueprint {
+            kind: EntityKind::Demon,
+            faction: Faction::Neutral,
+            combat: Some(CombatStats {
+                hp: 200.0,
+                damage: 25.0,
+                attack_range: 2.2,
+                attack_cooldown_secs: 1.2,
+                aggro_range: Some(25.0),
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 3.0,
+                y_offset: 1.15,
+            }),
+            gathering: None,
+            vision: None,
+            cost: ResourceCost::default(),
+            train_time_secs: 0.0,
+            building: None,
+            mob_ai: Some(MobAiData {
+                patrol_radius: 20.0,
+            }),
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 2.0 },
+                color: Color::srgb(0.6, 0.1, 0.1),
+                selected_color: Color::srgb(0.6, 0.1, 0.1),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
     // ── Summons ──
 
-    blueprints.insert(EntityKind::SkeletonMinion, Blueprint {
-        kind: EntityKind::SkeletonMinion,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 40.0, damage: 6.0, attack_range: 1.5, attack_cooldown_secs: 1.0,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 4.0, y_offset: 0.7 }),
-        gathering: None, vision: Some(VisionStats { range: 8.0 }),
-        cost: ResourceCost::default(), train_time_secs: 0.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.3 },
-            color: Color::srgb(0.75, 0.72, 0.65),
-            selected_color: Color::srgb(0.85, 0.82, 0.75),
-            selected_emissive: LinearRgba::new(0.1, 0.1, 0.08, 1.0),
-            scale: 0.9,
+    blueprints.insert(
+        EntityKind::SkeletonMinion,
+        Blueprint {
+            kind: EntityKind::SkeletonMinion,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 40.0,
+                damage: 6.0,
+                attack_range: 1.5,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 4.0,
+                y_offset: 0.7,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 8.0 }),
+            cost: ResourceCost::default(),
+            train_time_secs: 0.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.3 },
+                color: Color::srgb(0.75, 0.72, 0.65),
+                selected_color: Color::srgb(0.85, 0.82, 0.75),
+                selected_emissive: LinearRgba::new(0.1, 0.1, 0.08, 1.0),
+                scale: 0.9,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::SpiritWolf, Blueprint {
-        kind: EntityKind::SpiritWolf,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 60.0, damage: 8.0, attack_range: 1.8, attack_cooldown_secs: 0.8,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 7.0, y_offset: 0.5 }),
-        gathering: None, vision: Some(VisionStats { range: 20.0 }),
-        cost: ResourceCost::default(), train_time_secs: 0.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.3, length: 0.6 },
-            color: Color::srgba(0.5, 0.6, 0.8, 0.7),
-            selected_color: Color::srgba(0.6, 0.7, 0.9, 0.8),
-            selected_emissive: LinearRgba::new(0.1, 0.15, 0.25, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::SpiritWolf,
+        Blueprint {
+            kind: EntityKind::SpiritWolf,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 60.0,
+                damage: 8.0,
+                attack_range: 1.8,
+                attack_cooldown_secs: 0.8,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 7.0,
+                y_offset: 0.5,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 20.0 }),
+            cost: ResourceCost::default(),
+            train_time_secs: 0.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::Capsule {
+                    radius: 0.3,
+                    length: 0.6,
+                },
+                color: Color::srgba(0.5, 0.6, 0.8, 0.7),
+                selected_color: Color::srgba(0.6, 0.7, 0.9, 0.8),
+                selected_emissive: LinearRgba::new(0.1, 0.15, 0.25, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
-    blueprints.insert(EntityKind::FireElemental, Blueprint {
-        kind: EntityKind::FireElemental,
-        faction: Faction::Player1,
-        combat: Some(CombatStats {
-            hp: 80.0, damage: 12.0, attack_range: 3.0, attack_cooldown_secs: 1.5,
-            aggro_range: None, is_ranged: false, projectile_speed: None,
-        }),
-        movement: Some(MovementStats { speed: 3.5, y_offset: 0.9 }),
-        gathering: None, vision: Some(VisionStats { range: 12.0 }),
-        cost: ResourceCost::default(), train_time_secs: 0.0,
-        building: None, mob_ai: None,
-        visual: VisualDef {
-            mesh_kind: MeshKind::Capsule { radius: 0.35, length: 1.0 },
-            color: Color::srgb(0.9, 0.4, 0.1),
-            selected_color: Color::srgb(1.0, 0.5, 0.15),
-            selected_emissive: LinearRgba::new(0.5, 0.2, 0.05, 1.0),
-            scale: 1.0,
+    blueprints.insert(
+        EntityKind::FireElemental,
+        Blueprint {
+            kind: EntityKind::FireElemental,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 80.0,
+                damage: 12.0,
+                attack_range: 3.0,
+                attack_cooldown_secs: 1.5,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: Some(MovementStats {
+                speed: 3.5,
+                y_offset: 0.9,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 12.0 }),
+            cost: ResourceCost::default(),
+            train_time_secs: 0.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::Capsule {
+                    radius: 0.35,
+                    length: 1.0,
+                },
+                color: Color::srgb(0.9, 0.4, 0.1),
+                selected_color: Color::srgb(1.0, 0.5, 0.15),
+                selected_emissive: LinearRgba::new(0.5, 0.2, 0.05, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
         },
-        children: vec![], abilities: vec![], upgrades: vec![],
-    });
+    );
 
     BlueprintRegistry { blueprints }
 }
@@ -1734,7 +2782,17 @@ pub fn spawn_from_blueprint(
     height_map: &HeightMap,
 ) -> Entity {
     let bp = registry.get(kind);
-    spawn_from_blueprint_with_faction(commands, cache, kind, pos, registry, building_models, unit_models, height_map, bp.faction)
+    spawn_from_blueprint_with_faction(
+        commands,
+        cache,
+        kind,
+        pos,
+        registry,
+        building_models,
+        unit_models,
+        height_map,
+        bp.faction,
+    )
 }
 
 /// Spawn an entity from a blueprint with an explicit faction.
@@ -1751,8 +2809,16 @@ pub fn spawn_from_blueprint_with_faction(
 ) -> Entity {
     let bp = registry.get(kind);
 
-    let mesh_handle = cache.meshes.get(&kind).expect("Missing mesh for entity kind").clone();
-    let mat_handle = cache.materials_default.get(&kind).expect("Missing material for entity kind").clone();
+    let mesh_handle = cache
+        .meshes
+        .get(&kind)
+        .expect("Missing mesh for entity kind")
+        .clone();
+    let mat_handle = cache
+        .materials_default
+        .get(&kind)
+        .expect("Missing material for entity kind")
+        .clone();
 
     let is_gltf = bp.visual.mesh_kind.is_gltf();
     let is_gltf_character = bp.visual.mesh_kind.is_gltf_character();
@@ -1805,7 +2871,14 @@ pub fn spawn_from_blueprint_with_faction(
     // Category markers
     match kind.category() {
         EntityCategory::Unit | EntityCategory::Siege | EntityCategory::Summon => {
-            entity_cmds.insert((Unit, UnitState::default(), TaskSource::default(), TaskQueue::default()));
+            entity_cmds.insert((
+                Unit,
+                UnitState::default(),
+                TaskSource::default(),
+                TaskQueue::default(),
+                UnitStance::default(),
+                AutoRole::default(),
+            ));
         }
         EntityCategory::Mob => {
             entity_cmds.insert((Mob, FogHideable::Mob));
@@ -1814,7 +2887,8 @@ pub fn spawn_from_blueprint_with_faction(
             let footprint = crate::buildings::footprint_for_kind(kind);
             entity_cmds.insert((Building, BuildingLevel(1), BuildingFootprint(footprint)));
             if let Some(ref bd) = bp.building {
-                let mut construction_timer = Timer::from_seconds(bd.construction_time_secs, TimerMode::Once);
+                let mut construction_timer =
+                    Timer::from_seconds(bd.construction_time_secs, TimerMode::Once);
                 construction_timer.pause();
                 entity_cmds.insert((
                     BuildingState::UnderConstruction,
@@ -1829,15 +2903,21 @@ pub fn spawn_from_blueprint_with_faction(
             }
             // Base and Storage are deposit points with per-resource capacities
             if kind == EntityKind::Base {
-                entity_cmds.insert((DepositPoint, StorageInventory {
-                    caps: [500, 30, 50, 0, 0],
-                    ..default()
-                }));
+                entity_cmds.insert((
+                    DepositPoint,
+                    StorageInventory {
+                        caps: [500, 30, 50, 0, 0],
+                        ..default()
+                    },
+                ));
             } else if kind == EntityKind::Storage {
-                entity_cmds.insert((DepositPoint, StorageInventory {
-                    caps: [300, 300, 300, 300, 200],
-                    ..default()
-                }));
+                entity_cmds.insert((
+                    DepositPoint,
+                    StorageInventory {
+                        caps: [300, 300, 300, 300, 200],
+                        ..default()
+                    },
+                ));
             }
             // Resource processing buildings
             match kind {
@@ -1933,7 +3013,10 @@ pub fn spawn_from_blueprint_with_faction(
     // Combat stats
     if let Some(ref combat) = bp.combat {
         entity_cmds.insert((
-            Health { current: combat.hp, max: combat.hp },
+            Health {
+                current: combat.hp,
+                max: combat.hp,
+            },
             AttackDamage(combat.damage),
             AttackRange(combat.attack_range),
             AttackCooldown {
@@ -1962,7 +3045,7 @@ pub fn spawn_from_blueprint_with_faction(
             GatherSpeed(gathering.gather_speed),
             Carrying::default(),
             CarryCapacity(gathering.carry_weight_capacity),
-            GatherParticleTimer(Timer::from_seconds(0.3, TimerMode::Repeating)),
+            GatherAccumulator::default(),
         ));
     }
 
@@ -1984,7 +3067,11 @@ pub fn spawn_from_blueprint_with_faction(
     // Abilities
     if !bp.abilities.is_empty() {
         entity_cmds.insert(Abilities {
-            slots: bp.abilities.iter().map(AbilityInstance::from_slot).collect(),
+            slots: bp
+                .abilities
+                .iter()
+                .map(AbilityInstance::from_slot)
+                .collect(),
         });
     }
 
@@ -1997,14 +3084,16 @@ pub fn spawn_from_blueprint_with_faction(
                 let cal = models.calibration.get(&kind);
                 let scale = cal.map(|c| c.scale).unwrap_or(1.0);
                 let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
-                let child = commands.spawn((
-                    SceneRoot(scene_handle.clone()),
-                    BuildingSceneChild,
-                    InheritOutline,
-                    AsyncSceneInheritOutline::default(),
-                    Transform::from_scale(Vec3::splat(scale))
-                        .with_translation(Vec3::new(0.0, y_off, 0.0)),
-                )).id();
+                let child = commands
+                    .spawn((
+                        SceneRoot(scene_handle.clone()),
+                        BuildingSceneChild,
+                        InheritOutline,
+                        AsyncSceneInheritOutline::default(),
+                        Transform::from_scale(Vec3::splat(scale))
+                            .with_translation(Vec3::new(0.0, y_off, 0.0)),
+                    ))
+                    .id();
                 commands.entity(entity_id).add_child(child);
             }
         }
@@ -2018,15 +3107,17 @@ pub fn spawn_from_blueprint_with_faction(
                 let scale = cal.map(|c| c.scale).unwrap_or(2.0);
                 let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
                 let facing = cal.map(|c| c.facing_rotation).unwrap_or(0.0);
-                let child = commands.spawn((
-                    SceneRoot(scene_handle.clone()),
-                    UnitSceneChild,
-                    InheritOutline,
-                    AsyncSceneInheritOutline::default(),
-                    Transform::from_scale(Vec3::splat(scale))
-                        .with_translation(Vec3::new(0.0, y_off, 0.0))
-                        .with_rotation(Quat::from_rotation_y(facing)),
-                )).id();
+                let child = commands
+                    .spawn((
+                        SceneRoot(scene_handle.clone()),
+                        UnitSceneChild,
+                        InheritOutline,
+                        AsyncSceneInheritOutline::default(),
+                        Transform::from_scale(Vec3::splat(scale))
+                            .with_translation(Vec3::new(0.0, y_off, 0.0))
+                            .with_rotation(Quat::from_rotation_y(facing)),
+                    ))
+                    .id();
                 commands.entity(entity_id).add_child(child);
             }
         }
@@ -2084,7 +3175,6 @@ pub fn build_visual_cache(
 
     cache
 }
-
 
 // ── Plugin ──
 

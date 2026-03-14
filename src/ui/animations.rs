@@ -171,8 +171,7 @@ pub fn menu_particle_system(
         }
 
         // Alpha pulse
-        let alpha = particle.base_alpha
-            * (0.5 + 0.5 * (t * 0.8 + particle.phase).sin());
+        let alpha = particle.base_alpha * (0.5 + 0.5 * (t * 0.8 + particle.phase).sin());
         let srgba = theme::ACCENT.to_srgba();
         bg.0 = Color::srgba(srgba.red, srgba.green, srgba.blue, alpha * 0.3);
     }
@@ -181,10 +180,7 @@ pub fn menu_particle_system(
 // ── Title Shimmer System ──
 
 /// Cycles title text color through a subtle shimmer.
-pub fn title_shimmer_system(
-    time: Res<Time>,
-    mut query: Query<(&mut TextColor, &TitleShimmer)>,
-) {
+pub fn title_shimmer_system(time: Res<Time>, mut query: Query<(&mut TextColor, &TitleShimmer)>) {
     let t = time.elapsed_secs();
     for (mut color, shimmer) in &mut query {
         let phase = t * 1.2 + shimmer.phase_offset;
@@ -200,10 +196,7 @@ pub fn title_shimmer_system(
 // ── Glow Pulse System ──
 
 /// Pulses a BoxShadow glow on entities with UiGlowPulse.
-pub fn ui_glow_pulse_system(
-    time: Res<Time>,
-    mut query: Query<(&UiGlowPulse, &mut BoxShadow)>,
-) {
+pub fn ui_glow_pulse_system(time: Res<Time>, mut query: Query<(&UiGlowPulse, &mut BoxShadow)>) {
     let t = time.elapsed_secs();
     for (glow, mut shadow) in &mut query {
         let pulse = 0.4 + 0.6 * (t * 2.0).sin().abs();

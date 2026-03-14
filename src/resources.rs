@@ -6,9 +6,9 @@ use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::theme;
+use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
-use rand::rngs::StdRng;
 
 pub struct ResourcesPlugin;
 
@@ -17,28 +17,67 @@ impl Plugin for ResourcesPlugin {
         app.init_resource::<TreeGrowthConfig>()
             .init_resource::<CarriedResourceTotals>()
             .init_resource::<PendingCarriedDrains>()
-            .add_systems(Startup, (create_resource_node_materials, create_carry_visual_assets))
-            .add_systems(OnEnter(AppState::InGame), (spawn_resource_nodes, spawn_decorations).after(crate::ground::spawn_ground))
+            .add_systems(
+                Startup,
+                (create_resource_node_materials, create_carry_visual_assets),
+            )
+            .add_systems(
+                OnEnter(AppState::InGame),
+                (
+                    spawn_resource_nodes,
+                    spawn_decorations,
+                    spawn_explosive_props,
+                )
+                    .after(crate::ground::spawn_ground),
+            )
             .add_systems(
                 Update,
-                (compute_carried_totals, worker_ai_system, resource_processor_system, deplete_resource_nodes).chain()
+                (
+                    compute_carried_totals,
+                    worker_ai_system,
+                    resource_processor_system,
+                    deplete_resource_nodes,
+                )
+                    .chain()
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
-                (drain_carried_from_workers, update_carry_visuals).chain()
+                (drain_carried_from_workers, update_carry_visuals)
+                    .chain()
                     .after(deplete_resource_nodes)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
-                (spawn_saplings_system, grow_saplings_system, grow_trees_system)
+                (
+                    spawn_saplings_system,
+                    grow_saplings_system,
+                    grow_trees_system,
+                )
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
-                (processor_worker_visual_system, resource_respawn_system, grow_resource_system, update_resource_popups)
+                (
+                    processor_worker_visual_system,
+                    resource_respawn_system,
+                    grow_resource_system,
+                    update_resource_popups,
+                )
                     .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                spawn_dense_grass
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_exists::<GrassInstanceAssets>),
+            )
+            .add_systems(
+                Update,
+                reveal_explored_grass
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_exists::<FogOfWarMap>),
             );
     }
 }
@@ -89,7 +128,13 @@ fn primary_resource_for(
     gold_mesh: &Handle<Mesh>,
     oil_mesh: &Handle<Mesh>,
     mats: &ResourceNodeMaterials,
-) -> Option<(ResourceType, u32, Handle<Mesh>, Handle<StandardMaterial>, f32)> {
+) -> Option<(
+    ResourceType,
+    u32,
+    Handle<Mesh>,
+    Handle<StandardMaterial>,
+    f32,
+)> {
     match biome {
         Biome::Forest => Some((
             ResourceType::Wood,
@@ -134,7 +179,13 @@ fn secondary_resource_for(
     ore_mesh: &Handle<Mesh>,
     gold_mesh: &Handle<Mesh>,
     mats: &ResourceNodeMaterials,
-) -> Option<(ResourceType, u32, Handle<Mesh>, Handle<StandardMaterial>, f32)> {
+) -> Option<(
+    ResourceType,
+    u32,
+    Handle<Mesh>,
+    Handle<StandardMaterial>,
+    f32,
+)> {
     match biome {
         Biome::Desert => Some((
             ResourceType::Gold,
@@ -241,12 +292,7 @@ fn spawn_resource_nodes(
                 }
 
                 if let Some((rt, amount, mesh, mat, half_h)) = primary_resource_for(
-                    biome,
-                    &wood_mesh,
-                    &ore_mesh,
-                    &gold_mesh,
-                    &oil_mesh,
-                    &node_mats,
+                    biome, &wood_mesh, &ore_mesh, &gold_mesh, &oil_mesh, &node_mats,
                 ) {
                     let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
                     let scale_factor = rng.random_range(0.8_f32..1.2);
@@ -306,9 +352,8 @@ fn spawn_resource_nodes(
                 }
 
                 // Secondary resource (lower probability)
-                let secondary_noise = placement_noise
-                    .get([x as f64 * 0.13 + 50.0, z as f64 * 0.13 + 50.0])
-                    as f32;
+                let secondary_noise =
+                    placement_noise.get([x as f64 * 0.13 + 50.0, z as f64 * 0.13 + 50.0]) as f32;
                 if secondary_noise > threshold + 0.3 / density_mult {
                     if let Some((rt, amount, mesh, mat, half_h)) =
                         secondary_resource_for(biome, &ore_mesh, &gold_mesh, &node_mats)
@@ -317,8 +362,7 @@ fn spawn_resource_nodes(
                         let offset_z = z + 2.0;
 
                         if has_rock_models {
-                            let scene_handle =
-                                random_model(&mut rng, &model_assets.rocks).unwrap();
+                            let scene_handle = random_model(&mut rng, &model_assets.rocks).unwrap();
                             let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
                             let scale_factor = rng.random_range(0.8_f32..1.2);
                             commands.spawn((
@@ -367,7 +411,8 @@ fn spawn_resource_nodes(
 /// Weights control relative probability; 0 means none.
 fn biome_decoration_weights(biome: Biome) -> (f32, f32, f32, f32) {
     match biome {
-        Biome::Forest => (0.4, 0.35, 0.1, 0.0),
+        // Forest grass weight 0 — dense grass handled separately via GPU instancing
+        Biome::Forest => (0.0, 0.35, 0.1, 0.0),
         Biome::Desert => (0.0, 0.0, 0.5, 0.3),
         Biome::Mud => (0.35, 0.35, 0.0, 0.0),
         Biome::Mountain => (0.0, 0.0, 0.6, 0.15),
@@ -380,6 +425,75 @@ enum DecoKind {
     Bush,
     Rock,
     DeadTree,
+}
+
+fn spawn_explosive_props(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    biome_map: Res<BiomeMap>,
+    height_map: Res<HeightMap>,
+    config: Res<GameSetupConfig>,
+    map_seed: Res<MapSeed>,
+) {
+    let barrel_mesh = meshes.add(Cylinder::new(0.45, 1.1));
+    let barrel_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.62, 0.18, 0.08),
+        emissive: LinearRgba::new(0.12, 0.03, 0.01, 1.0),
+        perceptual_roughness: 0.85,
+        ..default()
+    });
+
+    let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(3000));
+    let half = height_map.half_map - 12.0;
+    let spawn_positions = config.spawn_positions(map_seed.0);
+    let barrel_count = ((config.map_size.world_size() / 500.0).powi(2) * 22.0).round() as u32;
+
+    for _ in 0..barrel_count.max(8) {
+        let mut placed = false;
+        for _ in 0..20 {
+            let x = rng.random_range(-half..half);
+            let z = rng.random_range(-half..half);
+            let biome = biome_map.get_biome(x, z);
+            if matches!(biome, Biome::Water | Biome::Mountain) {
+                continue;
+            }
+
+            let too_close_to_spawn = spawn_positions.iter().any(|(_, (sx, sz))| {
+                let dx = x - *sx;
+                let dz = z - *sz;
+                (dx * dx + dz * dz).sqrt() < 32.0
+            });
+            if too_close_to_spawn {
+                continue;
+            }
+
+            let y = height_map.sample(x, z) + 0.55;
+            commands.spawn((
+                ExplosiveProp {
+                    damage: 45.0,
+                    radius: 4.5,
+                },
+                Health {
+                    current: 35.0,
+                    max: 35.0,
+                },
+                FogHideable::Object,
+                PickRadius(1.0),
+                Mesh3d(barrel_mesh.clone()),
+                MeshMaterial3d(barrel_material.clone()),
+                Transform::from_translation(Vec3::new(x, y, z)).with_rotation(
+                    Quat::from_rotation_y(rng.random_range(0.0..std::f32::consts::TAU)),
+                ),
+            ));
+            placed = true;
+            break;
+        }
+
+        if !placed {
+            continue;
+        }
+    }
 }
 
 fn spawn_decorations(
@@ -481,6 +595,111 @@ fn spawn_decorations(
     }
 }
 
+fn spawn_dense_grass(
+    mut commands: Commands,
+    grass_assets: Res<GrassInstanceAssets>,
+    biome_map: Res<BiomeMap>,
+    height_map: Res<HeightMap>,
+    config: Res<GameSetupConfig>,
+    map_seed: Res<MapSeed>,
+    mut has_run: Local<bool>,
+) {
+    if *has_run {
+        return;
+    }
+    *has_run = true;
+
+    let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(5000));
+    let grass_noise = Fbm::<Perlin>::new((map_seed.0 >> 8) as u32)
+        .set_octaves(3);
+    let spacing = 3.0;
+    let half = height_map.half_map;
+    let spawn_positions = config.spawn_positions(map_seed.0);
+    let spawn_clear_radius = 30.0_f32;
+
+    let mut count = 0u32;
+    let mut x = -half + 1.5;
+    while x < half - 1.5 {
+        let mut z = -half + 1.5;
+        while z < half - 1.5 {
+            let biome = biome_map.get_biome(x, z);
+
+            // Only Forest biome gets dense grass
+            if biome != Biome::Forest {
+                z += spacing;
+                continue;
+            }
+            let threshold = -0.1;
+
+            // Noise-based clustering
+            let noise_val = grass_noise.get([x as f64 * 0.08, z as f64 * 0.08]) as f32;
+            if noise_val < threshold {
+                z += spacing;
+                continue;
+            }
+
+            // Jitter position to break grid
+            let jx = x + rng.random_range(-1.5_f32..1.5);
+            let jz = z + rng.random_range(-1.5_f32..1.5);
+
+            // Re-check biome at jittered position (jitter can cross biome boundaries)
+            let jittered_biome = biome_map.get_biome(jx, jz);
+            if jittered_biome != Biome::Forest {
+                z += spacing;
+                continue;
+            }
+
+            // Skip spawn areas
+            let too_close = spawn_positions.iter().any(|(_, (sx, sz))| {
+                let dx = jx - *sx;
+                let dz = jz - *sz;
+                (dx * dx + dz * dz).sqrt() < spawn_clear_radius
+            });
+            if too_close {
+                z += spacing;
+                continue;
+            }
+
+            let y = height_map.sample(jx, jz);
+            let scale = rng.random_range(0.5_f32..1.2);
+            let y_rot = rng.random_range(0.0..std::f32::consts::TAU);
+
+            commands.spawn((
+                DenseGrass,
+                Mesh3d(grass_assets.mesh.clone()),
+                MeshMaterial3d(grass_assets.material.clone()),
+                Transform::from_translation(Vec3::new(jx, y, jz))
+                    .with_rotation(Quat::from_rotation_y(y_rot))
+                    .with_scale(Vec3::splat(scale)),
+                Visibility::Hidden,
+                NotShadowCaster,
+                NotShadowReceiver,
+            ));
+            count += 1;
+
+            z += spacing;
+        }
+        x += spacing;
+    }
+
+    info!("Spawned {} dense grass instances", count);
+}
+
+pub fn reveal_explored_grass(
+    fog_map: Res<FogOfWarMap>,
+    mut grass_query: Query<(&Transform, &mut Visibility), With<DenseGrass>>,
+) {
+    for (transform, mut vis) in grass_query.iter_mut() {
+        if *vis != Visibility::Hidden {
+            continue;
+        }
+        let pos = transform.translation;
+        if fog_map.is_explored(pos.x, pos.z) {
+            *vis = Visibility::Inherited;
+        }
+    }
+}
+
 fn create_carry_visual_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -492,7 +711,13 @@ fn create_carry_visual_assets(
     let sphere_mesh = meshes.add(Sphere::new(0.2));
 
     let mut mats = HashMap::new();
-    for rt in [ResourceType::Wood, ResourceType::Copper, ResourceType::Iron, ResourceType::Gold, ResourceType::Oil] {
+    for rt in [
+        ResourceType::Wood,
+        ResourceType::Copper,
+        ResourceType::Iron,
+        ResourceType::Gold,
+        ResourceType::Oil,
+    ] {
         let color = rt.carry_color();
         let mat = materials.add(StandardMaterial {
             base_color: color,
@@ -513,7 +738,13 @@ fn create_carry_visual_assets(
     let pile_cylinder = meshes.add(Cylinder::new(0.2, 0.5));
 
     let mut pile_mats = HashMap::new();
-    for rt in [ResourceType::Wood, ResourceType::Copper, ResourceType::Iron, ResourceType::Gold, ResourceType::Oil] {
+    for rt in [
+        ResourceType::Wood,
+        ResourceType::Copper,
+        ResourceType::Iron,
+        ResourceType::Gold,
+        ResourceType::Oil,
+    ] {
         let color = rt.carry_color();
         let mat = materials.add(StandardMaterial {
             base_color: color,
@@ -537,23 +768,63 @@ fn worker_ai_system(
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut workers: Query<
-        (Entity, &Transform, &mut UnitState, &mut TaskSource, &mut Carrying, &GatherSpeed, &CarryCapacity, &EntityKind, &Faction, Option<&MoveTarget>, &TaskQueue),
+        (
+            Entity,
+            &Transform,
+            &mut UnitState,
+            &mut TaskSource,
+            &mut Carrying,
+            &GatherSpeed,
+            &CarryCapacity,
+            &mut GatherAccumulator,
+            &EntityKind,
+            &Faction,
+            Option<&MoveTarget>,
+            &TaskQueue,
+        ),
         With<Unit>,
     >,
     mut nodes: Query<(&Transform, &mut ResourceNode), Without<Unit>>,
-    deposit_points: Query<(Entity, &Transform, &BuildingState, &Faction), (With<DepositPoint>, Without<Unit>)>,
-    mut inventories: Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>,
+    deposit_points: Query<
+        (Entity, &Transform, &BuildingState, &Faction),
+        (With<DepositPoint>, Without<Unit>),
+    >,
+    mut inventories: Query<
+        (&Transform, Option<&mut StorageInventory>),
+        (With<DepositPoint>, Without<Unit>),
+    >,
     all_nodes: Query<(Entity, &Transform), (With<ResourceNode>, Without<Unit>)>,
-    construction_sites: Query<(Entity, &Transform, &BuildingState, &Faction), (With<Building>, Without<Unit>, Without<ResourceNode>)>,
+    construction_sites: Query<
+        (Entity, &Transform, &BuildingState, &Faction),
+        (With<Building>, Without<Unit>, Without<ResourceNode>),
+    >,
     storage_auras: Query<(&Transform, &StorageAura, &BuildingState), With<Building>>,
 ) {
     let gather_range = 3.0;
     let deposit_range = 4.0;
     let auto_scan_range = 20.0;
 
-    for (entity, tf, mut state, mut source, mut carrying, speed, capacity, kind, worker_faction, _move_target, task_queue) in &mut workers {
+    for (
+        entity,
+        tf,
+        mut state,
+        mut source,
+        mut carrying,
+        speed,
+        capacity,
+        mut gather_accumulator,
+        kind,
+        worker_faction,
+        _move_target,
+        task_queue,
+    ) in &mut workers
+    {
         if *kind != EntityKind::Worker {
             continue;
+        }
+
+        if !matches!(*state, UnitState::Gathering(_)) {
+            gather_accumulator.0 = 0.0;
         }
 
         match *state {
@@ -569,14 +840,24 @@ fn worker_ai_system(
 
                 // If carrying resources, find depot to deposit (resource-type aware)
                 if carrying.amount > 0 {
-                    let new_state = return_to_depot_or_idle(&mut commands, entity, &tf.translation, worker_faction, &carrying, None, &deposit_points, Some(&inventories));
+                    let new_state = return_to_depot_or_idle(
+                        &mut commands,
+                        entity,
+                        &tf.translation,
+                        worker_faction,
+                        &carrying,
+                        None,
+                        &deposit_points,
+                        Some(&inventories),
+                    );
                     if !matches!(new_state, UnitState::Idle) {
                         *state = new_state;
                     }
                     continue;
                 }
                 // Scan for nearby resource to auto-gather
-                if let Some(node) = find_nearest_node(&tf.translation, auto_scan_range, &all_nodes) {
+                if let Some(node) = find_nearest_node(&tf.translation, auto_scan_range, &all_nodes)
+                {
                     *state = UnitState::Gathering(node);
                 } else {
                     // No nearby resource — check for nearby construction sites (same faction)
@@ -584,7 +865,9 @@ fn worker_ai_system(
                     let mut closest_site = None;
                     let mut closest_site_dist = f32::MAX;
                     for (site_entity, site_tf, site_state, site_faction) in &construction_sites {
-                        if *site_state != BuildingState::UnderConstruction || site_faction != worker_faction {
+                        if *site_state != BuildingState::UnderConstruction
+                            || site_faction != worker_faction
+                        {
                             continue;
                         }
                         let dist = tf.translation.distance(site_tf.translation);
@@ -603,16 +886,38 @@ fn worker_ai_system(
                 let Ok((node_tf, mut node_data)) = nodes.get_mut(node) else {
                     // Node gone
                     commands.entity(entity).remove::<MoveTarget>();
-                    let new_state = return_to_depot_or_idle(&mut commands, entity, &tf.translation, worker_faction, &carrying, None, &deposit_points, Some(&inventories));
+                    let new_state = return_to_depot_or_idle(
+                        &mut commands,
+                        entity,
+                        &tf.translation,
+                        worker_faction,
+                        &carrying,
+                        None,
+                        &deposit_points,
+                        Some(&inventories),
+                    );
                     *state = new_state;
-                    if matches!(*state, UnitState::Idle) { *source = TaskSource::Auto; }
+                    if matches!(*state, UnitState::Idle) {
+                        *source = TaskSource::Auto;
+                    }
                     continue;
                 };
 
                 if node_data.amount_remaining == 0 {
-                    let new_state = return_to_depot_or_idle(&mut commands, entity, &tf.translation, worker_faction, &carrying, None, &deposit_points, Some(&inventories));
+                    let new_state = return_to_depot_or_idle(
+                        &mut commands,
+                        entity,
+                        &tf.translation,
+                        worker_faction,
+                        &carrying,
+                        None,
+                        &deposit_points,
+                        Some(&inventories),
+                    );
                     *state = new_state;
-                    if matches!(*state, UnitState::Idle) { *source = TaskSource::Auto; }
+                    if matches!(*state, UnitState::Idle) {
+                        *source = TaskSource::Auto;
+                    }
                     continue;
                 }
 
@@ -620,45 +925,105 @@ fn worker_ai_system(
                 let dist = tf.translation.distance(node_tf.translation);
                 if dist > gather_range {
                     // MovingToResource equivalent: just set MoveTarget, stay in Gathering
-                    commands.entity(entity).insert(MoveTarget(node_tf.translation));
+                    commands
+                        .entity(entity)
+                        .insert(MoveTarget(node_tf.translation));
                     continue;
                 }
 
                 // Remove any stale MoveTarget
                 commands.entity(entity).remove::<MoveTarget>();
 
-                // Gather tick (with storage aura bonus)
                 let rt = node_data.resource_type;
+                let node_pos = node_tf.translation;
+
+                // If carrying a different resource type, return to deposit first.
+                if carrying.amount > 0 {
+                    if let Some(carried_rt) = carrying.resource_type {
+                        if carried_rt != rt {
+                            let new_state = return_to_depot_or_idle(
+                                &mut commands,
+                                entity,
+                                &tf.translation,
+                                worker_faction,
+                                &carrying,
+                                Some(node),
+                                &deposit_points,
+                                Some(&inventories),
+                            );
+                            *state = new_state;
+                            if matches!(*state, UnitState::Idle) {
+                                *source = TaskSource::Auto;
+                            }
+                            continue;
+                        }
+                    }
+                }
+
+                // Frame-rate independent gather tick (with storage aura + per-resource modifier).
                 let unit_weight = rt.weight();
-                let aura_bonus = crate::buildings::storage_aura_bonus(tf.translation, &storage_auras);
-                let effective_speed = speed.0 * (1.0 + aura_bonus);
-                let amount = (effective_speed * time.delta_secs()) as u32;
-                let amount = amount.max(1).min(node_data.amount_remaining);
+                let aura_bonus =
+                    crate::buildings::storage_aura_bonus(tf.translation, &storage_auras);
+                let effective_speed = speed.0 * (1.0 + aura_bonus) * rt.gather_rate_multiplier();
+                gather_accumulator.0 += effective_speed * time.delta_secs();
+                let mut amount = gather_accumulator.0.floor() as u32;
+                if amount == 0 {
+                    continue;
+                }
+                gather_accumulator.0 -= amount as f32;
+                amount = amount.min(node_data.amount_remaining);
 
-                let new_weight = carrying.weight + amount as f32 * unit_weight;
-                if new_weight > capacity.0 {
-                    // Fill remaining capacity
-                    let remaining_capacity = capacity.0 - carrying.weight;
-                    let can_carry = (remaining_capacity / unit_weight).floor() as u32;
-                    if can_carry > 0 {
-                        let actual = can_carry.min(node_data.amount_remaining);
-                        node_data.amount_remaining -= actual;
-                        carrying.amount += actual;
-                        carrying.weight += actual as f32 * unit_weight;
-                        carrying.resource_type = Some(rt);
+                let remaining_capacity = (capacity.0 - carrying.weight).max(0.0);
+                let can_carry = (remaining_capacity / unit_weight).floor() as u32;
+                if can_carry == 0 {
+                    let new_state = return_to_depot_or_idle(
+                        &mut commands,
+                        entity,
+                        &tf.translation,
+                        worker_faction,
+                        &carrying,
+                        Some(node),
+                        &deposit_points,
+                        Some(&inventories),
+                    );
+                    *state = new_state;
+                    if matches!(*state, UnitState::Idle) {
+                        *source = TaskSource::Auto;
                     }
+                    continue;
+                }
 
-                    // Full — go deposit (resource-type aware)
-                    if let Some(depot) = find_nearest_deposit_for(&tf.translation, worker_faction, carrying.resource_type, &deposit_points, Some(&inventories)) {
-                        let depot_pos = deposit_points.get(depot).unwrap().1.translation;
-                        commands.entity(entity).insert(MoveTarget(depot_pos));
-                        *state = UnitState::ReturningToDeposit { depot, gather_node: Some(node) };
+                let actual = amount.min(can_carry);
+                if actual == 0 {
+                    continue;
+                }
+
+                node_data.amount_remaining -= actual;
+                carrying.amount += actual;
+                carrying.weight += actual as f32 * unit_weight;
+                carrying.resource_type = Some(rt);
+
+                if let Some(ref vfx) = vfx_assets {
+                    spawn_gather_vfx(&mut commands, vfx, tf.translation, node_pos, rt, actual);
+                }
+
+                // If effectively full for this resource type, head to a depot.
+                let remaining_capacity_after = (capacity.0 - carrying.weight).max(0.0);
+                if remaining_capacity_after < unit_weight {
+                    let new_state = return_to_depot_or_idle(
+                        &mut commands,
+                        entity,
+                        &tf.translation,
+                        worker_faction,
+                        &carrying,
+                        Some(node),
+                        &deposit_points,
+                        Some(&inventories),
+                    );
+                    *state = new_state;
+                    if matches!(*state, UnitState::Idle) {
+                        *source = TaskSource::Auto;
                     }
-                } else {
-                    node_data.amount_remaining -= amount;
-                    carrying.amount += amount;
-                    carrying.weight += amount as f32 * unit_weight;
-                    carrying.resource_type = Some(rt);
                 }
             }
 
@@ -666,9 +1031,20 @@ fn worker_ai_system(
                 // Check depot still exists
                 let Ok((depot_tf, _)) = inventories.get(depot) else {
                     commands.entity(entity).remove::<MoveTarget>();
-                    let new_state = return_to_depot_or_idle(&mut commands, entity, &tf.translation, worker_faction, &carrying, gather_node, &deposit_points, Some(&inventories));
+                    let new_state = return_to_depot_or_idle(
+                        &mut commands,
+                        entity,
+                        &tf.translation,
+                        worker_faction,
+                        &carrying,
+                        gather_node,
+                        &deposit_points,
+                        Some(&inventories),
+                    );
                     *state = new_state;
-                    if matches!(*state, UnitState::Idle) { *source = TaskSource::Auto; }
+                    if matches!(*state, UnitState::Idle) {
+                        *source = TaskSource::Auto;
+                    }
                     continue;
                 };
 
@@ -677,7 +1053,9 @@ fn worker_ai_system(
                     *state = UnitState::Depositing { depot, gather_node };
                 } else {
                     // Ensure MoveTarget
-                    commands.entity(entity).insert(MoveTarget(depot_tf.translation));
+                    commands
+                        .entity(entity)
+                        .insert(MoveTarget(depot_tf.translation));
                 }
             }
 
@@ -726,7 +1104,12 @@ fn worker_ai_system(
                             if let Ok((depot_tf, _)) = inventories.get(depot) {
                                 let deposit_pos = depot_tf.translation + Vec3::Y * 2.0;
                                 spawn_deposit_vfx(&mut commands, &vfx, deposit_pos, 4, 0.15, 0.3);
-                                spawn_resource_popup(&mut commands, deposit_pos + Vec3::Y * 1.5, rt, deposited);
+                                spawn_resource_popup(
+                                    &mut commands,
+                                    deposit_pos + Vec3::Y * 1.5,
+                                    rt,
+                                    deposited,
+                                );
                             }
                         }
                         continue;
@@ -739,7 +1122,12 @@ fn worker_ai_system(
                         let deposit_pos = depot_tf.translation + Vec3::Y * 2.0;
                         spawn_deposit_vfx(&mut commands, &vfx, deposit_pos, 4, 0.15, 0.3);
                         if let Some((rt, amount)) = deposit_info {
-                            spawn_resource_popup(&mut commands, deposit_pos + Vec3::Y * 1.5, rt, amount);
+                            spawn_resource_popup(
+                                &mut commands,
+                                deposit_pos + Vec3::Y * 1.5,
+                                rt,
+                                amount,
+                            );
                         }
                     }
                 }
@@ -760,7 +1148,8 @@ fn worker_ai_system(
                     }
                 }
                 // No gather node or depleted — scan broadly for next resource
-                if let Some(node) = find_nearest_node(&tf.translation, auto_scan_range, &all_nodes) {
+                if let Some(node) = find_nearest_node(&tf.translation, auto_scan_range, &all_nodes)
+                {
                     *state = UnitState::Gathering(node);
                 } else {
                     *state = UnitState::Idle;
@@ -818,7 +1207,10 @@ fn worker_ai_system(
                 if let Some(new_depot) = best_depot {
                     let depot_pos = deposit_points.get(new_depot).unwrap().1.translation;
                     commands.entity(entity).insert(MoveTarget(depot_pos));
-                    *state = UnitState::ReturningToDeposit { depot: new_depot, gather_node };
+                    *state = UnitState::ReturningToDeposit {
+                        depot: new_depot,
+                        gather_node,
+                    };
                 }
                 // Otherwise keep waiting at current depot
             }
@@ -836,13 +1228,23 @@ fn resource_processor_system(
     mut commands: Commands,
     mut all_resources: ResMut<AllPlayerResources>,
     mut processors: Query<
-        (Entity, &Transform, &mut ResourceProcessor, &BuildingState, &Faction, Option<&mut StorageInventory>, Option<&AssignedWorkers>),
+        (
+            Entity,
+            &Transform,
+            &mut ResourceProcessor,
+            &BuildingState,
+            &Faction,
+            Option<&mut StorageInventory>,
+            Option<&AssignedWorkers>,
+        ),
         With<Building>,
     >,
     mut nodes: Query<(&Transform, &mut ResourceNode), Without<Building>>,
     vfx_assets: Option<Res<VfxAssets>>,
 ) {
-    for (_building_entity, building_tf, mut processor, state, faction, storage, assigned_workers) in &mut processors {
+    for (_building_entity, building_tf, mut processor, state, faction, storage, assigned_workers) in
+        &mut processors
+    {
         if *state != BuildingState::Complete {
             continue;
         }
@@ -853,12 +1255,11 @@ fn resource_processor_system(
         }
 
         // Count assigned workers for this building
-        let worker_count = assigned_workers
-            .map(|aw| aw.workers.len())
-            .unwrap_or(0) as f32;
+        let worker_count = assigned_workers.map(|aw| aw.workers.len()).unwrap_or(0) as f32;
 
         // Effective amount per tick = base_rate + (worker_count * base_rate * worker_rate_bonus)
-        let effective_rate = processor.harvest_rate + (worker_count * processor.harvest_rate * processor.worker_rate_bonus);
+        let effective_rate = processor.harvest_rate
+            + (worker_count * processor.harvest_rate * processor.worker_rate_bonus);
         processor.harvest_accumulator += effective_rate;
         let amount = processor.harvest_accumulator as u32;
         processor.harvest_accumulator -= amount as f32;
@@ -978,7 +1379,11 @@ fn update_resource_popups(
         popup.world_pos.y += 30.0 * time.delta_secs() * 0.02;
 
         // Fade out in the last 40%
-        let alpha = if frac > 0.6 { 1.0 - (frac - 0.6) / 0.4 } else { 1.0 };
+        let alpha = if frac > 0.6 {
+            1.0 - (frac - 0.6) / 0.4
+        } else {
+            1.0
+        };
         let base = color.0.to_srgba();
         color.0 = Color::srgba(base.red, base.green, base.blue, alpha);
 
@@ -997,11 +1402,22 @@ fn return_to_depot_or_idle(
     faction: &Faction,
     carrying: &Carrying,
     gather_node: Option<Entity>,
-    deposit_points: &Query<(Entity, &Transform, &BuildingState, &Faction), (With<DepositPoint>, Without<Unit>)>,
-    inventories: Option<&Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>>,
+    deposit_points: &Query<
+        (Entity, &Transform, &BuildingState, &Faction),
+        (With<DepositPoint>, Without<Unit>),
+    >,
+    inventories: Option<
+        &Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>,
+    >,
 ) -> UnitState {
     if carrying.amount > 0 {
-        if let Some(depot) = find_nearest_deposit_for(pos, faction, carrying.resource_type, deposit_points, inventories) {
+        if let Some(depot) = find_nearest_deposit_for(
+            pos,
+            faction,
+            carrying.resource_type,
+            deposit_points,
+            inventories,
+        ) {
             let depot_pos = deposit_points.get(depot).unwrap().1.translation;
             commands.entity(entity).insert(MoveTarget(depot_pos));
             return UnitState::ReturningToDeposit { depot, gather_node };
@@ -1028,6 +1444,69 @@ fn find_nearest_node(
     closest_node
 }
 
+/// Spawn a short burst of gather particles when a worker extracts resources from a node.
+fn spawn_gather_vfx(
+    commands: &mut Commands,
+    vfx: &VfxAssets,
+    worker_pos: Vec3,
+    node_pos: Vec3,
+    rt: ResourceType,
+    amount: u32,
+) {
+    let mesh = match rt {
+        ResourceType::Wood => vfx.cube_mesh.clone(),
+        _ => vfx.sphere_mesh.clone(),
+    };
+    let material = vfx
+        .resource_particle_materials
+        .get(&rt)
+        .cloned()
+        .unwrap_or_else(|| vfx.impact_material.clone());
+    let base_count = match rt {
+        ResourceType::Wood => 2,
+        ResourceType::Copper => 3,
+        ResourceType::Iron => 3,
+        ResourceType::Gold => 4,
+        ResourceType::Oil => 2,
+    };
+    let count = (base_count + amount.min(4)).min(8).max(1);
+    let base_scale = match rt {
+        ResourceType::Wood => 0.09,
+        ResourceType::Oil => 0.07,
+        ResourceType::Gold => 0.08,
+        _ => 0.075,
+    };
+    let toward_worker = (worker_pos - node_pos).normalize_or_zero();
+
+    for i in 0..count {
+        let frac = i as f32 / count as f32;
+        let angle = std::f32::consts::TAU * frac;
+        let lateral = Vec3::new(angle.cos() * 0.35, 0.0, angle.sin() * 0.35);
+        let jitter = Vec3::new(
+            (frac * 11.3).sin() * 0.12,
+            0.2 + frac * 0.18,
+            (frac * 7.7).cos() * 0.12,
+        );
+        let velocity =
+            toward_worker * (1.1 + frac * 0.9) + lateral * 0.9 + Vec3::Y * (1.2 + frac * 0.8);
+
+        commands.spawn((
+            GatherParticle {
+                timer: Timer::from_seconds(0.42, TimerMode::Once),
+                velocity,
+                start_scale: base_scale * (1.0 + frac * 0.35),
+            },
+            FogHideable::Vfx,
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(node_pos + Vec3::Y * 0.7 + jitter)
+                .with_scale(Vec3::splat(base_scale)),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+    }
+}
+
 /// Spawn deposit VFX particles around a position.
 fn spawn_deposit_vfx(
     commands: &mut Commands,
@@ -1049,8 +1528,7 @@ fn spawn_deposit_vfx(
             FogHideable::Vfx,
             Mesh3d(vfx.sphere_mesh.clone()),
             MeshMaterial3d(vfx.deposit_material.clone()),
-            Transform::from_translation(deposit_pos + offset)
-                .with_scale(Vec3::splat(scale)),
+            Transform::from_translation(deposit_pos + offset).with_scale(Vec3::splat(scale)),
         ));
     }
 }
@@ -1062,8 +1540,13 @@ fn find_nearest_deposit_for(
     pos: &Vec3,
     faction: &Faction,
     resource_type: Option<ResourceType>,
-    deposit_points: &Query<(Entity, &Transform, &BuildingState, &Faction), (With<DepositPoint>, Without<Unit>)>,
-    inventories: Option<&Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>>,
+    deposit_points: &Query<
+        (Entity, &Transform, &BuildingState, &Faction),
+        (With<DepositPoint>, Without<Unit>),
+    >,
+    inventories: Option<
+        &Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>,
+    >,
 ) -> Option<Entity> {
     let mut closest_dist = f32::MAX;
     let mut closest = None;
@@ -1101,7 +1584,8 @@ fn compute_carried_totals(
     for (carrying, faction) in &workers {
         if let Some(rt) = carrying.resource_type {
             if carrying.amount > 0 {
-                totals.per_faction
+                totals
+                    .per_faction
                     .entry(*faction)
                     .or_insert_with(PlayerResources::empty)
                     .add(rt, carrying.amount);
@@ -1126,7 +1610,9 @@ fn drain_carried_from_workers(
             if !msg.has_deficit() {
                 break;
             }
-            let Some(rt) = carrying.resource_type else { continue };
+            let Some(rt) = carrying.resource_type else {
+                continue;
+            };
             let needed = msg.get(rt);
             if needed == 0 || carrying.amount == 0 {
                 continue;
@@ -1279,7 +1765,8 @@ fn spawn_saplings_system(
             continue;
         }
 
-        let scene_handle = model_assets.trees[rng.random_range(0..model_assets.trees.len())].clone();
+        let scene_handle =
+            model_assets.trees[rng.random_range(0..model_assets.trees.len())].clone();
         let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
         let target_scale = rng.random_range(0.8_f32..1.2);
         let initial_scale = 0.15;
@@ -1370,7 +1857,13 @@ fn processor_worker_visual_system(
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut workers: Query<
-        (Entity, &Transform, &mut ProcessorWorkerState, &UnitState, &mut Carrying),
+        (
+            Entity,
+            &Transform,
+            &mut ProcessorWorkerState,
+            &UnitState,
+            &mut Carrying,
+        ),
         With<Unit>,
     >,
     processors: Query<(Entity, &Transform, &ResourceProcessor, &BuildingState), With<Building>>,
@@ -1379,16 +1872,23 @@ fn processor_worker_visual_system(
     // Collect nodes targeted by other workers to avoid clustering
     let mut targeted_nodes: Vec<Entity> = Vec::new();
     for (_, _, pstate, ustate, _) in workers.iter() {
-        if !matches!(ustate, UnitState::InsideProcessor(_)) { continue; }
-        if let ProcessorWorkerState::MovingToNode(node) | ProcessorWorkerState::Harvesting { node, .. } = *pstate {
+        if !matches!(ustate, UnitState::InsideProcessor(_)) {
+            continue;
+        }
+        if let ProcessorWorkerState::MovingToNode(node)
+        | ProcessorWorkerState::Harvesting { node, .. } = *pstate
+        {
             targeted_nodes.push(node);
         }
     }
 
     for (_entity, tf, mut worker_state, unit_state, _carrying) in &mut workers {
-        let UnitState::InsideProcessor(building_entity) = *unit_state else { continue; };
+        let UnitState::InsideProcessor(building_entity) = *unit_state else {
+            continue;
+        };
 
-        let Ok((_, building_tf, processor, building_state)) = processors.get(building_entity) else {
+        let Ok((_, building_tf, processor, building_state)) = processors.get(building_entity)
+        else {
             // Building gone — handled by unit_state_executor
             continue;
         };
@@ -1412,7 +1912,8 @@ fn processor_worker_visual_system(
                     if dist_to_building > processor.harvest_radius {
                         continue;
                     }
-                    let already_targeted = targeted_nodes.iter().filter(|&&n| n == node_entity).count();
+                    let already_targeted =
+                        targeted_nodes.iter().filter(|&&n| n == node_entity).count();
                     if already_targeted >= 2 {
                         continue;
                     }
@@ -1435,10 +1936,21 @@ fn processor_worker_visual_system(
                     continue;
                 }
                 // Workers inside processors are hidden, so just timer-simulate "moving"
-                *worker_state = ProcessorWorkerState::Harvesting { node, timer_secs: 0.0 };
+                *worker_state = ProcessorWorkerState::Harvesting {
+                    node,
+                    timer_secs: 0.0,
+                };
             }
-            ProcessorWorkerState::Harvesting { node, ref mut timer_secs } => {
-                if nodes.get(node).is_err() || nodes.get(node).map(|(_, _, n)| n.amount_remaining == 0).unwrap_or(true) {
+            ProcessorWorkerState::Harvesting {
+                node,
+                ref mut timer_secs,
+            } => {
+                if nodes.get(node).is_err()
+                    || nodes
+                        .get(node)
+                        .map(|(_, _, n)| n.amount_remaining == 0)
+                        .unwrap_or(true)
+                {
                     *worker_state = ProcessorWorkerState::Idle;
                     continue;
                 }
@@ -1490,10 +2002,7 @@ fn resource_respawn_system(
     model_assets: Res<ModelAssets>,
     node_mats: Res<ResourceNodeMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut buildings: Query<
-        (&Transform, &mut ResourceRespawnConfig, &BuildingState),
-        With<Building>,
-    >,
+    mut buildings: Query<(&Transform, &mut ResourceRespawnConfig, &BuildingState), With<Building>>,
     existing_nodes: Query<(&Transform, &ResourceNode), Without<Building>>,
     growing_resources: Query<(&Transform, &GrowingResource), Without<Building>>,
     building_positions: Query<&Transform, (With<Building>, Without<ResourceNode>)>,
@@ -1564,7 +2073,9 @@ fn resource_respawn_system(
                 if rt == ResourceType::Wood {
                     // Reuse sapling system — spawn a Sapling
                     if !model_assets.trees.is_empty() {
-                        let scene_handle = model_assets.trees[rng.random_range(0..model_assets.trees.len())].clone();
+                        let scene_handle = model_assets.trees
+                            [rng.random_range(0..model_assets.trees.len())]
+                        .clone();
                         let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
                         let target_scale = rng.random_range(0.8_f32..1.2);
 
@@ -1589,8 +2100,14 @@ fn resource_respawn_system(
                     let target_scale = rng.random_range(0.8_f32..1.2);
 
                     // Use rock models for ore, cylinder mesh for oil
-                    if matches!(rt, ResourceType::Copper | ResourceType::Iron | ResourceType::Gold) && !model_assets.rocks.is_empty() {
-                        let scene_handle = model_assets.rocks[rng.random_range(0..model_assets.rocks.len())].clone();
+                    if matches!(
+                        rt,
+                        ResourceType::Copper | ResourceType::Iron | ResourceType::Gold
+                    ) && !model_assets.rocks.is_empty()
+                    {
+                        let scene_handle = model_assets.rocks
+                            [rng.random_range(0..model_assets.rocks.len())]
+                        .clone();
                         let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
 
                         commands.spawn((
@@ -1665,7 +2182,8 @@ fn grow_resource_system(
 // ── Worker assignment helpers ──
 
 pub fn assign_worker_to_processor(commands: &mut Commands, worker: Entity, building: Entity) {
-    commands.entity(worker)
+    commands
+        .entity(worker)
         .insert(UnitState::InsideProcessor(building))
         .insert(TaskSource::Manual)
         .insert(ProcessorWorkerState::default())
@@ -1675,13 +2193,12 @@ pub fn assign_worker_to_processor(commands: &mut Commands, worker: Entity, build
 }
 
 pub fn unassign_worker_from_processor(commands: &mut Commands, worker: Entity) {
-    commands.entity(worker)
+    commands
+        .entity(worker)
         .remove::<ProcessorWorkerState>()
         .insert(UnitState::Idle)
         .insert(TaskSource::Auto)
         .insert(Visibility::Inherited);
 }
-
-
 
 // processor_worker_loop_system removed — merged into processor_worker_visual_system
