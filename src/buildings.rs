@@ -73,6 +73,7 @@ pub fn spawn_wall_line(
 pub fn footprint_for_kind(kind: EntityKind) -> f32 {
     match kind {
         EntityKind::Base | EntityKind::Storage => 7.0,
+        EntityKind::House => 4.5,
         EntityKind::Gatehouse => 4.0,
         EntityKind::WallSegment | EntityKind::WallPost => 1.6,
         EntityKind::Sawmill | EntityKind::Mine | EntityKind::OilRig => 4.0,
@@ -298,6 +299,9 @@ fn update_placement_preview(
     } else {
         bp.building.as_ref().map(|b| b.half_height).unwrap_or(1.0)
     };
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
+        return;
+    };
     let new_footprint = footprint_for_kind(kind);
 
     // Spawn ghost if it doesn't exist
@@ -314,12 +318,14 @@ fn update_placement_preview(
             ));
             // Attach the GLTF scene as a child
             if let Some(ref models) = building_models {
-                if let Some(scene_handle) = models.scenes.get(&(kind, 1)) {
+                if let Some(scene_handle) =
+                    models.scene_for(kind, 1, Vec3::new(world_pos.x, 0.0, world_pos.z))
+                {
                     let cal = models.calibration.get(&kind);
                     let scale = cal.map(|c| c.scale).unwrap_or(1.0);
                     let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
                     ghost_cmds.with_child((
-                        SceneRoot(scene_handle.clone()),
+                        SceneRoot(scene_handle),
                         Transform::from_scale(Vec3::splat(scale))
                             .with_translation(Vec3::new(0.0, y_off, 0.0)),
                         NotShadowCaster,
@@ -345,10 +351,6 @@ fn update_placement_preview(
         };
         placement.preview_entity = Some(ghost);
     }
-
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
-        return;
-    };
 
     let Some(ghost_entity) = placement.preview_entity else {
         return;
@@ -548,6 +550,10 @@ fn update_gate_plot_preview(
         return;
     }
 
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
+        return;
+    };
+
     let kind = EntityKind::Gatehouse;
     let bp = registry.get(kind);
     let is_gltf = bp.visual.mesh_kind.is_gltf();
@@ -562,12 +568,14 @@ fn update_gate_plot_preview(
                 NotShadowReceiver,
             ));
             if let Some(ref models) = building_models {
-                if let Some(scene_handle) = models.scenes.get(&(kind, 1)) {
+                if let Some(scene_handle) =
+                    models.scene_for(kind, 1, Vec3::new(world_pos.x, 0.0, world_pos.z))
+                {
                     let cal = models.calibration.get(&kind);
                     let scale = cal.map(|c| c.scale).unwrap_or(1.0);
                     let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
                     ghost_cmds.with_child((
-                        SceneRoot(scene_handle.clone()),
+                        SceneRoot(scene_handle),
                         Transform::from_scale(Vec3::splat(scale))
                             .with_translation(Vec3::new(0.0, y_off, 0.0)),
                         NotShadowCaster,
@@ -592,10 +600,6 @@ fn update_gate_plot_preview(
         };
         placement.preview_entity = Some(ghost);
     }
-
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
-        return;
-    };
     let nearest = wall_segments
         .iter()
         .filter(|(_, faction)| **faction == active_player.0)
@@ -1390,6 +1394,8 @@ fn training_queue_system(
     cache: Res<EntityVisualCache>,
     unit_models: Option<Res<UnitModelAssets>>,
     height_map: Res<HeightMap>,
+    unit_factions: Query<&Faction, With<Unit>>,
+    cap_buildings: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
     mut buildings: Query<
         (
             &Transform,
@@ -1403,6 +1409,25 @@ fn training_queue_system(
     >,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
+    let mut used_by_faction: std::collections::HashMap<Faction, u32> =
+        std::collections::HashMap::new();
+    for faction in &unit_factions {
+        *used_by_faction.entry(*faction).or_default() += 1;
+    }
+
+    let mut cap_by_faction: std::collections::HashMap<Faction, u32> =
+        Faction::PLAYERS
+            .into_iter()
+            .map(|faction| (faction, DEFAULT_UNIT_CAP))
+            .collect();
+    for (faction, kind, state, level) in &cap_buildings {
+        if *state != BuildingState::Complete {
+            continue;
+        }
+        *cap_by_faction.entry(*faction).or_default() +=
+            unit_capacity_bonus_for_building(*kind, level.0);
+    }
+
     for (transform, building_kind, mut queue, rally_point, building_faction, building_level) in &mut buildings {
         if queue.queue.is_empty() {
             continue;
@@ -1432,6 +1457,15 @@ fn training_queue_system(
         if let Some(ref mut timer) = queue.timer {
             timer.tick(time.delta());
             if timer.is_finished() {
+                let used = used_by_faction.get(building_faction).copied().unwrap_or(0);
+                let cap = cap_by_faction
+                    .get(building_faction)
+                    .copied()
+                    .unwrap_or(DEFAULT_UNIT_CAP);
+                if used >= cap {
+                    continue;
+                }
+
                 let unit_kind = queue.queue.remove(0);
 
                 // Scatter spawn positions around the building to avoid stacking
@@ -1462,6 +1496,8 @@ fn training_queue_system(
                     Some(spawn_pos),
                     Some(*building_faction),
                 );
+
+                *used_by_faction.entry(*building_faction).or_default() += 1;
 
                 // If building has a rally point, set UnitState::Moving so the
                 // unit actually walks there (plain MoveTarget gets stripped by
@@ -1641,7 +1677,7 @@ fn building_upgrade_system(
         let is_gltf = bp.visual.mesh_kind.is_gltf();
         if is_gltf {
             if let Some(ref models) = building_models {
-                if let Some(new_scene) = models.scenes.get(&(*kind, new_level)) {
+                if let Some(new_scene) = models.scene_for(*kind, new_level, transform.translation) {
                     // Despawn old scene child
                     if let Ok(children) = children_q.get(entity) {
                         for child in children.iter() {
@@ -1656,7 +1692,7 @@ fn building_upgrade_system(
                     let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
                     let child = commands
                         .spawn((
-                            SceneRoot(new_scene.clone()),
+                            SceneRoot(new_scene),
                             BuildingSceneChild,
                             InheritOutline,
                             AsyncSceneInheritOutline::default(),

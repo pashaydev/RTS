@@ -109,17 +109,33 @@ pub fn handle_train_buttons(
     carried_totals: Res<CarriedResourceTotals>,
     mut pending_drains: ResMut<PendingCarriedDrains>,
     selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
-    mut queues: Query<&mut TrainingQueue>,
+    mut queue_queries: ParamSet<(
+        Query<(&Faction, &TrainingQueue), With<Building>>,
+        Query<&mut TrainingQueue>,
+    )>,
+    all_units: Query<&Faction, With<Unit>>,
+    all_buildings_for_cap: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
     registry: Res<BlueprintRegistry>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
+    let unit_cap = faction_unit_cap_stats(
+        active_player.0,
+        all_units.iter(),
+        queue_queries.p0().iter(),
+        all_buildings_for_cap.iter(),
+    );
+
     for (interaction, train_btn) in &interactions {
         if *interaction != Interaction::Pressed {
             continue;
         }
         ui_clicked.0 = 2;
         ui_press.0 = true;
+
+        if !unit_cap.has_room(1) {
+            continue;
+        }
 
         let kind = train_btn.0;
         let bp = registry.get(kind);
@@ -130,7 +146,7 @@ pub fn handle_train_buttons(
         }
 
         for building_entity in &selected_buildings {
-            if let Ok(mut queue) = queues.get_mut(building_entity) {
+            if let Ok(mut queue) = queue_queries.p1().get_mut(building_entity) {
                 let player_res_mut = all_resources.get_mut(&active_player.0);
                 let deficits = bp.cost.deduct_with_carried(player_res_mut);
                 let drain = SpendFromCarried {
@@ -914,13 +930,22 @@ pub fn update_train_cost_colors(
     active_player: Res<ActivePlayer>,
     carried_totals: Res<CarriedResourceTotals>,
     registry: Res<BlueprintRegistry>,
+    all_units: Query<&Faction, With<Unit>>,
+    all_training_queues: Query<(&Faction, &TrainingQueue), With<Building>>,
+    all_buildings_for_cap: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
     mut cost_texts: Query<(&TrainCostText, &mut TextColor)>,
 ) {
     let player_res = all_resources.get(&active_player.0);
     let carried = carried_totals.get(&active_player.0);
+    let unit_cap = faction_unit_cap_stats(
+        active_player.0,
+        all_units.iter(),
+        all_training_queues.iter(),
+        all_buildings_for_cap.iter(),
+    );
     for (cost_text, mut color) in &mut cost_texts {
         let bp = registry.get(cost_text.kind);
-        if bp.cost.can_afford_with_carried(player_res, carried) {
+        if bp.cost.can_afford_with_carried(player_res, carried) && unit_cap.has_room(1) {
             *color = TextColor(theme::TEXT_SECONDARY);
         } else {
             *color = TextColor(theme::DESTRUCTIVE);

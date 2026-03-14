@@ -160,23 +160,23 @@ fn spawn_pause_overlay(commands: &mut Commands, fonts: &UiFonts, is_options: boo
 }
 
 fn spawn_pause_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts) {
-    // Title
-    let title = commands
-        .spawn((
-            Text::new("PAUSED"),
-            TextFont {
-                font: fonts.heading.clone(),
-                font_size: theme::FONT_DISPLAY,
-                ..default()
-            },
-            TextColor(theme::TEXT_PRIMARY),
-            Node {
-                margin: UiRect::bottom(Val::Px(24.0)),
-                ..default()
-            },
-        ))
-        .id();
-    commands.entity(panel).add_child(title);
+    // // Title
+    // let title = commands
+    //     .spawn((
+    //         Text::new("PAUSED"),
+    //         TextFont {
+    //             font: fonts.heading.clone(),
+    //             font_size: theme::FONT_DISPLAY,
+    //             ..default()
+    //         },
+    //         TextColor(theme::TEXT_PRIMARY),
+    //         Node {
+    //             margin: UiRect::bottom(Val::Px(24.0)),
+    //             ..default()
+    //         },
+    //     ))
+    //     .id();
+    // commands.entity(panel).add_child(title);
 
     // Buttons
     let buttons = [

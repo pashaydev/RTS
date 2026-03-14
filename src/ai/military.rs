@@ -29,6 +29,7 @@ pub fn ai_military_system(
     registry: Res<BlueprintRegistry>,
     mut notifications: ResMut<AllyNotifications>,
     queries: (
+        Query<&Faction, With<Unit>>,
         Query<(Entity, &Faction, &EntityKind, &Transform), (With<Unit>, Without<Building>)>,
         Query<
             (Entity, &Faction, &EntityKind, &Transform, &UnitState),
@@ -41,10 +42,19 @@ pub fn ai_military_system(
         >,
         Query<&Health>,
         Query<(&Faction, &Transform), With<Building>>,
+        Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
         Query<(&Faction, &EntityKind, &mut TrainingQueue), With<Building>>,
     ),
 ) {
-    let (units_q, idle_military_q, health_q, enemy_buildings_q, mut train_queues) = queries;
+    let (
+        all_unit_factions_q,
+        units_q,
+        idle_military_q,
+        health_q,
+        enemy_buildings_q,
+        building_levels_q,
+        mut train_queues,
+    ) = queries;
     let dt = time.delta_secs();
 
     for &faction in &ai_controlled.factions {
@@ -143,7 +153,14 @@ pub fn ai_military_system(
                 .cost
                 .can_afford_with_carried(all_resources.get(&faction), carried)
             {
-                if try_train(&mut train_queues, &faction, unit_kind, &registry) {
+                if try_train(
+                    &mut train_queues,
+                    &faction,
+                    unit_kind,
+                    &registry,
+                    &all_unit_factions_q,
+                    &building_levels_q,
+                ) {
                     let deficits =
                         bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
                     let drain = SpendFromCarried {

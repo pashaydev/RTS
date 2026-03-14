@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::theme;
 
@@ -7,11 +8,17 @@ pub fn update_resource_texts(
     all_resources: Res<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
     carried_totals: Res<CarriedResourceTotals>,
-    mut text_q: Query<(&mut Text, &ResourceText)>,
+    all_units: Query<&Faction, With<Unit>>,
+    all_training_queues: Query<(&Faction, &TrainingQueue), With<Building>>,
+    all_buildings_for_cap: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
+    mut text_sets: ParamSet<(
+        Query<(&mut Text, &ResourceText)>,
+        Query<&mut Text, With<PopulationText>>,
+    )>,
 ) {
     let player_res = all_resources.get(&active_player.0);
     let carried = carried_totals.get(&active_player.0);
-    for (mut text, rt_marker) in &mut text_q {
+    for (mut text, rt_marker) in &mut text_sets.p0() {
         let rt = rt_marker.0;
         let val = player_res.get(rt);
         let carried_val = carried.get(rt);
@@ -19,6 +26,23 @@ pub fn update_resource_texts(
             **text = format!("{} (+{})", val, carried_val);
         } else {
             **text = format!("{}", val);
+        }
+    }
+
+    let unit_cap = faction_unit_cap_stats(
+        active_player.0,
+        all_units.iter(),
+        all_training_queues.iter(),
+        all_buildings_for_cap.iter(),
+    );
+    for mut text in &mut text_sets.p1() {
+        if unit_cap.queued > 0 {
+            **text = format!(
+                "Units: {} (+{}) / {}",
+                unit_cap.used, unit_cap.queued, unit_cap.cap
+            );
+        } else {
+            **text = format!("Units: {} / {}", unit_cap.used, unit_cap.cap);
         }
     }
 }
@@ -46,7 +70,28 @@ pub fn update_processed_resource_visibility(
 #[derive(Component)]
 pub struct ProcessedResourceRow(pub ResourceType);
 
+#[derive(Component)]
+pub struct PopulationText;
+
 pub fn spawn_resource_content(commands: &mut Commands, parent: Entity, icons: &IconAssets) {
+    let population = commands
+        .spawn((
+            PopulationText,
+            Text::new("Units: 0 / 8"),
+            TextFont {
+                font_size: theme::FONT_MEDIUM,
+                ..default()
+            },
+            TextColor(theme::TEXT_PRIMARY),
+            Node {
+                width: Val::Percent(100.0),
+                margin: UiRect::bottom(Val::Px(4.0)),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(parent).add_child(population);
+
     // Row 1: Raw resources (always shown)
     for rt in ResourceType::RAW {
         spawn_resource_row(commands, parent, rt, icons, false);

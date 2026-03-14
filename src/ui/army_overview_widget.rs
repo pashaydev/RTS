@@ -15,6 +15,8 @@ pub fn update_army_overview(
     content_q: Query<Entity, With<super::widget_framework::WidgetContent>>,
     existing: Query<Entity, With<ArmyOverviewContent>>,
     units: Query<(&EntityKind, &Faction, Option<&UnitState>), With<Unit>>,
+    training_queues: Query<(&Faction, &TrainingQueue), With<Building>>,
+    buildings: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
     registry: Res<super::widget_framework::WidgetRegistry>,
 ) {
     use super::widget_framework::WidgetId;
@@ -60,6 +62,12 @@ pub fn update_army_overview(
     }
 
     let total: u32 = counts.iter().map(|(_, c, _)| c).sum();
+    let unit_cap = faction_unit_cap_stats(
+        active_player.0,
+        units.iter().map(|(_, faction, _)| faction),
+        training_queues.iter(),
+        buildings.iter(),
+    );
 
     let container = commands
         .spawn((
@@ -130,7 +138,7 @@ pub fn update_army_overview(
     let total_text = commands
         .spawn((
             ArmyOverviewContent,
-            Text::new(format!("Total: {}", total)),
+            Text::new(format!("Total: {} / {}", total, unit_cap.cap)),
             TextFont {
                 font_size: theme::FONT_CAPTION,
                 ..default()

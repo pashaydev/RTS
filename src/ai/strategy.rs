@@ -19,8 +19,9 @@ pub fn ai_strategy_system(
     mut ai_state: ResMut<AiState>,
     base_state: Res<FactionBaseState>,
     all_completed: Res<AllCompletedBuildings>,
-    buildings_q: Query<(&Faction, &EntityKind, &BuildingState), With<Building>>,
+    buildings_q: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
     units_q: Query<(&Faction, &EntityKind), With<Unit>>,
+    training_queues_q: Query<(&Faction, &TrainingQueue), With<Building>>,
 ) {
     let dt = time.delta_secs();
 
@@ -68,7 +69,7 @@ pub fn ai_strategy_system(
         // Cache counts
         let mut building_counts: HashMap<EntityKind, usize> = HashMap::new();
         let mut completed_building_counts: HashMap<EntityKind, usize> = HashMap::new();
-        for (f, kind, state) in buildings_q.iter() {
+        for (f, kind, state, _) in buildings_q.iter() {
             if *f != faction {
                 continue;
             }
@@ -93,12 +94,25 @@ pub fn ai_strategy_system(
 
         // Count buildings under construction
         let mut under_construction = 0u8;
-        for (f, _, state) in buildings_q.iter() {
+        for (f, _, state, _) in buildings_q.iter() {
             if *f == faction && *state == BuildingState::UnderConstruction {
                 under_construction += 1;
             }
         }
         brain.pending_builds = under_construction;
+
+        let unit_cap = UnitCapStats {
+            used: count_faction_units(faction, units_q.iter().map(|(unit_faction, _)| unit_faction)),
+            queued: count_faction_queued_units(faction, training_queues_q.iter()),
+            cap: faction_unit_cap(
+                faction,
+                buildings_q
+                    .iter()
+                    .map(|(building_faction, kind, state, level)| {
+                        (building_faction, kind, state, level)
+                    }),
+            ),
+        };
 
         // ── State machine transitions (with hysteresis) ──
         let defense_interrupt = brain.defense_interrupt;
@@ -239,7 +253,7 @@ pub fn ai_strategy_system(
                 let tc = &building_counts;
                 let player_buildings = if brain.personality == AiPersonality::Supportive {
                     let mut pb: HashMap<EntityKind, usize> = HashMap::new();
-                    for (f, kind, state) in buildings_q.iter() {
+                    for (f, kind, state, _) in buildings_q.iter() {
                         if *f == active_player.0 && *state == BuildingState::Complete {
                             *pb.entry(*kind).or_default() += 1;
                         }
@@ -250,8 +264,21 @@ pub fn ai_strategy_system(
                 };
                 plan_builds_for_state(brain, tc, player_buildings.as_ref());
             }
-            brain.build_queue.sort_by_key(|r| r.priority);
         }
+
+        let needs_house = has_base && unit_cap.reserved().saturating_add(2) >= unit_cap.cap;
+        let house_already_planned = brain
+            .build_queue
+            .iter()
+            .any(|req| req.kind == EntityKind::House);
+        if needs_house && !house_already_planned {
+            brain.build_queue.push(BuildRequest {
+                kind: EntityKind::House,
+                priority: 0,
+                near_position: None,
+            });
+        }
+        brain.build_queue.sort_by_key(|r| r.priority);
 
         // Set resource goal from first build queue item
         if let Some(first) = brain.build_queue.first() {

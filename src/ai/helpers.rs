@@ -284,7 +284,23 @@ pub fn try_train(
     faction: &Faction,
     unit_kind: EntityKind,
     registry: &BlueprintRegistry,
+    unit_factions: &Query<&Faction, With<Unit>>,
+    building_levels: &Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
 ) -> bool {
+    let queued = train_queues
+        .iter_mut()
+        .filter(|(queue_faction, _, _)| **queue_faction == *faction)
+        .map(|(_, _, queue)| queue.queue.len() as u32)
+        .sum();
+    let unit_cap = UnitCapStats {
+        used: count_faction_units(*faction, unit_factions.iter()),
+        queued,
+        cap: faction_unit_cap(*faction, building_levels.iter()),
+    };
+    if !unit_cap.has_room(1) {
+        return false;
+    }
+
     for (f, building_kind, mut queue) in train_queues.iter_mut() {
         if *f != *faction {
             continue;

@@ -33,6 +33,7 @@ pub fn ai_economy_system(
     height_map: Res<HeightMap>,
     biome_map: Res<BiomeMap>,
     queries: (
+        Query<&Faction, With<Unit>>,
         Query<(Entity, &Faction, &Transform, &UnitState), (With<Unit>, With<GatherSpeed>)>,
         Query<(Entity, &Transform, &ResourceNode), Without<Unit>>,
         Query<(Entity, &Faction, &EntityKind, &Transform, &BuildingState), With<Building>>,
@@ -46,6 +47,7 @@ pub fn ai_economy_system(
             ),
             With<Building>,
         >,
+        Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
         Query<(&Faction, &ConstructionWorkers, &BuildingState), With<Building>>,
         Query<(&Faction, &EntityKind, &mut TrainingQueue), With<Building>>,
         Query<&BuildingFootprint>,
@@ -56,10 +58,12 @@ pub fn ai_economy_system(
     let dt = time.delta_secs();
     let (active_player, teams, ai_controlled, base_state) = context;
     let (
+        all_units_q,
         workers_q,
         resource_nodes_q,
         buildings_q,
         building_levels_q,
+        cap_buildings_q,
         construction_workers_q,
         mut train_queues,
         footprints_q,
@@ -224,7 +228,14 @@ pub fn ai_economy_system(
                 .cost
                 .can_afford_with_carried(all_resources.get(&faction), carried)
             {
-                if try_train(&mut train_queues, &faction, EntityKind::Worker, &registry) {
+                if try_train(
+                    &mut train_queues,
+                    &faction,
+                    EntityKind::Worker,
+                    &registry,
+                    &all_units_q,
+                    &cap_buildings_q,
+                ) {
                     let deficits =
                         bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
                     let drain = SpendFromCarried {
@@ -503,6 +514,7 @@ pub fn ai_economy_system(
                 EntityKind::WatchTower,
                 EntityKind::Barracks,
                 EntityKind::Storage,
+                EntityKind::House,
             ];
             for target_kind in &upgrade_priorities {
                 for (f, kind, level, entity, state) in building_levels_q.iter() {

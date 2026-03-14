@@ -77,28 +77,48 @@ pub fn update_action_bar(
         Res<ActivePlayer>,
         Res<AllPlayerResources>,
     ),
+    unit_cap_queries: (
+        Query<&Faction, With<Unit>>,
+        Query<(&Faction, &TrainingQueue), With<Building>>,
+        Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
+    ),
     registry: Res<BlueprintRegistry>,
-    action_bar: Query<(Entity, Option<&Children>), With<ActionBarInner>>,
-    changed_buildings: Query<
-        Entity,
-        Or<(
-            Changed<BuildingState>,
-            Changed<BuildingLevel>,
-            Changed<UpgradeProgress>,
-            Changed<TowerAutoAttackEnabled>,
-            Changed<AssignedWorkers>,
-            Changed<ProductionState>,
-        )>,
-    >,
-    mut last_queue_len: Local<usize>,
-    mut last_res_snapshot: Local<[u32; ResourceType::COUNT]>,
+    action_state: (
+        Query<(Entity, Option<&Children>), With<ActionBarInner>>,
+        Query<
+            Entity,
+            Or<(
+                Changed<BuildingState>,
+                Changed<BuildingLevel>,
+                Changed<UpgradeProgress>,
+                Changed<TowerAutoAttackEnabled>,
+                Changed<AssignedWorkers>,
+                Changed<ProductionState>,
+            )>,
+        >,
+        Query<Entity, With<BuildGridButton>>,
+        Query<Entity, With<DemolishConfirmPanel>>,
+        Query<&Children>,
+        Res<ActionBarLayoutRevision>,
+    ),
+    local_state: (
+        Local<usize>,
+        Local<[u32; ResourceType::COUNT]>,
+        Local<UnitCapStats>,
+    ),
     ui_state: (Res<IconAssets>, Res<RallyPointMode>),
-    existing_cards: Query<Entity, With<BuildGridButton>>,
-    confirm_panels: Query<Entity, With<DemolishConfirmPanel>>,
-    children_q_readonly: Query<&Children>,
-    layout_revision: Res<ActionBarLayoutRevision>,
 ) {
     let (all_completed, base_state, active_player, all_resources) = player_state;
+    let (all_units, all_training_queues, all_buildings_for_cap) = unit_cap_queries;
+    let (
+        action_bar,
+        changed_buildings,
+        existing_cards,
+        confirm_panels,
+        children_q_readonly,
+        layout_revision,
+    ) = action_state;
+    let (mut last_queue_len, mut last_res_snapshot, mut last_unit_cap) = local_state;
     let (icons, rally_mode) = ui_state;
 
     if !confirm_panels.is_empty() {
@@ -117,6 +137,14 @@ pub fn update_action_bar(
     let current_amounts = all_resources.get(&active_player.0).amounts;
     let resources_changed = current_amounts != *last_res_snapshot;
     *last_res_snapshot = current_amounts;
+    let current_unit_cap = faction_unit_cap_stats(
+        active_player.0,
+        all_units.iter(),
+        all_training_queues.iter(),
+        all_buildings_for_cap.iter(),
+    );
+    let unit_cap_changed = current_unit_cap != *last_unit_cap;
+    *last_unit_cap = current_unit_cap;
     let layout_changed = layout_revision.is_changed();
 
     let current_queue_len = selected_buildings
@@ -134,6 +162,7 @@ pub fn update_action_bar(
         && !queue_changed
         && !rally_changed
         && !resources_changed
+        && !unit_cap_changed
         && !layout_changed
     {
         return;
@@ -149,6 +178,7 @@ pub fn update_action_bar(
         && !completed_changed
         && !founded_changed
         && !resources_changed
+        && !unit_cap_changed
         && !layout_changed
     {
         return;
@@ -204,6 +234,7 @@ pub fn update_action_bar(
                         &icons,
                         &registry,
                         player_res,
+                        current_unit_cap,
                         &rally_mode,
                         layout_bucket,
                     );
@@ -602,6 +633,7 @@ fn spawn_building_action_bar(
     icons: &IconAssets,
     registry: &BlueprintRegistry,
     player_res: &PlayerResources,
+    unit_cap: UnitCapStats,
     rally_mode: &RallyPointMode,
     layout_bucket: u8,
 ) {
@@ -1139,6 +1171,7 @@ fn spawn_building_action_bar(
                     icons,
                     registry,
                     player_res,
+                    unit_cap,
                     layout_bucket,
                 );
             }
@@ -1927,6 +1960,7 @@ fn spawn_building_grid(
             matches!(
                 k,
                 EntityKind::Base
+                    | EntityKind::House
                     | EntityKind::Sawmill
                     | EntityKind::Mine
                     | EntityKind::OilRig
@@ -2125,12 +2159,15 @@ fn spawn_train_button(
     icons: &IconAssets,
     registry: &BlueprintRegistry,
     player_res: &PlayerResources,
+    unit_cap: UnitCapStats,
     layout_bucket: u8,
 ) {
     let label = kind.display_name();
     let bp = registry.get(kind);
     let cost_str = format_cost_from_blueprint(bp);
     let can_afford = bp.cost.can_afford(player_res);
+    let has_capacity = unit_cap.has_room(1);
+    let can_train = can_afford && has_capacity;
 
     // Build rich tooltip
     let mut tooltip_lines = vec![label.to_string()];
@@ -2145,17 +2182,25 @@ fn spawn_train_button(
         "Cost: {} | Train: {:.0}s",
         cost_str, bp.train_time_secs
     ));
+    tooltip_lines.push(format!(
+        "Units: {} active + {} queued / {}",
+        unit_cap.used, unit_cap.queued, unit_cap.cap
+    ));
     if !can_afford {
         tooltip_lines.push("Not enough resources!".to_string());
     }
-    tooltip_lines.push("Click to train".to_string());
+    if !has_capacity {
+        tooltip_lines.push("Population cap reached. Build or upgrade Houses.".to_string());
+    } else {
+        tooltip_lines.push("Click to train".to_string());
+    }
 
-    let border_color = if can_afford {
+    let border_color = if can_train {
         Color::srgba(0.25, 0.25, 0.30, 0.4)
     } else {
         Color::srgba(0.80, 0.27, 0.27, 0.25)
     };
-    let name_color = if can_afford {
+    let name_color = if can_train {
         theme::TEXT_PRIMARY
     } else {
         theme::TEXT_DISABLED
@@ -2165,7 +2210,7 @@ fn spawn_train_button(
         .spawn((
             TrainButton(kind),
             Button,
-            ButtonAnimState::new(if can_afford {
+            ButtonAnimState::new(if can_train {
                 [0.17, 0.17, 0.17, 0.94]
             } else {
                 [0.08, 0.08, 0.08, 0.94]
@@ -2189,7 +2234,7 @@ fn spawn_train_button(
                 border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
-            BackgroundColor(if can_afford {
+            BackgroundColor(if can_train {
                 theme::BTN_PRIMARY
             } else {
                 Color::srgba(0.08, 0.08, 0.08, 0.7)
@@ -2220,7 +2265,7 @@ fn spawn_train_button(
                 frame.spawn((
                     ImageNode {
                         image: icons.entity_icon(kind),
-                        color: if can_afford {
+                        color: if can_train {
                             Color::WHITE
                         } else {
                             Color::srgba(1.0, 1.0, 1.0, 0.35)
@@ -2249,7 +2294,7 @@ fn spawn_train_button(
                     font_size: theme::FONT_SMALL,
                     ..default()
                 },
-                TextColor(if can_afford {
+                TextColor(if can_train {
                     theme::TEXT_SECONDARY
                 } else {
                     theme::DESTRUCTIVE

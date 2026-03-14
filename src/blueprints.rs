@@ -40,6 +40,7 @@ pub enum EntityKind {
     WallSegment,
     WallPost,
     Storage,
+    House,
     MageTower,
     Temple,
     Stable,
@@ -98,6 +99,7 @@ impl EntityKind {
             | Self::WallSegment
             | Self::WallPost
             | Self::Storage
+            | Self::House
             | Self::MageTower
             | Self::Temple
             | Self::Stable
@@ -139,6 +141,7 @@ impl EntityKind {
             Self::WallSegment => "Wall",
             Self::WallPost => "Wall Post",
             Self::Storage => "Storage",
+            Self::House => "House",
             Self::MageTower => "Mage Tower",
             Self::Temple => "Temple",
             Self::Stable => "Stable",
@@ -182,6 +185,7 @@ impl EntityKind {
         EntityKind::WallSegment,
         EntityKind::WallPost,
         EntityKind::Storage,
+        EntityKind::House,
         EntityKind::MageTower,
         EntityKind::Temple,
         EntityKind::Stable,
@@ -225,6 +229,9 @@ impl EntityKind {
             Self::WallSegment => "Defensive wall segment. Best placed in long runs.",
             Self::WallPost => "Wall junction support piece.",
             Self::Storage => "Resource depot. Increases storage capacity.",
+            Self::House => {
+                "Housing building. Increases max units by +4 at level 1, +6 at level 2, and +8 at level 3."
+            }
             Self::MageTower => "Trains Mages and Priests.",
             Self::Temple => "Trains Priests. Provides healing aura when upgraded.",
             Self::Stable => "Trains Cavalry and Knights.",
@@ -608,6 +615,7 @@ impl BlueprintRegistry {
             EntityKind::GuardTower,
             EntityKind::BallistaTower,
             EntityKind::BombardTower,
+            EntityKind::House,
             EntityKind::Barracks,
             EntityKind::Workshop,
             EntityKind::Storage,
@@ -1778,6 +1786,66 @@ pub fn build_registry() -> BlueprintRegistry {
                 mesh_kind: MeshKind::GltfScene { pick_radius: 4.5 },
                 color: Color::srgb(0.45, 0.32, 0.18),
                 selected_color: Color::srgb(0.45, 0.32, 0.18),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
+        },
+    );
+
+    blueprints.insert(
+        EntityKind::House,
+        Blueprint {
+            kind: EntityKind::House,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 150.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 10.0 }),
+            cost: ResourceCost::new()
+                .with(ResourceType::Wood, 45)
+                .with(ResourceType::Iron, 10),
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 7.0,
+                half_height: 0.1,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost::new()
+                            .with(ResourceType::Wood, 60)
+                            .with(ResourceType::Iron, 15),
+                        time_secs: 10.0,
+                        scale_multiplier: 1.05,
+                        bonus: LevelBonus::None,
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost::new()
+                            .with(ResourceType::Wood, 90)
+                            .with(ResourceType::Copper, 10)
+                            .with(ResourceType::Iron, 30),
+                        time_secs: 16.0,
+                        scale_multiplier: 1.08,
+                        bonus: LevelBonus::None,
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
+                color: Color::srgb(0.62, 0.52, 0.42),
+                selected_color: Color::srgb(0.62, 0.52, 0.42),
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
@@ -2999,13 +3067,13 @@ pub fn spawn_from_blueprint_with_faction(
     // Spawn GLTF scene child for buildings with GltfScene mesh kind
     if !is_gltf_character && bp.visual.mesh_kind.is_gltf() {
         if let Some(models) = building_models {
-            if let Some(scene_handle) = models.scenes.get(&(kind, 1)) {
+            if let Some(scene_handle) = models.scene_for(kind, 1, pos) {
                 let cal = models.calibration.get(&kind);
                 let scale = cal.map(|c| c.scale).unwrap_or(1.0);
                 let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
                 let child = commands
                     .spawn((
-                        SceneRoot(scene_handle.clone()),
+                        SceneRoot(scene_handle),
                         BuildingSceneChild,
                         InheritOutline,
                         AsyncSceneInheritOutline::default(),

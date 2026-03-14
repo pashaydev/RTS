@@ -1778,6 +1778,7 @@ impl IconAssets {
             EntityKind::WallSegment => self.tower.clone(),
             EntityKind::WallPost => self.tower.clone(),
             EntityKind::Storage => self.storage.clone(),
+            EntityKind::House => self.storage.clone(),
             // Units
             EntityKind::Worker => self.worker.clone(),
             EntityKind::Soldier => self.soldier.clone(),
@@ -2048,6 +2049,80 @@ pub struct BuildingScaleAnim {
 #[derive(Component)]
 pub struct LevelIndicator {
     pub building: Entity,
+}
+
+pub const DEFAULT_UNIT_CAP: u32 = 8;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnitCapStats {
+    pub used: u32,
+    pub queued: u32,
+    pub cap: u32,
+}
+
+impl UnitCapStats {
+    pub fn reserved(self) -> u32 {
+        self.used + self.queued
+    }
+
+    pub fn has_room(self, amount: u32) -> bool {
+        self.reserved().saturating_add(amount) <= self.cap
+    }
+}
+
+pub fn unit_capacity_bonus_for_building(kind: EntityKind, level: u8) -> u32 {
+    match kind {
+        EntityKind::House => 4 + 2 * u32::from(level.saturating_sub(1)),
+        _ => 0,
+    }
+}
+
+pub fn count_faction_units<'a>(
+    faction: Faction,
+    unit_factions: impl IntoIterator<Item = &'a Faction>,
+) -> u32 {
+    unit_factions
+        .into_iter()
+        .filter(|unit_faction| **unit_faction == faction)
+        .count() as u32
+}
+
+pub fn count_faction_queued_units<'a>(
+    faction: Faction,
+    queues: impl IntoIterator<Item = (&'a Faction, &'a TrainingQueue)>,
+) -> u32 {
+    queues
+        .into_iter()
+        .filter(|(queue_faction, _)| **queue_faction == faction)
+        .map(|(_, queue)| queue.queue.len() as u32)
+        .sum()
+}
+
+pub fn faction_unit_cap<'a>(
+    faction: Faction,
+    buildings: impl IntoIterator<Item = (&'a Faction, &'a EntityKind, &'a BuildingState, &'a BuildingLevel)>,
+) -> u32 {
+    DEFAULT_UNIT_CAP
+        + buildings
+            .into_iter()
+            .filter(|(building_faction, _, state, _)| {
+                **building_faction == faction && **state == BuildingState::Complete
+            })
+            .map(|(_, kind, _, level)| unit_capacity_bonus_for_building(*kind, level.0))
+            .sum::<u32>()
+}
+
+pub fn faction_unit_cap_stats<'a>(
+    faction: Faction,
+    unit_factions: impl IntoIterator<Item = &'a Faction>,
+    queues: impl IntoIterator<Item = (&'a Faction, &'a TrainingQueue)>,
+    buildings: impl IntoIterator<Item = (&'a Faction, &'a EntityKind, &'a BuildingState, &'a BuildingLevel)>,
+) -> UnitCapStats {
+    UnitCapStats {
+        used: count_faction_units(faction, unit_factions),
+        queued: count_faction_queued_units(faction, queues),
+        cap: faction_unit_cap(faction, buildings),
+    }
 }
 
 #[derive(Component)]

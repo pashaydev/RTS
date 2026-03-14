@@ -1,5 +1,7 @@
 use bevy::prelude::*;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use crate::blueprints::EntityKind;
 use crate::components::{
@@ -194,178 +196,146 @@ pub struct BuildingModelCalibration {
 
 #[derive(Resource)]
 pub struct BuildingModelAssets {
-    pub scenes: HashMap<(EntityKind, u8), Handle<Scene>>,
+    pub scenes: HashMap<(EntityKind, u8), Vec<Handle<Scene>>>,
     pub calibration: HashMap<EntityKind, BuildingModelCalibration>,
+}
+
+impl BuildingModelAssets {
+    pub fn scene_for(&self, kind: EntityKind, level: u8, world_pos: Vec3) -> Option<Handle<Scene>> {
+        let variants = self.scenes.get(&(kind, level))?;
+        if variants.is_empty() {
+            return None;
+        }
+
+        let variant_index = if variants.len() == 1 {
+            0
+        } else {
+            building_variant_index(kind, world_pos, variants.len())
+        };
+
+        variants.get(variant_index).cloned()
+    }
 }
 
 const BUILDING_BASE_PATH: &str = "UltimateFantasyRTS/glTF";
 
+fn building_variant_index(kind: EntityKind, world_pos: Vec3, variant_count: usize) -> usize {
+    let mut hasher = DefaultHasher::new();
+    kind.hash(&mut hasher);
+    ((world_pos.x * 10.0).round() as i32).hash(&mut hasher);
+    ((world_pos.z * 10.0).round() as i32).hash(&mut hasher);
+    (hasher.finish() as usize) % variant_count
+}
+
 fn load_building_model_assets_eager(asset_server: &AssetServer) -> BuildingModelAssets {
     let mut scenes = HashMap::new();
+    let mut insert_variants = |kind: EntityKind, level: u8, names: &[&str]| {
+        let handles = names
+            .iter()
+            .map(|name| asset_server.load(format!("{BUILDING_BASE_PATH}/{name}.gltf#Scene0")))
+            .collect();
+        scenes.insert((kind, level), handles);
+    };
 
-    let mappings: &[(EntityKind, &[&str; 3])] = &[
-        (
-            EntityKind::Base,
-            &[
-                "TownCenter_FirstAge_Level1",
-                "TownCenter_FirstAge_Level2",
-                "TownCenter_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::Barracks,
-            &[
-                "Barracks_FirstAge_Level1",
-                "Barracks_FirstAge_Level2",
-                "Barracks_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::Workshop,
-            &[
-                "Market_FirstAge_Level1",
-                "Market_FirstAge_Level2",
-                "Market_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::Tower,
-            &[
-                "WatchTower_FirstAge_Level1",
-                "WatchTower_FirstAge_Level2",
-                "WatchTower_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::WatchTower,
-            &[
-                "WatchTower_FirstAge_Level1",
-                "WatchTower_FirstAge_Level2",
-                "WatchTower_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::GuardTower,
-            &[
-                "WatchTower_FirstAge_Level1",
-                "WatchTower_FirstAge_Level2",
-                "WatchTower_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::BallistaTower,
-            &[
-                "WatchTower_FirstAge_Level1",
-                "WatchTower_FirstAge_Level2",
-                "WatchTower_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::BombardTower,
-            &[
-                "WatchTower_FirstAge_Level1",
-                "WatchTower_FirstAge_Level2",
-                "WatchTower_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::Outpost,
-            &[
-                "WatchTower_FirstAge_Level1",
-                "WatchTower_FirstAge_Level1",
-                "WatchTower_FirstAge_Level1",
-            ],
-        ),
-        (
-            EntityKind::Gatehouse,
-            &[
-                "WatchTower_FirstAge_Level1",
-                "WatchTower_FirstAge_Level1",
-                "WatchTower_FirstAge_Level1",
-            ],
-        ),
-        (
-            EntityKind::WallSegment,
-            &[
-                "Storage_FirstAge_Level1",
-                "Storage_FirstAge_Level1",
-                "Storage_FirstAge_Level1",
-            ],
-        ),
-        (
-            EntityKind::WallPost,
-            &[
-                "Storage_FirstAge_Level1",
-                "Storage_FirstAge_Level1",
-                "Storage_FirstAge_Level1",
-            ],
-        ),
-        (
-            EntityKind::Storage,
-            &[
-                "Storage_FirstAge_Level1",
-                "Storage_FirstAge_Level2",
-                "Storage_FirstAge_Leve3", // typo in asset filename
-            ],
-        ),
-        (
-            EntityKind::MageTower,
-            &[
-                "Wonder_FirstAge_Level1",
-                "Wonder_FirstAge_Level2",
-                "Wonder_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::Temple,
-            &[
-                "Temple_FirstAge_Level1",
-                "Temple_FirstAge_Level2",
-                "Temple_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::Stable,
-            &[
-                "Farm_FirstAge_Level1",
-                "Farm_FirstAge_Level2",
-                "Farm_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::SiegeWorks,
-            &[
-                "Archery_FirstAge_Level1",
-                "Archery_FirstAge_Level2",
-                "Archery_FirstAge_Level3",
-            ],
-        ),
-        (
-            EntityKind::Sawmill,
-            &[
-                "Windmill_FirstAge",
-                "Windmill_FirstAge",
-                "Windmill_FirstAge",
-            ],
-        ),
-        (EntityKind::Mine, &["Mine", "Mine", "Mine"]),
-        (
-            EntityKind::OilRig,
-            &[
-                "Port_FirstAge_Level1",
-                "Port_FirstAge_Level2",
-                "Port_FirstAge_Level3",
-            ],
-        ),
-    ];
+    insert_variants(EntityKind::Base, 1, &["TownCenter_FirstAge_Level1"]);
+    insert_variants(EntityKind::Base, 2, &["TownCenter_FirstAge_Level2"]);
+    insert_variants(EntityKind::Base, 3, &["TownCenter_FirstAge_Level3"]);
 
-    for (kind, names) in mappings {
-        for (level_idx, name) in names.iter().enumerate() {
-            let level = (level_idx + 1) as u8;
-            let handle = asset_server.load(format!("{BUILDING_BASE_PATH}/{name}.gltf#Scene0"));
-            scenes.insert((*kind, level), handle);
-        }
+    insert_variants(EntityKind::Barracks, 1, &["Barracks_FirstAge_Level1"]);
+    insert_variants(EntityKind::Barracks, 2, &["Barracks_FirstAge_Level2"]);
+    insert_variants(EntityKind::Barracks, 3, &["Barracks_FirstAge_Level3"]);
+
+    insert_variants(EntityKind::Workshop, 1, &["Market_FirstAge_Level1"]);
+    insert_variants(EntityKind::Workshop, 2, &["Market_FirstAge_Level2"]);
+    insert_variants(EntityKind::Workshop, 3, &["Market_FirstAge_Level3"]);
+
+    for tower_kind in [
+        EntityKind::Tower,
+        EntityKind::WatchTower,
+        EntityKind::GuardTower,
+        EntityKind::BallistaTower,
+        EntityKind::BombardTower,
+    ] {
+        insert_variants(tower_kind, 1, &["WatchTower_FirstAge_Level1"]);
+        insert_variants(tower_kind, 2, &["WatchTower_FirstAge_Level2"]);
+        insert_variants(tower_kind, 3, &["WatchTower_FirstAge_Level3"]);
     }
+
+    insert_variants(EntityKind::Outpost, 1, &["WatchTower_FirstAge_Level1"]);
+    insert_variants(EntityKind::Outpost, 2, &["WatchTower_FirstAge_Level1"]);
+    insert_variants(EntityKind::Outpost, 3, &["WatchTower_FirstAge_Level1"]);
+
+    insert_variants(EntityKind::Gatehouse, 1, &["WatchTower_FirstAge_Level1"]);
+    insert_variants(EntityKind::Gatehouse, 2, &["WatchTower_FirstAge_Level1"]);
+    insert_variants(EntityKind::Gatehouse, 3, &["WatchTower_FirstAge_Level1"]);
+
+    insert_variants(EntityKind::WallSegment, 1, &["Storage_FirstAge_Level1"]);
+    insert_variants(EntityKind::WallSegment, 2, &["Storage_FirstAge_Level1"]);
+    insert_variants(EntityKind::WallSegment, 3, &["Storage_FirstAge_Level1"]);
+
+    insert_variants(EntityKind::WallPost, 1, &["Storage_FirstAge_Level1"]);
+    insert_variants(EntityKind::WallPost, 2, &["Storage_FirstAge_Level1"]);
+    insert_variants(EntityKind::WallPost, 3, &["Storage_FirstAge_Level1"]);
+
+    insert_variants(EntityKind::Storage, 1, &["Storage_FirstAge_Level1"]);
+    insert_variants(EntityKind::Storage, 2, &["Storage_FirstAge_Level2"]);
+    insert_variants(EntityKind::Storage, 3, &["Storage_FirstAge_Leve3"]);
+
+    insert_variants(
+        EntityKind::House,
+        1,
+        &[
+            "Houses_SecondAge_1_Level1",
+            "Houses_SecondAge_2_Level1",
+            "Houses_SecondAge_3_Level1",
+        ],
+    );
+    insert_variants(
+        EntityKind::House,
+        2,
+        &[
+            "Houses_SecondAge_1_Level2",
+            "Houses_SecondAge_2_Level2",
+            "Houses_SecondAge_3_Level2",
+        ],
+    );
+    insert_variants(
+        EntityKind::House,
+        3,
+        &[
+            "Houses_SecondAge_1_Level3",
+            "Houses_SecondAge_2_Level3",
+            "Houses_SecondAge_3_Level3",
+        ],
+    );
+
+    insert_variants(EntityKind::MageTower, 1, &["Wonder_FirstAge_Level1"]);
+    insert_variants(EntityKind::MageTower, 2, &["Wonder_FirstAge_Level2"]);
+    insert_variants(EntityKind::MageTower, 3, &["Wonder_FirstAge_Level3"]);
+
+    insert_variants(EntityKind::Temple, 1, &["Temple_FirstAge_Level1"]);
+    insert_variants(EntityKind::Temple, 2, &["Temple_FirstAge_Level2"]);
+    insert_variants(EntityKind::Temple, 3, &["Temple_FirstAge_Level3"]);
+
+    insert_variants(EntityKind::Stable, 1, &["Farm_FirstAge_Level1"]);
+    insert_variants(EntityKind::Stable, 2, &["Farm_FirstAge_Level2"]);
+    insert_variants(EntityKind::Stable, 3, &["Farm_FirstAge_Level3"]);
+
+    insert_variants(EntityKind::SiegeWorks, 1, &["Archery_FirstAge_Level1"]);
+    insert_variants(EntityKind::SiegeWorks, 2, &["Archery_FirstAge_Level2"]);
+    insert_variants(EntityKind::SiegeWorks, 3, &["Archery_FirstAge_Level3"]);
+
+    insert_variants(EntityKind::Sawmill, 1, &["Windmill_FirstAge"]);
+    insert_variants(EntityKind::Sawmill, 2, &["Windmill_FirstAge"]);
+    insert_variants(EntityKind::Sawmill, 3, &["Windmill_FirstAge"]);
+
+    insert_variants(EntityKind::Mine, 1, &["Mine"]);
+    insert_variants(EntityKind::Mine, 2, &["Mine"]);
+    insert_variants(EntityKind::Mine, 3, &["Mine"]);
+
+    insert_variants(EntityKind::OilRig, 1, &["Port_FirstAge_Level1"]);
+    insert_variants(EntityKind::OilRig, 2, &["Port_FirstAge_Level2"]);
+    insert_variants(EntityKind::OilRig, 3, &["Port_FirstAge_Level3"]);
 
     // (kind, scale, y_offset, building_height)
     let calibration_data: &[(EntityKind, f32, f32, f32)] = &[
@@ -382,6 +352,7 @@ fn load_building_model_assets_eager(asset_server: &AssetServer) -> BuildingModel
         (EntityKind::WallSegment, 1.5, 0.0, 4.0),
         (EntityKind::WallPost, 1.8, 0.0, 5.0),
         (EntityKind::Storage, 3.0, 0.0, 5.0),
+        (EntityKind::House, 2.8, 0.0, 4.0),
         (EntityKind::MageTower, 3.0, 0.0, 10.0),
         (EntityKind::Temple, 3.0, 0.0, 8.0),
         (EntityKind::Stable, 3.0, 0.0, 7.0),
