@@ -21,7 +21,7 @@ impl FromWorld for UiFonts {
     }
 }
 
-pub fn apply_default_fonts(fonts: Res<UiFonts>, mut query: Query<&mut TextFont>) {
+pub fn apply_default_fonts(fonts: Res<UiFonts>, mut query: Query<&mut TextFont, Added<TextFont>>) {
     for mut text_font in &mut query {
         if text_font.font == Handle::default() {
             text_font.font = fonts.body.clone();

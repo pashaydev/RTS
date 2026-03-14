@@ -89,6 +89,7 @@ pub fn update_action_bar(
         )>,
     >,
     mut last_queue_len: Local<usize>,
+    mut last_res_snapshot: Local<[u32; 5]>,
     ui_state: (Res<IconAssets>, Res<RallyPointMode>),
     existing_cards: Query<Entity, With<BuildGridButton>>,
     confirm_panels: Query<Entity, With<DemolishConfirmPanel>>,
@@ -111,7 +112,9 @@ pub fn update_action_bar(
     let completed_changed = all_completed.is_changed();
     let founded_changed = base_state.is_changed();
     let rally_changed = rally_mode.is_changed();
-    let resources_changed = all_resources.is_changed();
+    let current_amounts = all_resources.get(&active_player.0).amounts;
+    let resources_changed = current_amounts != *last_res_snapshot;
+    *last_res_snapshot = current_amounts;
     let layout_changed = layout_revision.is_changed();
 
     let current_queue_len = selected_buildings

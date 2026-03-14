@@ -10,11 +10,15 @@ use crate::hover_material::{HoverRingMaterial, HoverRingSettings};
 use crate::minimap::{MinimapInteraction, MinimapSet};
 use crate::orders;
 use crate::theme;
+use crate::ui::fonts;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SelectionSet;
 
 pub struct SelectionPlugin;
+
+#[derive(Component)]
+struct HoverTooltipText;
 
 impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
@@ -252,7 +256,11 @@ fn clear_ui_press_on_release(
     }
 }
 
-fn setup_hover_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+fn setup_hover_assets(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    fonts: Res<fonts::UiFonts>,
+) {
     // Flat plane that will show the ring shader — sized 3x3 units
     let ring_mesh = meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(1.5)));
     commands.insert_resource(HoverRingAssets { mesh: ring_mesh });
@@ -262,20 +270,39 @@ fn setup_hover_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) 
         HoverTooltip,
         Node {
             position_type: PositionType::Absolute,
-            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-            border_radius: BorderRadius::all(Val::Px(4.0)),
+            padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
+            border_radius: BorderRadius::all(Val::Px(5.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            min_width: Val::Px(96.0),
+            max_width: Val::Px(168.0),
             ..default()
         },
         BackgroundColor(theme::BG_PANEL),
+        BorderColor::all(Color::srgba(0.25, 0.25, 0.30, 0.6)),
+        BoxShadow::new(
+            Color::srgba(0.0, 0.0, 0.0, 0.6),
+            Val::Px(0.0),
+            Val::Px(2.0),
+            Val::Px(0.0),
+            Val::Px(8.0),
+        ),
+        GlobalZIndex(100),
         Visibility::Hidden,
         GlobalTransform::default(),
-        Text::new(""),
-        TextFont {
-            font_size: theme::FONT_BODY,
-            ..default()
-        },
-        TextColor(theme::TEXT_PRIMARY),
-    ));
+    ))
+    .with_children(|parent| {
+        parent.spawn((
+            HoverTooltipText,
+            Text::new(""),
+            fonts::body_emphasis(&fonts, theme::FONT_LARGE),
+            TextColor(theme::TEXT_PRIMARY),
+            TextLayout::new_with_justify(Justify::Left),
+            Node {
+                max_width: Val::Px(148.0),
+                ..default()
+            },
+        ));
+    });
 }
 
 fn spawn_selection_box(mut commands: Commands) {
@@ -744,7 +771,8 @@ fn update_hover_ring(
 
 /// Update tooltip position and text based on hovered entity.
 fn update_hover_tooltip(
-    mut tooltip_q: Query<(&mut Node, &mut Visibility, &mut Text), With<HoverTooltip>>,
+    mut tooltip_q: Query<(&mut Node, &mut Visibility), With<HoverTooltip>>,
+    mut tooltip_text_q: Query<&mut Text, With<HoverTooltipText>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     ui_scale: Res<UiScale>,
     hovered_entities: Query<Entity, With<Hovered>>,
@@ -754,7 +782,10 @@ fn update_hover_tooltip(
     healths: Query<&Health>,
     building_levels: Query<&BuildingLevel>,
 ) {
-    let Ok((mut node, mut vis, mut text)) = tooltip_q.single_mut() else {
+    let Ok((mut node, mut vis)) = tooltip_q.single_mut() else {
+        return;
+    };
+    let Ok(mut text) = tooltip_text_q.single_mut() else {
         return;
     };
 

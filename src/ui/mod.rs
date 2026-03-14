@@ -43,7 +43,7 @@ impl Plugin for UiPlugin {
                 (spawn_hud, widget_framework::spawn_grid_overlay),
             )
             .add_systems(
-                Update,
+                PostUpdate,
                 fonts::apply_default_fonts,
             )
             .add_systems(
