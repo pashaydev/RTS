@@ -739,12 +739,8 @@ fn fog_hide_entities(
         };
     }
 
-    // Hide enemy player units outside fog vision (skip workers inside processors)
-    for (tf, mut vis, faction, unit_state) in enemy_units.iter_mut() {
-        if matches!(unit_state, UnitState::InsideProcessor(_)) {
-            *vis = Visibility::Hidden;
-            continue;
-        }
+    // Hide enemy player units outside fog vision
+    for (tf, mut vis, faction, _unit_state) in enemy_units.iter_mut() {
         if teams.is_allied(&active_player.0, faction) {
             *vis = Visibility::Inherited;
         } else {

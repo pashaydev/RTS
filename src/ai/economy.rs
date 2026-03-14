@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache};
+use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, ResourceCost};
 use crate::buildings::{spawn_wall_line, start_upgrade};
 use crate::components::*;
 use crate::ground::HeightMap;
@@ -114,11 +114,11 @@ pub fn ai_economy_system(
         if let Some(first) = brain.build_queue.first() {
             let bp = registry.get(first.kind);
             brain.resource_goal = Some(ResourceGoal {
-                wood: bp.cost.wood,
-                copper: bp.cost.copper,
-                iron: bp.cost.iron,
-                gold: bp.cost.gold,
-                oil: bp.cost.oil,
+                wood: bp.cost.get(ResourceType::Wood),
+                copper: bp.cost.get(ResourceType::Copper),
+                iron: bp.cost.get(ResourceType::Iron),
+                gold: bp.cost.get(ResourceType::Gold),
+                oil: bp.cost.get(ResourceType::Oil),
             });
         } else {
             brain.resource_goal = None;
@@ -164,11 +164,11 @@ pub fn ai_economy_system(
                 .cost
                 .can_afford_with_carried(all_resources.get(&faction), carried)
             {
-                let (dw, dc, di, dg, do_) =
+                let deficits =
                     bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
                 let drain = SpendFromCarried {
                     faction,
-                    amounts: [dw, dc, di, dg, do_],
+                    amounts: deficits,
                 };
                 if drain.has_deficit() {
                     pending_drains.drains.push(drain);
@@ -225,11 +225,11 @@ pub fn ai_economy_system(
                 .can_afford_with_carried(all_resources.get(&faction), carried)
             {
                 if try_train(&mut train_queues, &faction, EntityKind::Worker, &registry) {
-                    let (dw, dc, di, dg, do_) =
+                    let deficits =
                         bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
                     let drain = SpendFromCarried {
                         faction,
-                        amounts: [dw, dc, di, dg, do_],
+                        amounts: deficits,
                     };
                     if drain.has_deficit() {
                         pending_drains.drains.push(drain);
@@ -395,11 +395,11 @@ pub fn ai_economy_system(
                     near,
                 );
 
-                let (dw, dc, di, dg, do_) =
+                let deficits =
                     bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
                 let drain = SpendFromCarried {
                     faction,
-                    amounts: [dw, dc, di, dg, do_],
+                    amounts: deficits,
                 };
                 if drain.has_deficit() {
                     pending_drains.drains.push(drain);
@@ -446,8 +446,8 @@ pub fn ai_economy_system(
                     // Check if we can afford a wall segment
                     let wall_post_bp = registry.get(EntityKind::WallPost);
                     let wall_seg_bp = registry.get(EntityKind::WallSegment);
-                    let est_wood = wall_post_bp.cost.wood * 2 + wall_seg_bp.cost.wood;
-                    let est_copper = wall_post_bp.cost.copper * 2 + wall_seg_bp.cost.copper;
+                    let est_wood = wall_post_bp.cost.get(ResourceType::Wood) * 2 + wall_seg_bp.cost.get(ResourceType::Wood);
+                    let est_copper = wall_post_bp.cost.get(ResourceType::Copper) * 2 + wall_seg_bp.cost.get(ResourceType::Copper);
                     let pr_check = all_resources.get(&faction);
                     if pr_check.get(ResourceType::Wood) < est_wood
                         || pr_check.get(ResourceType::Copper) < est_copper
@@ -463,15 +463,16 @@ pub fn ai_economy_system(
 
                     let num_posts = points.len() as u32;
                     let num_segs = (points.len() as u32).saturating_sub(1);
-                    let total_wood =
-                        wall_post_bp.cost.wood * num_posts + wall_seg_bp.cost.wood * num_segs;
-                    let total_copper =
-                        wall_post_bp.cost.copper * num_posts + wall_seg_bp.cost.copper * num_segs;
-                    let total_iron =
-                        wall_post_bp.cost.iron * num_posts + wall_seg_bp.cost.iron * num_segs;
+                    let mut total_cost = ResourceCost::default();
+                    for rt in ResourceType::ALL.iter() {
+                        let amt = wall_post_bp.cost.get(*rt) * num_posts + wall_seg_bp.cost.get(*rt) * num_segs;
+                        if amt > 0 {
+                            total_cost.set(*rt, amt);
+                        }
+                    }
 
                     let res = all_resources.get_mut(&faction);
-                    res.subtract(total_wood, total_copper, total_iron, 0, 0);
+                    res.subtract_cost(&total_cost);
 
                     spawn_wall_line(
                         &mut commands,

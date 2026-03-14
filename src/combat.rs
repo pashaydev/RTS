@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use crate::blueprints::{BlueprintRegistry, EntityKind, IsRanged};
 use crate::components::*;
 use crate::ground::HeightMap;
+use crate::spatial::{SpatialHashGrid, WallSpatialGrid};
 
 pub struct CombatPlugin;
 
@@ -81,9 +82,10 @@ fn explode_props(
     }
 }
 
-fn player_auto_acquire_target(
+pub fn player_auto_acquire_target(
     mut commands: Commands,
     teams: Res<TeamConfig>,
+    spatial_grid: Res<SpatialHashGrid>,
     idle_units: Query<
         (
             Entity,
@@ -95,8 +97,8 @@ fn player_auto_acquire_target(
         ),
         (With<Unit>, Without<MoveTarget>, Without<AttackTarget>),
     >,
-    potential_targets: Query<(Entity, &Transform, &Faction), Or<(With<Mob>, With<Unit>)>>,
-    buildings_with_faction: Query<(Entity, &Transform, &Faction), With<Building>>,
+    factions: Query<&Faction>,
+    building_check: Query<(), With<Building>>,
 ) {
     for (unit_entity, unit_tf, range, faction, unit_state, opt_stance) in &idle_units {
         // Skip units that are busy (not idle)
@@ -121,32 +123,28 @@ fn player_auto_acquire_target(
         let mut closest_dist = f32::MAX;
         let mut closest_target = None;
 
-        // Check units and mobs
-        for (target_entity, target_tf, target_faction) in &potential_targets {
-            if target_entity == unit_entity {
+        // Use spatial hash to find nearby entities
+        let nearby = spatial_grid.query_radius(unit_tf.translation, scan_range);
+        for (target_entity, target_pos) in &nearby {
+            if *target_entity == unit_entity {
                 continue;
             }
+            // Skip buildings unless aggressive stance
+            if stance != UnitStance::Aggressive && building_check.get(*target_entity).is_ok() {
+                continue;
+            }
+            let Some(target_faction) = factions.get(*target_entity).ok() else {
+                continue;
+            };
             if !teams.is_hostile(faction, target_faction) {
                 continue;
             }
-            let dist = unit_tf.translation.distance(target_tf.translation);
-            if dist < scan_range && dist < closest_dist {
+            let dx = target_pos.x - unit_tf.translation.x;
+            let dz = target_pos.z - unit_tf.translation.z;
+            let dist = (dx * dx + dz * dz).sqrt();
+            if dist < closest_dist {
                 closest_dist = dist;
-                closest_target = Some(target_entity);
-            }
-        }
-
-        // Aggressive stance also auto-acquires hostile buildings
-        if stance == UnitStance::Aggressive {
-            for (target_entity, target_tf, target_faction) in &buildings_with_faction {
-                if !teams.is_hostile(faction, target_faction) {
-                    continue;
-                }
-                let dist = unit_tf.translation.distance(target_tf.translation);
-                if dist < scan_range && dist < closest_dist {
-                    closest_dist = dist;
-                    closest_target = Some(target_entity);
-                }
+                closest_target = Some(*target_entity);
             }
         }
 
@@ -168,6 +166,7 @@ fn approach_attack_target(
     teams: Res<TeamConfig>,
     registry: Res<BlueprintRegistry>,
     height_map: Res<HeightMap>,
+    wall_grid: Res<WallSpatialGrid>,
     mut attackers: Query<
         (
             Entity,
@@ -181,11 +180,10 @@ fn approach_attack_target(
         ),
         With<Unit>,
     >,
-    walls: Query<
-        (Entity, &Transform, &BuildingFootprint, &Faction),
+    wall_check: Query<
+        (),
         (
             With<Building>,
-            Without<Unit>,
             Or<(With<WallSegmentPiece>, With<WallPostPiece>)>,
         ),
     >,
@@ -198,7 +196,7 @@ fn approach_attack_target(
             continue;
         };
 
-        let target_is_wall = walls.get(attack_target.0).is_ok();
+        let target_is_wall = wall_check.get(attack_target.0).is_ok();
         if !target_is_wall {
             let from = Vec2::new(tf.translation.x, tf.translation.z);
             let to = Vec2::new(target_tf.translation.x, target_tf.translation.z);
@@ -209,12 +207,17 @@ fn approach_attack_target(
                 let dir = delta / line_len;
                 let mut blocking_wall: Option<(Entity, f32)> = None;
 
-                for (wall_entity, wall_tf, wall_fp, wall_faction) in &walls {
-                    if !teams.is_hostile(faction, wall_faction) {
+                // Use wall spatial grid: check walls near the midpoint with radius = half the line length
+                let mid = tf.translation.lerp(target_tf.translation, 0.5);
+                let search_radius = line_len * 0.5 + 2.0;
+                let nearby_walls = wall_grid.query_radius(mid, search_radius);
+
+                for (wall_entity, wall_pos_3d, wall_fp, wall_faction) in &nearby_walls {
+                    if !teams.is_hostile(faction, &wall_faction) {
                         continue;
                     }
 
-                    let wall_pos = Vec2::new(wall_tf.translation.x, wall_tf.translation.z);
+                    let wall_pos = Vec2::new(wall_pos_3d.x, wall_pos_3d.z);
                     let rel = wall_pos - from;
                     let t = rel.dot(dir);
                     if t <= 0.3 || t >= line_len - 0.3 {
@@ -223,10 +226,10 @@ fn approach_attack_target(
 
                     let closest = from + dir * t;
                     let perp_dist = wall_pos.distance(closest);
-                    if perp_dist <= wall_fp.0 + 0.35
+                    if perp_dist <= wall_fp + 0.35
                         && blocking_wall.map_or(true, |(_, best_t)| t < best_t)
                     {
-                        blocking_wall = Some((wall_entity, t));
+                        blocking_wall = Some((*wall_entity, t));
                     }
                 }
 
@@ -254,17 +257,20 @@ fn approach_attack_target(
         if dist > range.0 {
             let step = dir.normalize() * speed.0 * time.delta_secs();
             let candidate = tf.translation + step;
-            let blocked = walls
-                .iter()
-                .filter(|(wall_entity, _, _, _)| *wall_entity != attack_target.0)
-                .any(|(_, wall_tf, wall_fp, wall_faction)| {
-                    if !teams.is_hostile(faction, wall_faction) {
-                        return false;
-                    }
-                    let a = Vec2::new(candidate.x, candidate.z);
-                    let b = Vec2::new(wall_tf.translation.x, wall_tf.translation.z);
-                    a.distance(b) < wall_fp.0 + 0.6
-                });
+
+            // Use wall spatial grid for collision check
+            let nearby_walls = wall_grid.query_radius(candidate, 3.0);
+            let blocked = nearby_walls.iter().any(|(wall_entity, wall_pos, wall_fp, wall_faction)| {
+                if *wall_entity == attack_target.0 {
+                    return false;
+                }
+                if !teams.is_hostile(faction, wall_faction) {
+                    return false;
+                }
+                let a = Vec2::new(candidate.x, candidate.z);
+                let b = Vec2::new(wall_pos.x, wall_pos.z);
+                a.distance(b) < wall_fp + 0.6
+            });
             if blocked {
                 continue;
             }
@@ -419,7 +425,7 @@ fn handle_death(
         }
 
         // If a worker dies while assigned to a processor, remove it from AssignedWorkers
-        if let Some(UnitState::InsideProcessor(building) | UnitState::MovingToProcessor(building)) =
+        if let Some(UnitState::AssignedGathering { building, .. }) =
             opt_unit_state
         {
             if let Ok(mut aw) = all_assigned_workers.get_mut(*building) {
@@ -433,14 +439,9 @@ fn handle_death(
                 let workers_to_eject: Vec<Entity> = aw.workers.clone();
                 for worker in workers_to_eject {
                     if let Ok((_, worker_state)) = workers_with_state.get(worker) {
-                        if matches!(worker_state, UnitState::InsideProcessor(b) if *b == *dead_entity)
+                        if matches!(worker_state, UnitState::AssignedGathering { building, .. } if *building == *dead_entity)
                         {
                             crate::resources::unassign_worker_from_processor(&mut commands, worker);
-                            if let Some(building_tf) = opt_transform {
-                                commands
-                                    .entity(worker)
-                                    .insert(Transform::from_translation(building_tf.translation));
-                            }
                         }
                     }
                 }

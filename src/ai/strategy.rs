@@ -312,25 +312,29 @@ fn plan_builds_for_state(
                     push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
                     push_if_missing(brain, tc, EntityKind::GuardTower, 2, 2);
                     push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
+                    push_if_missing(brain, tc, EntityKind::Smelter, 1, 4);
                 }
                 AiPersonality::Aggressive => {
                     push_if_missing(brain, tc, EntityKind::Barracks, 2, 0);
                     push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
                     push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
                     push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
+                    push_if_missing(brain, tc, EntityKind::Smelter, 1, 4);
                 }
                 AiPersonality::Defensive => {
                     push_if_missing(brain, tc, EntityKind::GuardTower, 3, 0);
                     push_if_missing(brain, tc, EntityKind::Mine, 1, 1);
                     push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
                     push_if_missing(brain, tc, EntityKind::MageTower, 1, 3);
+                    push_if_missing(brain, tc, EntityKind::Smelter, 1, 4);
                 }
                 AiPersonality::Economic => {
                     push_if_missing(brain, tc, EntityKind::Mine, 1, 0);
                     push_if_missing(brain, tc, EntityKind::Storage, 2, 1);
                     push_if_missing(brain, tc, EntityKind::Sawmill, 2, 1);
                     push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
-                    push_if_missing(brain, tc, EntityKind::Stable, 1, 3);
+                    push_if_missing(brain, tc, EntityKind::Smelter, 1, 3);
+                    push_if_missing(brain, tc, EntityKind::Stable, 1, 4);
                 }
                 AiPersonality::Supportive => {
                     if let Some(pb) = player_buildings {
@@ -368,18 +372,21 @@ fn plan_builds_for_state(
                     push_if_missing(brain, tc, EntityKind::Barracks, 3, 1);
                     push_if_missing(brain, tc, EntityKind::GuardTower, 2, 2);
                     push_if_missing(brain, tc, EntityKind::OilRig, 1, 3);
+                    push_if_missing(brain, tc, EntityKind::Alchemist, 1, 4);
                 }
                 AiPersonality::Defensive => {
                     push_if_missing(brain, tc, EntityKind::Temple, 1, 0);
                     push_if_missing(brain, tc, EntityKind::SiegeWorks, 1, 1);
                     push_if_missing(brain, tc, EntityKind::GuardTower, 4, 2);
-                    push_if_missing(brain, tc, EntityKind::Storage, 2, 3);
+                    push_if_missing(brain, tc, EntityKind::Alchemist, 1, 3);
+                    push_if_missing(brain, tc, EntityKind::Storage, 2, 4);
                 }
                 AiPersonality::Economic => {
                     push_if_missing(brain, tc, EntityKind::OilRig, 1, 0);
                     push_if_missing(brain, tc, EntityKind::SiegeWorks, 1, 1);
-                    push_if_missing(brain, tc, EntityKind::Temple, 1, 2);
-                    push_if_missing(brain, tc, EntityKind::GuardTower, 4, 3);
+                    push_if_missing(brain, tc, EntityKind::Alchemist, 1, 2);
+                    push_if_missing(brain, tc, EntityKind::Temple, 1, 3);
+                    push_if_missing(brain, tc, EntityKind::GuardTower, 4, 4);
                 }
                 _ => {
                     // Balanced & Supportive
@@ -387,7 +394,8 @@ fn plan_builds_for_state(
                     push_if_missing(brain, tc, EntityKind::Temple, 1, 1);
                     push_if_missing(brain, tc, EntityKind::GuardTower, 4, 2);
                     push_if_missing(brain, tc, EntityKind::OilRig, 1, 2);
-                    push_if_missing(brain, tc, EntityKind::Storage, 2, 3);
+                    push_if_missing(brain, tc, EntityKind::Alchemist, 1, 3);
+                    push_if_missing(brain, tc, EntityKind::Storage, 2, 4);
                 }
             }
         }

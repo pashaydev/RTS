@@ -47,6 +47,8 @@ pub enum EntityKind {
     Sawmill,
     Mine,
     OilRig,
+    Smelter,
+    Alchemist,
 
     // Mobs
     Goblin,
@@ -102,7 +104,9 @@ impl EntityKind {
             | Self::SiegeWorks
             | Self::Sawmill
             | Self::Mine
-            | Self::OilRig => EntityCategory::Building,
+            | Self::OilRig
+            | Self::Smelter
+            | Self::Alchemist => EntityCategory::Building,
 
             Self::Goblin | Self::Skeleton | Self::Orc | Self::Demon => EntityCategory::Mob,
 
@@ -142,6 +146,8 @@ impl EntityKind {
             Self::Sawmill => "Sawmill",
             Self::Mine => "Mine",
             Self::OilRig => "Oil Rig",
+            Self::Smelter => "Smelter",
+            Self::Alchemist => "Alchemist",
             Self::Goblin => "Goblin",
             Self::Skeleton => "Skeleton",
             Self::Orc => "Orc",
@@ -183,6 +189,8 @@ impl EntityKind {
         EntityKind::Sawmill,
         EntityKind::Mine,
         EntityKind::OilRig,
+        EntityKind::Smelter,
+        EntityKind::Alchemist,
         EntityKind::Goblin,
         EntityKind::Skeleton,
         EntityKind::Orc,
@@ -221,9 +229,11 @@ impl EntityKind {
             Self::Temple => "Trains Priests. Provides healing aura when upgraded.",
             Self::Stable => "Trains Cavalry and Knights.",
             Self::SiegeWorks => "Trains Catapults and Battering Rams.",
-            Self::Sawmill => "Processes Wood from nearby trees automatically.",
-            Self::Mine => "Processes Copper, Iron, and Gold from nearby deposits.",
+            Self::Sawmill => "Harvests Wood and produces Planks and Charcoal. Assign workers for best output.",
+            Self::Mine => "Extracts Copper, Iron, and Gold from nearby deposits. Assign workers for best output.",
             Self::OilRig => "Extracts Oil from nearby deposits.",
+            Self::Smelter => "Smelts Bronze and Steel from raw ores. Assign workers to deliver inputs.",
+            Self::Alchemist => "Produces Gunpowder from Charcoal and Oil. Required for siege upgrades.",
             Self::Goblin | Self::Skeleton | Self::Orc | Self::Demon => "Enemy mob.",
             Self::SkeletonMinion | Self::SpiritWolf | Self::FireElemental => "Summoned creature.",
         }
@@ -279,22 +289,43 @@ pub struct VisionStats {
     pub range: f32,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ResourceCost {
-    pub wood: u32,
-    pub copper: u32,
-    pub iron: u32,
-    pub gold: u32,
-    pub oil: u32,
+    pub amounts: [u32; ResourceType::COUNT],
+}
+
+impl Default for ResourceCost {
+    fn default() -> Self {
+        Self {
+            amounts: [0; ResourceType::COUNT],
+        }
+    }
 }
 
 impl ResourceCost {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with(mut self, rt: ResourceType, amt: u32) -> Self {
+        self.amounts[rt.index()] = amt;
+        self
+    }
+
+    pub fn get(&self, rt: ResourceType) -> u32 {
+        self.amounts[rt.index()]
+    }
+
+    pub fn set(&mut self, rt: ResourceType, amt: u32) {
+        self.amounts[rt.index()] = amt;
+    }
+
     pub fn can_afford(&self, res: &PlayerResources) -> bool {
-        res.can_afford(self.wood, self.copper, self.iron, self.gold, self.oil)
+        res.can_afford_cost(self)
     }
 
     pub fn deduct(&self, res: &mut PlayerResources) {
-        res.subtract(self.wood, self.copper, self.iron, self.gold, self.oil);
+        res.subtract_cost(self);
     }
 
     /// Check if stored + carried resources are enough to afford this cost.
@@ -303,50 +334,40 @@ impl ResourceCost {
         stored: &PlayerResources,
         carried: &PlayerResources,
     ) -> bool {
-        let costs = [self.wood, self.copper, self.iron, self.gold, self.oil];
         ResourceType::ALL
             .iter()
-            .enumerate()
-            .all(|(i, rt)| stored.get(*rt) + carried.get(*rt) >= costs[i])
+            .all(|rt| stored.get(*rt) + carried.get(*rt) >= self.amounts[rt.index()])
     }
 
-    /// Deduct from stored first, return the deficit that must come from carried workers.
-    /// Returns (wood, copper, iron, gold, oil) deficits.
-    pub fn deduct_with_carried(&self, stored: &mut PlayerResources) -> (u32, u32, u32, u32, u32) {
-        let costs = [self.wood, self.copper, self.iron, self.gold, self.oil];
-        let mut deficits = [0u32; 5];
-        for (i, rt) in ResourceType::ALL.iter().enumerate() {
+    /// Deduct from stored first, return the deficits that must come from carried workers.
+    pub fn deduct_with_carried(&self, stored: &mut PlayerResources) -> [u32; ResourceType::COUNT] {
+        let mut deficits = [0u32; ResourceType::COUNT];
+        for rt in ResourceType::ALL.iter() {
+            let i = rt.index();
             let have = stored.get(*rt);
-            deficits[i] = costs[i].saturating_sub(have);
-            stored.amounts[rt.index()] = have.saturating_sub(costs[i]);
+            deficits[i] = self.amounts[i].saturating_sub(have);
+            stored.amounts[i] = have.saturating_sub(self.amounts[i]);
         }
-        (
-            deficits[0],
-            deficits[1],
-            deficits[2],
-            deficits[3],
-            deficits[4],
-        )
+        deficits
     }
 
     pub fn cost_entries(&self) -> Vec<(ResourceType, u32)> {
-        let mut entries = Vec::new();
-        if self.wood > 0 {
-            entries.push((ResourceType::Wood, self.wood));
-        }
-        if self.copper > 0 {
-            entries.push((ResourceType::Copper, self.copper));
-        }
-        if self.iron > 0 {
-            entries.push((ResourceType::Iron, self.iron));
-        }
-        if self.gold > 0 {
-            entries.push((ResourceType::Gold, self.gold));
-        }
-        if self.oil > 0 {
-            entries.push((ResourceType::Oil, self.oil));
-        }
-        entries
+        ResourceType::ALL
+            .iter()
+            .filter_map(|rt| {
+                let a = self.amounts[rt.index()];
+                if a > 0 {
+                    Some((*rt, a))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Returns true if all amounts are zero.
+    pub fn is_free(&self) -> bool {
+        self.amounts.iter().all(|&a| a == 0)
     }
 }
 
@@ -387,6 +408,13 @@ pub enum LevelBonus {
         extra_worker_slots: u8,
         unlock_resources: Vec<ResourceType>,
     },
+    /// Unlock a production recipe at a given index and optionally add worker slots.
+    UnlockRecipe {
+        recipe_index: usize,
+        extra_worker_slots: u8,
+    },
+    /// Production speed multiplier (e.g. 0.67 = 33% faster).
+    ProductionSpeedMultiplier(f32),
 }
 
 #[derive(Clone, Debug)]
@@ -586,6 +614,8 @@ impl BlueprintRegistry {
             EntityKind::Sawmill,
             EntityKind::Mine,
             EntityKind::OilRig,
+            EntityKind::Smelter,
+            EntityKind::Alchemist,
             EntityKind::MageTower,
             EntityKind::Temple,
             EntityKind::Stable,
@@ -639,10 +669,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 carry_weight_capacity: 20.0,
             }),
             vision: Some(VisionStats { range: 15.0 }),
-            cost: ResourceCost {
-                wood: 30,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 30),
             train_time_secs: 5.0,
             building: None,
             mob_ai: None,
@@ -679,11 +706,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             gathering: None,
             vision: Some(VisionStats { range: 12.0 }),
-            cost: ResourceCost {
-                wood: 20,
-                iron: 15,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 20).with(ResourceType::Iron, 15),
             train_time_secs: 8.0,
             building: None,
             mob_ai: None,
@@ -698,11 +721,7 @@ pub fn build_registry() -> BlueprintRegistry {
             abilities: vec![],
             upgrades: vec![UpgradePath {
                 target: EntityKind::Knight,
-                cost: ResourceCost {
-                    iron: 30,
-                    gold: 20,
-                    ..Default::default()
-                },
+                cost: ResourceCost::new().with(ResourceType::Iron, 30).with(ResourceType::Gold, 20),
                 time_secs: 12.0,
                 requires_building: Some(EntityKind::Stable),
             }],
@@ -729,11 +748,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             gathering: None,
             vision: Some(VisionStats { range: 18.0 }),
-            cost: ResourceCost {
-                wood: 25,
-                iron: 10,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 25).with(ResourceType::Iron, 10),
             train_time_secs: 7.0,
             building: None,
             mob_ai: None,
@@ -770,13 +785,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
-            cost: ResourceCost {
-                copper: 20,
-                iron: 50,
-                gold: 15,
-                oil: 5,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Copper, 20).with(ResourceType::Iron, 50).with(ResourceType::Gold, 15).with(ResourceType::Oil, 5).with(ResourceType::Steel, 5),
             train_time_secs: 15.0,
             building: None,
             mob_ai: None,
@@ -813,13 +822,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             gathering: None,
             vision: Some(VisionStats { range: 14.0 }),
-            cost: ResourceCost {
-                wood: 20,
-                copper: 15,
-                iron: 45,
-                gold: 20,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 20).with(ResourceType::Copper, 15).with(ResourceType::Iron, 45).with(ResourceType::Gold, 20).with(ResourceType::Bronze, 5),
             train_time_secs: 12.0,
             building: None,
             mob_ai: None,
@@ -871,11 +874,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             gathering: None,
             vision: Some(VisionStats { range: 20.0 }),
-            cost: ResourceCost {
-                wood: 10,
-                gold: 40,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 10).with(ResourceType::Gold, 40),
             train_time_secs: 15.0,
             building: None,
             mob_ai: None,
@@ -927,11 +926,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             gathering: None,
             vision: Some(VisionStats { range: 16.0 }),
-            cost: ResourceCost {
-                wood: 15,
-                gold: 30,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 15).with(ResourceType::Gold, 30),
             train_time_secs: 12.0,
             building: None,
             mob_ai: None,
@@ -983,13 +978,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             gathering: None,
             vision: Some(VisionStats { range: 14.0 }),
-            cost: ResourceCost {
-                wood: 25,
-                copper: 10,
-                iron: 25,
-                gold: 10,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 25).with(ResourceType::Copper, 10).with(ResourceType::Iron, 25).with(ResourceType::Gold, 10),
             train_time_secs: 10.0,
             building: None,
             mob_ai: None,
@@ -1028,12 +1017,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             gathering: None,
             vision: Some(VisionStats { range: 28.0 }),
-            cost: ResourceCost {
-                wood: 80,
-                iron: 60,
-                gold: 20,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 80).with(ResourceType::Iron, 60).with(ResourceType::Gold, 20).with(ResourceType::Gunpowder, 5),
             train_time_secs: 20.0,
             building: None,
             mob_ai: None,
@@ -1080,11 +1064,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
-            cost: ResourceCost {
-                wood: 100,
-                iron: 40,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 100).with(ResourceType::Iron, 40).with(ResourceType::Planks, 15),
             train_time_secs: 18.0,
             building: None,
             mob_ai: None,
@@ -1124,11 +1104,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 25.0 }),
-            cost: ResourceCost {
-                wood: 90,
-                iron: 15,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 90).with(ResourceType::Iron, 15),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 15.0,
@@ -1137,22 +1113,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: None,
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 130,
-                            iron: 30,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 130).with(ResourceType::Iron, 30),
                         time_secs: 20.0,
                         scale_multiplier: 1.1,
                         bonus: LevelBonus::VisionBoost(5.0),
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 210,
-                            copper: 30,
-                            iron: 80,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 210).with(ResourceType::Copper, 30).with(ResourceType::Iron, 80),
                         time_secs: 30.0,
                         scale_multiplier: 1.15,
                         bonus: LevelBonus::TrainTimeMultiplier(0.7),
@@ -1190,11 +1157,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 15.0 }),
-            cost: ResourceCost {
-                wood: 75,
-                iron: 30,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 75).with(ResourceType::Iron, 30),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 12.0,
@@ -1203,22 +1166,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Base),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 110,
-                            iron: 40,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 110).with(ResourceType::Iron, 40),
                         time_secs: 15.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::UnlocksTraining(vec![EntityKind::Archer]),
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 170,
-                            copper: 40,
-                            iron: 90,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 170).with(ResourceType::Copper, 40).with(ResourceType::Iron, 90),
                         time_secs: 25.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::TrainedStatBoost {
@@ -1259,13 +1213,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 15.0 }),
-            cost: ResourceCost {
-                wood: 90,
-                copper: 25,
-                iron: 55,
-                gold: 15,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 90).with(ResourceType::Copper, 25).with(ResourceType::Iron, 55).with(ResourceType::Gold, 15).with(ResourceType::Bronze, 10),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 18.0,
@@ -1274,25 +1222,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Mine),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 120,
-                            copper: 40,
-                            iron: 80,
-                            gold: 20,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 120).with(ResourceType::Copper, 40).with(ResourceType::Iron, 80).with(ResourceType::Gold, 20),
                         time_secs: 18.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::TrainTimeMultiplier(0.75),
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 180,
-                            copper: 70,
-                            iron: 120,
-                            gold: 40,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 180).with(ResourceType::Copper, 70).with(ResourceType::Iron, 120).with(ResourceType::Gold, 40),
                         time_secs: 28.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::TrainedStatBoost {
@@ -1333,12 +1269,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 20.0 }),
-            cost: ResourceCost {
-                wood: 45,
-                copper: 10,
-                iron: 35,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 45).with(ResourceType::Copper, 10).with(ResourceType::Iron, 35),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 10.0,
@@ -1347,12 +1278,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Barracks),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 70,
-                            copper: 20,
-                            iron: 50,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 70).with(ResourceType::Copper, 20).with(ResourceType::Iron, 50),
                         time_secs: 12.0,
                         scale_multiplier: 1.1,
                         bonus: LevelBonus::RangeAndDamage {
@@ -1361,13 +1287,7 @@ pub fn build_registry() -> BlueprintRegistry {
                         },
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 110,
-                            copper: 40,
-                            iron: 70,
-                            gold: 20,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 110).with(ResourceType::Copper, 40).with(ResourceType::Iron, 70).with(ResourceType::Gold, 20),
                         time_secs: 20.0,
                         scale_multiplier: 1.15,
                         bonus: LevelBonus::RangeAndDamage {
@@ -1408,11 +1328,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 18.0 }),
-            cost: ResourceCost {
-                wood: 35,
-                iron: 15,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 35).with(ResourceType::Iron, 15),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 8.0,
@@ -1421,11 +1337,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Base),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 55,
-                            iron: 25,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 55).with(ResourceType::Iron, 25),
                         time_secs: 10.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::RangeAndDamage {
@@ -1434,12 +1346,7 @@ pub fn build_registry() -> BlueprintRegistry {
                         },
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 85,
-                            copper: 15,
-                            iron: 35,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 85).with(ResourceType::Copper, 15).with(ResourceType::Iron, 35),
                         time_secs: 16.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::RangeAndDamage {
@@ -1480,12 +1387,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 22.0 }),
-            cost: ResourceCost {
-                wood: 60,
-                copper: 20,
-                iron: 45,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 60).with(ResourceType::Copper, 20).with(ResourceType::Iron, 45),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 11.0,
@@ -1494,12 +1396,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Barracks),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 85,
-                            copper: 30,
-                            iron: 60,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 85).with(ResourceType::Copper, 30).with(ResourceType::Iron, 60),
                         time_secs: 12.0,
                         scale_multiplier: 1.1,
                         bonus: LevelBonus::RangeAndDamage {
@@ -1508,13 +1405,7 @@ pub fn build_registry() -> BlueprintRegistry {
                         },
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 130,
-                            copper: 55,
-                            iron: 85,
-                            gold: 20,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 130).with(ResourceType::Copper, 55).with(ResourceType::Iron, 85).with(ResourceType::Gold, 20),
                         time_secs: 20.0,
                         scale_multiplier: 1.15,
                         bonus: LevelBonus::RangeAndDamage {
@@ -1555,12 +1446,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 24.0 }),
-            cost: ResourceCost {
-                wood: 70,
-                copper: 55,
-                iron: 80,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 70).with(ResourceType::Copper, 55).with(ResourceType::Iron, 80).with(ResourceType::Steel, 10),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 14.0,
@@ -1569,12 +1455,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::SiegeWorks),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 95,
-                            copper: 70,
-                            iron: 100,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 95).with(ResourceType::Copper, 70).with(ResourceType::Iron, 100),
                         time_secs: 16.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::RangeAndDamage {
@@ -1583,13 +1464,7 @@ pub fn build_registry() -> BlueprintRegistry {
                         },
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 140,
-                            copper: 95,
-                            iron: 130,
-                            gold: 30,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 140).with(ResourceType::Copper, 95).with(ResourceType::Iron, 130).with(ResourceType::Gold, 30),
                         time_secs: 24.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::RangeAndDamage {
@@ -1630,13 +1505,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 20.0 }),
-            cost: ResourceCost {
-                wood: 85,
-                copper: 45,
-                iron: 65,
-                gold: 35,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 85).with(ResourceType::Copper, 45).with(ResourceType::Iron, 65).with(ResourceType::Gold, 35).with(ResourceType::Gunpowder, 5),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 15.0,
@@ -1645,13 +1514,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::MageTower),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 105,
-                            copper: 60,
-                            iron: 85,
-                            gold: 45,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 105).with(ResourceType::Copper, 60).with(ResourceType::Iron, 85).with(ResourceType::Gold, 45),
                         time_secs: 18.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::RangeAndDamage {
@@ -1660,13 +1523,7 @@ pub fn build_registry() -> BlueprintRegistry {
                         },
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 150,
-                            copper: 85,
-                            iron: 110,
-                            gold: 65,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 150).with(ResourceType::Copper, 85).with(ResourceType::Iron, 110).with(ResourceType::Gold, 65),
                         time_secs: 26.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::RangeAndDamage {
@@ -1707,11 +1564,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 30.0 }),
-            cost: ResourceCost {
-                wood: 20,
-                iron: 10,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 20).with(ResourceType::Iron, 10),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 6.0,
@@ -1720,22 +1573,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Base),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 35,
-                            iron: 20,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 35).with(ResourceType::Iron, 20),
                         time_secs: 8.0,
                         scale_multiplier: 1.05,
                         bonus: LevelBonus::VisionBoost(6.0),
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 55,
-                            copper: 10,
-                            iron: 30,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 55).with(ResourceType::Copper, 10).with(ResourceType::Iron, 30),
                         time_secs: 12.0,
                         scale_multiplier: 1.1,
                         bonus: LevelBonus::VisionBoost(10.0),
@@ -1773,12 +1617,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 16.0 }),
-            cost: ResourceCost {
-                wood: 40,
-                copper: 10,
-                iron: 35,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 40).with(ResourceType::Copper, 10).with(ResourceType::Iron, 35),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 10.0,
@@ -1818,10 +1657,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 8.0 }),
-            cost: ResourceCost {
-                wood: 12,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 12),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 4.0,
@@ -1865,10 +1701,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
-            cost: ResourceCost {
-                wood: 16,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 16),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 5.0,
@@ -1912,11 +1745,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
-            cost: ResourceCost {
-                wood: 55,
-                iron: 15,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 55).with(ResourceType::Iron, 15),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 8.0,
@@ -1925,11 +1754,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Base),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 75,
-                            iron: 25,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 75).with(ResourceType::Iron, 25),
                         time_secs: 10.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::GatherAura {
@@ -1938,12 +1763,7 @@ pub fn build_registry() -> BlueprintRegistry {
                         },
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 120,
-                            copper: 20,
-                            iron: 45,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 120).with(ResourceType::Copper, 20).with(ResourceType::Iron, 45),
                         time_secs: 18.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::GatherAura {
@@ -1984,13 +1804,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 22.0 }),
-            cost: ResourceCost {
-                wood: 80,
-                copper: 30,
-                iron: 40,
-                gold: 55,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 80).with(ResourceType::Copper, 30).with(ResourceType::Iron, 40).with(ResourceType::Gold, 55),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 20.0,
@@ -1999,25 +1813,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Workshop),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 100,
-                            copper: 40,
-                            iron: 55,
-                            gold: 80,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 100).with(ResourceType::Copper, 40).with(ResourceType::Iron, 55).with(ResourceType::Gold, 80),
                         time_secs: 20.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::TrainTimeMultiplier(0.85),
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 140,
-                            copper: 60,
-                            iron: 80,
-                            gold: 130,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 140).with(ResourceType::Copper, 60).with(ResourceType::Iron, 80).with(ResourceType::Gold, 130),
                         time_secs: 30.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::TrainedStatBoost {
@@ -2058,13 +1860,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 18.0 }),
-            cost: ResourceCost {
-                wood: 90,
-                copper: 20,
-                iron: 40,
-                gold: 70,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 90).with(ResourceType::Copper, 20).with(ResourceType::Iron, 40).with(ResourceType::Gold, 70),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 22.0,
@@ -2073,13 +1869,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::MageTower),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 115,
-                            copper: 30,
-                            iron: 55,
-                            gold: 85,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 115).with(ResourceType::Copper, 30).with(ResourceType::Iron, 55).with(ResourceType::Gold, 85),
                         time_secs: 18.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::HealAura {
@@ -2088,13 +1878,7 @@ pub fn build_registry() -> BlueprintRegistry {
                         },
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 170,
-                            copper: 50,
-                            iron: 75,
-                            gold: 130,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 170).with(ResourceType::Copper, 50).with(ResourceType::Iron, 75).with(ResourceType::Gold, 130),
                         time_secs: 28.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::HealAura {
@@ -2135,12 +1919,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 12.0 }),
-            cost: ResourceCost {
-                wood: 85,
-                copper: 30,
-                iron: 45,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 85).with(ResourceType::Copper, 30).with(ResourceType::Iron, 45),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 14.0,
@@ -2149,24 +1928,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Barracks),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 115,
-                            copper: 45,
-                            iron: 65,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 115).with(ResourceType::Copper, 45).with(ResourceType::Iron, 65),
                         time_secs: 16.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::UnlocksTraining(vec![EntityKind::Knight]),
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 170,
-                            copper: 70,
-                            iron: 90,
-                            gold: 35,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 170).with(ResourceType::Copper, 70).with(ResourceType::Iron, 90).with(ResourceType::Gold, 35),
                         time_secs: 25.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::TrainedStatBoost {
@@ -2207,13 +1975,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 12.0 }),
-            cost: ResourceCost {
-                wood: 100,
-                copper: 35,
-                iron: 90,
-                gold: 30,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 100).with(ResourceType::Copper, 35).with(ResourceType::Iron, 90).with(ResourceType::Gold, 30),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 20.0,
@@ -2222,25 +1984,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Workshop),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 140,
-                            copper: 50,
-                            iron: 110,
-                            gold: 45,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 140).with(ResourceType::Copper, 50).with(ResourceType::Iron, 110).with(ResourceType::Gold, 45),
                         time_secs: 20.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::TrainTimeMultiplier(0.8),
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 220,
-                            copper: 80,
-                            iron: 150,
-                            gold: 75,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 220).with(ResourceType::Copper, 80).with(ResourceType::Iron, 150).with(ResourceType::Gold, 75),
                         time_secs: 30.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::TrainedStatBoost {
@@ -2283,11 +2033,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
-            cost: ResourceCost {
-                wood: 50,
-                iron: 15,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 50).with(ResourceType::Iron, 15),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 12.0,
@@ -2296,11 +2042,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Base),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 70,
-                            iron: 25,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 70).with(ResourceType::Iron, 25),
                         time_secs: 10.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::ProcessorUpgrade {
@@ -2311,12 +2053,7 @@ pub fn build_registry() -> BlueprintRegistry {
                         },
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 110,
-                            copper: 15,
-                            iron: 35,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 110).with(ResourceType::Copper, 15).with(ResourceType::Iron, 35),
                         time_secs: 15.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::ProcessorUpgrade {
@@ -2359,11 +2096,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
-            cost: ResourceCost {
-                wood: 70,
-                iron: 35,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 70).with(ResourceType::Iron, 35),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 15.0,
@@ -2372,11 +2105,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Base),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 80,
-                            iron: 50,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 80).with(ResourceType::Iron, 50),
                         time_secs: 12.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::ProcessorUpgrade {
@@ -2387,13 +2116,7 @@ pub fn build_registry() -> BlueprintRegistry {
                         },
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 110,
-                            copper: 40,
-                            iron: 75,
-                            gold: 25,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 110).with(ResourceType::Copper, 40).with(ResourceType::Iron, 75).with(ResourceType::Gold, 25),
                         time_secs: 20.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::ProcessorUpgrade {
@@ -2436,12 +2159,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
-            cost: ResourceCost {
-                wood: 75,
-                copper: 25,
-                iron: 35,
-                ..Default::default()
-            },
+            cost: ResourceCost::new().with(ResourceType::Wood, 75).with(ResourceType::Copper, 25).with(ResourceType::Iron, 35),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 14.0,
@@ -2450,12 +2168,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 prerequisite: Some(EntityKind::Workshop),
                 level_upgrades: vec![
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 95,
-                            copper: 35,
-                            iron: 45,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 95).with(ResourceType::Copper, 35).with(ResourceType::Iron, 45),
                         time_secs: 12.0,
                         scale_multiplier: 1.08,
                         bonus: LevelBonus::ProcessorUpgrade {
@@ -2466,13 +2179,7 @@ pub fn build_registry() -> BlueprintRegistry {
                         },
                     },
                     BuildingLevelData {
-                        cost: ResourceCost {
-                            wood: 135,
-                            copper: 55,
-                            iron: 65,
-                            gold: 20,
-                            ..Default::default()
-                        },
+                        cost: ResourceCost::new().with(ResourceType::Wood, 135).with(ResourceType::Copper, 55).with(ResourceType::Iron, 65).with(ResourceType::Gold, 20),
                         time_secs: 18.0,
                         scale_multiplier: 1.12,
                         bonus: LevelBonus::ProcessorUpgrade {
@@ -2490,6 +2197,138 @@ pub fn build_registry() -> BlueprintRegistry {
                 color: Color::srgb(0.15, 0.15, 0.15),
                 selected_color: Color::srgb(0.25, 0.25, 0.25),
                 selected_emissive: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
+        },
+    );
+
+    // ── Production Chain Buildings ──
+
+    blueprints.insert(
+        EntityKind::Smelter,
+        Blueprint {
+            kind: EntityKind::Smelter,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 300.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 10.0 }),
+            cost: ResourceCost::new()
+                .with(ResourceType::Wood, 80)
+                .with(ResourceType::Copper, 20)
+                .with(ResourceType::Iron, 40),
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 16.0,
+                half_height: 1.5,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Mine),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost::new()
+                            .with(ResourceType::Wood, 100)
+                            .with(ResourceType::Iron, 60)
+                            .with(ResourceType::Copper, 30),
+                        time_secs: 14.0,
+                        scale_multiplier: 1.1,
+                        bonus: LevelBonus::UnlockRecipe {
+                            recipe_index: 1,
+                            extra_worker_slots: 1,
+                        },
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost::new()
+                            .with(ResourceType::Wood, 150)
+                            .with(ResourceType::Iron, 90)
+                            .with(ResourceType::Gold, 30),
+                        time_secs: 20.0,
+                        scale_multiplier: 1.15,
+                        bonus: LevelBonus::ProductionSpeedMultiplier(0.67),
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 4.0 },
+                color: Color::srgb(0.6, 0.35, 0.15),
+                selected_color: Color::srgb(0.8, 0.5, 0.2),
+                selected_emissive: LinearRgba::new(0.15, 0.08, 0.03, 1.0),
+                scale: 1.0,
+            },
+            children: vec![],
+            abilities: vec![],
+            upgrades: vec![],
+        },
+    );
+
+    blueprints.insert(
+        EntityKind::Alchemist,
+        Blueprint {
+            kind: EntityKind::Alchemist,
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 250.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+                projectile_speed: None,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 10.0 }),
+            cost: ResourceCost::new()
+                .with(ResourceType::Wood, 60)
+                .with(ResourceType::Iron, 30)
+                .with(ResourceType::Gold, 25)
+                .with(ResourceType::Oil, 15),
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 18.0,
+                half_height: 1.5,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Smelter),
+                level_upgrades: vec![
+                    BuildingLevelData {
+                        cost: ResourceCost::new()
+                            .with(ResourceType::Wood, 80)
+                            .with(ResourceType::Iron, 50)
+                            .with(ResourceType::Gold, 35)
+                            .with(ResourceType::Oil, 25),
+                        time_secs: 16.0,
+                        scale_multiplier: 1.1,
+                        bonus: LevelBonus::ProductionSpeedMultiplier(0.75),
+                    },
+                    BuildingLevelData {
+                        cost: ResourceCost::new()
+                            .with(ResourceType::Wood, 120)
+                            .with(ResourceType::Iron, 80)
+                            .with(ResourceType::Gold, 50)
+                            .with(ResourceType::Oil, 40),
+                        time_secs: 22.0,
+                        scale_multiplier: 1.15,
+                        bonus: LevelBonus::ProductionSpeedMultiplier(0.67),
+                    },
+                ],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 3.5 },
+                color: Color::srgb(0.45, 0.2, 0.2),
+                selected_color: Color::srgb(0.65, 0.3, 0.3),
+                selected_emissive: LinearRgba::new(0.12, 0.05, 0.05, 1.0),
                 scale: 1.0,
             },
             children: vec![],
@@ -2916,7 +2755,7 @@ pub fn spawn_from_blueprint_with_faction(
                 entity_cmds.insert((
                     DepositPoint,
                     StorageInventory {
-                        caps: [500, 80, 120, 0, 0],
+                        caps: [500, 80, 120, 0, 0, 0, 0, 0, 0, 0],
                         ..default()
                     },
                 ));
@@ -2924,7 +2763,7 @@ pub fn spawn_from_blueprint_with_faction(
                 entity_cmds.insert((
                     DepositPoint,
                     StorageInventory {
-                        caps: [300, 300, 300, 300, 200],
+                        caps: [300, 300, 300, 300, 200, 100, 50, 100, 100, 50],
                         ..default()
                     },
                 ));
@@ -2935,7 +2774,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory {
-                            caps: [3000, 0, 0, 0, 0],
+                            caps: [3000, 0, 0, 0, 0, 500, 200, 0, 0, 0],
                             ..default()
                         },
                         AssignedWorkers::default(),
@@ -2957,13 +2796,29 @@ pub fn spawn_from_blueprint_with_faction(
                             max_nodes: 5,
                             amount_per_node: 200,
                         },
+                        ProductionState::new(vec![
+                            ProductionRecipe {
+                                name: "Planks",
+                                inputs: vec![(ResourceType::Wood, 3)],
+                                outputs: vec![(ResourceType::Planks, 2)],
+                                cycle_secs: 8.0,
+                                requires_level: 1,
+                            },
+                            ProductionRecipe {
+                                name: "Charcoal",
+                                inputs: vec![(ResourceType::Wood, 2)],
+                                outputs: vec![(ResourceType::Charcoal, 1)],
+                                cycle_secs: 6.0,
+                                requires_level: 2,
+                            },
+                        ]),
                     ));
                 }
                 EntityKind::Mine => {
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory {
-                            caps: [0, 1000, 1000, 0, 0],
+                            caps: [0, 1000, 1000, 0, 0, 0, 0, 0, 0, 0],
                             ..default()
                         },
                         AssignedWorkers::default(),
@@ -2991,7 +2846,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory {
-                            caps: [0, 0, 0, 0, 500],
+                            caps: [0, 0, 0, 0, 500, 0, 0, 0, 0, 0],
                             ..default()
                         },
                         AssignedWorkers::default(),
@@ -2999,10 +2854,10 @@ pub fn spawn_from_blueprint_with_faction(
                             resource_types: vec![ResourceType::Oil],
                             harvest_radius: 12.0,
                             harvest_rate: 1.5,
-                            max_workers: 0, // Fully automated
+                            max_workers: 2,
                             buffer: 0,
                             buffer_capacity: 30,
-                            worker_rate_bonus: 0.0,
+                            worker_rate_bonus: 0.4,
                             harvest_timer: Timer::from_seconds(5.0, TimerMode::Repeating),
                             harvest_accumulator: 0.0,
                         },
@@ -3013,6 +2868,58 @@ pub fn spawn_from_blueprint_with_faction(
                             max_nodes: 3,
                             amount_per_node: 500,
                         },
+                    ));
+                }
+                EntityKind::Smelter => {
+                    entity_cmds.insert((
+                        DepositPoint,
+                        StorageInventory {
+                            caps: [0, 200, 200, 0, 0, 0, 0, 200, 200, 0],
+                            ..default()
+                        },
+                        AssignedWorkers::default(),
+                        ProductionState::new(vec![
+                            ProductionRecipe {
+                                name: "Bronze",
+                                inputs: vec![
+                                    (ResourceType::Copper, 2),
+                                    (ResourceType::Iron, 1),
+                                ],
+                                outputs: vec![(ResourceType::Bronze, 1)],
+                                cycle_secs: 8.0,
+                                requires_level: 1,
+                            },
+                            ProductionRecipe {
+                                name: "Steel",
+                                inputs: vec![
+                                    (ResourceType::Iron, 3),
+                                    (ResourceType::Charcoal, 1),
+                                ],
+                                outputs: vec![(ResourceType::Steel, 1)],
+                                cycle_secs: 12.0,
+                                requires_level: 2,
+                            },
+                        ]),
+                    ));
+                }
+                EntityKind::Alchemist => {
+                    entity_cmds.insert((
+                        DepositPoint,
+                        StorageInventory {
+                            caps: [0, 0, 0, 0, 100, 0, 100, 0, 0, 200],
+                            ..default()
+                        },
+                        AssignedWorkers::default(),
+                        ProductionState::new(vec![ProductionRecipe {
+                            name: "Gunpowder",
+                            inputs: vec![
+                                (ResourceType::Charcoal, 1),
+                                (ResourceType::Oil, 1),
+                            ],
+                            outputs: vec![(ResourceType::Gunpowder, 1)],
+                            cycle_secs: 10.0,
+                            requires_level: 1,
+                        }]),
                     ));
                 }
                 _ => {}

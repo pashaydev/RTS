@@ -1,5 +1,6 @@
 use bevy::ecs::message::MessageReader;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+use bevy::light::cluster::{ClusterConfig, ClusterZConfig};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
@@ -83,12 +84,16 @@ fn spawn_camera(mut commands: Commands, config: Res<GameSetupConfig>, map_seed: 
         },
         Camera3d::default(),
         Transform::from_translation(pivot + offset).looking_at(pivot, Vec3::Y),
-        // VolumetricFog {
-        //     ambient_color: Color::srgba(0.8, 0.75, 0.65, 1.0),
-        //     ambient_intensity: 0.05,
-        //     step_count: 32,
-        //     jitter: 0.5,
-        // },
+        // Top-down RTS camera: flatten Z-slices to 1 since all action is on a single plane
+        ClusterConfig::FixedZ {
+            total: 4096,
+            z_slices: 1,
+            z_config: ClusterZConfig::default(),
+            dynamic_resizing: true,
+        },
+        Msaa::Off,
+        #[cfg(not(target_arch = "wasm32"))]
+        bevy::anti_alias::smaa::Smaa::default(),
     ));
 }
 

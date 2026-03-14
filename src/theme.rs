@@ -84,6 +84,13 @@ pub const FONT_CAPTION: f32 = 10.0; // Toolbar, queue labels
 pub const FONT_TINY: f32 = 8.0; // Close buttons, badges
 pub const FONT_MICRO: f32 = 8.0; // Event log timestamps
 
+// ── Processed resource colors ──
+pub const RES_PLANKS: Color = Color::srgb(0.76, 0.60, 0.35);
+pub const RES_CHARCOAL: Color = Color::srgb(0.25, 0.25, 0.25);
+pub const RES_BRONZE: Color = Color::srgb(0.80, 0.50, 0.20);
+pub const RES_STEEL: Color = Color::srgb(0.55, 0.60, 0.70);
+pub const RES_GUNPOWDER: Color = Color::srgb(0.60, 0.20, 0.20);
+
 // ── Grid overlay ──
 pub const GRID_LINE: Color = Color::srgba(0.29, 0.62, 1.0, 0.15);
 #[allow(dead_code)]

@@ -7,6 +7,7 @@ use crate::blueprints::{
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::model_assets::UnitModelAssets;
+use crate::spatial::{SpatialHashGrid, WallSpatialGrid};
 use std::f32::consts::PI;
 
 pub struct UnitsPlugin;
@@ -170,17 +171,21 @@ fn spawn_all_players(
     }
 }
 
-fn steer_avoidance(time: Res<Time>, mut units: Query<(Entity, &mut Transform), With<Unit>>) {
+fn steer_avoidance(
+    time: Res<Time>,
+    spatial_grid: Res<SpatialHashGrid>,
+    mut units: Query<(Entity, &mut Transform), With<Unit>>,
+) {
     let avoidance_radius = 1.8;
     let strength = 4.0;
-
-    let positions: Vec<(Entity, Vec3)> = units.iter().map(|(e, t)| (e, t.translation)).collect();
 
     for (entity, mut transform) in &mut units {
         let my_pos = transform.translation;
         let mut separation = Vec3::ZERO;
 
-        for (other_e, other_pos) in &positions {
+        // Use spatial grid to find only nearby units instead of O(n^2)
+        let nearby = spatial_grid.query_radius(my_pos, avoidance_radius);
+        for (other_e, other_pos) in &nearby {
             if *other_e == entity {
                 continue;
             }
@@ -204,14 +209,7 @@ fn move_units(
     registry: Res<BlueprintRegistry>,
     teams: Res<TeamConfig>,
     height_map: Res<HeightMap>,
-    walls: Query<
-        (Entity, &Transform, &BuildingFootprint, &Faction),
-        (
-            With<Building>,
-            Without<Unit>,
-            Or<(With<WallSegmentPiece>, With<WallPostPiece>)>,
-        ),
-    >,
+    wall_grid: Res<WallSpatialGrid>,
     mut query: Query<
         (
             Entity,
@@ -260,19 +258,22 @@ fn move_units(
 
             let step = flat_dir.normalize() * unit_speed.0 * speed_mult * time.delta_secs();
             let candidate = transform.translation + step;
-            let ignore_wall = attack_target.and_then(|at| Some(at.0));
-            let blocked = walls
+            let ignore_wall = attack_target.map(|at| at.0);
+
+            // Use wall spatial grid for collision check
+            let nearby_walls = wall_grid.query_radius(candidate, 3.0);
+            let blocked = nearby_walls
                 .iter()
-                .any(|(wall_entity, wall_tf, wall_fp, wall_faction)| {
-                    if Some(wall_entity) == ignore_wall {
+                .any(|(wall_entity, wall_pos, wall_fp, wall_faction)| {
+                    if Some(*wall_entity) == ignore_wall {
                         return false;
                     }
                     if !teams.is_hostile(faction, wall_faction) {
                         return false;
                     }
                     let a = Vec2::new(candidate.x, candidate.z);
-                    let b = Vec2::new(wall_tf.translation.x, wall_tf.translation.z);
-                    a.distance(b) < wall_fp.0 + 0.6
+                    let b = Vec2::new(wall_pos.x, wall_pos.z);
+                    a.distance(b) < wall_fp + 0.6
                 });
             if !blocked {
                 transform.translation = candidate;

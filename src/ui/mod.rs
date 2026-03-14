@@ -61,6 +61,7 @@ impl Plugin for UiPlugin {
                 Update,
                 (
                     resources_widget::update_resource_texts,
+                    resources_widget::update_processed_resource_visibility,
                     selection_widget::rebuild_selection_panel,
                     buttons::update_hp_bars,
                     buttons::handle_unit_card_click,

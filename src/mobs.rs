@@ -5,7 +5,7 @@ use rand::SeedableRng;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::*;
-use crate::ground::HeightMap;
+use crate::ground::{is_in_mountain_border, BorderSettings, HeightMap};
 use crate::model_assets::UnitModelAssets;
 
 pub struct MobsPlugin;
@@ -76,6 +76,7 @@ fn generate_camps(
     num_camps: usize,
     player_spawns: &[(Faction, (f32, f32))],
     biome_map: &BiomeMap,
+    border: BorderSettings,
 ) -> Vec<CampSpawn> {
     let mut camps = Vec::new();
     let min_player_dist = 40.0;
@@ -97,6 +98,9 @@ fn generate_camps(
                 let r = rng.random_range(r_min..r_max);
                 let x = angle.cos() * r;
                 let z = angle.sin() * r;
+                if is_in_mountain_border(x, z, half_map, border) {
+                    continue;
+                }
 
                 // Check biome
                 let biome = biome_map.get_biome(x, z);
@@ -181,7 +185,15 @@ fn spawn_mob_camps(
     };
 
     let player_spawns = config.spawn_positions(map_seed.0);
-    let camps = generate_camps(&mut rng, half_map, num_camps, &player_spawns, &biome_map);
+    let border = BorderSettings::from_map_size(config.map_size.world_size());
+    let camps = generate_camps(
+        &mut rng,
+        half_map,
+        num_camps,
+        &player_spawns,
+        &biome_map,
+        border,
+    );
 
     for camp in &camps {
         let bp = registry.get(camp.kind);

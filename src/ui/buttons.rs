@@ -132,10 +132,10 @@ pub fn handle_train_buttons(
         for building_entity in &selected_buildings {
             if let Ok(mut queue) = queues.get_mut(building_entity) {
                 let player_res_mut = all_resources.get_mut(&active_player.0);
-                let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(player_res_mut);
+                let deficits = bp.cost.deduct_with_carried(player_res_mut);
                 let drain = SpendFromCarried {
                     faction: active_player.0,
-                    amounts: [dw, dc, di, dg, do_],
+                    amounts: deficits,
                 };
                 if drain.has_deficit() {
                     pending_drains.drains.push(drain);
@@ -235,12 +235,17 @@ pub fn handle_demolish_button(
             } else {
                 100
             };
-            let refund_str = format!(
-                "Refunds ~{}% (W:{} C:{})",
-                refund_pct,
-                bp.cost.wood * refund_pct as u32 / 100,
-                bp.cost.copper * refund_pct as u32 / 100,
-            );
+            let refund_str = {
+                let entries: Vec<String> = bp
+                    .cost
+                    .cost_entries()
+                    .iter()
+                    .map(|(rt, amt)| {
+                        format!("{}:{}", rt.abbreviation(), amt * refund_pct as u32 / 100)
+                    })
+                    .collect();
+                format!("Refunds ~{}% ({})", refund_pct, entries.join(" "))
+            };
 
             let panel = commands
                 .spawn((
@@ -361,14 +366,7 @@ pub fn handle_demolish_confirm(
                 if let Ok(kind) = building_kinds.get(entity) {
                     let bp = registry.get(*kind);
                     let player_res = all_resources.get_mut(&active_player.0);
-                    let refund = [
-                        bp.cost.wood,
-                        bp.cost.copper,
-                        bp.cost.iron,
-                        bp.cost.gold,
-                        bp.cost.oil,
-                    ];
-                    for (i, &amt) in refund.iter().enumerate() {
+                    for (i, &amt) in bp.cost.amounts.iter().enumerate() {
                         player_res.amounts[i] += amt;
                     }
                 }
@@ -641,14 +639,7 @@ pub fn handle_cancel_train(
                     let removed_kind = queue.queue.remove(idx);
                     let bp = registry.get(removed_kind);
                     let player_res = all_resources.get_mut(&active_player.0);
-                    let refund = [
-                        bp.cost.wood,
-                        bp.cost.copper,
-                        bp.cost.iron,
-                        bp.cost.gold,
-                        bp.cost.oil,
-                    ];
-                    for (i, &amt) in refund.iter().enumerate() {
+                    for (i, &amt) in bp.cost.amounts.iter().enumerate() {
                         player_res.amounts[i] += amt;
                     }
                     if idx == 0 {

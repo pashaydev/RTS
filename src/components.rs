@@ -214,15 +214,22 @@ impl GraphicsSettings {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
 pub enum ResourceType {
+    // Raw (0-4)
     Wood,
     Copper,
     Iron,
     Gold,
     Oil,
+    // Processed (5-9)
+    Planks,
+    Charcoal,
+    Bronze,
+    Steel,
+    Gunpowder,
 }
 
 impl ResourceType {
-    pub const ALL: [ResourceType; 5] = [
+    pub const RAW: [ResourceType; 5] = [
         ResourceType::Wood,
         ResourceType::Copper,
         ResourceType::Iron,
@@ -230,7 +237,28 @@ impl ResourceType {
         ResourceType::Oil,
     ];
 
-    pub const COUNT: usize = 5;
+    pub const PROCESSED: [ResourceType; 5] = [
+        ResourceType::Planks,
+        ResourceType::Charcoal,
+        ResourceType::Bronze,
+        ResourceType::Steel,
+        ResourceType::Gunpowder,
+    ];
+
+    pub const ALL: [ResourceType; 10] = [
+        ResourceType::Wood,
+        ResourceType::Copper,
+        ResourceType::Iron,
+        ResourceType::Gold,
+        ResourceType::Oil,
+        ResourceType::Planks,
+        ResourceType::Charcoal,
+        ResourceType::Bronze,
+        ResourceType::Steel,
+        ResourceType::Gunpowder,
+    ];
+
+    pub const COUNT: usize = 10;
 
     pub fn index(self) -> usize {
         match self {
@@ -239,7 +267,20 @@ impl ResourceType {
             Self::Iron => 2,
             Self::Gold => 3,
             Self::Oil => 4,
+            Self::Planks => 5,
+            Self::Charcoal => 6,
+            Self::Bronze => 7,
+            Self::Steel => 8,
+            Self::Gunpowder => 9,
         }
+    }
+
+    pub fn is_raw(self) -> bool {
+        self.index() < 5
+    }
+
+    pub fn is_processed(self) -> bool {
+        self.index() >= 5
     }
 
     pub fn display_name(self) -> &'static str {
@@ -249,6 +290,27 @@ impl ResourceType {
             Self::Iron => "Iron",
             Self::Gold => "Gold",
             Self::Oil => "Oil",
+            Self::Planks => "Planks",
+            Self::Charcoal => "Charcoal",
+            Self::Bronze => "Bronze",
+            Self::Steel => "Steel",
+            Self::Gunpowder => "Gunpowder",
+        }
+    }
+
+    /// Short abbreviation for UI display.
+    pub fn abbreviation(self) -> &'static str {
+        match self {
+            Self::Wood => "W",
+            Self::Copper => "C",
+            Self::Iron => "I",
+            Self::Gold => "G",
+            Self::Oil => "O",
+            Self::Planks => "Pk",
+            Self::Charcoal => "Ch",
+            Self::Bronze => "Bz",
+            Self::Steel => "St",
+            Self::Gunpowder => "Gp",
         }
     }
 
@@ -259,11 +321,16 @@ impl ResourceType {
             Self::Iron => 2.0,
             Self::Gold => 2.5,
             Self::Oil => 1.2,
+            Self::Planks => 1.2,
+            Self::Charcoal => 0.8,
+            Self::Bronze => 2.5,
+            Self::Steel => 3.0,
+            Self::Gunpowder => 1.0,
         }
     }
 
     /// Relative per-second gather throughput for workers.
-    /// Lower values make resource extraction slower for that type.
+    /// Processed resources return 0.0 (not gatherable from nodes).
     pub fn gather_rate_multiplier(self) -> f32 {
         match self {
             Self::Wood => 1.0,
@@ -271,6 +338,8 @@ impl ResourceType {
             Self::Iron => 0.65,
             Self::Gold => 0.45,
             Self::Oil => 0.85,
+            // Processed resources are not gatherable from nodes
+            Self::Planks | Self::Charcoal | Self::Bronze | Self::Steel | Self::Gunpowder => 0.0,
         }
     }
 
@@ -281,6 +350,11 @@ impl ResourceType {
             Self::Iron => Color::srgb(0.55, 0.55, 0.58),
             Self::Gold => Color::srgb(0.95, 0.8, 0.2),
             Self::Oil => Color::srgb(0.08, 0.08, 0.1),
+            Self::Planks => Color::srgb(0.76, 0.60, 0.35),
+            Self::Charcoal => Color::srgb(0.25, 0.25, 0.25),
+            Self::Bronze => Color::srgb(0.80, 0.50, 0.20),
+            Self::Steel => Color::srgb(0.55, 0.60, 0.70),
+            Self::Gunpowder => Color::srgb(0.60, 0.20, 0.20),
         }
     }
 }
@@ -446,7 +520,7 @@ impl Default for DecisionTimer {
 
 // ── Gathering ──
 
-/// Unified unit state machine — replaces WorkerTask, ProcessorWorkerState, and ad-hoc combat states.
+/// Unified unit state machine — replaces WorkerTask and ad-hoc combat states.
 #[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
 pub enum UnitState {
     #[default]
@@ -470,10 +544,11 @@ pub enum UnitState {
     MovingToPlot(Vec3),
     MovingToBuild(Entity),
     Building(Entity),
-    /// Worker absorbed into processor building (hidden, working inside)
-    InsideProcessor(Entity),
-    /// Worker walking to processor building before being absorbed
-    MovingToProcessor(Entity),
+    /// Worker assigned to a processing building (visible, walking between nodes and building)
+    AssignedGathering {
+        building: Entity,
+        phase: AssignedPhase,
+    },
     Patrolling {
         target: Vec3,
         origin: Vec3,
@@ -694,12 +769,12 @@ pub struct ResourcePopup {
     pub amount: u32,
 }
 
-/// Sub-state for workers inside processor buildings (visual work loop).
-/// Only present on workers in `UnitState::InsideProcessor`.
-#[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
-pub enum ProcessorWorkerState {
+/// Sub-phases for workers assigned to processing buildings.
+/// Workers stay visible on the map and physically walk between nodes and buildings.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum AssignedPhase {
     #[default]
-    Idle,
+    SeekingNode,
     MovingToNode(Entity),
     Harvesting {
         node: Entity,
@@ -709,6 +784,88 @@ pub enum ProcessorWorkerState {
     Depositing {
         timer_secs: f32,
     },
+    /// For production buildings: fetching input from storage
+    FetchingInput {
+        from_depot: Entity,
+        resource: ResourceType,
+    },
+    /// Delivering fetched input to the production building
+    DeliveringInput,
+}
+
+/// Marker: this worker is assigned to a building. The building entity is stored here
+/// for quick lookup without needing to check UnitState.
+#[derive(Component)]
+pub struct BuildingAssignment(pub Entity);
+
+// ── Production chain ──
+
+/// A recipe that converts input resources into output resources.
+#[derive(Clone, Debug)]
+pub struct ProductionRecipe {
+    pub name: &'static str,
+    pub inputs: Vec<(ResourceType, u32)>,
+    pub outputs: Vec<(ResourceType, u32)>,
+    pub cycle_secs: f32,
+    pub requires_level: u8,
+}
+
+/// Tracks the production state of a building that converts resources.
+#[derive(Component)]
+pub struct ProductionState {
+    pub recipes: Vec<ProductionRecipe>,
+    pub active_recipe: Option<usize>,
+    pub progress_timer: Timer,
+    pub input_buffer: [u32; ResourceType::COUNT],
+    pub output_buffer: [u32; ResourceType::COUNT],
+    pub auto_repeat: bool,
+}
+
+impl ProductionState {
+    pub fn new(recipes: Vec<ProductionRecipe>) -> Self {
+        Self {
+            recipes,
+            active_recipe: Some(0),
+            progress_timer: Timer::from_seconds(1.0, TimerMode::Once),
+            input_buffer: [0; ResourceType::COUNT],
+            output_buffer: [0; ResourceType::COUNT],
+            auto_repeat: true,
+        }
+    }
+
+    /// Check if input buffer has enough for the active recipe.
+    pub fn has_inputs_for_active(&self) -> bool {
+        let Some(idx) = self.active_recipe else {
+            return false;
+        };
+        let recipe = &self.recipes[idx];
+        recipe
+            .inputs
+            .iter()
+            .all(|(rt, amt)| self.input_buffer[rt.index()] >= *amt)
+    }
+
+    /// Consume inputs for the active recipe from the input buffer.
+    pub fn consume_inputs(&mut self) {
+        let Some(idx) = self.active_recipe else {
+            return;
+        };
+        let recipe = &self.recipes[idx];
+        for (rt, amt) in &recipe.inputs {
+            self.input_buffer[rt.index()] -= amt;
+        }
+    }
+
+    /// Add outputs for the active recipe to the output buffer.
+    pub fn produce_outputs(&mut self) {
+        let Some(idx) = self.active_recipe else {
+            return;
+        };
+        let recipe = &self.recipes[idx];
+        for (rt, amt) in &recipe.outputs {
+            self.output_buffer[rt.index()] += amt;
+        }
+    }
 }
 
 /// Config for resource respawn around processing buildings
@@ -834,18 +991,16 @@ impl PlayerResources {
         self.amounts[rt.index()]
     }
 
-    pub fn can_afford(&self, wood: u32, copper: u32, iron: u32, gold: u32, oil: u32) -> bool {
-        let costs = [wood, copper, iron, gold, oil];
-        self.amounts
+    pub fn can_afford_cost(&self, cost: &crate::blueprints::ResourceCost) -> bool {
+        cost.amounts
             .iter()
-            .zip(costs.iter())
-            .all(|(have, need)| have >= need)
+            .enumerate()
+            .all(|(i, need)| self.amounts[i] >= *need)
     }
 
-    pub fn subtract(&mut self, wood: u32, copper: u32, iron: u32, gold: u32, oil: u32) {
-        let costs = [wood, copper, iron, gold, oil];
-        for (amount, cost) in self.amounts.iter_mut().zip(costs.iter()) {
-            *amount = amount.saturating_sub(*cost);
+    pub fn subtract_cost(&mut self, cost: &crate::blueprints::ResourceCost) {
+        for (amount, need) in self.amounts.iter_mut().zip(cost.amounts.iter()) {
+            *amount = amount.saturating_sub(*need);
         }
     }
 }
@@ -874,6 +1029,7 @@ pub struct ModelAssets {
     pub rocks: Vec<Handle<Scene>>,
     pub bushes: Vec<Handle<Scene>>,
     pub grass: Vec<Handle<Scene>>,
+    pub mountains: Vec<Handle<Scene>>,
 }
 
 #[derive(Component)]
@@ -881,6 +1037,15 @@ pub struct Decoration;
 
 #[derive(Component)]
 pub struct DenseGrass;
+
+#[derive(Component)]
+pub struct GrassChunk {
+    pub chunk_x: i32,
+    pub chunk_z: i32,
+}
+
+#[derive(Resource, Default)]
+pub struct GrassChunkMap(pub std::collections::HashMap<(i32, i32), Entity>);
 
 #[derive(Resource)]
 pub struct GrassGltfHandle(pub Handle<bevy::gltf::Gltf>);
@@ -1536,6 +1701,12 @@ pub struct IconAssets {
     pub iron: Handle<Image>,
     pub gold: Handle<Image>,
     pub oil: Handle<Image>,
+    // Processed resources
+    pub planks: Handle<Image>,
+    pub charcoal: Handle<Image>,
+    pub bronze: Handle<Image>,
+    pub steel: Handle<Image>,
+    pub gunpowder: Handle<Image>,
     // Buildings
     pub base: Handle<Image>,
     pub barracks: Handle<Image>,
@@ -1552,6 +1723,9 @@ pub struct IconAssets {
     pub temple: Handle<Image>,
     pub stable: Handle<Image>,
     pub siege_works: Handle<Image>,
+    // Production chain buildings
+    pub smelter: Handle<Image>,
+    pub alchemist: Handle<Image>,
     // Additional units
     pub knight: Handle<Image>,
     pub mage: Handle<Image>,
@@ -1579,6 +1753,12 @@ impl IconAssets {
             ResourceType::Iron => self.iron.clone(),
             ResourceType::Gold => self.gold.clone(),
             ResourceType::Oil => self.oil.clone(),
+            // Processed resources
+            ResourceType::Planks => self.planks.clone(),
+            ResourceType::Charcoal => self.charcoal.clone(),
+            ResourceType::Bronze => self.bronze.clone(),
+            ResourceType::Steel => self.steel.clone(),
+            ResourceType::Gunpowder => self.gunpowder.clone(),
         }
     }
 
@@ -1619,6 +1799,9 @@ impl IconAssets {
             EntityKind::Sawmill => self.storage.clone(),
             EntityKind::Mine => self.workshop.clone(),
             EntityKind::OilRig => self.workshop.clone(),
+            // Production chain buildings
+            EntityKind::Smelter => self.smelter.clone(),
+            EntityKind::Alchemist => self.alchemist.clone(),
             // Mobs
             EntityKind::Goblin => self.goblin.clone(),
             EntityKind::Skeleton => self.skeleton.clone(),

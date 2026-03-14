@@ -20,7 +20,7 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 - **Enemies** — 4 mob camps (Goblin, Skeleton, Orc, Demon) with patrol AI, aggro detection, and boss variants
 - **Combat** — Melee and ranged attacks, stance-aware auto-targeting (Passive/Defensive/Aggressive), projectiles, hit-flash VFX, tower auto-attack, explosive props with chain reactions
 - **Unit AI** — Decision priority system (0.2s tick): manual orders > survival retreat (hp <25%) > stance-based threat response > auto-role. Defensive leash (12u) returns units that chase too far
-- **Economy** — 5 resource types (Wood, Copper, Iron, Gold, Oil) procedurally distributed across biomes with auto-gathering workers
+- **Economy** — 10 resource types: 5 raw (Wood, Copper, Iron, Gold, Oil) gathered from biome nodes + 5 processed (Planks, Charcoal, Bronze, Steel, Gunpowder) produced via production chains. Worker assignment model with visible workers walking between nodes and buildings; 30% trickle rate with no workers, scaling up with assigned workers
 - **Tree Growth** — Saplings spawn and grow through stages into harvestable mature trees over time
 - **Day/Night Cycle** — 600-second animated cycle (Dawn/Day/Dusk/Night) with keyframed sun illuminance, color, pitch, ambient light, and sky color
 - **Volumetric Fog** — Atmospheric fog volume on camera with density and color animated per time-of-day phase
@@ -131,12 +131,15 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 3. Place the Base at a strong starting position, then let workers construct it
 4. After your first Base is plotted and workers begin building it, more building options unlock
 5. Upgrade **Mine** to unlock reliable copper, then branch into **Workshop**, **Stable**, or advanced defenses
-6. Use the **Wall** tool to plot a straight wall line in one gesture
-7. Use **Gatehouse** to replace an owned wall segment and create a chokepoint opening
-8. Select completed production buildings to train units or upgrade structures to level 3
-9. **Watch Towers**, **Guard Towers**, **Ballista Towers**, and **Bombard Towers** fill different defensive roles
-10. Send workers near resource nodes to auto-gather; resource processors and depots improve efficiency
-11. Buildings can be demolished for a 50% refund after completion
+6. Build a **Smelter** (requires Mine) to produce **Bronze** and **Steel** from raw ores; build an **Alchemist** (requires Smelter) for **Gunpowder**
+7. Assign workers to processor buildings for higher output — right-click a worker onto a Sawmill/Mine/OilRig/Smelter/Alchemist, or let auto-assignment handle it
+8. Use the **Wall** tool to plot a straight wall line in one gesture
+9. Use **Gatehouse** to replace an owned wall segment and create a chokepoint opening
+10. Select completed production buildings to train units or upgrade structures to level 3
+11. **Watch Towers**, **Guard Towers**, **Ballista Towers**, and **Bombard Towers** fill different defensive roles
+12. Send workers near resource nodes to auto-gather; resource processors and depots improve efficiency
+13. Select a production building to choose its active recipe and see input/output buffers
+14. Buildings can be demolished for a 50% refund after completion
 
 ## Biomes
 
@@ -155,14 +158,14 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 | Base | 90W 15I | 15s | — | Tier 1 anchor, trains Workers |
 | Barracks | 75W 30I | 12s | Base | Trains Workers/Soldiers (Archer at L2) |
 | Storage | 55W 15I | 8s | Base | Resource depot; gather aura at level 1+ |
-| Sawmill | 50W 15I | 12s | Base | Wood processor (Forest only) |
+| Sawmill | 50W 15I | 12s | Base | Wood processor (Forest only); produces Planks (L1+), Charcoal (L2+) |
 | Mine | 70W 35I | 15s | Base | Ore processor; L2 unlocks copper (Mountain/Mud/Desert) |
 | Outpost | 20W 10I | 6s | Base | Vision structure and wall control anchor |
 | Watch Tower | 35W 15I | 8s | Base | Cheap early anti-raider defense |
 | Wall Segment | 12W | 4s | Base | Built through wall plotting flow |
 | Wall Post | 16W | 5s | Base | Endpoint / junction support for plotted walls |
 | Gatehouse | 40W 10C 35I | 10s | Outpost | Replaces a wall segment to create a fortified opening |
-| Workshop | 90W 25C 55I 15G | 18s | Mine | Tier 2 military tech, trains Tanks |
+| Workshop | 90W 25C 55I 15G 10Bronze | 18s | Mine | Tier 2 military tech, trains Tanks |
 | Stable | 85W 30C 45I | 14s | Barracks | Trains Cavalry (Knight at L2) |
 | Guard Tower | 60W 20C 45I | 11s | Barracks | Durable general-purpose tower |
 | Siege Works | 100W 35C 90I 30G | 20s | Workshop | Trains Catapults, Battering Rams |
@@ -170,9 +173,11 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 | Temple | 90W 20C 40I 70G | 22s | Mage Tower | Trains Priests; healing aura at level 1+ |
 | Ballista Tower | 70W 55C 80I | 14s | Siege Works | Long-range anti-heavy / anti-siege tower |
 | Bombard Tower | 85W 45C 65I 35G | 15s | Mage Tower | Splash-oriented tower for swarm defense |
+| Smelter | 80W 20C 40I | 16s | Mine | Produces Bronze (L1) and Steel (L2) from raw ores |
+| Alchemist | 60W 30I 25G 15O | 18s | Smelter | Produces Gunpowder from Charcoal + Oil |
 | Oil Rig | 75W 25C 35I | 14s | Workshop | Oil processor (Water only) |
 
-All buildings support 3-level upgrades with bonuses like vision boost, train time reduction, stat boosts, range/damage increase, gather aura, and heal aura.
+All buildings support 3-level upgrades with bonuses like vision boost, train time reduction, stat boosts, range/damage increase, gather aura, heal aura, recipe unlocks, and production speed multipliers.
 
 ## Training Costs
 
@@ -181,13 +186,13 @@ All buildings support 3-level upgrades with bonuses like vision boost, train tim
 | Worker | 30W | 5s | Base, Barracks |
 | Soldier | 20W 15I | 8s | Barracks |
 | Archer | 25W 10I | 7s | Barracks |
-| Tank | 20C 50I 15G 5O | 15s | Workshop |
-| Knight | 20W 15C 45I 20G | 12s | Stable |
+| Tank | 20C 50I 15G 5O 5Steel | 15s | Workshop |
+| Knight | 20W 15C 45I 20G 5Bronze | 12s | Stable |
 | Mage | 10W 40G | 15s | Mage Tower |
 | Priest | 15W 30G | 12s | Mage Tower, Temple |
 | Cavalry | 25W 10C 25I 10G | 10s | Stable |
-| Catapult | 80W 60I 20G | 20s | Siege Works |
-| Battering Ram | 100W 40I | 18s | Siege Works |
+| Catapult | 80W 60I 20G 5Gunpowder | 20s | Siege Works |
+| Battering Ram | 100W 40I 15Planks | 18s | Siege Works |
 
 ## Unit Stats
 
@@ -232,7 +237,7 @@ src/
 │   ├── mod.rs                    UiPlugin, spawn_hud, compute_ui_mode
 │   ├── widget_framework.rs       Widget/GridSlot/WidgetRegistry types, spawn_widget_frame()
 │   ├── widget_toolbar.rs         Top toolbar with F1-F10 toggle buttons
-│   ├── resources_widget.rs       Resource display (wood, copper, iron, gold, oil)
+│   ├── resources_widget.rs       Resource display (raw + processed, unlockable rows)
 │   ├── selection_widget.rs       Selection panel (unit/building detail cards)
 │   ├── actions_widget.rs         Action bar + categorized building grid
 │   ├── production_queue_widget.rs Global training queue overview
@@ -245,7 +250,7 @@ src/
 │   ├── notifications.rs          Ally notification toasts
 │   └── shared.rs                 Shared helpers (hp_color, spawn_hp_bar, format_cost)
 ├── model_assets.rs   Loads KayKit 3D models (characters, trees, rocks, props)
-├── resources.rs      Biome-based resource node spawning, auto-gathering, tree growth
+├── resources.rs      Resource nodes, auto-gathering, tree growth, production chains, worker assignment
 ├── mobs.rs           Enemy camps, patrol / aggro / chase AI
 ├── unit_ai.rs        Unit AI decision layer, task queue, state executor, leash system
 ├── combat.rs         Melee and ranged attacks, auto-targeting, death + event logging
@@ -272,7 +277,7 @@ src/
 | `SelectionPlugin` | Click/box/shift selection, contextual right-click resolver, hotkey orders (A/P/H/S/V stance), control groups |
 | `UiPlugin` | Widget-based HUD — 12x8 grid layout with closable/pinnable panels, building grid, production queue, army overview, tech tree, event log |
 | `ModelAssetsPlugin` | Loads KayKit 3D models — Forest Nature Pack, Adventurers, Skeletons, Character Animations |
-| `ResourcesPlugin` | Procedural biome-based resource node spawning with 3D models, auto-gather + deposit loop, tree growth, biome-aware decoration scatter |
+| `ResourcesPlugin` | Procedural biome-based resource node spawning, auto-gather + deposit loop, tree growth, production chain system (raw → processed), worker assignment with auto-assign, biome-aware decoration scatter |
 | `MobsPlugin` | Spawns 4 enemy camps with patrol, aggro, chase, and return AI |
 | `UnitAiPlugin` | Decision priority system (0.2s tick), task queue processing, unit state executor, defensive leash return |
 | `CombatPlugin` | Melee/ranged attacks, stance-aware auto-acquire, explosive prop chain reactions, death cleanup |

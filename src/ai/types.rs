@@ -91,6 +91,8 @@ impl SquadRole {
             ResourceType::Iron => SquadRole::GatherIron,
             ResourceType::Gold => SquadRole::GatherGold,
             ResourceType::Oil => SquadRole::GatherOil,
+            // Processed resources don't have dedicated gather squads
+            _ => SquadRole::GatherWood,
         }
     }
 
@@ -200,8 +202,8 @@ pub struct AiFactionBrain {
     pub build_queue: Vec<BuildRequest>,
     pub pending_builds: u8,
     pub resource_goal: Option<ResourceGoal>,
-    pub income_rates: [f32; 5],
-    pub last_resource_snapshot: [u32; 5],
+    pub income_rates: [f32; ResourceType::COUNT],
+    pub last_resource_snapshot: [u32; ResourceType::COUNT],
 
     // Military intelligence
     pub attack_ready: bool,

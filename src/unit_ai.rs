@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::blueprints::EntityKind;
 use crate::components::*;
+use crate::spatial::SpatialHashGrid;
 
 pub struct UnitAiPlugin;
 
@@ -25,7 +26,7 @@ impl Plugin for UnitAiPlugin {
 /// Removes dead/invalid worker entities from all AssignedWorkers lists,
 /// and ejects workers whose building no longer exists.
 pub fn cleanup_assigned_workers_system(
-    _commands: Commands,
+    mut commands: Commands,
     mut buildings: Query<&mut AssignedWorkers, With<Building>>,
     workers: Query<Entity, With<Unit>>,
     unit_states: Query<&UnitState, With<Unit>>,
@@ -36,12 +37,14 @@ pub fn cleanup_assigned_workers_system(
             if workers.get(worker).is_err() {
                 return false;
             }
-            // Remove if worker is no longer InsideProcessor (was unassigned externally)
+            // Remove if worker is no longer AssignedGathering (was unassigned externally)
             if let Ok(state) = unit_states.get(worker) {
-                matches!(
-                    state,
-                    UnitState::InsideProcessor(_) | UnitState::MovingToProcessor(_)
-                )
+                let still_assigned = matches!(state, UnitState::AssignedGathering { .. });
+                if !still_assigned {
+                    // Clean up the BuildingAssignment marker
+                    commands.entity(worker).remove::<BuildingAssignment>();
+                }
+                still_assigned
             } else {
                 false
             }
@@ -61,6 +64,7 @@ fn decision_priority_system(
     time: Res<Time>,
     mut decision_timer: ResMut<DecisionTimer>,
     teams: Res<TeamConfig>,
+    spatial_grid: Res<SpatialHashGrid>,
     mut units: Query<
         (
             Entity,
@@ -75,8 +79,8 @@ fn decision_priority_system(
         ),
         With<Unit>,
     >,
-    potential_targets: Query<(Entity, &Transform, &Faction), Or<(With<Mob>, With<Unit>)>>,
-    buildings_with_faction: Query<(Entity, &Transform, &Faction), (With<Building>, Without<Unit>)>,
+    factions: Query<&Faction>,
+    building_check: Query<(), With<Building>>,
     deposit_points: Query<(Entity, &Transform, &Faction), (With<DepositPoint>, Without<Unit>)>,
 ) {
     decision_timer.timer.tick(time.delta());
@@ -97,8 +101,7 @@ fn decision_priority_system(
             UnitState::Building(_)
             | UnitState::MovingToBuild(_)
             | UnitState::MovingToPlot(_)
-            | UnitState::InsideProcessor(_)
-            | UnitState::MovingToProcessor(_)
+            | UnitState::AssignedGathering { .. }
             | UnitState::Depositing { .. }
             | UnitState::ReturningToDeposit { .. }
             | UnitState::WaitingForStorage { .. }
@@ -159,31 +162,28 @@ fn decision_priority_system(
             let mut closest_dist = f32::MAX;
             let mut closest_target = None;
 
-            for (target_entity, target_tf, target_faction) in &potential_targets {
-                if target_entity == entity {
+            // Use spatial hash grid instead of iterating all entities
+            let nearby = spatial_grid.query_radius(tf.translation, scan_range);
+            for (target_entity, target_pos) in &nearby {
+                if *target_entity == entity {
                     continue;
                 }
+                // Skip buildings unless aggressive stance
+                if *stance != UnitStance::Aggressive && building_check.get(*target_entity).is_ok() {
+                    continue;
+                }
+                let Some(target_faction) = factions.get(*target_entity).ok() else {
+                    continue;
+                };
                 if !teams.is_hostile(faction, target_faction) {
                     continue;
                 }
-                let dist = tf.translation.distance(target_tf.translation);
-                if dist < scan_range && dist < closest_dist {
+                let dx = target_pos.x - tf.translation.x;
+                let dz = target_pos.z - tf.translation.z;
+                let dist = (dx * dx + dz * dz).sqrt();
+                if dist < closest_dist {
                     closest_dist = dist;
-                    closest_target = Some(target_entity);
-                }
-            }
-
-            // Aggressive stance also scans hostile buildings
-            if *stance == UnitStance::Aggressive {
-                for (target_entity, target_tf, target_faction) in &buildings_with_faction {
-                    if !teams.is_hostile(faction, target_faction) {
-                        continue;
-                    }
-                    let dist = tf.translation.distance(target_tf.translation);
-                    if dist < scan_range && dist < closest_dist {
-                        closest_dist = dist;
-                        closest_target = Some(target_entity);
-                    }
+                    closest_target = Some(*target_entity);
                 }
             }
 
@@ -262,7 +262,7 @@ pub fn task_queue_advance_system(
     >,
     transforms: Query<&Transform>,
     processors: Query<(&ResourceProcessor, &BuildingState, &Faction), With<Building>>,
-    assigned_workers_q: Query<&AssignedWorkers>,
+    mut assigned_workers_q: Query<&mut AssignedWorkers>,
 ) {
     for (entity, mut state, mut source, mut queue, _kind) in &mut units {
         if *state != UnitState::Idle || queue.current.is_some() || queue.queue.is_empty() {
@@ -328,12 +328,19 @@ pub fn task_queue_advance_system(
                 };
 
                 if can_assign {
-                    if let Ok(building_tf) = transforms.get(building) {
-                        commands
-                            .entity(entity)
-                            .insert(MoveTarget(building_tf.translation));
+                    *state = UnitState::AssignedGathering {
+                        building,
+                        phase: AssignedPhase::SeekingNode,
+                    };
+                    commands
+                        .entity(entity)
+                        .insert(BuildingAssignment(building));
+                    // Add to building's AssignedWorkers
+                    if let Ok(mut aw) = assigned_workers_q.get_mut(building) {
+                        if !aw.workers.contains(&entity) {
+                            aw.workers.push(entity);
+                        }
                     }
-                    *state = UnitState::MovingToProcessor(building);
                 }
             }
             QueuedTask::HoldPosition => {
@@ -353,6 +360,7 @@ pub fn unit_state_executor_system(
     mut commands: Commands,
     _time: Res<Time>,
     teams: Res<TeamConfig>,
+    spatial_grid: Res<SpatialHashGrid>,
     mut units: Query<
         (
             Entity,
@@ -374,13 +382,12 @@ pub fn unit_state_executor_system(
         (With<Building>, With<ConstructionProgress>),
     >,
     processors: Query<(&ResourceProcessor, &BuildingState, &Faction), With<Building>>,
-    mut assigned_workers_q: Query<&mut AssignedWorkers>,
-    potential_targets: Query<(Entity, &Transform, &Faction), Or<(With<Mob>, With<Unit>)>>,
-    buildings_with_faction: Query<(Entity, &Transform, &Faction), (With<Building>, Without<Unit>)>,
+    _assigned_workers_q: Query<&AssignedWorkers>,
+    factions: Query<&Faction>,
+    entity_check: Query<()>,
 ) {
     let gather_range = 3.0;
     let build_range = 4.0;
-    let processor_range = 3.0;
 
     for (entity, tf, mut state, mut source, mut task_queue, _kind, faction, move_target, attack_range) in &mut units
     {
@@ -407,10 +414,7 @@ pub fn unit_state_executor_system(
 
             UnitState::Attacking(target) => {
                 // Check target still exists
-                if transforms.get(target).is_err()
-                    && potential_targets.get(target).is_err()
-                    && buildings_with_faction.get(target).is_err()
-                {
+                if entity_check.get(target).is_err() {
                     commands
                         .entity(entity)
                         .remove::<AttackTarget>()
@@ -516,67 +520,13 @@ pub fn unit_state_executor_system(
                 }
             }
 
-            UnitState::MovingToProcessor(building) => {
-                if let Ok(build_tf) = transforms.get(building) {
-                    let dist = tf.translation.distance(build_tf.translation);
-                    if dist <= processor_range {
-                        // Arrived — absorb into building
-                        commands.entity(entity).remove::<MoveTarget>();
-
-                        // Check building still valid and has capacity
-                        let can_enter = if let Ok((proc, bstate, _)) = processors.get(building) {
-                            if *bstate == BuildingState::Complete {
-                                let current = assigned_workers_q
-                                    .get(building)
-                                    .map(|aw| aw.workers.len())
-                                    .unwrap_or(0);
-                                current < proc.max_workers as usize
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-
-                        if can_enter {
-                            *state = UnitState::InsideProcessor(building);
-                            commands
-                                .entity(entity)
-                                .insert(Visibility::Hidden)
-                                .insert(ProcessorWorkerState::default());
-                            // Add to building's AssignedWorkers
-                            if let Ok(mut aw) = assigned_workers_q.get_mut(building) {
-                                if !aw.workers.contains(&entity) {
-                                    aw.workers.push(entity);
-                                }
-                            }
-                        } else {
-                            *state = UnitState::Idle;
-                            *source = TaskSource::Auto;
-                            task_queue.current = None;
-                        }
-                    } else {
-                        commands
-                            .entity(entity)
-                            .insert(MoveTarget(build_tf.translation));
-                    }
-                } else {
-                    commands.entity(entity).remove::<MoveTarget>();
-                    *state = UnitState::Idle;
-                    *source = TaskSource::Auto;
-                    task_queue.current = None;
-                }
-            }
-
-            UnitState::InsideProcessor(building) => {
+            UnitState::AssignedGathering { building, .. } => {
                 // Check building still exists
                 if processors.get(building).is_err() {
-                    // Building destroyed — eject worker
+                    // Building destroyed — unassign worker
                     commands
                         .entity(entity)
-                        .insert(Visibility::Inherited)
-                        .remove::<ProcessorWorkerState>();
-                    // Remove from AssignedWorkers (building gone, so this is a no-op but safe)
+                        .remove::<BuildingAssignment>();
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;
@@ -590,33 +540,28 @@ pub fn unit_state_executor_system(
                     *source = TaskSource::Auto;
                     task_queue.current = None;
                 } else {
-                    // Scan for enemies en route
+                    // Scan for enemies en route using spatial hash
                     if let Some(scan_range) = attack_range.map(|r| r.0 * 2.0) {
                         let mut closest_dist = f32::MAX;
                         let mut closest_target = None;
 
-                        for (target_entity, target_tf, target_faction) in &potential_targets {
-                            if target_entity == entity {
+                        let nearby = spatial_grid.query_radius(tf.translation, scan_range);
+                        for (target_entity, target_pos) in &nearby {
+                            if *target_entity == entity {
                                 continue;
                             }
+                            let Some(target_faction) = factions.get(*target_entity).ok() else {
+                                continue;
+                            };
                             if !teams.is_hostile(faction, target_faction) {
                                 continue;
                             }
-                            let dist = tf.translation.distance(target_tf.translation);
-                            if dist < scan_range && dist < closest_dist {
+                            let dx = target_pos.x - tf.translation.x;
+                            let dz = target_pos.z - tf.translation.z;
+                            let dist = (dx * dx + dz * dz).sqrt();
+                            if dist < closest_dist {
                                 closest_dist = dist;
-                                closest_target = Some(target_entity);
-                            }
-                        }
-
-                        for (target_entity, target_tf, target_faction) in &buildings_with_faction {
-                            if !teams.is_hostile(faction, target_faction) {
-                                continue;
-                            }
-                            let dist = tf.translation.distance(target_tf.translation);
-                            if dist < scan_range && dist < closest_dist {
-                                closest_dist = dist;
-                                closest_target = Some(target_entity);
+                                closest_target = Some(*target_entity);
                             }
                         }
 
@@ -640,22 +585,23 @@ pub fn unit_state_executor_system(
                         origin: new_origin,
                     };
 
-                    // Also scan for enemies while patrolling
+                    // Also scan for enemies while patrolling using spatial hash
                     if let Some(scan_range) = attack_range.map(|r| r.0 * 2.0) {
-                        for (target_entity, target_tf, target_faction) in &potential_targets {
-                            if target_entity == entity {
+                        let nearby = spatial_grid.query_radius(tf.translation, scan_range);
+                        for (target_entity, _target_pos) in &nearby {
+                            if *target_entity == entity {
                                 continue;
                             }
+                            let Some(target_faction) = factions.get(*target_entity).ok() else {
+                                continue;
+                            };
                             if !teams.is_hostile(faction, target_faction) {
                                 continue;
                             }
-                            let dist = tf.translation.distance(target_tf.translation);
-                            if dist < scan_range {
-                                commands.entity(entity).remove::<MoveTarget>();
-                                commands.entity(entity).insert(AttackTarget(target_entity));
-                                *state = UnitState::Attacking(target_entity);
-                                break;
-                            }
+                            commands.entity(entity).remove::<MoveTarget>();
+                            commands.entity(entity).insert(AttackTarget(*target_entity));
+                            *state = UnitState::Attacking(*target_entity);
+                            break;
                         }
                     }
                 }

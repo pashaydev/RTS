@@ -61,10 +61,10 @@ fn fbm(p: vec2<f32>, octaves: i32) -> f32 {
 }
 
 fn domain_warp(p: vec2<f32>, t: f32) -> vec2<f32> {
-    let q = vec2<f32>(fbm(p + t * 0.02, 3), fbm(p + vec2<f32>(5.2, 1.3) + t * 0.015, 3));
+    let q = vec2<f32>(fbm(p + t * 0.02, 2), fbm(p + vec2<f32>(5.2, 1.3) + t * 0.015, 2));
     return vec2<f32>(
-        fbm(p + 4.0 * q + vec2<f32>(1.7, 9.2) + t * 0.01, 3),
-        fbm(p + 4.0 * q + vec2<f32>(8.3, 2.8) + t * 0.008, 3)
+        fbm(p + 4.0 * q + vec2<f32>(1.7, 9.2) + t * 0.01, 2),
+        fbm(p + 4.0 * q + vec2<f32>(8.3, 2.8) + t * 0.008, 2)
     );
 }
 
@@ -81,9 +81,14 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let vis = textureSample(visible_tex, visible_sampler, uv).r;
     let explored = textureSample(explored_tex, explored_sampler, uv).r;
 
+    // Early-out for fully visible pixels — skip all noise computation
+    if vis > 0.9 && explored > 0.9 {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+
     // ── Noise distortion at boundaries for organic edges ──
     let noise_uv = uv * settings.noise_scale + time * 0.03;
-    let noise_val = fbm(noise_uv, 3);
+    let noise_val = fbm(noise_uv, 2);
 
     let vis_boundary = smoothstep(0.0, 0.15, vis) * (1.0 - smoothstep(0.7, 1.0, vis));
     let explore_boundary = smoothstep(0.0, 0.1, explored) * (1.0 - smoothstep(0.8, 1.0, explored));
@@ -139,11 +144,10 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
         fog_rgb = fog_rgb + settings.glow_color.rgb * highlights * unexplored_factor;
     }
 
-    // ── Mist tendrils at explored/unexplored boundary ──
+    // ── Mist tendrils at explored/unexplored boundary (simplified) ──
     if explore_boundary > 0.1 {
         let tendril_uv = uv * settings.fog_tendril_scale + time * 0.015;
-        let warp2 = domain_warp(tendril_uv, time * settings.fog_warp_speed * 0.7);
-        let tendril = fbm(tendril_uv + warp2 * 1.2, octaves);
+        let tendril = fbm(tendril_uv, 2);
         let tendril_n = tendril * 0.5 + 0.5;
         let t_strength = explore_boundary * settings.fog_tendril_strength * tendril_n;
         fog_rgb = fog_rgb + settings.glow_color.rgb * t_strength;

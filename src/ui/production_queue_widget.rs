@@ -552,16 +552,10 @@ fn format_active_state(
         UnitState::Building(target) => {
             format!("Build {}", format_target(target, kind_lookup, resource_nodes))
         }
-        UnitState::InsideProcessor(target) => {
+        UnitState::AssignedGathering { building, .. } => {
             format!(
                 "Assigned to {}",
-                format_target(target, kind_lookup, resource_nodes)
-            )
-        }
-        UnitState::MovingToProcessor(target) => {
-            format!(
-                "Assign to {}",
-                format_target(target, kind_lookup, resource_nodes)
+                format_target(building, kind_lookup, resource_nodes)
             )
         }
         UnitState::Patrolling { target, .. } => format!("Patrol {}", format_position(target)),
@@ -731,14 +725,7 @@ pub fn handle_queue_cancel_buttons(
                 let removed_kind = queue.queue.remove(button.index);
                 let bp = registry.get(removed_kind);
                 let player_res = all_resources.get_mut(&active_player.0);
-                let refund = [
-                    bp.cost.wood,
-                    bp.cost.copper,
-                    bp.cost.iron,
-                    bp.cost.gold,
-                    bp.cost.oil,
-                ];
-                for (i, &amt) in refund.iter().enumerate() {
+                for (i, &amt) in bp.cost.amounts.iter().enumerate() {
                     player_res.amounts[i] += amt;
                 }
                 if button.index == 0 {

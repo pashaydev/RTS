@@ -98,23 +98,11 @@ pub fn spawn_section_divider(
 }
 
 pub fn format_cost(cost: &crate::blueprints::ResourceCost) -> String {
-    let mut parts = Vec::new();
-    if cost.wood > 0 {
-        parts.push(format!("W:{}", cost.wood));
-    }
-    if cost.copper > 0 {
-        parts.push(format!("C:{}", cost.copper));
-    }
-    if cost.iron > 0 {
-        parts.push(format!("I:{}", cost.iron));
-    }
-    if cost.gold > 0 {
-        parts.push(format!("G:{}", cost.gold));
-    }
-    if cost.oil > 0 {
-        parts.push(format!("O:{}", cost.oil));
-    }
-    parts.join(" ")
+    cost.cost_entries()
+        .iter()
+        .map(|(rt, amt)| format!("{}:{}", rt.abbreviation(), amt))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Base node for widget content to keep internals visually integrated with the outer widget tile.

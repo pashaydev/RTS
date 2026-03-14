@@ -66,6 +66,7 @@ pub fn update_action_bar(
             Option<&Health>,
             Option<&TowerAutoAttackEnabled>,
             Option<&ResourceProcessor>,
+            Option<&ProductionState>,
         ),
         (With<Building>, With<Selected>),
     >,
@@ -86,10 +87,11 @@ pub fn update_action_bar(
             Changed<UpgradeProgress>,
             Changed<TowerAutoAttackEnabled>,
             Changed<AssignedWorkers>,
+            Changed<ProductionState>,
         )>,
     >,
     mut last_queue_len: Local<usize>,
-    mut last_res_snapshot: Local<[u32; 5]>,
+    mut last_res_snapshot: Local<[u32; ResourceType::COUNT]>,
     ui_state: (Res<IconAssets>, Res<RallyPointMode>),
     existing_cards: Query<Entity, With<BuildGridButton>>,
     confirm_panels: Query<Entity, With<DemolishConfirmPanel>>,
@@ -120,7 +122,7 @@ pub fn update_action_bar(
     let current_queue_len = selected_buildings
         .iter()
         .next()
-        .and_then(|(_, _, _, _, _, _, q, _, _, _, _)| q.map(|q| q.queue.len()))
+        .and_then(|(_, _, _, _, _, _, q, _, _, _, _, _)| q.map(|q| q.queue.len()))
         .unwrap_or(0);
     let queue_changed = current_queue_len != *last_queue_len;
     *last_queue_len = current_queue_len;
@@ -177,6 +179,7 @@ pub fn update_action_bar(
                 health,
                 auto_attack,
                 proc_opt,
+                production_state,
             )) = selected_buildings.single()
             {
                 if *state == BuildingState::Complete {
@@ -196,6 +199,7 @@ pub fn update_action_bar(
                         health,
                         auto_attack,
                         proc_opt,
+                        production_state,
                         worker_count,
                         &icons,
                         &registry,
@@ -398,8 +402,7 @@ fn spawn_units_action_bar(
                             UnitState::MovingToBuild(_) => "Moving to build",
                             UnitState::Building(_) => "Building",
                             UnitState::WaitingForStorage { .. } => "Storage full!",
-                            UnitState::InsideProcessor(_) => "Working at building",
-                            UnitState::MovingToProcessor(_) => "Going to building",
+                            UnitState::AssignedGathering { .. } => "Working at building",
                             UnitState::Attacking(_) => "Attacking",
                             UnitState::AttackMoving(_) => "Attack moving",
                             UnitState::Patrolling { .. } => "Patrolling",
@@ -556,6 +559,7 @@ fn spawn_building_action_bar(
     health: Option<&Health>,
     auto_attack: Option<&TowerAutoAttackEnabled>,
     processor: Option<&ResourceProcessor>,
+    production: Option<&ProductionState>,
     worker_count: usize,
     icons: &IconAssets,
     registry: &BlueprintRegistry,
@@ -901,6 +905,163 @@ fn spawn_building_action_bar(
                 ))
                 .id();
             commands.entity(proc_row).add_child(auto_badge);
+        }
+
+        spawn_separator(commands, container);
+    }
+
+    // Production state section
+    if let Some(prod) = production {
+        let prod_col = commands
+            .spawn(Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(3.0),
+                ..default()
+            })
+            .id();
+        commands.entity(container).add_child(prod_col);
+
+        // Section label
+        let section_label = commands
+            .spawn((
+                Text::new("Production"),
+                TextFont {
+                    font_size: theme::FONT_BODY,
+                    ..default()
+                },
+                TextColor(theme::TEXT_SECONDARY),
+            ))
+            .id();
+        commands.entity(prod_col).add_child(section_label);
+
+        for (idx, recipe) in prod.recipes.iter().enumerate() {
+            let is_active = prod.active_recipe == Some(idx);
+            let is_locked = recipe.requires_level > level;
+
+            let recipe_row = commands
+                .spawn(Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(2.0),
+                    padding: UiRect::all(Val::Px(4.0)),
+                    ..default()
+                })
+                .id();
+            commands.entity(prod_col).add_child(recipe_row);
+
+            if is_locked {
+                let locked_text = commands
+                    .spawn((
+                        Text::new(format!(
+                            "\u{1f512} {}  (Requires L{})",
+                            recipe.name, recipe.requires_level
+                        )),
+                        TextFont {
+                            font_size: theme::FONT_BODY,
+                            ..default()
+                        },
+                        TextColor(theme::TEXT_SECONDARY.with_alpha(0.5)),
+                    ))
+                    .id();
+                commands.entity(recipe_row).add_child(locked_text);
+            } else {
+                // Recipe name + cycle time
+                let status = if is_active { "Active" } else { "" };
+                let header_text = if status.is_empty() {
+                    format!("{}  ({:.0}s)", recipe.name, recipe.cycle_secs)
+                } else {
+                    format!(
+                        "{}  ({:.0}s) [{}]",
+                        recipe.name, recipe.cycle_secs, status
+                    )
+                };
+                let header = commands
+                    .spawn((
+                        Text::new(header_text),
+                        TextFont {
+                            font_size: theme::FONT_BODY,
+                            ..default()
+                        },
+                        TextColor(if is_active {
+                            theme::ACCENT
+                        } else {
+                            theme::TEXT_PRIMARY
+                        }),
+                    ))
+                    .id();
+                commands.entity(recipe_row).add_child(header);
+
+                // Inputs
+                if !recipe.inputs.is_empty() {
+                    let inputs_str: Vec<String> = recipe
+                        .inputs
+                        .iter()
+                        .map(|(rt, qty)| format!("{} {}", qty, rt.display_name()))
+                        .collect();
+                    let inputs_label = commands
+                        .spawn((
+                            Text::new(format!("  In: {}", inputs_str.join(", "))),
+                            TextFont {
+                                font_size: theme::FONT_BODY,
+                                ..default()
+                            },
+                            TextColor(theme::TEXT_SECONDARY),
+                        ))
+                        .id();
+                    commands.entity(recipe_row).add_child(inputs_label);
+                }
+
+                // Outputs
+                if !recipe.outputs.is_empty() {
+                    let outputs_str: Vec<String> = recipe
+                        .outputs
+                        .iter()
+                        .map(|(rt, qty)| format!("{} {}", qty, rt.display_name()))
+                        .collect();
+                    let outputs_label = commands
+                        .spawn((
+                            Text::new(format!("  Out: {}", outputs_str.join(", "))),
+                            TextFont {
+                                font_size: theme::FONT_BODY,
+                                ..default()
+                            },
+                            TextColor(theme::TEXT_SECONDARY),
+                        ))
+                        .id();
+                    commands.entity(recipe_row).add_child(outputs_label);
+                }
+
+                // Progress bar for active recipe
+                if is_active {
+                    let elapsed = prod.progress_timer.elapsed_secs();
+                    let duration = prod.progress_timer.duration().as_secs_f32();
+                    let pct = if duration > 0.0 {
+                        (elapsed / duration).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    };
+                    let filled = (pct * 20.0) as usize;
+                    let empty = 20 - filled;
+                    let bar = format!(
+                        "  [{}{}] {:.0}%",
+                        "=".repeat(filled),
+                        " ".repeat(empty),
+                        pct * 100.0
+                    );
+                    let progress_label = commands
+                        .spawn((
+                            Text::new(bar),
+                            TextFont {
+                                font_size: theme::FONT_BODY,
+                                ..default()
+                            },
+                            TextColor(theme::ACCENT),
+                        ))
+                        .id();
+                    commands.entity(recipe_row).add_child(progress_label);
+                }
+            }
         }
 
         spawn_separator(commands, container);
@@ -1735,6 +1896,11 @@ fn spawn_building_grid(
             )
         })
         .collect();
+    let production: Vec<EntityKind> = available
+        .iter()
+        .copied()
+        .filter(|k| matches!(k, EntityKind::Smelter | EntityKind::Alchemist))
+        .collect();
     let military: Vec<EntityKind> = available
         .iter()
         .copied()
@@ -1774,6 +1940,7 @@ fn spawn_building_grid(
 
     let categories = [
         ("Economy", &economy),
+        ("Production", &production),
         ("Military", &military),
         ("Defense", &defense),
     ];

@@ -482,7 +482,7 @@ fn handle_click_select(
     ui_interactions: Query<&Interaction, With<Node>>,
     active_player: Res<ActivePlayer>,
     faction_q: Query<&Faction>,
-    unit_state_q: Query<&UnitState>,
+    _unit_state_q: Query<&UnitState>,
 ) {
     let (ref mut drag, ref mut inspected) = state;
     let (ref units, ref buildings, ref mobs, ref resource_nodes, ref explosive_props) =
@@ -552,12 +552,7 @@ fn handle_click_select(
                         continue;
                     }
                 }
-                if unit_state_q
-                    .get(entity)
-                    .map_or(false, |s| matches!(s, UnitState::InsideProcessor(_)))
-                {
-                    continue;
-                }
+                // Workers assigned to buildings are now visible, so no need to skip them
                 if let Ok(gt) = unit_transforms.get(entity) {
                     if let Ok(screen_pos) = camera.world_to_viewport(cam_gt, gt.translation()) {
                         if screen_pos.x >= min_x
@@ -1110,7 +1105,11 @@ fn handle_right_click_move(
                                             .entity(*entity)
                                             .remove::<AttackTarget>()
                                             .insert(MoveTarget(gt.translation()))
-                                            .insert(UnitState::MovingToProcessor(target_entity))
+                                            .insert(UnitState::AssignedGathering {
+                                                building: target_entity,
+                                                phase: AssignedPhase::SeekingNode,
+                                            })
+                                            .insert(BuildingAssignment(target_entity))
                                             .insert(TaskSource::Manual);
                                         set_current_task(
                                             &mut task_queues,

@@ -19,6 +19,11 @@ impl Plugin for ModelAssetsPlugin {
             iron: asset_server.load("icons/resources/iron.png"),
             gold: asset_server.load("icons/resources/gold.png"),
             oil: asset_server.load("icons/resources/oil.png"),
+            planks: asset_server.load("icons/resources/planks.png"),
+            charcoal: asset_server.load("icons/resources/charcoal.png"),
+            bronze: asset_server.load("icons/resources/bronze.png"),
+            steel: asset_server.load("icons/resources/steel.png"),
+            gunpowder: asset_server.load("icons/resources/gunpowder.png"),
             base: asset_server.load("icons/buildings/base.png"),
             barracks: asset_server.load("icons/buildings/barracks.png"),
             workshop: asset_server.load("icons/buildings/workshop.png"),
@@ -32,6 +37,8 @@ impl Plugin for ModelAssetsPlugin {
             temple: asset_server.load("icons/buildings/temple.png"),
             stable: asset_server.load("icons/buildings/stable.png"),
             siege_works: asset_server.load("icons/buildings/siege_works.png"),
+            smelter: asset_server.load("icons/buildings/smelter.png"),
+            alchemist: asset_server.load("icons/buildings/alchemist.png"),
             knight: asset_server.load("icons/units/knight.png"),
             mage: asset_server.load("icons/units/mage.png"),
             priest: asset_server.load("icons/units/priest.png"),
@@ -157,12 +164,23 @@ fn load_model_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
         ],
     );
 
+    let mountains = [
+        "UltimateFantasyRTS/glTF/Mountain_Group_1.gltf#Scene0",
+        "UltimateFantasyRTS/glTF/Mountain_Group_2.gltf#Scene0",
+        "UltimateFantasyRTS/glTF/MountainLarge_Single.gltf#Scene0",
+        "UltimateFantasyRTS/glTF/Mountain_Single.gltf#Scene0",
+    ]
+    .iter()
+    .map(|path| asset_server.load(*path))
+    .collect();
+
     commands.insert_resource(ModelAssets {
         trees,
         dead_trees,
         rocks,
         bushes,
         grass,
+        mountains,
     });
 }
 

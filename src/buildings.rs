@@ -237,11 +237,9 @@ fn wall_cost_from_points(
     let seg_cost = &registry.get(EntityKind::WallSegment).cost;
     let post_cost = &registry.get(EntityKind::WallPost).cost;
 
-    total.wood = segments * seg_cost.wood + posts * post_cost.wood;
-    total.copper = segments * seg_cost.copper + posts * post_cost.copper;
-    total.iron = segments * seg_cost.iron + posts * post_cost.iron;
-    total.gold = segments * seg_cost.gold + posts * post_cost.gold;
-    total.oil = segments * seg_cost.oil + posts * post_cost.oil;
+    for rt in ResourceType::RAW.iter() {
+        total.set(*rt, segments * seg_cost.get(*rt) + posts * post_cost.get(*rt));
+    }
     total
 }
 
@@ -510,7 +508,7 @@ fn update_wall_plot_preview(
     placement.hint_text = Some(if wall_preview.valid {
         format!(
             "Wall: {segments} segments, {posts} posts | Cost: {}W",
-            cost.wood
+            cost.get(ResourceType::Wood)
         )
     } else {
         "Wall path blocked".to_string()
@@ -802,10 +800,10 @@ fn confirm_placement(
 
     // Deduct from stored first, queue carried drain for any deficit
     let player_res_mut = all_resources.get_mut(&faction);
-    let (dw, dc, di, dg, do_) = bp.cost.deduct_with_carried(player_res_mut);
+    let deficits = bp.cost.deduct_with_carried(player_res_mut);
     let drain = SpendFromCarried {
         faction,
-        amounts: [dw, dc, di, dg, do_],
+        amounts: deficits,
     };
     if drain.has_deficit() {
         pending_drains.drains.push(drain);
@@ -1136,11 +1134,9 @@ fn pending_build_arrival_system(
             // Refund resources and cancel
             let bp = registry.get(kind);
             let res = all_resources.get_mut(&faction);
-            res.add(ResourceType::Wood, bp.cost.wood);
-            res.add(ResourceType::Copper, bp.cost.copper);
-            res.add(ResourceType::Iron, bp.cost.iron);
-            res.add(ResourceType::Gold, bp.cost.gold);
-            res.add(ResourceType::Oil, bp.cost.oil);
+            for (rt, amt) in bp.cost.cost_entries() {
+                res.add(rt, amt);
+            }
 
             commands
                 .entity(w_entity)
@@ -1194,11 +1190,9 @@ fn pending_build_cleanup_system(
         if !matches!(state, UnitState::MovingToPlot(_)) {
             let bp = registry.get(pending.kind);
             let res = all_resources.get_mut(&pending.faction);
-            res.add(ResourceType::Wood, bp.cost.wood);
-            res.add(ResourceType::Copper, bp.cost.copper);
-            res.add(ResourceType::Iron, bp.cost.iron);
-            res.add(ResourceType::Gold, bp.cost.gold);
-            res.add(ResourceType::Oil, bp.cost.oil);
+            for (rt, amt) in bp.cost.cost_entries() {
+                res.add(rt, amt);
+            }
 
             commands.entity(entity).remove::<PendingBuildOrder>();
         }
@@ -1520,10 +1514,10 @@ pub fn start_upgrade(
     }
 
     // Deduct from stored first, queue carried drain for deficit
-    let (dw, dc, di, dg, do_) = level_data.cost.deduct_with_carried(player_res);
+    let deficits = level_data.cost.deduct_with_carried(player_res);
     let drain = SpendFromCarried {
         faction,
-        amounts: [dw, dc, di, dg, do_],
+        amounts: deficits,
     };
     if drain.has_deficit() {
         pending_drains.drains.push(drain);
@@ -1726,6 +1720,18 @@ fn building_upgrade_system(
                         Timer::from_seconds((current_secs * 0.75).max(10.0), TimerMode::Repeating);
                 }
             }
+            LevelBonus::UnlockRecipe {
+                recipe_index: _,
+                extra_worker_slots,
+            } => {
+                // Recipe unlock is checked at runtime via building level vs requires_level
+                if let Some(mut proc) = processor {
+                    proc.max_workers += extra_worker_slots;
+                }
+            }
+            LevelBonus::ProductionSpeedMultiplier(_mult) => {
+                // Applied at runtime in production_chain_system by checking building level
+            }
         }
 
         // Scale storage capacities +15% on any upgrade for buildings with storage
@@ -1817,11 +1823,9 @@ fn demolish_system(
             let bp = registry.get(*kind);
             let cost = &bp.cost;
             let res = all_resources.get_mut(faction);
-            res.add(ResourceType::Wood, cost.wood / 2);
-            res.add(ResourceType::Copper, cost.copper / 2);
-            res.add(ResourceType::Iron, cost.iron / 2);
-            res.add(ResourceType::Gold, cost.gold / 2);
-            res.add(ResourceType::Oil, cost.oil / 2);
+            for (rt, amt) in cost.cost_entries() {
+                res.add(rt, amt / 2);
+            }
 
             // Despawn
             commands.entity(entity).despawn();

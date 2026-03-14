@@ -22,6 +22,7 @@ mod resources;
 mod roads;
 mod save;
 mod selection;
+mod spatial;
 mod theme;
 mod ui;
 mod unit_ai;
@@ -85,6 +86,7 @@ fn main() {
             combat::CombatPlugin,
             fog::FogPlugin,
         ))
+        .add_plugins(spatial::SpatialPlugin)
         .add_plugins(roads::RoadPlugin)
         .add_plugins(save::SavePlugin)
         .add_plugins(animation::AnimationPlugin)

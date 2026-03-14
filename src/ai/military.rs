@@ -144,11 +144,11 @@ pub fn ai_military_system(
                 .can_afford_with_carried(all_resources.get(&faction), carried)
             {
                 if try_train(&mut train_queues, &faction, unit_kind, &registry) {
-                    let (dw, dc, di, dg, do_) =
+                    let deficits =
                         bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
                     let drain = SpendFromCarried {
                         faction,
-                        amounts: [dw, dc, di, dg, do_],
+                        amounts: deficits,
                     };
                     if drain.has_deficit() {
                         pending_drains.drains.push(drain);

@@ -4,7 +4,7 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::blueprints::EntityKind;
 use crate::components::*;
-use crate::ground::HeightMap;
+use crate::ground::{is_in_mountain_border, BorderSettings, HeightMap};
 use crate::theme;
 use rand::rngs::StdRng;
 use rand::Rng;
@@ -36,6 +36,7 @@ impl Plugin for ResourcesPlugin {
                     compute_carried_totals,
                     worker_ai_system,
                     resource_processor_system,
+                    production_chain_system,
                     deplete_resource_nodes,
                 )
                     .chain()
@@ -61,6 +62,7 @@ impl Plugin for ResourcesPlugin {
                 Update,
                 (
                     processor_worker_visual_system,
+                    auto_assign_workers_system,
                     resource_respawn_system,
                     grow_resource_system,
                     update_resource_popups,
@@ -252,6 +254,7 @@ fn spawn_resource_nodes(
     let density_mult = config.resource_density.multiplier();
     let spacing = 12.0;
     let half = height_map.half_map;
+    let border = BorderSettings::from_map_size(height_map.map_size);
 
     let spawn_positions = config.spawn_positions(map_seed.0);
 
@@ -259,6 +262,11 @@ fn spawn_resource_nodes(
     while x < half - 5.0 {
         let mut z = -half + 5.0;
         while z < half - 5.0 {
+            if is_in_mountain_border(x, z, half, border) {
+                z += spacing;
+                continue;
+            }
+
             // Keep starting areas clear (all faction spawn positions)
             let mut too_close_to_spawn = false;
             for &(_, (sx, sz)) in &spawn_positions {
@@ -446,6 +454,7 @@ fn spawn_explosive_props(
 
     let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(3000));
     let half = height_map.half_map - 12.0;
+    let border = BorderSettings::from_map_size(height_map.map_size);
     let spawn_positions = config.spawn_positions(map_seed.0);
     let barrel_count = ((config.map_size.world_size() / 500.0).powi(2) * 22.0).round() as u32;
 
@@ -454,6 +463,9 @@ fn spawn_explosive_props(
         for _ in 0..20 {
             let x = rng.random_range(-half..half);
             let z = rng.random_range(-half..half);
+            if is_in_mountain_border(x, z, height_map.half_map, border) {
+                continue;
+            }
             let biome = biome_map.get_biome(x, z);
             if matches!(biome, Biome::Water | Biome::Mountain) {
                 continue;
@@ -509,6 +521,7 @@ fn spawn_decorations(
     let deco_noise = Fbm::<Perlin>::new(deco_seed).set_octaves(2);
     let spacing = 8.0;
     let half = height_map.half_map;
+    let border = BorderSettings::from_map_size(height_map.map_size);
     let max_decorations = ((height_map.map_size / 500.0).powi(2) * 700.0) as u32;
     let mut count = 0u32;
 
@@ -518,6 +531,11 @@ fn spawn_decorations(
         while z < half - 4.0 {
             if count >= max_decorations {
                 return;
+            }
+
+            if is_in_mountain_border(x, z, half, border) {
+                z += spacing;
+                continue;
             }
 
             // Keep starting areas clear (all faction spawn positions)
@@ -595,6 +613,8 @@ fn spawn_decorations(
     }
 }
 
+const GRASS_CHUNK_SIZE: f32 = 32.0;
+
 fn spawn_dense_grass(
     mut commands: Commands,
     grass_assets: Res<GrassInstanceAssets>,
@@ -602,6 +622,7 @@ fn spawn_dense_grass(
     height_map: Res<HeightMap>,
     config: Res<GameSetupConfig>,
     map_seed: Res<MapSeed>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut has_run: Local<bool>,
 ) {
     if *has_run {
@@ -609,12 +630,65 @@ fn spawn_dense_grass(
     }
     *has_run = true;
 
+    // Get the source grass mesh vertices
+    let Some(source_mesh) = meshes.get(&grass_assets.mesh) else {
+        return;
+    };
+    let src_positions: Vec<[f32; 3]> = source_mesh
+        .attribute(Mesh::ATTRIBUTE_POSITION)
+        .and_then(|attr| {
+            if let bevy::mesh::VertexAttributeValues::Float32x3(v) = attr {
+                Some(v.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+    let src_normals: Vec<[f32; 3]> = source_mesh
+        .attribute(Mesh::ATTRIBUTE_NORMAL)
+        .and_then(|attr| {
+            if let bevy::mesh::VertexAttributeValues::Float32x3(v) = attr {
+                Some(v.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+    let src_uvs: Vec<[f32; 2]> = source_mesh
+        .attribute(Mesh::ATTRIBUTE_UV_0)
+        .and_then(|attr| {
+            if let bevy::mesh::VertexAttributeValues::Float32x2(v) = attr {
+                Some(v.clone())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+    let src_indices: Vec<u32> = source_mesh
+        .indices()
+        .map(|idx| match idx {
+            bevy::mesh::Indices::U16(v) => v.iter().map(|&i| i as u32).collect(),
+            bevy::mesh::Indices::U32(v) => v.clone(),
+        })
+        .unwrap_or_default();
+
+    if src_positions.is_empty() {
+        warn!("Grass source mesh has no positions");
+        return;
+    }
+
     let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(5000));
     let grass_noise = Fbm::<Perlin>::new((map_seed.0 >> 8) as u32).set_octaves(3);
     let spacing = 3.0;
     let half = height_map.half_map;
+    let border = BorderSettings::from_map_size(height_map.map_size);
     let spawn_positions = config.spawn_positions(map_seed.0);
     let spawn_clear_radius = 30.0_f32;
+
+    // Collect grass instances into chunk buckets
+    let inv_chunk = 1.0 / GRASS_CHUNK_SIZE;
+    let mut chunk_instances: std::collections::HashMap<(i32, i32), Vec<(Vec3, f32, f32)>> =
+        std::collections::HashMap::new();
 
     let mut count = 0u32;
     let mut x = -half + 1.5;
@@ -622,33 +696,29 @@ fn spawn_dense_grass(
         let mut z = -half + 1.5;
         while z < half - 1.5 {
             let biome = biome_map.get_biome(x, z);
-
-            // Only Forest biome gets dense grass
             if biome != Biome::Forest {
                 z += spacing;
                 continue;
             }
-            let threshold = -0.1;
 
-            // Noise-based clustering
             let noise_val = grass_noise.get([x as f64 * 0.08, z as f64 * 0.08]) as f32;
-            if noise_val < threshold {
+            if noise_val < -0.1 {
                 z += spacing;
                 continue;
             }
 
-            // Jitter position to break grid
             let jx = x + rng.random_range(-1.5_f32..1.5);
             let jz = z + rng.random_range(-1.5_f32..1.5);
-
-            // Re-check biome at jittered position (jitter can cross biome boundaries)
-            let jittered_biome = biome_map.get_biome(jx, jz);
-            if jittered_biome != Biome::Forest {
+            if is_in_mountain_border(jx, jz, half, border) {
                 z += spacing;
                 continue;
             }
 
-            // Skip spawn areas
+            if biome_map.get_biome(jx, jz) != Biome::Forest {
+                z += spacing;
+                continue;
+            }
+
             let too_close = spawn_positions.iter().any(|(_, (sx, sz))| {
                 let dx = jx - *sx;
                 let dz = jz - *sz;
@@ -663,17 +733,12 @@ fn spawn_dense_grass(
             let scale = rng.random_range(0.5_f32..1.2);
             let y_rot = rng.random_range(0.0..std::f32::consts::TAU);
 
-            commands.spawn((
-                DenseGrass,
-                Mesh3d(grass_assets.mesh.clone()),
-                MeshMaterial3d(grass_assets.material.clone()),
-                Transform::from_translation(Vec3::new(jx, y, jz))
-                    .with_rotation(Quat::from_rotation_y(y_rot))
-                    .with_scale(Vec3::splat(scale)),
-                Visibility::Hidden,
-                NotShadowCaster,
-                NotShadowReceiver,
-            ));
+            let cx = (jx * inv_chunk).floor() as i32;
+            let cz = (jz * inv_chunk).floor() as i32;
+            chunk_instances
+                .entry((cx, cz))
+                .or_default()
+                .push((Vec3::new(jx, y, jz), scale, y_rot));
             count += 1;
 
             z += spacing;
@@ -681,19 +746,108 @@ fn spawn_dense_grass(
         x += spacing;
     }
 
-    info!("Spawned {} dense grass instances", count);
+    // Build merged meshes per chunk
+    let mut chunk_map = GrassChunkMap::default();
+    let chunk_count = chunk_instances.len();
+
+    for ((cx, cz), instances) in chunk_instances {
+        let verts_per_instance = src_positions.len();
+        let indices_per_instance = src_indices.len();
+        let total_verts = verts_per_instance * instances.len();
+        let total_indices = indices_per_instance * instances.len();
+
+        let mut positions = Vec::with_capacity(total_verts);
+        let mut normals = Vec::with_capacity(total_verts);
+        let mut uvs = Vec::with_capacity(total_verts);
+        let mut indices = Vec::with_capacity(total_indices);
+
+        for (i, (pos, scale, y_rot)) in instances.iter().enumerate() {
+            let rot = Quat::from_rotation_y(*y_rot);
+            let base_idx = (i * verts_per_instance) as u32;
+
+            for vi in 0..verts_per_instance {
+                let sp = Vec3::from(src_positions[vi]) * *scale;
+                let transformed = rot * sp + *pos;
+                positions.push([transformed.x, transformed.y, transformed.z]);
+
+                if vi < src_normals.len() {
+                    let sn = Vec3::from(src_normals[vi]);
+                    let tn = rot * sn;
+                    normals.push([tn.x, tn.y, tn.z]);
+                } else {
+                    normals.push([0.0, 1.0, 0.0]);
+                }
+
+                if vi < src_uvs.len() {
+                    uvs.push(src_uvs[vi]);
+                } else {
+                    uvs.push([0.0, 0.0]);
+                }
+            }
+
+            for &idx in &src_indices {
+                indices.push(base_idx + idx);
+            }
+        }
+
+        let mut mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, default());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+        mesh.insert_indices(bevy::mesh::Indices::U32(indices));
+
+        let entity = commands
+            .spawn((
+                GrassChunk {
+                    chunk_x: cx,
+                    chunk_z: cz,
+                },
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(grass_assets.material.clone()),
+                Transform::default(),
+                Visibility::Hidden,
+                NotShadowCaster,
+                NotShadowReceiver,
+            ))
+            .id();
+        chunk_map.0.insert((cx, cz), entity);
+    }
+
+    commands.insert_resource(chunk_map);
+    info!(
+        "Spawned {} grass instances merged into {} chunks",
+        count, chunk_count
+    );
 }
 
 pub fn reveal_explored_grass(
     fog_map: Res<FogOfWarMap>,
-    mut grass_query: Query<(&Transform, &mut Visibility), With<DenseGrass>>,
+    mut grass_query: Query<(&GrassChunk, &mut Visibility)>,
 ) {
-    for (transform, mut vis) in grass_query.iter_mut() {
+    let step = GRASS_CHUNK_SIZE;
+    for (chunk, mut vis) in grass_query.iter_mut() {
         if *vis != Visibility::Hidden {
             continue;
         }
-        let pos = transform.translation;
-        if fog_map.is_explored(pos.x, pos.z) {
+        // Check if any cell in this chunk's bounds is explored
+        let x_start = chunk.chunk_x as f32 * step;
+        let z_start = chunk.chunk_z as f32 * step;
+        let sample_step = step / 4.0; // Check 4x4 sample points in chunk
+
+        let mut explored = false;
+        let mut sx = x_start;
+        while sx < x_start + step && !explored {
+            let mut sz = z_start;
+            while sz < z_start + step && !explored {
+                if fog_map.is_explored(sx, sz) {
+                    explored = true;
+                }
+                sz += sample_step;
+            }
+            sx += sample_step;
+        }
+
+        if explored {
             *vis = Visibility::Inherited;
         }
     }
@@ -1247,7 +1401,7 @@ fn worker_ai_system(
             }
 
             // Building/MovingToBuild states are handled by unit_state_executor
-            // InsideProcessor/MovingToProcessor handled by processor_worker_visual_system + unit_state_executor
+            // AssignedGathering handled by processor_worker_visual_system + unit_state_executor
             _ => {}
         }
     }
@@ -1288,8 +1442,9 @@ fn resource_processor_system(
         // Count assigned workers for this building
         let worker_count = assigned_workers.map(|aw| aw.workers.len()).unwrap_or(0) as f32;
 
-        // Effective amount per tick = base_rate + (worker_count * base_rate * worker_rate_bonus)
-        let effective_rate = processor.harvest_rate
+        // With 0 workers: 30% trickle rate. Each worker adds worker_rate_bonus fraction of base.
+        let trickle_fraction = if worker_count == 0.0 { 0.3 } else { 0.0 };
+        let effective_rate = processor.harvest_rate * trickle_fraction
             + (worker_count * processor.harvest_rate * processor.worker_rate_bonus);
         processor.harvest_accumulator += effective_rate;
         let amount = processor.harvest_accumulator as u32;
@@ -1350,6 +1505,109 @@ fn resource_processor_system(
                     spawn_deposit_vfx(&mut commands, &vfx, deposit_pos, 3, 0.12, 0.25);
                 }
             }
+        }
+    }
+}
+
+/// Production chain system: buildings with ProductionState convert input resources to outputs.
+fn production_chain_system(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut all_resources: ResMut<AllPlayerResources>,
+    mut producers: Query<
+        (
+            Entity,
+            &Transform,
+            &mut ProductionState,
+            &BuildingState,
+            &BuildingLevel,
+            &Faction,
+            Option<&mut StorageInventory>,
+        ),
+        With<Building>,
+    >,
+    vfx_assets: Option<Res<VfxAssets>>,
+) {
+    for (_entity, building_tf, mut production, state, level, faction, mut storage) in &mut producers {
+        if *state != BuildingState::Complete {
+            continue;
+        }
+
+        let Some(recipe_idx) = production.active_recipe else {
+            continue;
+        };
+
+        if recipe_idx >= production.recipes.len() {
+            continue;
+        }
+
+        // Check if recipe is unlocked at current building level
+        let requires_level = production.recipes[recipe_idx].requires_level;
+        if requires_level > level.0 {
+            continue;
+        }
+
+        // Copy recipe data to avoid borrow conflicts
+        let inputs: Vec<(ResourceType, u32)> = production.recipes[recipe_idx].inputs.clone();
+        let outputs: Vec<(ResourceType, u32)> = production.recipes[recipe_idx].outputs.clone();
+        let cycle_secs = production.recipes[recipe_idx].cycle_secs;
+
+        // Check if we have inputs in the buffer — if not, auto-pull from player resources
+        if !production.has_inputs_for_active() {
+            let player_res = all_resources.get_mut(faction);
+            for (rt, amt) in &inputs {
+                if production.input_buffer[rt.index()] < *amt {
+                    let needed = *amt - production.input_buffer[rt.index()];
+                    let available = player_res.get(*rt);
+                    let take = needed.min(available);
+                    player_res.amounts[rt.index()] -= take;
+                    production.input_buffer[rt.index()] += take;
+                }
+            }
+            if !production.has_inputs_for_active() {
+                continue;
+            }
+        }
+
+        production.progress_timer.tick(time.delta());
+        if !production.progress_timer.is_finished() {
+            continue;
+        }
+
+        // Consume inputs and produce outputs
+        production.consume_inputs();
+        production.produce_outputs();
+
+        // Transfer outputs to storage/player resources
+        for (rt, amt) in &outputs {
+            if let Some(ref mut inv) = storage {
+                let stored = inv.add_capped(*rt, *amt);
+                if stored > 0 {
+                    all_resources.get_mut(faction).add(*rt, stored);
+                }
+            } else {
+                all_resources.get_mut(faction).add(*rt, *amt);
+            }
+
+            // Spawn floating popup
+            let popup_pos = building_tf.translation + Vec3::Y * 3.5;
+            spawn_resource_popup(&mut commands, popup_pos, *rt, *amt);
+
+            if let Some(ref vfx) = vfx_assets {
+                let deposit_pos = building_tf.translation + Vec3::Y * 2.0;
+                spawn_deposit_vfx(&mut commands, &vfx, deposit_pos, 3, 0.12, 0.25);
+            }
+        }
+
+        // Drain outputs from output buffer
+        for (rt, amt) in &outputs {
+            production.output_buffer[rt.index()] =
+                production.output_buffer[rt.index()].saturating_sub(*amt);
+        }
+
+        // Reset timer for next cycle
+        if production.auto_repeat {
+            production.progress_timer = Timer::from_seconds(cycle_secs, TimerMode::Once);
         }
     }
 }
@@ -1499,6 +1757,8 @@ fn spawn_gather_vfx(
         ResourceType::Iron => 3,
         ResourceType::Gold => 4,
         ResourceType::Oil => 2,
+        // Processed resources use moderate particle counts
+        _ => 3,
     };
     let count = (base_count + amount.min(4)).min(8).max(1);
     let base_scale = match rt {
@@ -1881,8 +2141,8 @@ fn grow_trees_system(
 
 // ── Processor Worker Visual System ──
 
-/// Drives the ProcessorWorkerState state machine for workers in InsideProcessor state.
-/// Workers in InsideProcessor are hidden but still run a visual harvest/deposit loop.
+/// Drives the AssignedPhase state machine for workers in AssignedGathering state.
+/// Workers are visible and physically walk between nodes and their assigned building.
 fn processor_worker_visual_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -1891,8 +2151,7 @@ fn processor_worker_visual_system(
         (
             Entity,
             &Transform,
-            &mut ProcessorWorkerState,
-            &UnitState,
+            &mut UnitState,
             &mut Carrying,
         ),
         With<Unit>,
@@ -1902,19 +2161,19 @@ fn processor_worker_visual_system(
 ) {
     // Collect nodes targeted by other workers to avoid clustering
     let mut targeted_nodes: Vec<Entity> = Vec::new();
-    for (_, _, pstate, ustate, _) in workers.iter() {
-        if !matches!(ustate, UnitState::InsideProcessor(_)) {
-            continue;
-        }
-        if let ProcessorWorkerState::MovingToNode(node)
-        | ProcessorWorkerState::Harvesting { node, .. } = *pstate
-        {
-            targeted_nodes.push(node);
+    for (_, _, ustate, _) in workers.iter() {
+        if let UnitState::AssignedGathering { phase, .. } = ustate {
+            match phase {
+                AssignedPhase::MovingToNode(node) | AssignedPhase::Harvesting { node, .. } => {
+                    targeted_nodes.push(*node);
+                }
+                _ => {}
+            }
         }
     }
 
-    for (_entity, tf, mut worker_state, unit_state, _carrying) in &mut workers {
-        let UnitState::InsideProcessor(building_entity) = *unit_state else {
+    for (entity, tf, mut unit_state, _carrying) in &mut workers {
+        let UnitState::AssignedGathering { building: building_entity, ref mut phase } = *unit_state else {
             continue;
         };
 
@@ -1928,8 +2187,8 @@ fn processor_worker_visual_system(
             continue;
         }
 
-        match *worker_state {
-            ProcessorWorkerState::Idle => {
+        match phase {
+            AssignedPhase::SeekingNode => {
                 // Find nearest resource node within processor's harvest_radius not targeted by another worker
                 let mut best: Option<(Entity, f32)> = None;
                 for (node_entity, node_tf, node_data) in &nodes {
@@ -1954,46 +2213,65 @@ fn processor_worker_visual_system(
                     }
                 }
                 if let Some((node, _)) = best {
-                    *worker_state = ProcessorWorkerState::MovingToNode(node);
+                    // Set MoveTarget so the worker physically walks to the node
+                    if let Ok((_, node_tf, _)) = nodes.get(node) {
+                        commands.entity(entity).insert(MoveTarget(node_tf.translation));
+                    }
+                    *phase = AssignedPhase::MovingToNode(node);
                 }
             }
-            ProcessorWorkerState::MovingToNode(node) => {
-                let Ok((_, _node_tf, node_data)) = nodes.get(node) else {
-                    *worker_state = ProcessorWorkerState::Idle;
+            AssignedPhase::MovingToNode(node) => {
+                let node = *node;
+                let Ok((_, node_tf, node_data)) = nodes.get(node) else {
+                    *phase = AssignedPhase::SeekingNode;
+                    commands.entity(entity).remove::<MoveTarget>();
                     continue;
                 };
                 if node_data.amount_remaining == 0 {
-                    *worker_state = ProcessorWorkerState::Idle;
+                    *phase = AssignedPhase::SeekingNode;
+                    commands.entity(entity).remove::<MoveTarget>();
                     continue;
                 }
-                // Workers inside processors are hidden, so just timer-simulate "moving"
-                *worker_state = ProcessorWorkerState::Harvesting {
-                    node,
-                    timer_secs: 0.0,
-                };
+                // Check if worker arrived at node
+                let dist = tf.translation.distance(node_tf.translation);
+                if dist <= 3.0 {
+                    commands.entity(entity).remove::<MoveTarget>();
+                    *phase = AssignedPhase::Harvesting {
+                        node,
+                        timer_secs: 0.0,
+                    };
+                }
             }
-            ProcessorWorkerState::Harvesting {
+            AssignedPhase::Harvesting {
                 node,
                 ref mut timer_secs,
             } => {
+                let node = *node;
                 if nodes.get(node).is_err()
                     || nodes
                         .get(node)
                         .map(|(_, _, n)| n.amount_remaining == 0)
                         .unwrap_or(true)
                 {
-                    *worker_state = ProcessorWorkerState::Idle;
+                    *phase = AssignedPhase::SeekingNode;
                     continue;
                 }
                 *timer_secs += time.delta_secs();
                 if *timer_secs >= 2.5 {
-                    *worker_state = ProcessorWorkerState::ReturningToBuilding;
+                    // Walk back to building
+                    commands.entity(entity).insert(MoveTarget(building_tf.translation));
+                    *phase = AssignedPhase::ReturningToBuilding;
                 }
             }
-            ProcessorWorkerState::ReturningToBuilding => {
-                *worker_state = ProcessorWorkerState::Depositing { timer_secs: 0.0 };
+            AssignedPhase::ReturningToBuilding => {
+                // Check if worker arrived at building
+                let dist = tf.translation.distance(building_tf.translation);
+                if dist <= 3.0 {
+                    commands.entity(entity).remove::<MoveTarget>();
+                    *phase = AssignedPhase::Depositing { timer_secs: 0.0 };
+                }
             }
-            ProcessorWorkerState::Depositing { ref mut timer_secs } => {
+            AssignedPhase::Depositing { ref mut timer_secs } => {
                 *timer_secs += time.delta_secs();
                 if *timer_secs >= 0.5 {
                     // Deposit VFX at building
@@ -2016,9 +2294,11 @@ fn processor_worker_visual_system(
                             ));
                         }
                     }
-                    *worker_state = ProcessorWorkerState::Idle;
+                    *phase = AssignedPhase::SeekingNode;
                 }
             }
+            // FetchingInput and DeliveringInput are handled elsewhere (production buildings)
+            _ => {}
         }
     }
 }
@@ -2210,26 +2490,97 @@ fn grow_resource_system(
     }
 }
 
+// ── Auto-assign workers to newly completed processors ──
+
+/// Every 3 seconds, find idle workers near completed processor buildings and assign them.
+fn auto_assign_workers_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut timer: Local<Option<Timer>>,
+    mut processors: Query<
+        (Entity, &Transform, &ResourceProcessor, &BuildingState, &Faction, &mut AssignedWorkers),
+        With<Building>,
+    >,
+    workers: Query<
+        (Entity, &Transform, &UnitState, &Faction, &TaskSource),
+        (With<Unit>, With<crate::blueprints::EntityKind>, Without<BuildingAssignment>),
+    >,
+    kinds: Query<&crate::blueprints::EntityKind>,
+) {
+    let t = timer.get_or_insert_with(|| Timer::from_seconds(3.0, TimerMode::Repeating));
+    t.tick(time.delta());
+    if !t.just_finished() {
+        return;
+    }
+
+    for (building_entity, building_tf, processor, state, building_faction, mut assigned) in
+        &mut processors
+    {
+        if *state != BuildingState::Complete {
+            continue;
+        }
+        let slots = processor.max_workers as usize;
+        if assigned.workers.len() >= slots {
+            continue;
+        }
+
+        // Collect idle workers of the same faction within 25 units, sorted by distance
+        let mut candidates: Vec<(Entity, f32)> = Vec::new();
+        for (worker_entity, worker_tf, unit_state, worker_faction, task_source) in &workers {
+            if worker_faction != building_faction {
+                continue;
+            }
+            if *unit_state != UnitState::Idle {
+                continue;
+            }
+            // Only auto-assign workers that are in Auto task source (not manually commanded)
+            if *task_source != TaskSource::Auto {
+                continue;
+            }
+            // Must be a Worker
+            if let Ok(kind) = kinds.get(worker_entity) {
+                if *kind != crate::blueprints::EntityKind::Worker {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+            let dist = worker_tf.translation.distance(building_tf.translation);
+            if dist <= 25.0 {
+                candidates.push((worker_entity, dist));
+            }
+        }
+        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let needed = slots - assigned.workers.len();
+        for (worker_entity, _) in candidates.into_iter().take(needed) {
+            assign_worker_to_processor(&mut commands, worker_entity, building_entity);
+            assigned.workers.push(worker_entity);
+        }
+    }
+}
+
 // ── Worker assignment helpers ──
 
 pub fn assign_worker_to_processor(commands: &mut Commands, worker: Entity, building: Entity) {
     commands
         .entity(worker)
-        .insert(UnitState::InsideProcessor(building))
+        .insert(UnitState::AssignedGathering {
+            building,
+            phase: AssignedPhase::SeekingNode,
+        })
         .insert(TaskSource::Manual)
-        .insert(ProcessorWorkerState::default())
+        .insert(BuildingAssignment(building))
         .remove::<MoveTarget>()
-        .remove::<AttackTarget>()
-        .insert(Visibility::Hidden);
+        .remove::<AttackTarget>();
 }
 
 pub fn unassign_worker_from_processor(commands: &mut Commands, worker: Entity) {
     commands
         .entity(worker)
-        .remove::<ProcessorWorkerState>()
         .insert(UnitState::Idle)
         .insert(TaskSource::Auto)
-        .insert(Visibility::Inherited);
+        .remove::<BuildingAssignment>();
 }
 
 // processor_worker_loop_system removed — merged into processor_worker_visual_system

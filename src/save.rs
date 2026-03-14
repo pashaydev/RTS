@@ -79,7 +79,15 @@ impl From<&PlayerResources> for SavedPlayerResources {
 impl From<&SavedPlayerResources> for PlayerResources {
     fn from(r: &SavedPlayerResources) -> Self {
         Self {
-            amounts: [r.wood, r.copper, r.iron, r.gold, r.oil],
+            amounts: {
+                let mut a = [0u32; ResourceType::COUNT];
+                a[ResourceType::Wood.index()] = r.wood;
+                a[ResourceType::Copper.index()] = r.copper;
+                a[ResourceType::Iron.index()] = r.iron;
+                a[ResourceType::Gold.index()] = r.gold;
+                a[ResourceType::Oil.index()] = r.oil;
+                a
+            },
         }
     }
 }
@@ -508,7 +516,7 @@ fn serialize_unit_state(state: &UnitState, lookup: &HashMap<Entity, u64>) -> Sav
         | UnitState::AttackMoving(_)
         | UnitState::Patrolling { .. }
         | UnitState::Attacking(_)
-        | UnitState::MovingToProcessor(_) => SavedWorkerTask {
+        => SavedWorkerTask {
             variant: "Idle".into(),
             ..default()
         },
@@ -549,9 +557,9 @@ fn serialize_unit_state(state: &UnitState, lookup: &HashMap<Entity, u64>) -> Sav
             gather_node_id: gather_node.and_then(|gn| lookup.get(&gn).copied()),
             ..default()
         },
-        UnitState::InsideProcessor(e) => SavedWorkerTask {
-            variant: "InsideProcessor".into(),
-            target_id: lookup.get(e).copied(),
+        UnitState::AssignedGathering { building, .. } => SavedWorkerTask {
+            variant: "AssignedGathering".into(),
+            target_id: lookup.get(&building).copied(),
             ..default()
         },
     }
@@ -799,14 +807,24 @@ fn apply_load_overrides(
         // Storage inventory
         if let Some(ref st) = saved.storage {
             commands.entity(entity).insert(StorageInventory {
-                amounts: [st.wood, st.copper, st.iron, st.gold, st.oil],
-                caps: [
-                    st.wood_cap,
-                    st.copper_cap,
-                    st.iron_cap,
-                    st.gold_cap,
-                    st.oil_cap,
-                ],
+                amounts: {
+                    let mut a = [0u32; ResourceType::COUNT];
+                    a[ResourceType::Wood.index()] = st.wood;
+                    a[ResourceType::Copper.index()] = st.copper;
+                    a[ResourceType::Iron.index()] = st.iron;
+                    a[ResourceType::Gold.index()] = st.gold;
+                    a[ResourceType::Oil.index()] = st.oil;
+                    a
+                },
+                caps: {
+                    let mut c = [0u32; ResourceType::COUNT];
+                    c[ResourceType::Wood.index()] = st.wood_cap;
+                    c[ResourceType::Copper.index()] = st.copper_cap;
+                    c[ResourceType::Iron.index()] = st.iron_cap;
+                    c[ResourceType::Gold.index()] = st.gold_cap;
+                    c[ResourceType::Oil.index()] = st.oil_cap;
+                    c
+                },
                 last_total: 0,
             });
         }
@@ -930,8 +948,11 @@ fn restore_unit_state(saved: &SavedWorkerTask, map: &HashMap<u64, Entity>) -> Un
                 UnitState::Idle
             }
         }
-        "InsideProcessor" => resolve(saved.target_id)
-            .map(UnitState::InsideProcessor)
+        "AssignedGathering" => resolve(saved.target_id)
+            .map(|building| UnitState::AssignedGathering {
+                building,
+                phase: AssignedPhase::SeekingNode,
+            })
             .unwrap_or(UnitState::Idle),
         _ => UnitState::Idle,
     }
