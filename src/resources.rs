@@ -114,8 +114,8 @@ fn create_resource_node_materials(
 fn biome_spawn_threshold(biome: Biome) -> f32 {
     match biome {
         Biome::Forest => 0.1,
-        Biome::Desert => 0.2,
-        Biome::Mud => 0.3,
+        Biome::Desert => 0.14,
+        Biome::Mud => 0.28,
         Biome::Water => 0.4,
         Biome::Mountain => 0.35,
     }
@@ -145,7 +145,7 @@ fn primary_resource_for(
         )),
         Biome::Desert => Some((
             ResourceType::Copper,
-            500,
+            650,
             ore_mesh.clone(),
             mats.copper.clone(),
             0.4,
@@ -196,7 +196,7 @@ fn secondary_resource_for(
         )),
         Biome::Mud => Some((
             ResourceType::Copper,
-            300,
+            420,
             ore_mesh.clone(),
             mats.copper.clone(),
             0.4,
@@ -210,7 +210,7 @@ fn secondary_resource_for(
         )),
         Biome::Forest => Some((
             ResourceType::Copper,
-            200,
+            320,
             ore_mesh.clone(),
             mats.copper.clone(),
             0.4,
@@ -264,7 +264,7 @@ fn spawn_resource_nodes(
             for &(_, (sx, sz)) in &spawn_positions {
                 let dx = x - sx;
                 let dz = z - sz;
-                if (dx * dx + dz * dz).sqrt() < 25.0 {
+                if (dx * dx + dz * dz).sqrt() < 22.0 {
                     too_close_to_spawn = true;
                     break;
                 }
@@ -354,7 +354,7 @@ fn spawn_resource_nodes(
                 // Secondary resource (lower probability)
                 let secondary_noise =
                     placement_noise.get([x as f64 * 0.13 + 50.0, z as f64 * 0.13 + 50.0]) as f32;
-                if secondary_noise > threshold + 0.3 / density_mult {
+                if secondary_noise > threshold + 0.2 / density_mult {
                     if let Some((rt, amount, mesh, mat, half_h)) =
                         secondary_resource_for(biome, &ore_mesh, &gold_mesh, &node_mats)
                     {

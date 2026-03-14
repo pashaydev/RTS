@@ -140,15 +140,15 @@ fn spawn_all_players(
         let mut res = PlayerResources::empty();
         res.add(
             ResourceType::Wood,
-            (200.0 * config.starting_resources_mult) as u32,
+            (220.0 * config.starting_resources_mult) as u32,
         );
         res.add(
             ResourceType::Copper,
-            (40.0 * config.starting_resources_mult) as u32,
+            (20.0 * config.starting_resources_mult) as u32,
         );
         res.add(
             ResourceType::Iron,
-            (20.0 * config.starting_resources_mult) as u32,
+            (40.0 * config.starting_resources_mult) as u32,
         );
         all_resources.resources.insert(faction, res);
 
@@ -202,7 +202,16 @@ fn move_units(
     mut commands: Commands,
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
+    teams: Res<TeamConfig>,
     height_map: Res<HeightMap>,
+    walls: Query<
+        (Entity, &Transform, &BuildingFootprint, &Faction),
+        (
+            With<Building>,
+            Without<Unit>,
+            Or<(With<WallSegmentPiece>, With<WallPostPiece>)>,
+        ),
+    >,
     mut query: Query<
         (
             Entity,
@@ -210,13 +219,26 @@ fn move_units(
             &MoveTarget,
             &UnitSpeed,
             &EntityKind,
+            &Faction,
             Option<&Carrying>,
             Option<&CarryCapacity>,
+            Option<&AttackTarget>,
         ),
         With<Unit>,
     >,
 ) {
-    for (entity, mut transform, target, unit_speed, kind, carrying, capacity) in &mut query {
+    for (
+        entity,
+        mut transform,
+        target,
+        unit_speed,
+        kind,
+        faction,
+        carrying,
+        capacity,
+        attack_target,
+    ) in &mut query
+    {
         let direction = target.0 - transform.translation;
         let flat_dir = Vec3::new(direction.x, 0.0, direction.z);
         let distance = flat_dir.length();
@@ -237,7 +259,22 @@ fn move_units(
             };
 
             let step = flat_dir.normalize() * unit_speed.0 * speed_mult * time.delta_secs();
-            transform.translation += step;
+            let candidate = transform.translation + step;
+            let ignore_wall = attack_target.and_then(|at| Some(at.0));
+            let blocked = walls.iter().any(|(wall_entity, wall_tf, wall_fp, wall_faction)| {
+                if Some(wall_entity) == ignore_wall {
+                    return false;
+                }
+                if !teams.is_hostile(faction, wall_faction) {
+                    return false;
+                }
+                let a = Vec2::new(candidate.x, candidate.z);
+                let b = Vec2::new(wall_tf.translation.x, wall_tf.translation.z);
+                a.distance(b) < wall_fp.0 + 0.6
+            });
+            if !blocked {
+                transform.translation = candidate;
+            }
         }
         // Snap Y to terrain
         transform.translation.y = height_map

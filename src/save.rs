@@ -462,6 +462,15 @@ fn save_game(
         explosive_props,
     };
 
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = save_file;
+        status.message = "Save not supported in browser".to_string();
+        status.timer = 3.0;
+        return;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     match serde_json::to_string_pretty(&save_file) {
         Ok(json) => {
             std::fs::create_dir_all("saves").ok();
@@ -578,6 +587,15 @@ fn load_game(
         return;
     };
 
+    #[cfg(target_arch = "wasm32")]
+    {
+        status.message = "Load not supported in browser".to_string();
+        status.timer = 3.0;
+        return;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
     let json = match std::fs::read_to_string(SAVE_PATH) {
         Ok(s) => s,
         Err(e) => {
@@ -643,6 +661,7 @@ fn load_game(
     info!("Load: despawned {despawned}, spawning {entity_count} entities. Overrides pending.");
     status.message = format!("Loaded! ({entity_count} entities)");
     status.timer = 3.0;
+    } // #[cfg(not(target_arch = "wasm32"))]
 }
 
 // ── Apply overrides (runs frame after load) ─────────────────────────────────

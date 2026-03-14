@@ -38,19 +38,28 @@ fn main() {
 
     App::new()
         .set_error_handler(error::warn)
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "RTS Prototype".to_string(),
-                resolution: (w, h).into(),
-                mode: if graphics.fullscreen {
-                    bevy::window::WindowMode::BorderlessFullscreen(MonitorSelection::Current)
-                } else {
-                    bevy::window::WindowMode::Windowed
-                },
-                ..default()
-            }),
-            ..default()
-        }))
+        .add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "RTS Prototype".to_string(),
+                        resolution: (w, h).into(),
+                        mode: if graphics.fullscreen {
+                            bevy::window::WindowMode::BorderlessFullscreen(
+                                MonitorSelection::Current,
+                            )
+                        } else {
+                            bevy::window::WindowMode::Windowed
+                        },
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(AssetPlugin {
+                    meta_check: bevy::asset::AssetMetaCheck::Never,
+                    ..default()
+                }),
+        )
         .add_plugins(OutlinePlugin)
         .init_state::<AppState>()
         .insert_resource(GameSetupConfig::default())

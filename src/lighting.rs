@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+#[cfg(not(target_arch = "wasm32"))]
 use bevy::light::{FogVolume, VolumetricFog, VolumetricLight};
 use bevy::prelude::*;
 
@@ -15,9 +16,17 @@ impl Plugin for LightingPlugin {
             .add_systems(OnEnter(AppState::InGame), setup_lighting)
             .add_systems(
                 Update,
-                (advance_day_cycle, update_lighting, update_volumetric_fog)
-                    .chain()
-                    .run_if(in_state(AppState::InGame)),
+                {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let systems = (advance_day_cycle, update_lighting, update_volumetric_fog)
+                        .chain()
+                        .run_if(in_state(AppState::InGame));
+                    #[cfg(target_arch = "wasm32")]
+                    let systems = (advance_day_cycle, update_lighting)
+                        .chain()
+                        .run_if(in_state(AppState::InGame));
+                    systems
+                },
             )
             .add_systems(
                 Update,
@@ -254,6 +263,7 @@ fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
     commands.insert_resource(LightingOverrides::default());
 
     // Directional light (sun)
+    #[cfg(not(target_arch = "wasm32"))]
     commands.spawn((
         SunLight,
         DirectionalLight {
@@ -264,6 +274,17 @@ fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, SUN_YAW, 0.0)),
         VolumetricLight,
+    ));
+    #[cfg(target_arch = "wasm32")]
+    commands.spawn((
+        SunLight,
+        DirectionalLight {
+            illuminance: 6000.0,
+            shadows_enabled: true,
+            color: Color::srgb(0.85, 0.8, 0.7),
+            ..default()
+        },
+        Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, SUN_YAW, 0.0)),
     ));
 
     // Ambient light
@@ -350,6 +371,7 @@ const KF_VOL_AMBIENT: [f32; 5] = [0.02, 0.06, 0.05, 0.06, 0.02];
 
 const KF_VOL_LIGHT_INT: [f32; 5] = [0.3, 1.5, 1.0, 1.5, 0.3];
 
+#[cfg(not(target_arch = "wasm32"))]
 fn update_volumetric_fog(
     cycle: Res<DayCycle>,
     overrides: Res<LightingOverrides>,

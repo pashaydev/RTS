@@ -19,6 +19,7 @@ use crate::lighting::{
 };
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::theme;
+#[cfg(not(target_arch = "wasm32"))]
 use bevy::light::{FogVolume, VolumetricFog};
 use bevy::window::PrimaryWindow;
 
@@ -260,41 +261,51 @@ enum ConfigValue {
 
 type ConfigMap = BTreeMap<String, BTreeMap<String, ConfigValue>>;
 
-fn save_debug_config(tweaks: &DebugTweaks) {
-    let mut map: ConfigMap = BTreeMap::new();
-    for (folder, entries) in &tweaks.folders {
-        let folder_map = map.entry(folder.clone()).or_default();
-        for entry in entries {
-            match &entry.value {
-                TweakValue::Float { value, .. } => {
-                    folder_map.insert(entry.label.clone(), ConfigValue::Float(*value));
+fn save_debug_config(_tweaks: &DebugTweaks) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let mut map: ConfigMap = BTreeMap::new();
+        for (folder, entries) in &_tweaks.folders {
+            let folder_map = map.entry(folder.clone()).or_default();
+            for entry in entries {
+                match &entry.value {
+                    TweakValue::Float { value, .. } => {
+                        folder_map.insert(entry.label.clone(), ConfigValue::Float(*value));
+                    }
+                    TweakValue::Bool(v) => {
+                        folder_map.insert(entry.label.clone(), ConfigValue::Bool(*v));
+                    }
+                    TweakValue::ReadOnly(_) => {}
+                    TweakValue::CycleEnum { .. } => {}
+                    TweakValue::Button { .. } => {}
                 }
-                TweakValue::Bool(v) => {
-                    folder_map.insert(entry.label.clone(), ConfigValue::Bool(*v));
-                }
-                TweakValue::ReadOnly(_) => {}
-                TweakValue::CycleEnum { .. } => {}
-                TweakValue::Button { .. } => {}
             }
         }
-    }
 
-    if let Some(parent) = std::path::Path::new(DEBUG_CONFIG_PATH).parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    match serde_json::to_string_pretty(&map) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(DEBUG_CONFIG_PATH, json) {
-                warn!("Failed to save debug config: {}", e);
-            }
+        if let Some(parent) = std::path::Path::new(DEBUG_CONFIG_PATH).parent() {
+            let _ = std::fs::create_dir_all(parent);
         }
-        Err(e) => warn!("Failed to serialize debug config: {}", e),
+        match serde_json::to_string_pretty(&map) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(DEBUG_CONFIG_PATH, json) {
+                    warn!("Failed to save debug config: {}", e);
+                }
+            }
+            Err(e) => warn!("Failed to serialize debug config: {}", e),
+        }
     }
 }
 
 fn load_debug_config() -> Option<ConfigMap> {
-    let data = std::fs::read_to_string(DEBUG_CONFIG_PATH).ok()?;
-    serde_json::from_str(&data).ok()
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let data = std::fs::read_to_string(DEBUG_CONFIG_PATH).ok()?;
+        serde_json::from_str(&data).ok()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
 }
 
 fn apply_config_to_tweaks(tweaks: &mut DebugTweaks, config: &ConfigMap) {
@@ -1581,8 +1592,11 @@ fn sync_lighting_tweaks(
     sun_q: Query<(&DirectionalLight, &Transform), With<SunLight>>,
     ambient: Res<GlobalAmbientLight>,
     clear: Res<ClearColor>,
-    mut fog_vol_q: Query<&mut FogVolume, With<AtmosphericFogVolume>>,
-    mut cam_fog_q: Query<&mut VolumetricFog>,
+    #[cfg(not(target_arch = "wasm32"))] mut fog_vol_q: Query<
+        &mut FogVolume,
+        With<AtmosphericFogVolume>,
+    >,
+    #[cfg(not(target_arch = "wasm32"))] mut cam_fog_q: Query<&mut VolumetricFog>,
 ) {
     // Helper: check if a specific entry is actively being dragged
     let is_dragging = |folder: &str, label: &str| -> bool {
@@ -1725,115 +1739,118 @@ fn sync_lighting_tweaks(
         }
     }
 
-    // ── Volumetric Fog folder ──
-    let vol_enabled = tweaks
-        .get_bool("Visuals/Volumetric Fog", "Enabled")
-        .unwrap_or(true);
-    let vol_override = tweaks
-        .get_bool("Visuals/Volumetric Fog", "Override")
-        .unwrap_or(false);
+    // ── Volumetric Fog folder (not available on WASM) ──
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let vol_enabled = tweaks
+            .get_bool("Visuals/Volumetric Fog", "Enabled")
+            .unwrap_or(true);
+        let vol_override = tweaks
+            .get_bool("Visuals/Volumetric Fog", "Override")
+            .unwrap_or(false);
 
-    // Toggle visibility of the fog volume
-    if let Ok(mut fog_vol) = fog_vol_q.single_mut() {
-        if !vol_enabled {
-            fog_vol.density_factor = 0.0;
-        }
-    }
-
-    // Toggle camera volumetric fog step_count to 0 to disable
-    if let Ok(mut vol_fog) = cam_fog_q.single_mut() {
-        if !vol_enabled {
-            vol_fog.step_count = 0;
-        } else if let Some(sc) = tweaks.get_float("Visuals/Volumetric Fog", "Step Count") {
-            vol_fog.step_count = sc as u32;
-        }
-    }
-
-    if vol_override {
-        overrides.vol_density = tweaks.get_float("Visuals/Volumetric Fog", "Density");
-        overrides.vol_color = match (
-            tweaks.get_float("Visuals/Volumetric Fog", "Color R"),
-            tweaks.get_float("Visuals/Volumetric Fog", "Color G"),
-            tweaks.get_float("Visuals/Volumetric Fog", "Color B"),
-        ) {
-            (Some(r), Some(g), Some(b)) => Some([r, g, b]),
-            _ => None,
-        };
-        overrides.vol_ambient_intensity =
-            tweaks.get_float("Visuals/Volumetric Fog", "Ambient Intensity");
-        overrides.vol_light_intensity =
-            tweaks.get_float("Visuals/Volumetric Fog", "Light Intensity");
-
-        // Apply scattering/absorption directly
+        // Toggle visibility of the fog volume
         if let Ok(mut fog_vol) = fog_vol_q.single_mut() {
-            if let Some(s) = tweaks.get_float("Visuals/Volumetric Fog", "Scattering") {
-                fog_vol.scattering = s;
-            }
-            if let Some(a) = tweaks.get_float("Visuals/Volumetric Fog", "Absorption") {
-                fog_vol.absorption = a;
-            }
-        }
-    } else {
-        overrides.vol_density = None;
-        overrides.vol_color = None;
-        overrides.vol_ambient_intensity = None;
-        overrides.vol_light_intensity = None;
-
-        if let Ok(fog_vol) = fog_vol_q.single() {
-            if !is_dragging("Visuals/Volumetric Fog", "Density") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Density",
-                    fog_vol.density_factor,
-                );
-            }
-            let c = fog_vol.fog_color.to_srgba();
-            if !is_dragging("Visuals/Volumetric Fog", "Color R") {
-                tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color R", c.red);
-            }
-            if !is_dragging("Visuals/Volumetric Fog", "Color G") {
-                tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color G", c.green);
-            }
-            if !is_dragging("Visuals/Volumetric Fog", "Color B") {
-                tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color B", c.blue);
-            }
-            if !is_dragging("Visuals/Volumetric Fog", "Light Intensity") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Light Intensity",
-                    fog_vol.light_intensity,
-                );
-            }
-            if !is_dragging("Visuals/Volumetric Fog", "Scattering") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Scattering",
-                    fog_vol.scattering,
-                );
-            }
-            if !is_dragging("Visuals/Volumetric Fog", "Absorption") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Absorption",
-                    fog_vol.absorption,
-                );
+            if !vol_enabled {
+                fog_vol.density_factor = 0.0;
             }
         }
 
-        if let Ok(vol_fog) = cam_fog_q.single() {
-            if !is_dragging("Visuals/Volumetric Fog", "Ambient Intensity") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Ambient Intensity",
-                    vol_fog.ambient_intensity,
-                );
+        // Toggle camera volumetric fog step_count to 0 to disable
+        if let Ok(mut vol_fog) = cam_fog_q.single_mut() {
+            if !vol_enabled {
+                vol_fog.step_count = 0;
+            } else if let Some(sc) = tweaks.get_float("Visuals/Volumetric Fog", "Step Count") {
+                vol_fog.step_count = sc as u32;
             }
-            if !is_dragging("Visuals/Volumetric Fog", "Step Count") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Step Count",
-                    vol_fog.step_count as f32,
-                );
+        }
+
+        if vol_override {
+            overrides.vol_density = tweaks.get_float("Visuals/Volumetric Fog", "Density");
+            overrides.vol_color = match (
+                tweaks.get_float("Visuals/Volumetric Fog", "Color R"),
+                tweaks.get_float("Visuals/Volumetric Fog", "Color G"),
+                tweaks.get_float("Visuals/Volumetric Fog", "Color B"),
+            ) {
+                (Some(r), Some(g), Some(b)) => Some([r, g, b]),
+                _ => None,
+            };
+            overrides.vol_ambient_intensity =
+                tweaks.get_float("Visuals/Volumetric Fog", "Ambient Intensity");
+            overrides.vol_light_intensity =
+                tweaks.get_float("Visuals/Volumetric Fog", "Light Intensity");
+
+            // Apply scattering/absorption directly
+            if let Ok(mut fog_vol) = fog_vol_q.single_mut() {
+                if let Some(s) = tweaks.get_float("Visuals/Volumetric Fog", "Scattering") {
+                    fog_vol.scattering = s;
+                }
+                if let Some(a) = tweaks.get_float("Visuals/Volumetric Fog", "Absorption") {
+                    fog_vol.absorption = a;
+                }
+            }
+        } else {
+            overrides.vol_density = None;
+            overrides.vol_color = None;
+            overrides.vol_ambient_intensity = None;
+            overrides.vol_light_intensity = None;
+
+            if let Ok(fog_vol) = fog_vol_q.single() {
+                if !is_dragging("Visuals/Volumetric Fog", "Density") {
+                    tweaks.set_float_if_changed(
+                        "Visuals/Volumetric Fog",
+                        "Density",
+                        fog_vol.density_factor,
+                    );
+                }
+                let c = fog_vol.fog_color.to_srgba();
+                if !is_dragging("Visuals/Volumetric Fog", "Color R") {
+                    tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color R", c.red);
+                }
+                if !is_dragging("Visuals/Volumetric Fog", "Color G") {
+                    tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color G", c.green);
+                }
+                if !is_dragging("Visuals/Volumetric Fog", "Color B") {
+                    tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color B", c.blue);
+                }
+                if !is_dragging("Visuals/Volumetric Fog", "Light Intensity") {
+                    tweaks.set_float_if_changed(
+                        "Visuals/Volumetric Fog",
+                        "Light Intensity",
+                        fog_vol.light_intensity,
+                    );
+                }
+                if !is_dragging("Visuals/Volumetric Fog", "Scattering") {
+                    tweaks.set_float_if_changed(
+                        "Visuals/Volumetric Fog",
+                        "Scattering",
+                        fog_vol.scattering,
+                    );
+                }
+                if !is_dragging("Visuals/Volumetric Fog", "Absorption") {
+                    tweaks.set_float_if_changed(
+                        "Visuals/Volumetric Fog",
+                        "Absorption",
+                        fog_vol.absorption,
+                    );
+                }
+            }
+
+            if let Ok(vol_fog) = cam_fog_q.single() {
+                if !is_dragging("Visuals/Volumetric Fog", "Ambient Intensity") {
+                    tweaks.set_float_if_changed(
+                        "Visuals/Volumetric Fog",
+                        "Ambient Intensity",
+                        vol_fog.ambient_intensity,
+                    );
+                }
+                if !is_dragging("Visuals/Volumetric Fog", "Step Count") {
+                    tweaks.set_float_if_changed(
+                        "Visuals/Volumetric Fog",
+                        "Step Count",
+                        vol_fog.step_count as f32,
+                    );
+                }
             }
         }
     }

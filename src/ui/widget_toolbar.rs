@@ -14,14 +14,27 @@ pub struct WidgetToolbarButton(pub WidgetId);
 pub struct ToolbarContainer;
 
 pub fn spawn_toolbar(commands: &mut Commands, parent: Entity) {
-    let toolbar = commands
+    let anchor = commands
         .spawn((
             ToolbarContainer,
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(4.0),
-                left: Val::Percent(50.0),
-                margin: UiRect::left(Val::Px(-250.0)), // rough center offset
+                left: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(parent).add_child(anchor);
+
+    let toolbar = commands
+        .spawn((
+            WidgetToolbar,
+            Node {
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(2.0),
@@ -39,7 +52,7 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity) {
             ),
         ))
         .id();
-    commands.entity(parent).add_child(toolbar);
+    commands.entity(anchor).add_child(toolbar);
 
     for &id in WidgetId::ALL {
         let hotkey_name = match id.hotkey() {

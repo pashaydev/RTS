@@ -47,6 +47,25 @@ pub fn handle_build_buttons(
                 continue;
             }
 
+            let bp = registry.get(kind);
+            let prereq_met = if let Some(ref bd) = bp.building {
+                match bd.prerequisite {
+                    None => true,
+                    Some(prereq_kind) => {
+                        if prereq_kind == EntityKind::Base {
+                            founded || all_completed.has(&active_player.0, prereq_kind)
+                        } else {
+                            all_completed.has(&active_player.0, prereq_kind)
+                        }
+                    }
+                }
+            } else {
+                true
+            };
+            if !prereq_met {
+                continue;
+            }
+
             if kind == EntityKind::WallSegment && founded {
                 placement.mode = PlacementMode::PlotWall { start: Vec3::ZERO };
                 placement.awaiting_release = false;
@@ -58,20 +77,6 @@ pub fn handle_build_buttons(
                 placement.mode = PlacementMode::PlotGate;
                 placement.awaiting_release = false;
                 placement.hint_text = Some("Hover an owned wall segment to place gate".to_string());
-                continue;
-            }
-
-            let bp = registry.get(kind);
-
-            let prereq_met = if let Some(ref bd) = bp.building {
-                match bd.prerequisite {
-                    None => true,
-                    Some(prereq_kind) => all_completed.has(&active_player.0, prereq_kind),
-                }
-            } else {
-                true
-            };
-            if !prereq_met {
                 continue;
             }
 
@@ -938,6 +943,7 @@ pub fn update_upgrade_progress_display(
 pub fn show_action_tooltips(
     mut commands: Commands,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    ui_scale: Res<UiScale>,
     triggers: Query<(Entity, &Interaction, &ActionTooltipTrigger), Changed<Interaction>>,
     existing_tooltips: Query<(Entity, &ActionTooltip)>,
 ) {
@@ -957,6 +963,13 @@ pub fn show_action_tooltips(
                     .and_then(|w| w.cursor_position())
                     .map(|p| (p.x, p.y))
                     .unwrap_or((0.0, 0.0));
+                let scale = ui_scale.0.max(0.001);
+                let (ui_w, ui_h) = windows
+                    .single()
+                    .map(|w| (w.width() / scale, w.height() / scale))
+                    .unwrap_or((1920.0 / scale, 1080.0 / scale));
+                let left = ((cx + 12.0) / scale).clamp(6.0, (ui_w - 240.0).max(6.0));
+                let top = ((cy + 14.0) / scale).clamp(6.0, (ui_h - 140.0).max(6.0));
 
                 commands
                     .spawn((
@@ -964,8 +977,8 @@ pub fn show_action_tooltips(
                         Pickable::IGNORE,
                         Node {
                             position_type: PositionType::Absolute,
-                            left: Val::Px(cx + 12.0),
-                            top: Val::Px(cy - 8.0),
+                            left: Val::Px(left),
+                            top: Val::Px(top),
                             flex_direction: FlexDirection::Column,
                             padding: UiRect::all(Val::Px(8.0)),
                             row_gap: Val::Px(2.0),

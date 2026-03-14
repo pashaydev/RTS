@@ -574,6 +574,8 @@ impl BlueprintRegistry {
         let order = [
             EntityKind::Base,
             EntityKind::Outpost,
+            EntityKind::WallSegment,
+            EntityKind::Gatehouse,
             EntityKind::WatchTower,
             EntityKind::GuardTower,
             EntityKind::BallistaTower,
@@ -678,9 +680,8 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 12.0 }),
             cost: ResourceCost {
-                wood: 10,
-                copper: 20,
-                iron: 10,
+                wood: 20,
+                iron: 15,
                 ..Default::default()
             },
             train_time_secs: 8.0,
@@ -729,9 +730,8 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 18.0 }),
             cost: ResourceCost {
-                wood: 20,
-                copper: 10,
-                iron: 5,
+                wood: 25,
+                iron: 10,
                 ..Default::default()
             },
             train_time_secs: 7.0,
@@ -771,9 +771,9 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
             cost: ResourceCost {
-                copper: 30,
-                iron: 40,
-                gold: 10,
+                copper: 20,
+                iron: 50,
+                gold: 15,
                 oil: 5,
                 ..Default::default()
             },
@@ -814,9 +814,9 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 14.0 }),
             cost: ResourceCost {
-                wood: 10,
-                copper: 20,
-                iron: 40,
+                wood: 20,
+                copper: 15,
+                iron: 45,
                 gold: 20,
                 ..Default::default()
             },
@@ -984,9 +984,9 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 14.0 }),
             cost: ResourceCost {
-                wood: 20,
-                copper: 15,
-                iron: 20,
+                wood: 25,
+                copper: 10,
+                iron: 25,
                 gold: 10,
                 ..Default::default()
             },
@@ -1125,8 +1125,8 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 25.0 }),
             cost: ResourceCost {
-                wood: 100,
-                copper: 20,
+                wood: 90,
+                iron: 15,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1138,8 +1138,8 @@ pub fn build_registry() -> BlueprintRegistry {
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 150,
-                            copper: 40,
+                            wood: 130,
+                            iron: 30,
                             ..Default::default()
                         },
                         time_secs: 20.0,
@@ -1148,9 +1148,9 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 250,
-                            copper: 80,
-                            iron: 40,
+                            wood: 210,
+                            copper: 30,
+                            iron: 80,
                             ..Default::default()
                         },
                         time_secs: 30.0,
@@ -1191,9 +1191,8 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 15.0 }),
             cost: ResourceCost {
-                wood: 80,
-                copper: 40,
-                iron: 20,
+                wood: 75,
+                iron: 30,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1205,9 +1204,8 @@ pub fn build_registry() -> BlueprintRegistry {
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 120,
-                            copper: 60,
-                            iron: 30,
+                            wood: 110,
+                            iron: 40,
                             ..Default::default()
                         },
                         time_secs: 15.0,
@@ -1216,9 +1214,9 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 200,
-                            copper: 100,
-                            iron: 60,
+                            wood: 170,
+                            copper: 40,
+                            iron: 90,
                             ..Default::default()
                         },
                         time_secs: 25.0,
@@ -1262,10 +1260,10 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 15.0 }),
             cost: ResourceCost {
-                wood: 60,
-                copper: 60,
-                iron: 40,
-                gold: 10,
+                wood: 90,
+                copper: 25,
+                iron: 55,
+                gold: 15,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1273,13 +1271,14 @@ pub fn build_registry() -> BlueprintRegistry {
                 construction_time_secs: 18.0,
                 half_height: 1.5,
                 trains: vec![EntityKind::Tank],
-                prerequisite: Some(EntityKind::Base),
+                prerequisite: Some(EntityKind::Mine),
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 100,
-                            copper: 80,
-                            iron: 60,
+                            wood: 120,
+                            copper: 40,
+                            iron: 80,
+                            gold: 20,
                             ..Default::default()
                         },
                         time_secs: 18.0,
@@ -1288,10 +1287,10 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 160,
-                            copper: 120,
-                            iron: 100,
-                            gold: 20,
+                            wood: 180,
+                            copper: 70,
+                            iron: 120,
+                            gold: 40,
                             ..Default::default()
                         },
                         time_secs: 28.0,
@@ -1335,9 +1334,9 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 20.0 }),
             cost: ResourceCost {
-                wood: 40,
-                copper: 30,
-                iron: 30,
+                wood: 45,
+                copper: 10,
+                iron: 35,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1345,13 +1344,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 construction_time_secs: 10.0,
                 half_height: 3.0,
                 trains: vec![],
-                prerequisite: Some(EntityKind::Base),
+                prerequisite: Some(EntityKind::Barracks),
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 60,
-                            copper: 40,
-                            iron: 40,
+                            wood: 70,
+                            copper: 20,
+                            iron: 50,
                             ..Default::default()
                         },
                         time_secs: 12.0,
@@ -1363,9 +1362,9 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 100,
-                            copper: 60,
-                            iron: 60,
+                            wood: 110,
+                            copper: 40,
+                            iron: 70,
                             gold: 20,
                             ..Default::default()
                         },
@@ -1410,9 +1409,8 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 18.0 }),
             cost: ResourceCost {
-                wood: 30,
-                copper: 20,
-                iron: 10,
+                wood: 35,
+                iron: 15,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1424,9 +1422,8 @@ pub fn build_registry() -> BlueprintRegistry {
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 50,
-                            copper: 30,
-                            iron: 20,
+                            wood: 55,
+                            iron: 25,
                             ..Default::default()
                         },
                         time_secs: 10.0,
@@ -1438,9 +1435,9 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 80,
-                            copper: 50,
-                            iron: 30,
+                            wood: 85,
+                            copper: 15,
+                            iron: 35,
                             ..Default::default()
                         },
                         time_secs: 16.0,
@@ -1484,9 +1481,9 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 22.0 }),
             cost: ResourceCost {
-                wood: 55,
-                copper: 35,
-                iron: 30,
+                wood: 60,
+                copper: 20,
+                iron: 45,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1494,13 +1491,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 construction_time_secs: 11.0,
                 half_height: 3.0,
                 trains: vec![],
-                prerequisite: Some(EntityKind::Base),
+                prerequisite: Some(EntityKind::Barracks),
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 75,
-                            copper: 45,
-                            iron: 40,
+                            wood: 85,
+                            copper: 30,
+                            iron: 60,
                             ..Default::default()
                         },
                         time_secs: 12.0,
@@ -1512,10 +1509,10 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 110,
-                            copper: 70,
-                            iron: 65,
-                            gold: 15,
+                            wood: 130,
+                            copper: 55,
+                            iron: 85,
+                            gold: 20,
                             ..Default::default()
                         },
                         time_secs: 20.0,
@@ -1559,9 +1556,9 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 24.0 }),
             cost: ResourceCost {
-                wood: 60,
-                copper: 40,
-                iron: 55,
+                wood: 70,
+                copper: 55,
+                iron: 80,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1569,13 +1566,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 construction_time_secs: 14.0,
                 half_height: 3.0,
                 trains: vec![],
-                prerequisite: Some(EntityKind::Workshop),
+                prerequisite: Some(EntityKind::SiegeWorks),
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 80,
-                            copper: 55,
-                            iron: 70,
+                            wood: 95,
+                            copper: 70,
+                            iron: 100,
                             ..Default::default()
                         },
                         time_secs: 16.0,
@@ -1587,10 +1584,10 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 120,
-                            copper: 80,
-                            iron: 95,
-                            gold: 20,
+                            wood: 140,
+                            copper: 95,
+                            iron: 130,
+                            gold: 30,
                             ..Default::default()
                         },
                         time_secs: 24.0,
@@ -1634,10 +1631,10 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 20.0 }),
             cost: ResourceCost {
-                wood: 70,
-                copper: 50,
-                iron: 40,
-                gold: 20,
+                wood: 85,
+                copper: 45,
+                iron: 65,
+                gold: 35,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1649,10 +1646,10 @@ pub fn build_registry() -> BlueprintRegistry {
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 90,
-                            copper: 65,
-                            iron: 55,
-                            gold: 25,
+                            wood: 105,
+                            copper: 60,
+                            iron: 85,
+                            gold: 45,
                             ..Default::default()
                         },
                         time_secs: 18.0,
@@ -1664,10 +1661,10 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 130,
-                            copper: 90,
-                            iron: 75,
-                            gold: 35,
+                            wood: 150,
+                            copper: 85,
+                            iron: 110,
+                            gold: 65,
                             ..Default::default()
                         },
                         time_secs: 26.0,
@@ -1711,8 +1708,8 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 30.0 }),
             cost: ResourceCost {
-                wood: 25,
-                copper: 10,
+                wood: 20,
+                iron: 10,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1724,8 +1721,8 @@ pub fn build_registry() -> BlueprintRegistry {
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 40,
-                            copper: 20,
+                            wood: 35,
+                            iron: 20,
                             ..Default::default()
                         },
                         time_secs: 8.0,
@@ -1734,9 +1731,9 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 60,
-                            copper: 30,
-                            iron: 10,
+                            wood: 55,
+                            copper: 10,
+                            iron: 30,
                             ..Default::default()
                         },
                         time_secs: 12.0,
@@ -1777,9 +1774,9 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 16.0 }),
             cost: ResourceCost {
-                wood: 45,
-                copper: 15,
-                iron: 20,
+                wood: 40,
+                copper: 10,
+                iron: 35,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1787,7 +1784,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 construction_time_secs: 10.0,
                 half_height: 2.0,
                 trains: vec![],
-                prerequisite: Some(EntityKind::Base),
+                prerequisite: Some(EntityKind::Outpost),
                 level_upgrades: vec![],
             }),
             mob_ai: None,
@@ -1823,7 +1820,6 @@ pub fn build_registry() -> BlueprintRegistry {
             vision: Some(VisionStats { range: 8.0 }),
             cost: ResourceCost {
                 wood: 12,
-                copper: 4,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1836,9 +1832,13 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfScene { pick_radius: 2.0 },
-                color: Color::srgb(0.45, 0.45, 0.45),
-                selected_color: Color::srgb(0.45, 0.45, 0.45),
+                mesh_kind: MeshKind::Cuboid {
+                    x: 1.0,
+                    y: 2.2,
+                    z: 0.7,
+                },
+                color: Color::srgb(0.42, 0.25, 0.11),
+                selected_color: Color::srgb(0.58, 0.36, 0.17),
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
@@ -1867,7 +1867,6 @@ pub fn build_registry() -> BlueprintRegistry {
             vision: Some(VisionStats { range: 10.0 }),
             cost: ResourceCost {
                 wood: 16,
-                copper: 6,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1880,9 +1879,13 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfScene { pick_radius: 2.2 },
-                color: Color::srgb(0.48, 0.48, 0.48),
-                selected_color: Color::srgb(0.48, 0.48, 0.48),
+                mesh_kind: MeshKind::Cuboid {
+                    x: 0.9,
+                    y: 2.6,
+                    z: 0.9,
+                },
+                color: Color::srgb(0.40, 0.23, 0.10),
+                selected_color: Color::srgb(0.58, 0.34, 0.16),
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
@@ -1910,8 +1913,8 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
             cost: ResourceCost {
-                wood: 60,
-                copper: 10,
+                wood: 55,
+                iron: 15,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1923,8 +1926,8 @@ pub fn build_registry() -> BlueprintRegistry {
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 80,
-                            copper: 20,
+                            wood: 75,
+                            iron: 25,
                             ..Default::default()
                         },
                         time_secs: 10.0,
@@ -1936,9 +1939,9 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 140,
-                            copper: 40,
-                            iron: 20,
+                            wood: 120,
+                            copper: 20,
+                            iron: 45,
                             ..Default::default()
                         },
                         time_secs: 18.0,
@@ -1982,9 +1985,10 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 22.0 }),
             cost: ResourceCost {
-                wood: 60,
-                iron: 30,
-                gold: 40,
+                wood: 80,
+                copper: 30,
+                iron: 40,
+                gold: 55,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -1992,13 +1996,14 @@ pub fn build_registry() -> BlueprintRegistry {
                 construction_time_secs: 20.0,
                 half_height: 2.5,
                 trains: vec![EntityKind::Mage, EntityKind::Priest],
-                prerequisite: Some(EntityKind::Base),
+                prerequisite: Some(EntityKind::Workshop),
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 80,
-                            iron: 40,
-                            gold: 60,
+                            wood: 100,
+                            copper: 40,
+                            iron: 55,
+                            gold: 80,
                             ..Default::default()
                         },
                         time_secs: 20.0,
@@ -2007,9 +2012,10 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 120,
-                            iron: 60,
-                            gold: 100,
+                            wood: 140,
+                            copper: 60,
+                            iron: 80,
+                            gold: 130,
                             ..Default::default()
                         },
                         time_secs: 30.0,
@@ -2053,9 +2059,10 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 18.0 }),
             cost: ResourceCost {
-                wood: 80,
+                wood: 90,
                 copper: 20,
-                gold: 50,
+                iron: 40,
+                gold: 70,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -2063,13 +2070,14 @@ pub fn build_registry() -> BlueprintRegistry {
                 construction_time_secs: 22.0,
                 half_height: 2.0,
                 trains: vec![EntityKind::Priest],
-                prerequisite: Some(EntityKind::Base),
+                prerequisite: Some(EntityKind::MageTower),
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 100,
+                            wood: 115,
                             copper: 30,
-                            gold: 60,
+                            iron: 55,
+                            gold: 85,
                             ..Default::default()
                         },
                         time_secs: 18.0,
@@ -2081,9 +2089,10 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 160,
+                            wood: 170,
                             copper: 50,
-                            gold: 100,
+                            iron: 75,
+                            gold: 130,
                             ..Default::default()
                         },
                         time_secs: 28.0,
@@ -2127,9 +2136,9 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 12.0 }),
             cost: ResourceCost {
-                wood: 70,
+                wood: 85,
                 copper: 30,
-                iron: 20,
+                iron: 45,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -2137,13 +2146,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 construction_time_secs: 14.0,
                 half_height: 1.25,
                 trains: vec![EntityKind::Cavalry],
-                prerequisite: Some(EntityKind::Base),
+                prerequisite: Some(EntityKind::Barracks),
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 100,
-                            copper: 40,
-                            iron: 30,
+                            wood: 115,
+                            copper: 45,
+                            iron: 65,
                             ..Default::default()
                         },
                         time_secs: 16.0,
@@ -2152,10 +2161,10 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 160,
-                            copper: 60,
-                            iron: 50,
-                            gold: 20,
+                            wood: 170,
+                            copper: 70,
+                            iron: 90,
+                            gold: 35,
                             ..Default::default()
                         },
                         time_secs: 25.0,
@@ -2199,9 +2208,10 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 12.0 }),
             cost: ResourceCost {
-                wood: 80,
-                iron: 60,
-                gold: 20,
+                wood: 100,
+                copper: 35,
+                iron: 90,
+                gold: 30,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -2209,13 +2219,14 @@ pub fn build_registry() -> BlueprintRegistry {
                 construction_time_secs: 20.0,
                 half_height: 1.5,
                 trains: vec![EntityKind::Catapult, EntityKind::BatteringRam],
-                prerequisite: Some(EntityKind::Base),
+                prerequisite: Some(EntityKind::Workshop),
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 120,
-                            iron: 80,
-                            gold: 30,
+                            wood: 140,
+                            copper: 50,
+                            iron: 110,
+                            gold: 45,
                             ..Default::default()
                         },
                         time_secs: 20.0,
@@ -2224,9 +2235,10 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 200,
-                            iron: 120,
-                            gold: 60,
+                            wood: 220,
+                            copper: 80,
+                            iron: 150,
+                            gold: 75,
                             ..Default::default()
                         },
                         time_secs: 30.0,
@@ -2272,8 +2284,8 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
             cost: ResourceCost {
-                wood: 60,
-                copper: 20,
+                wood: 50,
+                iron: 15,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -2285,8 +2297,8 @@ pub fn build_registry() -> BlueprintRegistry {
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 80,
-                            copper: 30,
+                            wood: 70,
+                            iron: 25,
                             ..Default::default()
                         },
                         time_secs: 10.0,
@@ -2300,9 +2312,9 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 120,
-                            copper: 40,
-                            iron: 20,
+                            wood: 110,
+                            copper: 15,
+                            iron: 35,
                             ..Default::default()
                         },
                         time_secs: 15.0,
@@ -2348,9 +2360,8 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
             cost: ResourceCost {
-                wood: 80,
-                copper: 40,
-                iron: 10,
+                wood: 70,
+                iron: 35,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -2362,9 +2373,8 @@ pub fn build_registry() -> BlueprintRegistry {
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 60,
-                            copper: 60,
-                            iron: 30,
+                            wood: 80,
+                            iron: 50,
                             ..Default::default()
                         },
                         time_secs: 12.0,
@@ -2373,15 +2383,15 @@ pub fn build_registry() -> BlueprintRegistry {
                             harvest_rate_boost: 1.0,
                             radius_boost: 3.0,
                             extra_worker_slots: 1,
-                            unlock_resources: vec![ResourceType::Iron],
+                            unlock_resources: vec![ResourceType::Copper],
                         },
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 100,
-                            copper: 80,
-                            iron: 50,
-                            gold: 20,
+                            wood: 110,
+                            copper: 40,
+                            iron: 75,
+                            gold: 25,
                             ..Default::default()
                         },
                         time_secs: 20.0,
@@ -2427,9 +2437,9 @@ pub fn build_registry() -> BlueprintRegistry {
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
             cost: ResourceCost {
-                wood: 60,
-                copper: 30,
-                iron: 20,
+                wood: 75,
+                copper: 25,
+                iron: 35,
                 ..Default::default()
             },
             train_time_secs: 0.0,
@@ -2437,13 +2447,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 construction_time_secs: 14.0,
                 half_height: 1.5,
                 trains: vec![],
-                prerequisite: Some(EntityKind::Base),
+                prerequisite: Some(EntityKind::Workshop),
                 level_upgrades: vec![
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 80,
-                            copper: 40,
-                            iron: 30,
+                            wood: 95,
+                            copper: 35,
+                            iron: 45,
                             ..Default::default()
                         },
                         time_secs: 12.0,
@@ -2457,10 +2467,10 @@ pub fn build_registry() -> BlueprintRegistry {
                     },
                     BuildingLevelData {
                         cost: ResourceCost {
-                            wood: 120,
-                            copper: 60,
-                            iron: 50,
-                            gold: 10,
+                            wood: 135,
+                            copper: 55,
+                            iron: 65,
+                            gold: 20,
                             ..Default::default()
                         },
                         time_secs: 18.0,
@@ -2906,7 +2916,7 @@ pub fn spawn_from_blueprint_with_faction(
                 entity_cmds.insert((
                     DepositPoint,
                     StorageInventory {
-                        caps: [500, 30, 50, 0, 0],
+                        caps: [500, 80, 120, 0, 0],
                         ..default()
                     },
                 ));
@@ -2958,7 +2968,7 @@ pub fn spawn_from_blueprint_with_faction(
                         },
                         AssignedWorkers::default(),
                         ResourceProcessor {
-                            resource_types: vec![ResourceType::Copper],
+                            resource_types: vec![ResourceType::Iron],
                             harvest_radius: 12.0,
                             harvest_rate: 2.0,
                             max_workers: 4,
@@ -2969,7 +2979,7 @@ pub fn spawn_from_blueprint_with_faction(
                             harvest_accumulator: 0.0,
                         },
                         ResourceRespawnConfig {
-                            resource_types: vec![ResourceType::Copper],
+                            resource_types: vec![ResourceType::Iron],
                             respawn_timer: Timer::from_seconds(45.0, TimerMode::Repeating),
                             respawn_radius: 12.0,
                             max_nodes: 4,

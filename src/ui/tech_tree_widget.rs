@@ -68,7 +68,13 @@ pub fn update_tech_tree(
             (false, crate::blueprints::EntityKind::Base, _) => true,
             (false, _, _) => false,
             (true, _, None) => true,
-            (true, _, Some(p)) => completed.contains(&p),
+            (true, _, Some(p)) => {
+                if p == crate::blueprints::EntityKind::Base {
+                    founded || completed.contains(&p)
+                } else {
+                    completed.contains(&p)
+                }
+            }
         };
 
         let (border_color, text_color) = if is_built {

@@ -1,0 +1,88 @@
+{
+  "Entities/Selected": {
+    "Set HP %": 100.0,
+    "Set Speed": 5.0
+  },
+  "Entities/Spawn": {
+    "Click to Place": false
+  },
+  "Game/AI Settings": {
+    "P2 AI Enabled": true,
+    "P3 AI Enabled": true,
+    "P4 AI Enabled": true
+  },
+  "Game/Player Control": {},
+  "Game/Save & Load": {},
+  "Visuals/Ambient Light": {
+    "Brightness": 177.02057,
+    "Color B": 0.39702058,
+    "Color G": 0.34404114,
+    "Color R": 0.48957202,
+    "Override": false
+  },
+  "Visuals/Entity Lights": {
+    "Building Intensity": 150000.0,
+    "Cell Size": 15.0,
+    "Day Factor": 0.3,
+    "Enabled": true,
+    "Max Lights": 64.0,
+    "Night Factor": 1.0,
+    "Unit Intensity": 80000.0
+  },
+  "Visuals/FoW Fog Noise": {
+    "Contrast": 0.2,
+    "Octaves": 4.0,
+    "Scale": 5.0,
+    "Speed": 0.01,
+    "Tendril Scale": 6.0,
+    "Tendril Strength": 0.3,
+    "Warp": 0.8,
+    "Warp Speed": 0.5
+  },
+  "Visuals/FoW Gameplay": {
+    "Enable LOS": 1.0,
+    "LOS Ray Count": 48.0,
+    "Mob Threshold": 0.8,
+    "Object Threshold": 0.4,
+    "Transition Speed": 4.0,
+    "VFX Threshold": 0.3
+  },
+  "Visuals/FoW Shader": {
+    "Edge Glow Intensity": 0.55,
+    "Edge Glow Width": 0.45,
+    "Explored Tint A": 0.15,
+    "Explored Tint B": 0.0,
+    "Explored Tint G": 0.0,
+    "Explored Tint R": 0.0,
+    "Fog Color A": 1.0,
+    "Fog Color B": 0.02,
+    "Fog Color G": 0.01,
+    "Fog Color R": 0.01,
+    "Glow Color A": 1.0,
+    "Glow Color B": 1.0,
+    "Glow Color G": 1.0,
+    "Glow Color R": 1.0,
+    "Noise Scale": 8.0
+  },
+  "Visuals/Sky Color": {
+    "Color B": 0.39255145,
+    "Color G": 0.3410617,
+    "Color R": 0.5351029,
+    "Override": false
+  },
+  "Visuals/Sunlight": {
+    "Color B": 0.20297943,
+    "Color G": 0.5029794,
+    "Color R": 0.9999999,
+    "Illuminance": 2910.6174,
+    "Override": false,
+    "Pitch": -0.15000004,
+    "Shadows": true,
+    "Yaw": 0.3
+  },
+  "Visuals/Time of Day": {
+    "Cycle Duration": 600.0,
+    "Paused": false,
+    "Time": 0.77584565
+  }
+}

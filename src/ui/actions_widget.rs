@@ -1686,7 +1686,13 @@ fn spawn_building_grid(
             let prereq = bp.building.as_ref().and_then(|b| b.prerequisite);
             match prereq {
                 None => true,
-                Some(prereq_kind) => completed.contains(&prereq_kind),
+                Some(prereq_kind) => {
+                    if prereq_kind == EntityKind::Base {
+                        founded || completed.contains(&prereq_kind)
+                    } else {
+                        completed.contains(&prereq_kind)
+                    }
+                }
             }
         })
         .collect();

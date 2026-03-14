@@ -310,6 +310,7 @@ fn track_drag(
 fn update_selection_box_visual(
     drag: Res<DragState>,
     mouse: Res<ButtonInput<MouseButton>>,
+    ui_scale: Res<UiScale>,
     mut query: Query<(&mut Node, &mut Visibility), With<SelectionBox>>,
     placement: Res<BuildingPlacementState>,
     minimap_interaction: Res<MinimapInteraction>,
@@ -324,15 +325,16 @@ fn update_selection_box_visual(
         && !minimap_interaction.clicked
     {
         if let (Some(start), Some(current)) = (drag.start, drag.current) {
+            let scale = ui_scale.0.max(0.001);
             let min_x = start.x.min(current.x);
             let min_y = start.y.min(current.y);
             let w = (current.x - start.x).abs();
             let h = (current.y - start.y).abs();
 
-            node.left = Val::Px(min_x);
-            node.top = Val::Px(min_y);
-            node.width = Val::Px(w);
-            node.height = Val::Px(h);
+            node.left = Val::Px(min_x / scale);
+            node.top = Val::Px(min_y / scale);
+            node.width = Val::Px(w / scale);
+            node.height = Val::Px(h / scale);
             *vis = Visibility::Visible;
         }
     } else {
@@ -713,6 +715,7 @@ fn update_hover_ring(
 fn update_hover_tooltip(
     mut tooltip_q: Query<(&mut Node, &mut Visibility, &mut Text), With<HoverTooltip>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    ui_scale: Res<UiScale>,
     hovered_entities: Query<Entity, With<Hovered>>,
     entity_kinds: Query<&EntityKind>,
     resource_nodes: Query<&ResourceNode>,
@@ -775,8 +778,15 @@ fn update_hover_tooltip(
     *text = Text::new(label);
 
     // Position tooltip near cursor with offset
-    node.left = Val::Px(cursor.x + 16.0);
-    node.top = Val::Px(cursor.y - 10.0);
+    let scale = ui_scale.0.max(0.001);
+    let ui_w = window.width() / scale;
+    let ui_h = window.height() / scale;
+    let mut x = (cursor.x + 16.0) / scale;
+    let mut y = (cursor.y + 18.0) / scale;
+    x = x.clamp(6.0, (ui_w - 260.0).max(6.0));
+    y = y.clamp(6.0, (ui_h - 120.0).max(6.0));
+    node.left = Val::Px(x);
+    node.top = Val::Px(y);
     *vis = Visibility::Visible;
 }
 

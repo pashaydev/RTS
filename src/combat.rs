@@ -163,22 +163,91 @@ fn player_auto_acquire_target(
 }
 
 fn approach_attack_target(
+    mut commands: Commands,
     time: Res<Time>,
+    teams: Res<TeamConfig>,
     registry: Res<BlueprintRegistry>,
     height_map: Res<HeightMap>,
     mut attackers: Query<(
+        Entity,
         &mut Transform,
         &AttackTarget,
         &UnitSpeed,
         &AttackRange,
         Option<&EntityKind>,
-    )>,
+        &Faction,
+        Option<&mut UnitState>,
+    ), With<Unit>>,
+    walls: Query<
+        (Entity, &Transform, &BuildingFootprint, &Faction),
+        (
+            With<Building>,
+            Without<Unit>,
+            Or<(With<WallSegmentPiece>, With<WallPostPiece>)>,
+        ),
+    >,
     targets: Query<&Transform, Without<AttackTarget>>,
 ) {
-    for (mut tf, attack_target, speed, range, opt_kind) in &mut attackers {
+    for (
+        attacker_entity,
+        mut tf,
+        attack_target,
+        speed,
+        range,
+        opt_kind,
+        faction,
+        opt_state,
+    ) in &mut attackers
+    {
         let Ok(target_tf) = targets.get(attack_target.0) else {
             continue;
         };
+
+        let target_is_wall = walls.get(attack_target.0).is_ok();
+        if !target_is_wall {
+            let from = Vec2::new(tf.translation.x, tf.translation.z);
+            let to = Vec2::new(target_tf.translation.x, target_tf.translation.z);
+            let delta = to - from;
+            let line_len = delta.length();
+
+            if line_len > 0.5 {
+                let dir = delta / line_len;
+                let mut blocking_wall: Option<(Entity, f32)> = None;
+
+                for (wall_entity, wall_tf, wall_fp, wall_faction) in &walls {
+                    if !teams.is_hostile(faction, wall_faction) {
+                        continue;
+                    }
+
+                    let wall_pos = Vec2::new(wall_tf.translation.x, wall_tf.translation.z);
+                    let rel = wall_pos - from;
+                    let t = rel.dot(dir);
+                    if t <= 0.3 || t >= line_len - 0.3 {
+                        continue;
+                    }
+
+                    let closest = from + dir * t;
+                    let perp_dist = wall_pos.distance(closest);
+                    if perp_dist <= wall_fp.0 + 0.35
+                        && blocking_wall.map_or(true, |(_, best_t)| t < best_t)
+                    {
+                        blocking_wall = Some((wall_entity, t));
+                    }
+                }
+
+                if let Some((wall_entity, _)) = blocking_wall {
+                    commands
+                        .entity(attacker_entity)
+                        .insert(AttackTarget(wall_entity));
+                    if let Some(mut state) = opt_state {
+                        if matches!(*state, UnitState::Attacking(_)) {
+                            *state = UnitState::Attacking(wall_entity);
+                        }
+                    }
+                    continue;
+                }
+            }
+        }
 
         let dir = Vec3::new(
             target_tf.translation.x - tf.translation.x,
@@ -189,7 +258,22 @@ fn approach_attack_target(
 
         if dist > range.0 {
             let step = dir.normalize() * speed.0 * time.delta_secs();
-            tf.translation += step;
+            let candidate = tf.translation + step;
+            let blocked = walls
+                .iter()
+                .filter(|(wall_entity, _, _, _)| *wall_entity != attack_target.0)
+                .any(|(_, wall_tf, wall_fp, wall_faction)| {
+                    if !teams.is_hostile(faction, wall_faction) {
+                        return false;
+                    }
+                    let a = Vec2::new(candidate.x, candidate.z);
+                    let b = Vec2::new(wall_tf.translation.x, wall_tf.translation.z);
+                    a.distance(b) < wall_fp.0 + 0.6
+                });
+            if blocked {
+                continue;
+            }
+            tf.translation = candidate;
 
             let y_off = if let Some(kind) = opt_kind {
                 registry

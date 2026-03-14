@@ -162,9 +162,9 @@ impl Default for WidgetRegistry {
         slots.insert(WidgetId::EventLog, GridSlot::new(10, 0, 2, 4));
         slots.insert(WidgetId::GroupHotkeys, GridSlot::new(0, 4, 1, 3));
         slots.insert(WidgetId::Selection, GridSlot::new(0, 9, 3, 3));
-        slots.insert(WidgetId::Actions, GridSlot::new(3, 8, 4, 4));
+        slots.insert(WidgetId::Actions, GridSlot::new(3, 9, 3, 3));
         slots.insert(WidgetId::ProductionQueue, GridSlot::new(7, 8, 2, 4));
-        slots.insert(WidgetId::Minimap, GridSlot::new(9, 8, 3, 4));
+        slots.insert(WidgetId::Minimap, GridSlot::new(9, 9, 3, 3));
         slots.insert(WidgetId::TechTree, GridSlot::new(3, 4, 6, 4));
         slots.insert(WidgetId::Debug, GridSlot::new(10, 0, 2, 12));
 
@@ -552,6 +552,7 @@ fn pixel_to_grid_slot(
 pub fn handle_widget_drag(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    ui_scale: Res<UiScale>,
     mut drag_state: ResMut<WidgetDragState>,
     mut registry: ResMut<WidgetRegistry>,
     mut grid_active: ResMut<GridInteractionActive>,
@@ -561,16 +562,18 @@ pub fn handle_widget_drag(
     let Ok(window) = windows.single() else {
         return;
     };
-    let Some(cursor) = window.cursor_position() else {
+    let Some(cursor_raw) = window.cursor_position() else {
         return;
     };
+    let scale = ui_scale.0.max(0.001);
+    let cursor = cursor_raw / scale;
 
     // Snap on release (before clearing active_widget)
     if mouse.just_released(MouseButton::Left) {
         if let Some(widget_entity) = drag_state.active_widget {
             if let Ok((mut node, _, widget, computed)) = widget_nodes.get_mut(widget_entity) {
-                let win_w = window.width();
-                let win_h = window.height();
+                let win_w = window.width() / scale;
+                let win_h = window.height() / scale;
                 let inv_scale = computed.inverse_scale_factor();
 
                 let px_x = match node.left {
@@ -621,6 +624,8 @@ pub fn handle_widget_drag(
 
                     let win_w = window.width();
                     let win_h = window.height();
+                    let win_w = win_w / scale;
+                    let win_h = win_h / scale;
 
                     let start_x = match node.left {
                         Val::Px(x) => x,
@@ -653,6 +658,7 @@ pub fn handle_widget_drag(
 pub fn handle_widget_resize(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    ui_scale: Res<UiScale>,
     mut resize_state: ResMut<WidgetResizeState>,
     mut registry: ResMut<WidgetRegistry>,
     mut grid_active: ResMut<GridInteractionActive>,
@@ -662,16 +668,18 @@ pub fn handle_widget_resize(
     let Ok(window) = windows.single() else {
         return;
     };
-    let Some(cursor) = window.cursor_position() else {
+    let Some(cursor_raw) = window.cursor_position() else {
         return;
     };
+    let scale = ui_scale.0.max(0.001);
+    let cursor = cursor_raw / scale;
 
     // Snap on release (before clearing active_widget)
     if mouse.just_released(MouseButton::Left) {
         if let Some(widget_entity) = resize_state.active_widget {
             if let Ok((mut node, computed, _, widget)) = widget_nodes.get_mut(widget_entity) {
-                let win_w = window.width();
-                let win_h = window.height();
+                let win_w = window.width() / scale;
+                let win_h = window.height() / scale;
                 let inv_scale = computed.inverse_scale_factor();
 
                 let px_x = match node.left {

@@ -27,7 +27,7 @@ pub fn footprint_for_kind(kind: EntityKind) -> f32 {
 pub fn allowed_biomes(kind: EntityKind) -> Option<&'static [Biome]> {
     match kind {
         EntityKind::Sawmill => Some(&[Biome::Forest]),
-        EntityKind::Mine => Some(&[Biome::Mountain, Biome::Mud]),
+        EntityKind::Mine => Some(&[Biome::Mountain, Biome::Mud, Biome::Desert]),
         EntityKind::OilRig => Some(&[Biome::Water]),
         _ => None,
     }
@@ -45,7 +45,7 @@ pub fn is_biome_valid_for(kind: EntityKind, biome: Biome) -> bool {
 pub fn biome_requirement_text(kind: EntityKind) -> Option<&'static str> {
     match kind {
         EntityKind::Sawmill => Some("Sawmill must be placed on Forest"),
-        EntityKind::Mine => Some("Mine must be placed on Mountain or Mud"),
+        EntityKind::Mine => Some("Mine must be placed on Mountain, Mud, or Desert"),
         EntityKind::OilRig => Some("Oil Rig must be placed on Water"),
         _ => Some("Cannot place on Water"),
     }
@@ -160,7 +160,10 @@ fn wall_layout_points(start: Vec3, end: Vec3) -> Vec<Vec3> {
         .collect()
 }
 
-fn wall_cost_from_points(points: &[Vec3]) -> crate::blueprints::ResourceCost {
+fn wall_cost_from_points(
+    points: &[Vec3],
+    registry: &BlueprintRegistry,
+) -> crate::blueprints::ResourceCost {
     let mut total = crate::blueprints::ResourceCost::default();
     if points.len() < 2 {
         return total;
@@ -168,8 +171,14 @@ fn wall_cost_from_points(points: &[Vec3]) -> crate::blueprints::ResourceCost {
 
     let segments = (points.len() - 1) as u32;
     let posts = points.len() as u32;
-    total.wood = segments * 12 + posts * 16;
-    total.copper = segments * 4 + posts * 6;
+    let seg_cost = &registry.get(EntityKind::WallSegment).cost;
+    let post_cost = &registry.get(EntityKind::WallPost).cost;
+
+    total.wood = segments * seg_cost.wood + posts * post_cost.wood;
+    total.copper = segments * seg_cost.copper + posts * post_cost.copper;
+    total.iron = segments * seg_cost.iron + posts * post_cost.iron;
+    total.gold = segments * seg_cost.gold + posts * post_cost.gold;
+    total.oil = segments * seg_cost.oil + posts * post_cost.oil;
     total
 }
 
@@ -318,6 +327,7 @@ fn update_wall_plot_preview(
     mut meshes: ResMut<Assets<Mesh>>,
     mut placement: ResMut<BuildingPlacementState>,
     mut wall_preview: ResMut<WallPlotPreview>,
+    registry: Res<BlueprintRegistry>,
     ghost_mats: Res<BuildingGhostMaterials>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -355,7 +365,7 @@ fn update_wall_plot_preview(
 
     wall_preview.start = Some(start);
     wall_preview.snapped_points = points.clone();
-    wall_preview.total_cost = wall_cost_from_points(&points);
+    wall_preview.total_cost = wall_cost_from_points(&points, &registry);
     wall_preview.valid = true;
 
     for point in &points {
@@ -436,8 +446,8 @@ fn update_wall_plot_preview(
     let cost = &wall_preview.total_cost;
     placement.hint_text = Some(if wall_preview.valid {
         format!(
-            "Wall: {segments} segments, {posts} posts | Cost: {}W {}C",
-            cost.wood, cost.copper
+            "Wall: {segments} segments, {posts} posts | Cost: {}W",
+            cost.wood
         )
     } else {
         "Wall path blocked".to_string()
@@ -671,7 +681,13 @@ fn confirm_placement(
         match (is_initial_base_plot, bd.prerequisite) {
             (true, _) => true,
             (false, None) => true,
-            (false, Some(prereq_kind)) => all_completed.has(&faction, prereq_kind),
+            (false, Some(prereq_kind)) => {
+                if prereq_kind == EntityKind::Base {
+                    base_state.is_founded(&faction) || all_completed.has(&faction, prereq_kind)
+                } else {
+                    all_completed.has(&faction, prereq_kind)
+                }
+            }
         }
     } else {
         true
@@ -825,16 +841,11 @@ fn confirm_wall_plot(
             .deduct(all_resources.get_mut(&faction));
 
         let mut spawned_entities = Vec::new();
-        for (idx, point) in wall_preview.snapped_points.iter().enumerate() {
-            let kind = if idx == 0 || idx == wall_preview.snapped_points.len() - 1 {
-                EntityKind::WallPost
-            } else {
-                EntityKind::WallPost
-            };
+        for point in &wall_preview.snapped_points {
             let entity = spawn_from_blueprint_with_faction(
                 &mut commands,
                 &cache,
-                kind,
+                EntityKind::WallPost,
                 *point,
                 &registry,
                 building_models.as_deref(),
@@ -1426,13 +1437,14 @@ fn update_completed_buildings_tracker(
     let mut founded: std::collections::HashMap<Faction, bool> = std::collections::HashMap::new();
 
     for (kind, state, faction) in &buildings {
+        if *kind == EntityKind::Base {
+            founded.insert(*faction, true);
+        }
+
         if *state == BuildingState::Complete && kind.category() == EntityCategory::Building {
             let list = per_faction.entry(*faction).or_default();
             if !list.contains(kind) {
                 list.push(*kind);
-            }
-            if *kind == EntityKind::Base {
-                founded.insert(*faction, true);
             }
         }
     }

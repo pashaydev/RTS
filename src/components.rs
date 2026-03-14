@@ -185,18 +185,28 @@ impl Default for GraphicsSettings {
 
 impl GraphicsSettings {
     pub fn load_or_default() -> Self {
-        std::fs::read_to_string("config/graphics_settings.json")
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            std::fs::read_to_string("config/graphics_settings.json")
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self::default()
+        }
     }
 
     pub fn save(&self) {
-        let _ = std::fs::create_dir_all("config");
-        let _ = std::fs::write(
-            "config/graphics_settings.json",
-            serde_json::to_string_pretty(self).unwrap(),
-        );
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = std::fs::create_dir_all("config");
+            let _ = std::fs::write(
+                "config/graphics_settings.json",
+                serde_json::to_string_pretty(self).unwrap(),
+            );
+        }
     }
 }
 
@@ -257,7 +267,7 @@ impl ResourceType {
     pub fn gather_rate_multiplier(self) -> f32 {
         match self {
             Self::Wood => 1.0,
-            Self::Copper => 0.75,
+            Self::Copper => 0.9,
             Self::Iron => 0.65,
             Self::Gold => 0.45,
             Self::Oil => 0.85,
@@ -775,9 +785,9 @@ pub struct PlayerResources {
 impl Default for PlayerResources {
     fn default() -> Self {
         let mut amounts = [0; ResourceType::COUNT];
-        amounts[ResourceType::Wood.index()] = 300;
-        amounts[ResourceType::Copper.index()] = 60;
-        amounts[ResourceType::Iron.index()] = 20;
+        amounts[ResourceType::Wood.index()] = 220;
+        amounts[ResourceType::Copper.index()] = 20;
+        amounts[ResourceType::Iron.index()] = 40;
         Self { amounts }
     }
 }
@@ -821,9 +831,9 @@ pub struct LastPlayerResources {
 impl Default for LastPlayerResources {
     fn default() -> Self {
         let mut amounts = [0; ResourceType::COUNT];
-        amounts[ResourceType::Wood.index()] = 300;
-        amounts[ResourceType::Copper.index()] = 60;
-        amounts[ResourceType::Iron.index()] = 20;
+        amounts[ResourceType::Wood.index()] = 220;
+        amounts[ResourceType::Copper.index()] = 20;
+        amounts[ResourceType::Iron.index()] = 40;
         Self { amounts }
     }
 }

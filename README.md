@@ -123,11 +123,11 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 
 ## How to Play
 
-1. You start with **2 Workers**, **no Base**, and a light stockpile of **200 Wood / 40 Copper / 20 Iron**
+1. You start with **2 Workers**, **no Base**, and a light stockpile of **220 Wood / 20 Copper / 40 Iron**
 2. Use the **Settlement** action to **Found Base**
 3. Place the Base at a strong starting position, then let workers construct it
-4. Once the Base completes, early economy and fortification options unlock
-5. Build **Storage**, **Barracks**, and early defenses like **Watch Tower** or **Outpost**
+4. After your first Base is plotted and workers begin building it, more building options unlock
+5. Upgrade **Mine** to unlock reliable copper, then branch into **Workshop**, **Stable**, or advanced defenses
 6. Use the **Wall** tool to plot a straight wall line in one gesture
 7. Use **Gatehouse** to replace an owned wall segment and create a chokepoint opening
 8. Select completed production buildings to train units or upgrade structures to level 3
@@ -139,7 +139,7 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 
 | Biome | Terrain Color | Primary Resource | Secondary Resource |
 |---|---|---|---|
-| Forest | Green | Wood (high density) | — |
+| Forest | Green | Wood (high density) | Copper (low) |
 | Desert | Sandy yellow | Copper | Gold |
 | Mud/Dirt | Brown | Iron | Copper |
 | Water (edges) | Blue | Oil | — |
@@ -149,22 +149,25 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 
 | Type | Cost | Build Time | Requires | Function |
 |---|---|---|---|---|
-| Base | 100W 20C | 15s | — | Unlocks other buildings, trains Workers |
-| Barracks | 80W 40C 20I | 12s | Base | Trains Workers, Soldiers, Archers |
-| Workshop | 60W 60C 40I 10G | 18s | Base | Trains Tanks |
-| Watch Tower | 30W 20C 10I | 8s | Base | Cheap early anti-raider defense |
-| Guard Tower | 55W 35C 30I | 11s | Base | Durable general-purpose tower |
-| Ballista Tower | 60W 40C 55I | 14s | Workshop | Long-range anti-heavy / anti-siege tower |
-| Bombard Tower | 70W 50C 40I 20G | 15s | Mage Tower | Splash-oriented tower for swarm defense |
-| Outpost | 25W 10C | 6s | Base | Vision structure for map control and wall anchoring |
-| Wall Segment | 12W 4C | 4s | Base | Built through wall plotting flow |
-| Wall Post | 16W 6C | 5s | Base | Endpoint / junction support for plotted walls |
-| Gatehouse | 45W 15C 20I | 10s | Base | Replaces a wall segment to create a fortified opening |
-| Storage | 60W 10C | 8s | Base | Resource depot; gather aura at level 1+ |
-| Mage Tower | 60W 30I 40G | 20s | Base | Trains Mages, Priests |
-| Temple | 80W 20C 50G | 22s | Base | Trains Priests; healing aura at level 1+ |
-| Stable | 70W 30C 20I | 14s | Base | Trains Cavalry, Knights |
-| Siege Works | 80W 60I 20G | 20s | Base | Trains Catapults, Battering Rams |
+| Base | 90W 15I | 15s | — | Tier 1 anchor, trains Workers |
+| Barracks | 75W 30I | 12s | Base | Trains Workers/Soldiers (Archer at L2) |
+| Storage | 55W 15I | 8s | Base | Resource depot; gather aura at level 1+ |
+| Sawmill | 50W 15I | 12s | Base | Wood processor (Forest only) |
+| Mine | 70W 35I | 15s | Base | Ore processor; L2 unlocks copper (Mountain/Mud/Desert) |
+| Outpost | 20W 10I | 6s | Base | Vision structure and wall control anchor |
+| Watch Tower | 35W 15I | 8s | Base | Cheap early anti-raider defense |
+| Wall Segment | 12W | 4s | Base | Built through wall plotting flow |
+| Wall Post | 16W | 5s | Base | Endpoint / junction support for plotted walls |
+| Gatehouse | 40W 10C 35I | 10s | Outpost | Replaces a wall segment to create a fortified opening |
+| Workshop | 90W 25C 55I 15G | 18s | Mine | Tier 2 military tech, trains Tanks |
+| Stable | 85W 30C 45I | 14s | Barracks | Trains Cavalry (Knight at L2) |
+| Guard Tower | 60W 20C 45I | 11s | Barracks | Durable general-purpose tower |
+| Siege Works | 100W 35C 90I 30G | 20s | Workshop | Trains Catapults, Battering Rams |
+| Mage Tower | 80W 30C 40I 55G | 20s | Workshop | Trains Mages and Priests |
+| Temple | 90W 20C 40I 70G | 22s | Mage Tower | Trains Priests; healing aura at level 1+ |
+| Ballista Tower | 70W 55C 80I | 14s | Siege Works | Long-range anti-heavy / anti-siege tower |
+| Bombard Tower | 85W 45C 65I 35G | 15s | Mage Tower | Splash-oriented tower for swarm defense |
+| Oil Rig | 75W 25C 35I | 14s | Workshop | Oil processor (Water only) |
 
 All buildings support 3-level upgrades with bonuses like vision boost, train time reduction, stat boosts, range/damage increase, gather aura, and heal aura.
 
@@ -173,13 +176,13 @@ All buildings support 3-level upgrades with bonuses like vision boost, train tim
 | Unit | Cost | Train Time | Trained At |
 |---|---|---|---|
 | Worker | 30W | 5s | Base, Barracks |
-| Soldier | 10W 20C 10I | 8s | Barracks |
-| Archer | 20W 10C 5I | 7s | Barracks |
-| Tank | 30C 40I 10G 5O | 15s | Workshop |
-| Knight | 10W 20C 40I 20G | 12s | Stable |
+| Soldier | 20W 15I | 8s | Barracks |
+| Archer | 25W 10I | 7s | Barracks |
+| Tank | 20C 50I 15G 5O | 15s | Workshop |
+| Knight | 20W 15C 45I 20G | 12s | Stable |
 | Mage | 10W 40G | 15s | Mage Tower |
 | Priest | 15W 30G | 12s | Mage Tower, Temple |
-| Cavalry | 20W 15C 20I 10G | 10s | Stable |
+| Cavalry | 25W 10C 25I 10G | 10s | Stable |
 | Catapult | 80W 60I 20G | 20s | Siege Works |
 | Battering Ram | 100W 40I | 18s | Siege Works |
 
