@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::components::*;
 use crate::theme;
+use crate::ui::fonts::{self, UiFonts};
 
 pub fn hp_color(current: f32, max: f32) -> Color {
     let pct = (current / max).clamp(0.0, 1.0);
@@ -60,7 +61,12 @@ pub fn spawn_hp_bar(
 }
 
 /// Spawn a section divider: a label above a horizontal separator line.
-pub fn spawn_section_divider(commands: &mut Commands, parent: Entity, label: &str) {
+pub fn spawn_section_divider(
+    commands: &mut Commands,
+    parent: Entity,
+    label: &str,
+    fonts: &UiFonts,
+) {
     let section = commands
         .spawn(Node {
             width: Val::Percent(100.0),
@@ -71,10 +77,7 @@ pub fn spawn_section_divider(commands: &mut Commands, parent: Entity, label: &st
         .with_children(|p| {
             p.spawn((
                 Text::new(label),
-                TextFont {
-                    font_size: theme::FONT_MEDIUM,
-                    ..default()
-                },
+                fonts::heading(fonts, theme::FONT_MEDIUM),
                 TextColor(theme::TEXT_SECONDARY),
                 Node {
                     margin: UiRect::bottom(Val::Px(4.0)),

@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use super::widget_framework::{WidgetId, WidgetRegistry};
 use crate::theme;
+use crate::ui::fonts::{self, UiFonts};
 
 #[derive(Component)]
 pub struct WidgetToolbar;
@@ -13,7 +14,7 @@ pub struct WidgetToolbarButton(pub WidgetId);
 #[derive(Component)]
 pub struct ToolbarContainer;
 
-pub fn spawn_toolbar(commands: &mut Commands, parent: Entity) {
+pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts) {
     let anchor = commands
         .spawn((
             ToolbarContainer,
@@ -86,10 +87,7 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity) {
             .with_children(|btn| {
                 btn.spawn((
                     Text::new(format!("{} {}", id.icon(), hotkey_name)),
-                    TextFont {
-                        font_size: theme::FONT_CAPTION,
-                        ..default()
-                    },
+                    fonts::toolbar(fonts),
                     TextColor(theme::TEXT_SECONDARY),
                 ));
             })

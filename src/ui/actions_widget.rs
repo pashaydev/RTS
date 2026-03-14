@@ -213,8 +213,28 @@ pub fn update_action_bar(
             }
         }
         UiMode::SelectedUnits(_) => {
-            is_building_grid = false;
-            spawn_units_action_bar(&mut commands, bar_entity, &selected_units, layout_bucket);
+            let founded = base_state.is_founded(&active_player.0);
+            let has_workers = selected_units.iter().any(|(k, ..)| *k == EntityKind::Worker);
+            if !founded && has_workers {
+                is_building_grid = true;
+                let player_res = all_resources.get(&active_player.0);
+                spawn_found_base_panel(
+                    &mut commands,
+                    bar_entity,
+                    &icons,
+                    &registry,
+                    player_res,
+                    layout_bucket,
+                );
+            } else {
+                is_building_grid = false;
+                spawn_units_action_bar(
+                    &mut commands,
+                    bar_entity,
+                    &selected_units,
+                    layout_bucket,
+                );
+            }
         }
         _ => {
             is_building_grid = true;
@@ -1551,7 +1571,7 @@ fn spawn_found_base_panel(
             TextColor(theme::TEXT_SECONDARY),
         ));
         panel.spawn((
-            Text::new("Found your first Base to unlock construction and unit production."),
+            Text::new("Found a Base to unlock construction and unit production."),
             TextFont {
                 font_size: theme::FONT_BODY,
                 ..default()
@@ -1562,7 +1582,7 @@ fn spawn_found_base_panel(
 
     let mut tooltip_lines = vec![
         "Found Base".to_string(),
-        "Establish your first headquarters.".to_string(),
+        "Establish your headquarters.".to_string(),
         format!("Cost: {}", cost_str),
     ];
     if let Some(ref bd) = bp.building {
@@ -1571,7 +1591,7 @@ fn spawn_found_base_panel(
     if !can_afford {
         tooltip_lines.push("Not enough resources!".to_string());
     }
-    tooltip_lines.push("Drag & Drop to choose your settlement site".to_string());
+    tooltip_lines.push("Click to place".to_string());
 
     let btn = commands
         .spawn((
@@ -1796,7 +1816,7 @@ fn spawn_building_grid(
             if !can_afford {
                 tooltip_lines.push("Not enough resources!".to_string());
             }
-            tooltip_lines.push("Drag & Drop to create".to_string());
+            tooltip_lines.push("Click to place".to_string());
 
             let border_color = if can_afford {
                 Color::srgba(0.25, 0.25, 0.30, 0.4)

@@ -610,8 +610,7 @@ fn spawn_dense_grass(
     *has_run = true;
 
     let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(5000));
-    let grass_noise = Fbm::<Perlin>::new((map_seed.0 >> 8) as u32)
-        .set_octaves(3);
+    let grass_noise = Fbm::<Perlin>::new((map_seed.0 >> 8) as u32).set_octaves(3);
     let spacing = 3.0;
     let half = height_map.half_map;
     let spawn_positions = config.spawn_positions(map_seed.0);
@@ -780,7 +779,7 @@ fn worker_ai_system(
             &EntityKind,
             &Faction,
             Option<&MoveTarget>,
-            &TaskQueue,
+            &mut TaskQueue,
         ),
         With<Unit>,
     >,
@@ -816,7 +815,7 @@ fn worker_ai_system(
         kind,
         worker_faction,
         _move_target,
-        task_queue,
+        mut task_queue,
     ) in &mut workers
     {
         if *kind != EntityKind::Worker {
@@ -834,7 +833,10 @@ fn worker_ai_system(
             }
             UnitState::Idle => {
                 // Only auto-decide if source is Auto and queue is empty
-                if *source == TaskSource::Manual || !task_queue.queue.is_empty() {
+                if *source == TaskSource::Manual
+                    || task_queue.current.is_some()
+                    || !task_queue.queue.is_empty()
+                {
                     continue;
                 }
 
@@ -855,13 +857,35 @@ fn worker_ai_system(
                     }
                     continue;
                 }
-                // Scan for nearby resource to auto-gather
-                if let Some(node) = find_nearest_node(&tf.translation, auto_scan_range, &all_nodes)
+                // Check for nearby unfinished buildings first (prioritize construction)
+                let auto_build_range = 20.0;
+                let mut closest_site = None;
+                let mut closest_site_dist = f32::MAX;
+                for (site_entity, site_tf, site_state, site_faction) in &construction_sites {
+                    if *site_state != BuildingState::UnderConstruction
+                        || site_faction != worker_faction
+                    {
+                        continue;
+                    }
+                    let dist = tf.translation.distance(site_tf.translation);
+                    if dist < auto_build_range && dist < closest_site_dist {
+                        closest_site_dist = dist;
+                        closest_site = Some(site_entity);
+                    }
+                }
+                if let Some(site) = closest_site {
+                    *state = UnitState::MovingToBuild(site);
+                } else if let Some(node) =
+                    find_nearest_node(&tf.translation, auto_scan_range, &all_nodes)
                 {
                     *state = UnitState::Gathering(node);
-                } else {
-                    // No nearby resource — check for nearby construction sites (same faction)
-                    let auto_build_range = 10.0;
+                }
+            }
+
+            UnitState::Gathering(node) => {
+                // Interrupt auto-gathering for nearby construction (only if not carrying)
+                if *source == TaskSource::Auto && carrying.amount == 0 {
+                    let auto_build_range = 20.0;
                     let mut closest_site = None;
                     let mut closest_site_dist = f32::MAX;
                     for (site_entity, site_tf, site_state, site_faction) in &construction_sites {
@@ -877,12 +901,12 @@ fn worker_ai_system(
                         }
                     }
                     if let Some(site) = closest_site {
+                        commands.entity(entity).remove::<MoveTarget>();
                         *state = UnitState::MovingToBuild(site);
+                        continue;
                     }
                 }
-            }
 
-            UnitState::Gathering(node) => {
                 let Ok((node_tf, mut node_data)) = nodes.get_mut(node) else {
                     // Node gone
                     commands.entity(entity).remove::<MoveTarget>();
@@ -899,6 +923,7 @@ fn worker_ai_system(
                     *state = new_state;
                     if matches!(*state, UnitState::Idle) {
                         *source = TaskSource::Auto;
+                        task_queue.current = None;
                     }
                     continue;
                 };
@@ -917,6 +942,7 @@ fn worker_ai_system(
                     *state = new_state;
                     if matches!(*state, UnitState::Idle) {
                         *source = TaskSource::Auto;
+                        task_queue.current = None;
                     }
                     continue;
                 }
@@ -954,6 +980,7 @@ fn worker_ai_system(
                             *state = new_state;
                             if matches!(*state, UnitState::Idle) {
                                 *source = TaskSource::Auto;
+                                task_queue.current = None;
                             }
                             continue;
                         }
@@ -989,6 +1016,7 @@ fn worker_ai_system(
                     *state = new_state;
                     if matches!(*state, UnitState::Idle) {
                         *source = TaskSource::Auto;
+                        task_queue.current = None;
                     }
                     continue;
                 }
@@ -1023,6 +1051,7 @@ fn worker_ai_system(
                     *state = new_state;
                     if matches!(*state, UnitState::Idle) {
                         *source = TaskSource::Auto;
+                        task_queue.current = None;
                     }
                 }
             }
@@ -1044,6 +1073,7 @@ fn worker_ai_system(
                     *state = new_state;
                     if matches!(*state, UnitState::Idle) {
                         *source = TaskSource::Auto;
+                        task_queue.current = None;
                     }
                     continue;
                 };
@@ -1154,6 +1184,7 @@ fn worker_ai_system(
                 } else {
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
+                    task_queue.current = None;
                 }
             }
 

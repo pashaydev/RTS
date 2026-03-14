@@ -3,10 +3,10 @@ use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use rand::Rng;
-use std::time::Duration;
 
 use crate::components::*;
 use crate::theme;
+use crate::ui::fonts::{self, UiFonts};
 
 // ── Resources & Components ──
 
@@ -170,6 +170,7 @@ fn spawn_menu(
     page: Res<MenuPage>,
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
+    fonts: Res<UiFonts>,
 ) {
     commands.spawn((
         MenuCamera,
@@ -195,14 +196,12 @@ fn spawn_menu(
         ))
         .id();
 
-    spawn_background_particles(&mut commands, root);
-
     let container = spawn_menu_panel(&mut commands);
     commands.entity(root).add_child(container);
     match *page {
-        MenuPage::Title => spawn_title_page(&mut commands, container),
-        MenuPage::NewGame => spawn_new_game_page(&mut commands, container, &config),
-        MenuPage::Options => spawn_options_page(&mut commands, container, &graphics),
+        MenuPage::Title => spawn_title_page(&mut commands, container, &fonts),
+        MenuPage::NewGame => spawn_new_game_page(&mut commands, container, &config, &fonts),
+        MenuPage::Options => spawn_options_page(&mut commands, container, &graphics, &fonts),
     }
 }
 
@@ -219,55 +218,16 @@ fn cleanup_menu(
     }
 }
 
-// ── Background Particles ──
-
-fn spawn_background_particles(commands: &mut Commands, root: Entity) {
-    let mut rng = rand::rng();
-    for _ in 0..NUM_PARTICLES {
-        let x = rng.random_range(5.0..95.0_f32);
-        let y = rng.random_range(5.0..95.0_f32);
-        let size = rng.random_range(2.0..6.0_f32);
-        let vx = rng.random_range(-8.0..8.0_f32);
-        let vy = rng.random_range(-4.0..4.0_f32);
-        let phase = rng.random_range(0.0..std::f32::consts::TAU);
-        let alpha = rng.random_range(0.15..0.4_f32);
-
-        let particle = commands
-            .spawn((
-                MenuParticle {
-                    velocity: Vec2::new(vx, vy),
-                    base_alpha: alpha,
-                    phase,
-                },
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Percent(x),
-                    top: Val::Percent(y),
-                    width: Val::Px(size),
-                    height: Val::Px(size),
-                    border_radius: BorderRadius::all(Val::Px(size / 2.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.29, 0.62, 1.0, alpha * 0.2)),
-                Pickable::IGNORE,
-            ))
-            .id();
-        commands.entity(root).add_child(particle);
-    }
-}
 
 // ── Title Page ──
 
-fn spawn_title_page(commands: &mut Commands, container: Entity) {
+fn spawn_title_page(commands: &mut Commands, container: Entity, fonts: &UiFonts) {
     // Title with shimmer + scale-in
     let title = commands
         .spawn((
             TitleShimmer { phase_offset: 0.0 },
             Text::new("RTS PROTOTYPE"),
-            TextFont {
-                font_size: theme::FONT_DISPLAY,
-                ..default()
-            },
+            fonts::heading(fonts, theme::FONT_DISPLAY),
             TextColor(Color::WHITE),
             Node {
                 margin: UiRect::bottom(Val::Px(8.0)),
@@ -286,10 +246,7 @@ fn spawn_title_page(commands: &mut Commands, container: Entity) {
     let subtitle = commands
         .spawn((
             Text::new("COMMAND YOUR EMPIRE"),
-            TextFont {
-                font_size: theme::FONT_BODY,
-                ..default()
-            },
+            fonts::body_emphasis(fonts, theme::FONT_BODY),
             TextColor(theme::TEXT_SECONDARY),
             Node {
                 margin: UiRect::bottom(Val::Px(16.0)),
@@ -324,7 +281,7 @@ fn spawn_title_page(commands: &mut Commands, container: Entity) {
         ("OPTIONS", MenuAction::Options),
         ("QUIT", MenuAction::Quit),
     ] {
-        let btn = spawn_menu_button(commands, label, action, false);
+        let btn = spawn_menu_button(commands, label, action, false, fonts);
         commands.entity(container).add_child(btn);
     }
 
@@ -332,10 +289,7 @@ fn spawn_title_page(commands: &mut Commands, container: Entity) {
     let ver = commands
         .spawn((
             Text::new("v0.1"),
-            TextFont {
-                font_size: theme::FONT_BODY,
-                ..default()
-            },
+            fonts::body(fonts, theme::FONT_BODY),
             TextColor(theme::TEXT_SECONDARY),
             Node {
                 margin: UiRect::top(Val::Px(40.0)),
@@ -348,10 +302,15 @@ fn spawn_title_page(commands: &mut Commands, container: Entity) {
 
 // ── New Game Page ──
 
-fn spawn_new_game_page(commands: &mut Commands, container: Entity, config: &GameSetupConfig) {
-    spawn_page_header(commands, container, "NEW GAME");
+fn spawn_new_game_page(
+    commands: &mut Commands,
+    container: Entity,
+    config: &GameSetupConfig,
+    fonts: &UiFonts,
+) {
+    spawn_page_header(commands, container, "NEW GAME", fonts);
 
-    spawn_animated_section_divider(commands, container, "PLAYER");
+    spawn_animated_section_divider(commands, container, "PLAYER", fonts);
 
     let name_row = spawn_name_input_row(commands, &config.player_name);
     commands.entity(container).add_child(name_row);
@@ -359,7 +318,7 @@ fn spawn_new_game_page(commands: &mut Commands, container: Entity, config: &Game
     let color_row = spawn_color_picker(commands, config.player_color_index);
     commands.entity(container).add_child(color_row);
 
-    spawn_animated_section_divider(commands, container, "OPPONENTS");
+    spawn_animated_section_divider(commands, container, "OPPONENTS", fonts);
 
     spawn_selector_row(
         commands,
@@ -389,7 +348,7 @@ fn spawn_new_game_page(commands: &mut Commands, container: Entity, config: &Game
         SelectorField::TeamMode,
     );
 
-    spawn_animated_section_divider(commands, container, "WORLD");
+    spawn_animated_section_divider(commands, container, "WORLD", fonts);
 
     let map_idx = match config.map_size {
         MapSize::Small => 0,
@@ -496,7 +455,7 @@ fn spawn_new_game_page(commands: &mut Commands, container: Entity, config: &Game
                     Node {
                         padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
                         margin: UiRect::horizontal(Val::Px(2.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        // border_radius: BorderRadius::all(Val::Px(4.0)),
                         ..default()
                     },
                     BackgroundColor(theme::BTN_PRIMARY),
@@ -537,7 +496,7 @@ fn spawn_new_game_page(commands: &mut Commands, container: Entity, config: &Game
                     bottom: Val::Px(4.0),
                     ..default()
                 },
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+                // border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
             BackgroundColor(theme::ACCENT),
@@ -552,10 +511,7 @@ fn spawn_new_game_page(commands: &mut Commands, container: Entity, config: &Game
         .with_children(|parent| {
             parent.spawn((
                 Text::new("START GAME"),
-                TextFont {
-                    font_size: theme::FONT_BUTTON,
-                    ..default()
-                },
+                fonts::heading(fonts, theme::FONT_BUTTON),
                 TextColor(Color::WHITE),
                 Pickable::IGNORE,
             ));
@@ -566,10 +522,15 @@ fn spawn_new_game_page(commands: &mut Commands, container: Entity, config: &Game
 
 // ── Options Page ──
 
-fn spawn_options_page(commands: &mut Commands, container: Entity, graphics: &GraphicsSettings) {
-    spawn_page_header(commands, container, "OPTIONS");
+fn spawn_options_page(
+    commands: &mut Commands,
+    container: Entity,
+    graphics: &GraphicsSettings,
+    fonts: &UiFonts,
+) {
+    spawn_page_header(commands, container, "OPTIONS", fonts);
 
-    spawn_animated_section_divider(commands, container, "GRAPHICS");
+    spawn_animated_section_divider(commands, container, "GRAPHICS", fonts);
 
     let res_idx = RESOLUTION_OPTIONS
         .iter()
@@ -632,7 +593,7 @@ fn spawn_options_page(commands: &mut Commands, container: Entity, graphics: &Gra
         SelectorField::UiScale,
     );
 
-    let apply_btn = spawn_menu_button(commands, "APPLY", MenuAction::ApplySettings, true);
+    let apply_btn = spawn_menu_button(commands, "APPLY", MenuAction::ApplySettings, true, fonts);
     commands.entity(container).add_child(apply_btn);
 }
 
@@ -653,7 +614,7 @@ fn spawn_menu_panel(commands: &mut Commands) -> Entity {
                 padding: UiRect::all(Val::Px(24.0)),
                 overflow: Overflow::scroll_y(),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(12.0)),
+                // border_radius: BorderRadius::all(Val::Px(12.0)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.07, 0.07, 0.07, 0.0)),
@@ -682,6 +643,7 @@ fn spawn_menu_button(
     label: &str,
     action: MenuAction,
     accent: bool,
+    fonts: &UiFonts,
 ) -> Entity {
     let bg = if accent {
         theme::ACCENT
@@ -700,7 +662,7 @@ fn spawn_menu_button(
             justify_content: JustifyContent::Center,
             align_items: AlignItems::Center,
             margin: UiRect::vertical(Val::Px(4.0)),
-            border_radius: BorderRadius::all(Val::Px(6.0)),
+            // border_radius: BorderRadius::all(Val::Px(6.0)),
             border: UiRect::all(Val::Px(1.0)),
             ..default()
         },
@@ -725,10 +687,7 @@ fn spawn_menu_button(
     entity_commands.with_children(|parent| {
         parent.spawn((
             Text::new(label),
-            TextFont {
-                font_size: theme::FONT_BUTTON,
-                ..default()
-            },
+            fonts::heading(fonts, theme::FONT_BUTTON),
             TextColor(Color::WHITE),
             Pickable::IGNORE,
         ));
@@ -736,7 +695,7 @@ fn spawn_menu_button(
     entity_commands.id()
 }
 
-fn spawn_page_header(commands: &mut Commands, container: Entity, title: &str) {
+fn spawn_page_header(commands: &mut Commands, container: Entity, title: &str, fonts: &UiFonts) {
     let row = commands
         .spawn(Node {
             width: Val::Percent(100.0),
@@ -754,7 +713,7 @@ fn spawn_page_header(commands: &mut Commands, container: Entity, title: &str) {
                     ButtonStyle::Ghost,
                     Node {
                         padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        // border_radius: BorderRadius::all(Val::Px(4.0)),
                         ..default()
                     },
                     BackgroundColor(Color::NONE),
@@ -762,10 +721,7 @@ fn spawn_page_header(commands: &mut Commands, container: Entity, title: &str) {
                 .with_children(|btn| {
                     btn.spawn((
                         Text::new("<< BACK"),
-                        TextFont {
-                            font_size: theme::FONT_MEDIUM,
-                            ..default()
-                        },
+                        fonts::body_emphasis(fonts, theme::FONT_MEDIUM),
                         TextColor(theme::TEXT_SECONDARY),
                         Pickable::IGNORE,
                     ));
@@ -773,10 +729,7 @@ fn spawn_page_header(commands: &mut Commands, container: Entity, title: &str) {
 
             parent.spawn((
                 Text::new(title),
-                TextFont {
-                    font_size: theme::FONT_HEADING,
-                    ..default()
-                },
+                fonts::heading(fonts, theme::FONT_HEADING),
                 TextColor(Color::WHITE),
             ));
         })
@@ -785,7 +738,12 @@ fn spawn_page_header(commands: &mut Commands, container: Entity, title: &str) {
 }
 
 /// Section divider with expanding line animation.
-fn spawn_animated_section_divider(commands: &mut Commands, container: Entity, label: &str) {
+fn spawn_animated_section_divider(
+    commands: &mut Commands,
+    container: Entity,
+    label: &str,
+    fonts: &UiFonts,
+) {
     let row = commands
         .spawn(Node {
             width: Val::Percent(100.0),
@@ -811,10 +769,7 @@ fn spawn_animated_section_divider(commands: &mut Commands, container: Entity, la
 
             parent.spawn((
                 Text::new(label),
-                TextFont {
-                    font_size: theme::FONT_SMALL,
-                    ..default()
-                },
+                fonts::heading(fonts, theme::FONT_SMALL),
                 TextColor(theme::TEXT_SECONDARY),
                 Node {
                     margin: UiRect::horizontal(Val::Px(4.0)),
@@ -892,7 +847,7 @@ fn spawn_selector_row(
                     Node {
                         padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
                         margin: UiRect::horizontal(Val::Px(2.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        // border_radius: BorderRadius::all(Val::Px(4.0)),
                         border: UiRect::all(Val::Px(1.0)),
                         ..default()
                     },
@@ -961,7 +916,7 @@ fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Entity {
                         height: Val::Px(32.0),
                         padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
                         border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        // border_radius: BorderRadius::all(Val::Px(4.0)),
                         align_items: AlignItems::Center,
                         overflow: Overflow::clip(),
                         ..default()
@@ -1000,7 +955,7 @@ fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Entity {
                     Node {
                         padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
                         margin: UiRect::left(Val::Px(6.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        // border_radius: BorderRadius::all(Val::Px(4.0)),
                         ..default()
                     },
                     BackgroundColor(Color::NONE),
@@ -1072,7 +1027,7 @@ fn spawn_color_picker(commands: &mut Commands, selected: usize) -> Entity {
                         width: Val::Px(size),
                         height: Val::Px(size),
                         margin: UiRect::horizontal(Val::Px(5.0)),
-                        border_radius: BorderRadius::all(Val::Px(size / 4.0)),
+                        // border_radius: BorderRadius::all(Val::Px(size / 4.0)),
                         border: UiRect::all(Val::Px(border_width)),
                         ..default()
                     },
@@ -1137,7 +1092,7 @@ fn spawn_ai_card(
                 padding: UiRect::all(Val::Px(10.0)),
                 margin: UiRect::vertical(Val::Px(4.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+                // border_radius: BorderRadius::all(Val::Px(6.0)),
                 display,
                 row_gap: Val::Px(8.0),
                 ..default()
@@ -1205,7 +1160,7 @@ fn spawn_ai_card(
                     ButtonStyle::Filled,
                     Node {
                         padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        // border_radius: BorderRadius::all(Val::Px(4.0)),
                         ..default()
                     },
                     BackgroundColor(toggle_bg),
@@ -1270,7 +1225,7 @@ fn spawn_ai_card(
                         Node {
                             padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
                             margin: UiRect::horizontal(Val::Px(2.0)),
-                            border_radius: BorderRadius::all(Val::Px(4.0)),
+                            // border_radius: BorderRadius::all(Val::Px(4.0)),
                             border: UiRect::all(Val::Px(1.0)),
                             ..default()
                         },
@@ -1368,6 +1323,7 @@ fn page_transition_system(
     page: Res<MenuPage>,
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
+    fonts: Res<UiFonts>,
 ) {
     if roots.iter().next().is_none() {
         let root = commands
@@ -1385,15 +1341,13 @@ fn page_transition_system(
             ))
             .id();
 
-        spawn_background_particles(&mut commands, root);
-
         let container = spawn_menu_panel(&mut commands);
         commands.entity(root).add_child(container);
 
         match *page {
-            MenuPage::Title => spawn_title_page(&mut commands, container),
-            MenuPage::NewGame => spawn_new_game_page(&mut commands, container, &config),
-            MenuPage::Options => spawn_options_page(&mut commands, container, &graphics),
+            MenuPage::Title => spawn_title_page(&mut commands, container, &fonts),
+            MenuPage::NewGame => spawn_new_game_page(&mut commands, container, &config, &fonts),
+            MenuPage::Options => spawn_options_page(&mut commands, container, &graphics, &fonts),
         }
     }
 }

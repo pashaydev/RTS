@@ -2469,9 +2469,12 @@ fn sync_ai_debug_tweaks(
     for (label, faction) in &state_factions {
         if let Some(config) = ai_settings.settings.get(faction) {
             let status = format!(
-                "{} {} | Atk:{} Def:{}",
+                "{} {} | Str:{:.1} W:{} M:{} Atk:{} Def:{}",
                 config.phase_name,
                 config.posture_name,
+                config.relative_strength,
+                config.worker_count,
+                config.military_count,
                 config.attack_squad_size,
                 config.defense_squad_size
             );

@@ -596,71 +596,71 @@ fn load_game(
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-    let json = match std::fs::read_to_string(SAVE_PATH) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("Could not read save file: {e}");
-            status.message = format!("Load failed: {e}");
-            status.timer = 5.0;
-            return;
+        let json = match std::fs::read_to_string(SAVE_PATH) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Could not read save file: {e}");
+                status.message = format!("Load failed: {e}");
+                status.timer = 5.0;
+                return;
+            }
+        };
+
+        let save: SaveFile = match serde_json::from_str(&json) {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("Could not parse save file: {e}");
+                status.message = format!("Parse failed: {e}");
+                status.timer = 5.0;
+                return;
+            }
+        };
+
+        // 1. Despawn all existing game entities (units, buildings, mobs)
+        let despawned = existing_entities.iter().count();
+        for entity in &existing_entities {
+            commands.entity(entity).despawn();
         }
-    };
 
-    let save: SaveFile = match serde_json::from_str(&json) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("Could not parse save file: {e}");
-            status.message = format!("Parse failed: {e}");
-            status.timer = 5.0;
-            return;
+        // 2. Restore global resources
+        *player_resources = (&save.player_resources).into();
+        id_counter.0 = save.id_counter;
+        if save.fog_explored.len() == fog.explored.len() {
+            fog.explored.copy_from_slice(&save.fog_explored);
         }
-    };
 
-    // 1. Despawn all existing game entities (units, buildings, mobs)
-    let despawned = existing_entities.iter().count();
-    for entity in &existing_entities {
-        commands.entity(entity).despawn();
-    }
+        // 3. Spawn all entities via blueprint
+        let mut gid_map: HashMap<u64, Entity> = HashMap::new();
+        let mut entity_overrides: Vec<(u64, SavedEntity)> = Vec::new();
 
-    // 2. Restore global resources
-    *player_resources = (&save.player_resources).into();
-    id_counter.0 = save.id_counter;
-    if save.fog_explored.len() == fog.explored.len() {
-        fog.explored.copy_from_slice(&save.fog_explored);
-    }
+        let entity_count = save.entities.len();
+        for saved in save.entities {
+            let pos = Vec3::new(saved.position[0], 0.0, saved.position[2]);
+            let entity = spawn_from_blueprint(
+                &mut commands,
+                &cache,
+                saved.kind,
+                pos,
+                &registry,
+                building_models.as_deref(),
+                unit_models.as_deref(),
+                &height_map,
+            );
+            let game_id = GameId(saved.id);
+            commands.entity(entity).insert(game_id);
+            gid_map.insert(saved.id, entity);
+            entity_overrides.push((saved.id, saved));
+        }
 
-    // 3. Spawn all entities via blueprint
-    let mut gid_map: HashMap<u64, Entity> = HashMap::new();
-    let mut entity_overrides: Vec<(u64, SavedEntity)> = Vec::new();
+        // Store overrides and resource nodes for next frame
+        pending.entity_overrides = entity_overrides;
+        pending.gid_map = gid_map;
+        pending.resource_nodes = save.resource_nodes;
+        pending.explosive_props = save.explosive_props;
 
-    let entity_count = save.entities.len();
-    for saved in save.entities {
-        let pos = Vec3::new(saved.position[0], 0.0, saved.position[2]);
-        let entity = spawn_from_blueprint(
-            &mut commands,
-            &cache,
-            saved.kind,
-            pos,
-            &registry,
-            building_models.as_deref(),
-            unit_models.as_deref(),
-            &height_map,
-        );
-        let game_id = GameId(saved.id);
-        commands.entity(entity).insert(game_id);
-        gid_map.insert(saved.id, entity);
-        entity_overrides.push((saved.id, saved));
-    }
-
-    // Store overrides and resource nodes for next frame
-    pending.entity_overrides = entity_overrides;
-    pending.gid_map = gid_map;
-    pending.resource_nodes = save.resource_nodes;
-    pending.explosive_props = save.explosive_props;
-
-    info!("Load: despawned {despawned}, spawning {entity_count} entities. Overrides pending.");
-    status.message = format!("Loaded! ({entity_count} entities)");
-    status.timer = 3.0;
+        info!("Load: despawned {despawned}, spawning {entity_count} entities. Overrides pending.");
+        status.message = format!("Loaded! ({entity_count} entities)");
+        status.timer = 3.0;
     } // #[cfg(not(target_arch = "wasm32"))]
 }
 

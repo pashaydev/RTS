@@ -80,9 +80,9 @@ pub const FONT_LARGE: f32 = 15.0; // Popups, unit names
 pub const FONT_MEDIUM: f32 = 13.0; // Selector labels, resource counts
 pub const FONT_BODY: f32 = 12.0; // Standard text, tooltips
 pub const FONT_SMALL: f32 = 10.0; // Widget titles, costs
-pub const FONT_CAPTION: f32 = 9.0; // Toolbar, queue labels
+pub const FONT_CAPTION: f32 = 10.0; // Toolbar, queue labels
 pub const FONT_TINY: f32 = 8.0; // Close buttons, badges
-pub const FONT_MICRO: f32 = 7.0; // Event log timestamps
+pub const FONT_MICRO: f32 = 8.0; // Event log timestamps
 
 // ── Grid overlay ──
 pub const GRID_LINE: Color = Color::srgba(0.29, 0.62, 1.0, 0.15);

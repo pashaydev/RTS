@@ -2,7 +2,9 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use crate::blueprints::EntityKind;
-use crate::components::{AnimState, AttentionIconAssets, GrassGltfHandle, GrassInstanceAssets, IconAssets, ModelAssets};
+use crate::components::{
+    AnimState, AttentionIconAssets, GrassGltfHandle, GrassInstanceAssets, IconAssets, ModelAssets,
+};
 
 pub struct ModelAssetsPlugin;
 
@@ -64,8 +66,8 @@ impl Plugin for ModelAssetsPlugin {
         app.insert_resource(unit_models);
 
         // Load grass GLTF for dense instanced grass
-        let grass_gltf: Handle<bevy::gltf::Gltf> = asset_server
-            .load(format!("{BASE_PATH}/Grass_2_D_Color1.gltf"));
+        let grass_gltf: Handle<bevy::gltf::Gltf> =
+            asset_server.load(format!("{BASE_PATH}/Grass_2_D_Color1.gltf"));
         app.insert_resource(GrassGltfHandle(grass_gltf));
 
         app.add_systems(Startup, (load_model_assets, load_animation_assets))

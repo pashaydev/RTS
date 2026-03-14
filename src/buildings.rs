@@ -13,6 +13,63 @@ use crate::ground::HeightMap;
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
 
+/// Spawn a line of wall posts and segments between the given points.
+/// Returns all spawned entities (posts + segments).
+pub fn spawn_wall_line(
+    commands: &mut Commands,
+    cache: &EntityVisualCache,
+    registry: &BlueprintRegistry,
+    building_models: Option<&BuildingModelAssets>,
+    height_map: &HeightMap,
+    faction: Faction,
+    points: &[Vec3],
+) -> Vec<Entity> {
+    let mut spawned_entities = Vec::new();
+    for point in points {
+        let entity = spawn_from_blueprint_with_faction(
+            commands,
+            cache,
+            EntityKind::WallPost,
+            *point,
+            registry,
+            building_models,
+            None,
+            height_map,
+            faction,
+        );
+        commands.entity(entity).insert(WallPostPiece);
+        spawned_entities.push(entity);
+    }
+
+    for window in points.windows(2) {
+        let a = window[0];
+        let b = window[1];
+        let mid = (a + b) * 0.5;
+        let seg_len = a.distance(b).max(0.8);
+        let angle = (b.z - a.z).atan2(b.x - a.x);
+        let entity = spawn_from_blueprint_with_faction(
+            commands,
+            cache,
+            EntityKind::WallSegment,
+            mid,
+            registry,
+            building_models,
+            None,
+            height_map,
+            faction,
+        );
+        commands.entity(entity).insert((
+            WallSegmentPiece,
+            Transform::from_translation(Vec3::new(mid.x, height_map.sample(mid.x, mid.z), mid.z))
+                .with_rotation(Quat::from_rotation_y(-angle))
+                .with_scale(Vec3::new(seg_len.max(1.0), 1.0, 1.0)),
+        ));
+        spawned_entities.push(entity);
+    }
+
+    spawned_entities
+}
+
 pub fn footprint_for_kind(kind: EntityKind) -> f32 {
     match kind {
         EntityKind::Base | EntityKind::Storage => 7.0,
@@ -137,6 +194,12 @@ fn cursor_ground_pos(
     };
     let dist = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))?;
     Some(ray.get_point(dist))
+}
+
+fn is_pointer_over_ui(ui_interactions: &Query<&Interaction, With<Node>>) -> bool {
+    ui_interactions
+        .iter()
+        .any(|interaction| matches!(*interaction, Interaction::Hovered | Interaction::Pressed))
 }
 
 const WALL_SEGMENT_LENGTH: f32 = 3.0;
@@ -619,6 +682,7 @@ fn confirm_placement(
     extras: (Res<AllCompletedBuildings>, Option<Res<BiomeMap>>),
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    ui_interactions: Query<&Interaction, With<Node>>,
     existing_buildings: Query<
         (&Transform, &BuildingFootprint),
         (With<Building>, Without<GhostBuilding>),
@@ -637,31 +701,15 @@ fn confirm_placement(
     if placement.awaiting_release {
         if mouse.just_released(MouseButton::Left) {
             placement.awaiting_release = false;
-
-            if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) {
-                let bad_biome = biome_map.as_ref().map_or(false, |bm| {
-                    !is_biome_valid_for(kind, bm.get_biome(world_pos.x, world_pos.z))
-                });
-                let too_close = existing_buildings.iter().any(|(building_tf, existing_fp)| {
-                    let check_pos = Vec3::new(world_pos.x, building_tf.translation.y, world_pos.z);
-                    building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
-                });
-                let half_map = 250.0;
-                let out_of_bounds =
-                    world_pos.x.abs() > half_map - 5.0 || world_pos.z.abs() > half_map - 5.0;
-
-                if !bad_biome && !too_close && !out_of_bounds {
-                    // Valid drag-and-drop
-                } else {
-                    return;
-                }
-            } else {
-                return;
-            }
+            return;
         } else {
             return;
         }
     } else if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    if is_pointer_over_ui(&ui_interactions) {
         return;
     }
 
@@ -802,6 +850,7 @@ fn confirm_wall_plot(
     active_player: Res<ActivePlayer>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    ui_interactions: Query<&Interaction, With<Node>>,
     height_map: Res<HeightMap>,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
@@ -812,130 +861,99 @@ fn confirm_wall_plot(
         return;
     }
 
-    if mouse.just_pressed(MouseButton::Left) {
-        if let PlacementMode::PlotWall { start } = placement.mode {
-            if start == Vec3::ZERO {
-                if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) {
-                    let first = Vec3::new(world_pos.x, 0.0, world_pos.z);
-                    wall_preview.start = Some(first);
-                    placement.mode = PlacementMode::PlotWall { start: first };
-                    placement.hint_text =
-                        Some("Move cursor and click again to confirm wall".to_string());
-                }
-                return;
-            }
-        }
-
-        if wall_preview.snapped_points.len() < 2 || !wall_preview.valid {
-            return;
-        }
-
-        let faction = active_player.0;
-        let player_res = all_resources.get(&faction);
-        if !wall_preview.total_cost.can_afford(player_res) {
-            placement.hint_text = Some("Not enough resources for wall".to_string());
-            return;
-        }
-        wall_preview
-            .total_cost
-            .deduct(all_resources.get_mut(&faction));
-
-        let mut spawned_entities = Vec::new();
-        for point in &wall_preview.snapped_points {
-            let entity = spawn_from_blueprint_with_faction(
-                &mut commands,
-                &cache,
-                EntityKind::WallPost,
-                *point,
-                &registry,
-                building_models.as_deref(),
-                None,
-                &height_map,
-                faction,
-            );
-            commands.entity(entity).insert(WallPostPiece);
-            spawned_entities.push(entity);
-        }
-
-        for window in wall_preview.snapped_points.windows(2) {
-            let a = window[0];
-            let b = window[1];
-            let mid = (a + b) * 0.5;
-            let seg_len = a.distance(b).max(0.8);
-            let angle = (b.z - a.z).atan2(b.x - a.x);
-            let entity = spawn_from_blueprint_with_faction(
-                &mut commands,
-                &cache,
-                EntityKind::WallSegment,
-                mid,
-                &registry,
-                building_models.as_deref(),
-                None,
-                &height_map,
-                faction,
-            );
-            commands.entity(entity).insert((
-                WallSegmentPiece,
-                Transform::from_translation(Vec3::new(
-                    mid.x,
-                    height_map.sample(mid.x, mid.z),
-                    mid.z,
-                ))
-                .with_rotation(Quat::from_rotation_y(-angle))
-                .with_scale(Vec3::new(seg_len.max(1.0), 1.0, 1.0)),
-            ));
-            spawned_entities.push(entity);
-        }
-
-        if let Some(worker_entity) = workers
-            .iter()
-            .filter(|(_, _, state, worker_faction, kind)| {
-                **kind == EntityKind::Worker
-                    && **worker_faction == faction
-                    && matches!(
-                        state,
-                        UnitState::Idle
-                            | UnitState::Gathering(_)
-                            | UnitState::ReturningToDeposit { .. }
-                            | UnitState::Depositing { .. }
-                            | UnitState::WaitingForStorage { .. }
-                            | UnitState::Moving(_)
-                    )
-            })
-            .min_by(|(_, a_tf, _, _, _), (_, b_tf, _, _, _)| {
-                let a_dist = a_tf.translation.distance(wall_preview.snapped_points[0]);
-                let b_dist = b_tf.translation.distance(wall_preview.snapped_points[0]);
-                a_dist
-                    .partial_cmp(&b_dist)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(worker, _, _, _, _)| worker)
-        {
-            let target_building = spawned_entities[0];
-            commands
-                .entity(worker_entity)
-                .remove::<AttackTarget>()
-                .remove::<MoveTarget>()
-                .insert(UnitState::MovingToBuild(target_building))
-                .insert(TaskSource::Manual);
-            commands
-                .entity(target_building)
-                .entry::<AssignedWorkers>()
-                .and_modify(move |mut aw| {
-                    if !aw.workers.contains(&worker_entity) {
-                        aw.workers.push(worker_entity);
-                    }
-                })
-                .or_insert(AssignedWorkers {
-                    workers: vec![worker_entity],
-                });
-        }
-
-        clear_wall_preview(&mut commands, &mut wall_preview);
-        placement.mode = PlacementMode::None;
-        placement.preview_entity = None;
-        placement.hint_text = None;
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
     }
+
+    if is_pointer_over_ui(&ui_interactions) {
+        return;
+    }
+
+    if let PlacementMode::PlotWall { start } = placement.mode {
+        if start == Vec3::ZERO {
+            if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) {
+                let first = Vec3::new(world_pos.x, 0.0, world_pos.z);
+                wall_preview.start = Some(first);
+                placement.mode = PlacementMode::PlotWall { start: first };
+                placement.hint_text =
+                    Some("Move cursor and click again to confirm wall".to_string());
+            }
+            return;
+        }
+    }
+
+    if wall_preview.snapped_points.len() < 2 || !wall_preview.valid {
+        return;
+    }
+
+    let faction = active_player.0;
+    let player_res = all_resources.get(&faction);
+    if !wall_preview.total_cost.can_afford(player_res) {
+        placement.hint_text = Some("Not enough resources for wall".to_string());
+        return;
+    }
+    wall_preview
+        .total_cost
+        .deduct(all_resources.get_mut(&faction));
+
+    let spawned_entities = spawn_wall_line(
+        &mut commands,
+        &cache,
+        &registry,
+        building_models.as_deref(),
+        &height_map,
+        faction,
+        &wall_preview.snapped_points,
+    );
+
+    if let Some(worker_entity) = workers
+        .iter()
+        .filter(|(_, _, state, worker_faction, kind)| {
+            **kind == EntityKind::Worker
+                && **worker_faction == faction
+                && matches!(
+                    state,
+                    UnitState::Idle
+                        | UnitState::Gathering(_)
+                        | UnitState::ReturningToDeposit { .. }
+                        | UnitState::Depositing { .. }
+                        | UnitState::WaitingForStorage { .. }
+                        | UnitState::Moving(_)
+                )
+        })
+        .min_by(|(_, a_tf, _, _, _), (_, b_tf, _, _, _)| {
+            let a_dist = a_tf.translation.distance(wall_preview.snapped_points[0]);
+            let b_dist = b_tf.translation.distance(wall_preview.snapped_points[0]);
+            a_dist
+                .partial_cmp(&b_dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(worker, _, _, _, _)| worker)
+    {
+        let target_building = spawned_entities[0];
+        commands
+            .entity(worker_entity)
+            .remove::<AttackTarget>()
+            .remove::<MoveTarget>()
+            .insert(UnitState::MovingToBuild(target_building))
+            .insert(TaskSource::Manual);
+        commands
+            .entity(target_building)
+            .entry::<AssignedWorkers>()
+            .and_modify(move |mut aw| {
+                if !aw.workers.contains(&worker_entity) {
+                    aw.workers.push(worker_entity);
+                }
+            })
+            .or_insert(AssignedWorkers {
+                workers: vec![worker_entity],
+            });
+    }
+
+    clear_wall_preview(&mut commands, &mut wall_preview);
+    placement.mode = PlacementMode::None;
+    placement.preview_entity = None;
+    placement.hint_text = None;
 }
 
 fn confirm_gate_plot(
@@ -946,6 +964,7 @@ fn confirm_gate_plot(
     active_player: Res<ActivePlayer>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    ui_interactions: Query<&Interaction, With<Node>>,
     height_map: Res<HeightMap>,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
@@ -954,6 +973,10 @@ fn confirm_gate_plot(
     workers: Query<(Entity, &Transform, &UnitState, &Faction, &EntityKind), With<Unit>>,
 ) {
     if placement.mode != PlacementMode::PlotGate || !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    if is_pointer_over_ui(&ui_interactions) {
         return;
     }
 

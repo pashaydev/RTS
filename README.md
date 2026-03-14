@@ -44,6 +44,8 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 
 ```sh
 cargo run
+# wasm
+trunk serve --config .trunk.toml
 ```
 
 Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framerate.
@@ -93,11 +95,12 @@ Dev profile has dependency optimizations (`opt-level = 2`) for acceptable framer
 
 | Input | Action |
 |---|---|
-| Click building button | Enter placement mode |
+| Click building button | Enter placement preview mode |
 | Click `Found Base` | Enter first-base founding mode |
 | Click `Wall` | Enter wall plotting mode |
 | Click `Gatehouse` | Enter gate conversion mode |
-| Left click (placing) | Confirm building placement |
+| Left click ground (placing) | Confirm building placement |
+| Release after clicking a UI build button | Does not place; wait for next world click |
 | Left click (wall) | Set wall start / confirm wall end |
 | Right click / Escape | Cancel building placement |
 | Hover wall segment + left click | Replace with Gatehouse |

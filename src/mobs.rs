@@ -373,6 +373,17 @@ fn mob_aggro(
 
         if let Some(target) = closest_target {
             commands.entity(mob_entity).insert(AttackTarget(target));
+
+            // Pack aggro: alert nearby mobs to chase the same target
+            let mob_pos = mob_tf.translation;
+            for (other_entity, other_tf, _) in &mobs {
+                if other_entity == mob_entity {
+                    continue;
+                }
+                if mob_pos.distance(other_tf.translation) < 15.0 {
+                    commands.entity(other_entity).insert(AttackTarget(target));
+                }
+            }
         }
     }
 }
@@ -442,7 +453,9 @@ fn mob_chase(
                 }
 
                 if let Some((wall_entity, _)) = blocking_wall {
-                    commands.entity(mob_entity).insert(AttackTarget(wall_entity));
+                    commands
+                        .entity(mob_entity)
+                        .insert(AttackTarget(wall_entity));
                     continue;
                 }
             }

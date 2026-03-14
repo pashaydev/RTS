@@ -492,6 +492,13 @@ pub enum QueuedTask {
     Build(Entity),
     Patrol(Vec3),
     AssignToProcessor(Entity),
+    HoldPosition,
+}
+
+#[derive(Clone, Debug)]
+pub struct TaskEntry {
+    pub id: u64,
+    pub task: QueuedTask,
 }
 
 /// Attached to a worker who is walking to a location to plot a new building.
@@ -506,8 +513,28 @@ pub struct PendingBuildOrder {
 /// Task queue for shift+click command queuing.
 #[derive(Component, Default)]
 pub struct TaskQueue {
-    pub queue: VecDeque<QueuedTask>,
+    pub current: Option<TaskEntry>,
+    pub queue: VecDeque<TaskEntry>,
 }
+
+impl TaskQueue {
+    pub fn clear(&mut self) {
+        self.current = None;
+        self.queue.clear();
+    }
+
+    pub fn clear_queued(&mut self) {
+        self.queue.clear();
+    }
+
+    pub fn remove_by_id(&mut self, id: u64) -> Option<TaskEntry> {
+        let idx = self.queue.iter().position(|entry| entry.id == id)?;
+        self.queue.remove(idx)
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct NextTaskId(pub u64);
 
 /// Tracks which workers are assigned inside a building (for UI display).
 #[derive(Component, Default)]
@@ -818,7 +845,7 @@ impl PlayerResources {
     pub fn subtract(&mut self, wood: u32, copper: u32, iron: u32, gold: u32, oil: u32) {
         let costs = [wood, copper, iron, gold, oil];
         for (amount, cost) in self.amounts.iter_mut().zip(costs.iter()) {
-            *amount -= cost;
+            *amount = amount.saturating_sub(*cost);
         }
     }
 }
@@ -1259,6 +1286,9 @@ pub struct AiFactionConfig {
     pub posture_name: String,
     pub attack_squad_size: usize,
     pub defense_squad_size: usize,
+    pub relative_strength: f32,
+    pub worker_count: u8,
+    pub military_count: u8,
 }
 
 impl Default for AiFactionConfig {
@@ -1267,10 +1297,13 @@ impl Default for AiFactionConfig {
             difficulty: AiDifficulty::Medium,
             personality: AiPersonality::Balanced,
             relation: AiRelation::Enemy,
-            phase_name: "EarlyGame".to_string(),
+            phase_name: "Founding".to_string(),
             posture_name: "Normal".to_string(),
             attack_squad_size: 0,
             defense_squad_size: 0,
+            relative_strength: 0.0,
+            worker_count: 0,
+            military_count: 0,
         }
     }
 }
@@ -1895,6 +1928,19 @@ pub struct ToggleAutoAttackButton;
 
 #[derive(Component)]
 pub struct CancelTrainButton(pub usize);
+
+#[derive(Component)]
+pub struct CancelTrainQueueItemButton {
+    pub building: Entity,
+    pub index: usize,
+}
+
+#[derive(Component)]
+pub struct CancelUnitTaskButton {
+    pub unit: Entity,
+    pub task_id: Option<u64>,
+    pub is_current: bool,
+}
 
 #[derive(Component)]
 pub struct AttackMoveButton;

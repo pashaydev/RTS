@@ -16,8 +16,10 @@ mod menu;
 mod minimap;
 mod mobs;
 mod model_assets;
+mod orders;
 mod pathvis;
 mod resources;
+mod roads;
 mod save;
 mod selection;
 mod theme;
@@ -83,6 +85,7 @@ fn main() {
             combat::CombatPlugin,
             fog::FogPlugin,
         ))
+        .add_plugins(roads::RoadPlugin)
         .add_plugins(save::SavePlugin)
         .add_plugins(animation::AnimationPlugin)
         .add_plugins(minimap::MinimapPlugin)

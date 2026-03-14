@@ -261,17 +261,19 @@ fn move_units(
             let step = flat_dir.normalize() * unit_speed.0 * speed_mult * time.delta_secs();
             let candidate = transform.translation + step;
             let ignore_wall = attack_target.and_then(|at| Some(at.0));
-            let blocked = walls.iter().any(|(wall_entity, wall_tf, wall_fp, wall_faction)| {
-                if Some(wall_entity) == ignore_wall {
-                    return false;
-                }
-                if !teams.is_hostile(faction, wall_faction) {
-                    return false;
-                }
-                let a = Vec2::new(candidate.x, candidate.z);
-                let b = Vec2::new(wall_tf.translation.x, wall_tf.translation.z);
-                a.distance(b) < wall_fp.0 + 0.6
-            });
+            let blocked = walls
+                .iter()
+                .any(|(wall_entity, wall_tf, wall_fp, wall_faction)| {
+                    if Some(wall_entity) == ignore_wall {
+                        return false;
+                    }
+                    if !teams.is_hostile(faction, wall_faction) {
+                        return false;
+                    }
+                    let a = Vec2::new(candidate.x, candidate.z);
+                    let b = Vec2::new(wall_tf.translation.x, wall_tf.translation.z);
+                    a.distance(b) < wall_fp.0 + 0.6
+                });
             if !blocked {
                 transform.translation = candidate;
             }

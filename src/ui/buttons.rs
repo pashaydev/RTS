@@ -43,7 +43,9 @@ pub fn handle_build_buttons(
 
                 placement.mode = PlacementMode::PlotBase;
                 placement.awaiting_release = true;
-                placement.hint_text = Some("Plot your first Base".to_string());
+                placement.hint_text = Some(
+                    "Left-click ground to place Base (Right-click/Escape to cancel)".to_string(),
+                );
                 continue;
             }
 
@@ -69,14 +71,18 @@ pub fn handle_build_buttons(
             if kind == EntityKind::WallSegment && founded {
                 placement.mode = PlacementMode::PlotWall { start: Vec3::ZERO };
                 placement.awaiting_release = false;
-                placement.hint_text = Some("Click ground to start wall".to_string());
+                placement.hint_text =
+                    Some("Click ground to start wall (Right-click/Escape to cancel)".to_string());
                 continue;
             }
 
             if kind == EntityKind::Gatehouse && founded {
                 placement.mode = PlacementMode::PlotGate;
                 placement.awaiting_release = false;
-                placement.hint_text = Some("Hover an owned wall segment to place gate".to_string());
+                placement.hint_text = Some(
+                    "Hover an owned wall segment and left-click (Right-click/Escape to cancel)"
+                        .to_string(),
+                );
                 continue;
             }
 
@@ -88,7 +94,8 @@ pub fn handle_build_buttons(
 
             placement.mode = PlacementMode::Placing(kind);
             placement.awaiting_release = true;
-            placement.hint_text = None;
+            placement.hint_text =
+                Some("Left-click ground to place (Right-click/Escape to cancel)".to_string());
         }
     }
 }
@@ -956,20 +963,8 @@ pub fn show_action_tooltips(
                     continue;
                 }
 
-                // Position near cursor
-                let (cx, cy) = windows
-                    .single()
-                    .ok()
-                    .and_then(|w| w.cursor_position())
-                    .map(|p| (p.x, p.y))
-                    .unwrap_or((0.0, 0.0));
-                let scale = ui_scale.0.max(0.001);
-                let (ui_w, ui_h) = windows
-                    .single()
-                    .map(|w| (w.width() / scale, w.height() / scale))
-                    .unwrap_or((1920.0 / scale, 1080.0 / scale));
-                let left = ((cx + 12.0) / scale).clamp(6.0, (ui_w - 240.0).max(6.0));
-                let top = ((cy + 14.0) / scale).clamp(6.0, (ui_h - 140.0).max(6.0));
+                let (left, top) =
+                    tooltip_anchor_under_cursor(windows.single().ok(), ui_scale.0, 176.0, 110.0);
 
                 commands
                     .spawn((
@@ -980,12 +975,12 @@ pub fn show_action_tooltips(
                             left: Val::Px(left),
                             top: Val::Px(top),
                             flex_direction: FlexDirection::Column,
-                            padding: UiRect::all(Val::Px(8.0)),
-                            row_gap: Val::Px(2.0),
-                            border_radius: BorderRadius::all(Val::Px(6.0)),
+                            padding: UiRect::all(Val::Px(6.0)),
+                            row_gap: Val::Px(1.0),
+                            border_radius: BorderRadius::all(Val::Px(5.0)),
                             border: UiRect::all(Val::Px(1.0)),
-                            max_width: Val::Px(220.0),
-                            min_width: Val::Px(140.0),
+                            max_width: Val::Px(176.0),
+                            min_width: Val::Px(116.0),
                             ..default()
                         },
                         BackgroundColor(Color::srgba(0.05, 0.05, 0.07, 0.96)),
@@ -993,9 +988,9 @@ pub fn show_action_tooltips(
                         BoxShadow::new(
                             Color::srgba(0.0, 0.0, 0.0, 0.6),
                             Val::Px(0.0),
-                            Val::Px(4.0),
+                            Val::Px(2.0),
                             Val::Px(0.0),
-                            Val::Px(12.0),
+                            Val::Px(8.0),
                         ),
                         GlobalZIndex(100),
                     ))
@@ -1012,6 +1007,25 @@ pub fn show_action_tooltips(
                 }
             }
         }
+    }
+}
+
+pub fn update_action_tooltip_positions(
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    ui_scale: Res<UiScale>,
+    mut tooltips: Query<&mut Node, With<ActionTooltip>>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    if tooltips.is_empty() {
+        return;
+    }
+
+    let (left, top) = tooltip_anchor_under_cursor(Some(window), ui_scale.0, 176.0, 110.0);
+    for mut node in &mut tooltips {
+        node.left = Val::Px(left);
+        node.top = Val::Px(top);
     }
 }
 
@@ -1032,6 +1046,29 @@ pub fn cleanup_action_tooltips(
     }
 }
 
+fn tooltip_anchor_under_cursor(
+    window: Option<&Window>,
+    ui_scale: f32,
+    tooltip_w: f32,
+    tooltip_h: f32,
+) -> (f32, f32) {
+    let scale = ui_scale.max(0.001);
+    let Some(window) = window else {
+        return (6.0, 6.0);
+    };
+    let Some(cursor) = window.cursor_position() else {
+        return (6.0, 6.0);
+    };
+
+    let ui_w = window.width() / scale;
+    let ui_h = window.height() / scale;
+    let cx = cursor.x / scale;
+    let cy = cursor.y / scale;
+    let left = (cx - tooltip_w * 0.5).clamp(6.0, (ui_w - tooltip_w - 6.0).max(6.0));
+    let top = (cy + 16.0).clamp(6.0, (ui_h - tooltip_h - 6.0).max(6.0));
+    (left, top)
+}
+
 fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
     let lines: Vec<&str> = text.split('\n').collect();
     for (i, line) in lines.iter().enumerate() {
@@ -1044,7 +1081,7 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
             tt.spawn((
                 Text::new(*line),
                 TextFont {
-                    font_size: theme::FONT_BODY,
+                    font_size: theme::FONT_SMALL,
                     ..default()
                 },
                 TextColor(theme::TEXT_PRIMARY),
@@ -1053,7 +1090,7 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
                 Node {
                     width: Val::Percent(100.0),
                     height: Val::Px(1.0),
-                    margin: UiRect::axes(Val::Px(0.0), Val::Px(2.0)),
+                    margin: UiRect::axes(Val::Px(0.0), Val::Px(1.0)),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.30, 0.30, 0.35, 0.4)),
@@ -1062,31 +1099,31 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
         }
 
         let (color, font_size) = if line.starts_with("Not enough") {
-            (theme::DESTRUCTIVE, theme::FONT_SMALL)
+            (theme::DESTRUCTIVE, theme::FONT_CAPTION)
         } else if line.starts_with("Requires:") {
-            (theme::WARNING, theme::FONT_SMALL)
+            (theme::WARNING, theme::FONT_CAPTION)
         } else if line.starts_with("Cost:") {
-            (theme::TEXT_SECONDARY, theme::FONT_SMALL)
+            (theme::TEXT_SECONDARY, theme::FONT_CAPTION)
         } else if line.starts_with("HP:") || line.starts_with("DMG:") {
-            (theme::STAT_DMG, theme::FONT_SMALL)
-        } else if *line == "Drag & Drop to create"
+            (theme::STAT_DMG, theme::FONT_CAPTION)
+        } else if *line == "Click to place"
             || *line == "Click to train"
-            || *line == "Click to place"
+            || *line == "Click ground to place"
         {
             tt.spawn((
                 Node {
                     width: Val::Percent(100.0),
                     height: Val::Px(1.0),
-                    margin: UiRect::axes(Val::Px(0.0), Val::Px(2.0)),
+                    margin: UiRect::axes(Val::Px(0.0), Val::Px(1.0)),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.30, 0.30, 0.35, 0.4)),
             ));
-            (Color::srgba(0.45, 0.65, 1.0, 0.7), theme::FONT_CAPTION)
+            (Color::srgba(0.45, 0.65, 1.0, 0.7), theme::FONT_TINY)
         } else if line.starts_with("Build time:") || line.starts_with("Train:") {
-            (theme::TEXT_SECONDARY, theme::FONT_SMALL)
+            (theme::TEXT_SECONDARY, theme::FONT_CAPTION)
         } else {
-            (Color::srgba(0.65, 0.65, 0.65, 0.9), theme::FONT_SMALL)
+            (Color::srgba(0.65, 0.65, 0.65, 0.9), theme::FONT_CAPTION)
         };
 
         tt.spawn((
@@ -1136,7 +1173,9 @@ pub fn handle_hold_position_button(
     interactions: Query<&Interaction, (Changed<Interaction>, With<HoldPositionButton>)>,
     mut commands: Commands,
     selected_units: Query<(Entity, &Faction), (With<Unit>, With<Selected>)>,
+    mut task_queues: Query<&mut TaskQueue, With<Unit>>,
     active_player: Res<ActivePlayer>,
+    mut next_task_id: ResMut<NextTaskId>,
     mut cmd_mode: ResMut<CommandMode>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
@@ -1158,10 +1197,10 @@ pub fn handle_hold_position_button(
                 .remove::<AttackTarget>()
                 .insert(UnitState::HoldPosition)
                 .insert(TaskSource::Manual);
-            commands
-                .entity(entity)
-                .entry::<TaskQueue>()
-                .and_modify(|mut tq| tq.queue.clear());
+            if let Ok(mut queue) = task_queues.get_mut(entity) {
+                queue.clear_queued();
+                crate::orders::set_current_task(&mut queue, &mut next_task_id, QueuedTask::HoldPosition);
+            }
         }
     }
 }
@@ -1195,7 +1234,7 @@ pub fn handle_stop_button(
             commands
                 .entity(entity)
                 .entry::<TaskQueue>()
-                .and_modify(|mut tq| tq.queue.clear());
+                .and_modify(|mut tq| tq.clear());
         }
     }
 }

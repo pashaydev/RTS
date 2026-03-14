@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 use bevy::light::{FogVolume, VolumetricFog, VolumetricLight};
 use bevy::prelude::*;
 
-use crate::components::{AppState, Building, GameSetupConfig, GhostBuilding, Unit};
+use crate::components::{
+    AppState, Building, GameSetupConfig, GhostBuilding, Unit, WallPostPiece, WallSegmentPiece,
+};
 
 pub struct LightingPlugin;
 
@@ -14,20 +16,17 @@ impl Plugin for LightingPlugin {
             .init_resource::<EntityLightConfig>()
             .add_systems(Startup, register_lighting_tweaks)
             .add_systems(OnEnter(AppState::InGame), setup_lighting)
-            .add_systems(
-                Update,
-                {
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let systems = (advance_day_cycle, update_lighting, update_volumetric_fog)
-                        .chain()
-                        .run_if(in_state(AppState::InGame));
-                    #[cfg(target_arch = "wasm32")]
-                    let systems = (advance_day_cycle, update_lighting)
-                        .chain()
-                        .run_if(in_state(AppState::InGame));
-                    systems
-                },
-            )
+            .add_systems(Update, {
+                #[cfg(not(target_arch = "wasm32"))]
+                let systems = (advance_day_cycle, update_lighting, update_volumetric_fog)
+                    .chain()
+                    .run_if(in_state(AppState::InGame));
+                #[cfg(target_arch = "wasm32")]
+                let systems = (advance_day_cycle, update_lighting)
+                    .chain()
+                    .run_if(in_state(AppState::InGame));
+                systems
+            })
             .add_systems(
                 Update,
                 (update_entity_light_grid, manage_cluster_lights)
@@ -479,7 +478,15 @@ fn entity_light_factor(day_time: f32, config: &EntityLightConfig) -> f32 {
 fn update_entity_light_grid(
     mut grid: ResMut<EntityLightGrid>,
     units: Query<&Transform, (With<Unit>, Without<GhostBuilding>)>,
-    buildings: Query<&Transform, (With<Building>, Without<GhostBuilding>)>,
+    buildings: Query<
+        &Transform,
+        (
+            With<Building>,
+            Without<GhostBuilding>,
+            Without<WallSegmentPiece>,
+            Without<WallPostPiece>,
+        ),
+    >,
 ) {
     grid.cells.clear();
     let inv = 1.0 / grid.cell_size;

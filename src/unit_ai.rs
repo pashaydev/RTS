@@ -88,7 +88,7 @@ fn decision_priority_system(
         &mut units
     {
         // Skip units with manual orders or queued tasks
-        if *source == TaskSource::Manual || !task_queue.queue.is_empty() {
+        if *source == TaskSource::Manual || task_queue.current.is_some() || !task_queue.queue.is_empty() {
             continue;
         }
 
@@ -265,14 +265,15 @@ pub fn task_queue_advance_system(
     assigned_workers_q: Query<&AssignedWorkers>,
 ) {
     for (entity, mut state, mut source, mut queue, _kind) in &mut units {
-        if *state != UnitState::Idle || queue.queue.is_empty() {
+        if *state != UnitState::Idle || queue.current.is_some() || queue.queue.is_empty() {
             continue;
         }
 
         let task = queue.queue.pop_front().unwrap();
+        queue.current = Some(task.clone());
         *source = TaskSource::Manual;
 
-        match task {
+        match task.task {
             QueuedTask::Move(pos) => {
                 *state = UnitState::Moving(pos);
                 commands.entity(entity).insert(MoveTarget(pos));
@@ -335,6 +336,13 @@ pub fn task_queue_advance_system(
                     *state = UnitState::MovingToProcessor(building);
                 }
             }
+            QueuedTask::HoldPosition => {
+                commands
+                    .entity(entity)
+                    .remove::<MoveTarget>()
+                    .remove::<AttackTarget>();
+                *state = UnitState::HoldPosition;
+            }
         }
     }
 }
@@ -351,6 +359,7 @@ pub fn unit_state_executor_system(
             &Transform,
             &mut UnitState,
             &mut TaskSource,
+            &mut TaskQueue,
             &EntityKind,
             &Faction,
             Option<&MoveTarget>,
@@ -373,7 +382,7 @@ pub fn unit_state_executor_system(
     let build_range = 4.0;
     let processor_range = 3.0;
 
-    for (entity, tf, mut state, mut source, _kind, faction, move_target, attack_range) in &mut units
+    for (entity, tf, mut state, mut source, mut task_queue, _kind, faction, move_target, attack_range) in &mut units
     {
         match *state {
             UnitState::Idle | UnitState::HoldPosition => {
@@ -389,6 +398,7 @@ pub fn unit_state_executor_system(
                 if move_target.is_none() {
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
+                    task_queue.current = None;
                 } else {
                     // Keep MoveTarget synced
                     commands.entity(entity).insert(MoveTarget(pos));
@@ -407,6 +417,7 @@ pub fn unit_state_executor_system(
                         .remove::<LeashOrigin>();
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
+                    task_queue.current = None;
                 } else {
                     commands.entity(entity).insert(AttackTarget(target));
                 }
@@ -426,6 +437,7 @@ pub fn unit_state_executor_system(
                     // Node gone
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
+                    task_queue.current = None;
                 }
             }
 
@@ -436,6 +448,7 @@ pub fn unit_state_executor_system(
                 if transforms.get(depot).is_err() {
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
+                    task_queue.current = None;
                 }
             }
 
@@ -458,6 +471,7 @@ pub fn unit_state_executor_system(
                         commands.entity(entity).remove::<MoveTarget>();
                         *state = UnitState::Idle;
                         *source = TaskSource::Auto;
+                        task_queue.current = None;
                         continue;
                     }
                     if let Ok(build_tf) = transforms.get(building) {
@@ -475,6 +489,7 @@ pub fn unit_state_executor_system(
                     commands.entity(entity).remove::<MoveTarget>();
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
+                    task_queue.current = None;
                 }
             }
 
@@ -484,6 +499,7 @@ pub fn unit_state_executor_system(
                         commands.entity(entity).remove::<MoveTarget>();
                         *state = UnitState::Idle;
                         *source = TaskSource::Auto;
+                        task_queue.current = None;
                     } else if let Ok(build_tf) = transforms.get(building) {
                         let dist = tf.translation.distance(build_tf.translation);
                         if dist > build_range {
@@ -496,6 +512,7 @@ pub fn unit_state_executor_system(
                     commands.entity(entity).remove::<MoveTarget>();
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
+                    task_queue.current = None;
                 }
             }
 
@@ -536,6 +553,7 @@ pub fn unit_state_executor_system(
                         } else {
                             *state = UnitState::Idle;
                             *source = TaskSource::Auto;
+                            task_queue.current = None;
                         }
                     } else {
                         commands
@@ -546,6 +564,7 @@ pub fn unit_state_executor_system(
                     commands.entity(entity).remove::<MoveTarget>();
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
+                    task_queue.current = None;
                 }
             }
 
@@ -560,6 +579,7 @@ pub fn unit_state_executor_system(
                     // Remove from AssignedWorkers (building gone, so this is a no-op but safe)
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
+                    task_queue.current = None;
                 }
             }
 
@@ -568,6 +588,7 @@ pub fn unit_state_executor_system(
                     // Arrived at destination
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
+                    task_queue.current = None;
                 } else {
                     // Scan for enemies en route
                     if let Some(scan_range) = attack_range.map(|r| r.0 * 2.0) {

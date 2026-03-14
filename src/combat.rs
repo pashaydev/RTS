@@ -168,16 +168,19 @@ fn approach_attack_target(
     teams: Res<TeamConfig>,
     registry: Res<BlueprintRegistry>,
     height_map: Res<HeightMap>,
-    mut attackers: Query<(
-        Entity,
-        &mut Transform,
-        &AttackTarget,
-        &UnitSpeed,
-        &AttackRange,
-        Option<&EntityKind>,
-        &Faction,
-        Option<&mut UnitState>,
-    ), With<Unit>>,
+    mut attackers: Query<
+        (
+            Entity,
+            &mut Transform,
+            &AttackTarget,
+            &UnitSpeed,
+            &AttackRange,
+            Option<&EntityKind>,
+            &Faction,
+            Option<&mut UnitState>,
+        ),
+        With<Unit>,
+    >,
     walls: Query<
         (Entity, &Transform, &BuildingFootprint, &Faction),
         (
@@ -188,16 +191,8 @@ fn approach_attack_target(
     >,
     targets: Query<&Transform, Without<AttackTarget>>,
 ) {
-    for (
-        attacker_entity,
-        mut tf,
-        attack_target,
-        speed,
-        range,
-        opt_kind,
-        faction,
-        opt_state,
-    ) in &mut attackers
+    for (attacker_entity, mut tf, attack_target, speed, range, opt_kind, faction, opt_state) in
+        &mut attackers
     {
         let Ok(target_tf) = targets.get(attack_target.0) else {
             continue;

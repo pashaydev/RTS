@@ -3,6 +3,7 @@ pub mod animations;
 pub mod army_overview_widget;
 pub mod buttons;
 pub mod event_log_widget;
+pub mod fonts;
 pub mod group_hotkeys_widget;
 pub mod notifications;
 pub mod production_queue_widget;
@@ -28,6 +29,7 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RallyPointMode>()
             .init_resource::<UiMode>()
+            .init_resource::<fonts::UiFonts>()
             .init_resource::<actions_widget::ActionBarLayoutRevision>()
             .init_resource::<WidgetRegistry>()
             .init_resource::<widget_framework::WidgetResizeState>()
@@ -39,6 +41,10 @@ impl Plugin for UiPlugin {
             .add_systems(
                 OnEnter(AppState::InGame),
                 (spawn_hud, widget_framework::spawn_grid_overlay),
+            )
+            .add_systems(
+                Update,
+                fonts::apply_default_fonts,
             )
             .add_systems(
                 Update,
@@ -103,6 +109,7 @@ impl Plugin for UiPlugin {
                     buttons::update_upgrade_progress_display,
                     buttons::action_bar_transition_system,
                     buttons::show_action_tooltips,
+                    buttons::update_action_tooltip_positions,
                     buttons::cleanup_action_tooltips,
                     buttons::handle_attack_move_button,
                     buttons::handle_patrol_button,
@@ -148,6 +155,7 @@ impl Plugin for UiPlugin {
                 (
                     production_queue_widget::update_production_queue,
                     production_queue_widget::handle_queue_row_click,
+                    production_queue_widget::handle_queue_cancel_buttons,
                     army_overview_widget::update_army_overview,
                     tech_tree_widget::update_tech_tree,
                 )
@@ -197,6 +205,40 @@ fn update_ui_scale(
     }
 }
 
+fn placement_default_hint(mode: PlacementMode) -> Option<String> {
+    match mode {
+        PlacementMode::None => None,
+        PlacementMode::Placing(kind) => Some(format!(
+            "Placing {}: Left-click ground to place (Right-click/Escape to cancel)",
+            kind.display_name()
+        )),
+        PlacementMode::PlotBase => Some(
+            "Founding Base: Left-click ground to place (Right-click/Escape to cancel)".to_string(),
+        ),
+        PlacementMode::PlotWall { start } => {
+            if start == Vec3::ZERO {
+                Some("Wall: Click ground to start (Right-click/Escape to cancel)".to_string())
+            } else {
+                Some(
+                    "Wall: Move cursor, then left-click to confirm (Right-click/Escape to cancel)"
+                        .to_string(),
+                )
+            }
+        }
+        PlacementMode::PlotGate => Some(
+            "Gatehouse: Hover owned wall and left-click (Right-click/Escape to cancel)".to_string(),
+        ),
+    }
+}
+
+fn is_error_hint(hint: &str) -> bool {
+    hint.contains("Not enough")
+        || hint.contains("must")
+        || hint.contains("blocked")
+        || hint.contains("No workers")
+        || hint.contains("Cannot place")
+}
+
 /// Root UI container that holds all widgets
 #[derive(Component)]
 struct UiRoot;
@@ -205,7 +247,12 @@ struct UiRoot;
 #[derive(Component)]
 struct PlacementHintLabel;
 
-pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<WidgetRegistry>) {
+pub fn spawn_hud(
+    mut commands: Commands,
+    icons: Res<IconAssets>,
+    registry: Res<WidgetRegistry>,
+    fonts: Res<fonts::UiFonts>,
+) {
     // Root full-screen container for widget grid
     let root = commands
         .spawn((
@@ -222,7 +269,7 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
         .id();
 
     // Spawn widget toolbar at top-center
-    widget_toolbar::spawn_toolbar(&mut commands, root);
+    widget_toolbar::spawn_toolbar(&mut commands, root, &fonts);
 
     // Spawn Resources widget
     let resources_content = spawn_widget_frame(
@@ -231,6 +278,7 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
         WidgetId::Resources,
         registry.slots.get(&WidgetId::Resources).unwrap(),
         registry.is_visible(WidgetId::Resources),
+        &fonts,
     );
     resources_widget::spawn_resource_content(&mut commands, resources_content, &icons);
 
@@ -241,6 +289,7 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
         WidgetId::Selection,
         registry.slots.get(&WidgetId::Selection).unwrap(),
         registry.is_visible(WidgetId::Selection),
+        &fonts,
     );
     // Tag the content entity so rebuild_selection_panel can find it
     commands
@@ -254,6 +303,7 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
         WidgetId::Actions,
         registry.slots.get(&WidgetId::Actions).unwrap(),
         registry.is_visible(WidgetId::Actions),
+        &fonts,
     );
     // Tag the content entity so update_action_bar can find it
     commands.entity(actions_content).insert(ActionBarInner);
@@ -265,6 +315,7 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
         WidgetId::ArmyOverview,
         registry.slots.get(&WidgetId::ArmyOverview).unwrap(),
         registry.is_visible(WidgetId::ArmyOverview),
+        &fonts,
     );
 
     // Spawn Production Queue widget
@@ -274,6 +325,7 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
         WidgetId::ProductionQueue,
         registry.slots.get(&WidgetId::ProductionQueue).unwrap(),
         registry.is_visible(WidgetId::ProductionQueue),
+        &fonts,
     );
 
     // Spawn Tech Tree widget (overlay, closed by default)
@@ -283,6 +335,7 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
         WidgetId::TechTree,
         registry.slots.get(&WidgetId::TechTree).unwrap(),
         registry.is_visible(WidgetId::TechTree),
+        &fonts,
     );
 
     // Spawn Group Hotkeys widget
@@ -292,6 +345,7 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
         WidgetId::GroupHotkeys,
         registry.slots.get(&WidgetId::GroupHotkeys).unwrap(),
         registry.is_visible(WidgetId::GroupHotkeys),
+        &fonts,
     );
 
     // Spawn Event Log widget
@@ -301,6 +355,7 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
         WidgetId::EventLog,
         registry.slots.get(&WidgetId::EventLog).unwrap(),
         registry.is_visible(WidgetId::EventLog),
+        &fonts,
     );
 
     // Spawn Minimap widget (content populated by MinimapPlugin in PostStartup)
@@ -310,6 +365,7 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
         WidgetId::Minimap,
         registry.slots.get(&WidgetId::Minimap).unwrap(),
         registry.is_visible(WidgetId::Minimap),
+        &fonts,
     );
     commands
         .entity(minimap_content)
@@ -323,16 +379,23 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
         PlacementHintLabel,
         Text::new(""),
         TextFont {
-            font_size: theme::FONT_BUTTON,
+            font_size: theme::FONT_BODY,
             ..default()
         },
-        TextColor(Color::srgba(1.0, 0.3, 0.3, 0.95)),
+        TextColor(theme::TEXT_SECONDARY),
         Node {
             position_type: PositionType::Absolute,
-            bottom: Val::Px(60.0),
-            left: Val::Percent(50.0),
+            left: Val::Px(0.0),
+            top: Val::Px(0.0),
+            max_width: Val::Px(420.0),
+            padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
+            border_radius: BorderRadius::all(Val::Px(5.0)),
+            border: UiRect::all(Val::Px(1.0)),
             ..default()
         },
+        BackgroundColor(Color::srgba(0.05, 0.05, 0.07, 0.9)),
+        BorderColor::all(Color::srgba(0.25, 0.25, 0.30, 0.5)),
+        GlobalZIndex(90),
         Visibility::Hidden,
         Pickable::IGNORE,
     ));
@@ -340,13 +403,42 @@ pub fn spawn_hud(mut commands: Commands, icons: Res<IconAssets>, registry: Res<W
 
 fn update_placement_hint(
     placement: Res<BuildingPlacementState>,
-    mut hint_q: Query<(&mut Text, &mut Visibility), With<PlacementHintLabel>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    ui_scale: Res<UiScale>,
+    mut hint_q: Query<
+        (&mut Text, &mut TextColor, &mut Node, &mut Visibility),
+        With<PlacementHintLabel>,
+    >,
 ) {
-    let Ok((mut text, mut vis)) = hint_q.single_mut() else {
+    let Ok((mut text, mut color, mut node, mut vis)) = hint_q.single_mut() else {
         return;
     };
-    if let Some(ref hint) = placement.hint_text {
+
+    let hint = placement
+        .hint_text
+        .clone()
+        .or_else(|| placement_default_hint(placement.mode));
+
+    if let Some(hint) = hint {
         **text = hint.clone();
+        *color = TextColor(if is_error_hint(&hint) {
+            theme::DESTRUCTIVE
+        } else {
+            theme::TEXT_SECONDARY
+        });
+
+        if let Ok(window) = windows.single() {
+            if let Some(cursor) = window.cursor_position() {
+                let scale = ui_scale.0.max(0.001);
+                let ui_w = window.width() / scale;
+                let ui_h = window.height() / scale;
+                let left = (cursor.x / scale + 14.0).clamp(6.0, (ui_w - 430.0).max(6.0));
+                let top = (cursor.y / scale + 18.0).clamp(6.0, (ui_h - 70.0).max(6.0));
+                node.left = Val::Px(left);
+                node.top = Val::Px(top);
+            }
+        }
+
         *vis = Visibility::Inherited;
     } else {
         *vis = Visibility::Hidden;

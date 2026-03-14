@@ -5,6 +5,7 @@ use bevy::window::PrimaryWindow;
 use std::collections::HashMap;
 
 use crate::theme;
+use crate::ui::fonts::{self, UiFonts};
 
 // ── Widget Identifiers ──
 
@@ -231,6 +232,7 @@ pub fn spawn_widget_frame(
     id: WidgetId,
     slot: &GridSlot,
     visible: bool,
+    fonts: &UiFonts,
 ) -> Entity {
     let mut node = grid_to_style(slot);
     node.padding = UiRect::all(Val::Px(2.0));
@@ -279,10 +281,7 @@ pub fn spawn_widget_frame(
             // Title text
             bar.spawn((
                 Text::new(id.display_name().to_uppercase()),
-                TextFont {
-                    font_size: theme::FONT_SMALL,
-                    ..default()
-                },
+                fonts::heading(fonts, theme::FONT_SMALL),
                 TextColor(theme::TEXT_SECONDARY),
             ));
 
@@ -303,10 +302,7 @@ pub fn spawn_widget_frame(
             .with_children(|close| {
                 close.spawn((
                     Text::new("X"),
-                    TextFont {
-                        font_size: theme::FONT_TINY,
-                        ..default()
-                    },
+                    fonts::body_emphasis(fonts, theme::FONT_TINY),
                     TextColor(theme::TEXT_DISABLED),
                 ));
             });

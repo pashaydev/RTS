@@ -8,6 +8,7 @@ use crate::components::*;
 use crate::ground::HeightMap;
 use crate::hover_material::{HoverRingMaterial, HoverRingSettings};
 use crate::minimap::{MinimapInteraction, MinimapSet};
+use crate::orders;
 use crate::theme;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -23,6 +24,7 @@ impl Plugin for SelectionPlugin {
             .init_resource::<UiClickedThisFrame>()
             .init_resource::<UiPressActive>()
             .init_resource::<CommandMode>()
+            .init_resource::<NextTaskId>()
             .add_systems(Startup, setup_hover_assets)
             .add_systems(OnEnter(AppState::InGame), spawn_selection_box)
             .add_systems(First, reset_ui_clicked.run_if(in_state(AppState::InGame)))
@@ -57,6 +59,35 @@ impl Plugin for SelectionPlugin {
                 PostUpdate,
                 clear_ui_press_on_release.run_if(in_state(AppState::InGame)),
             );
+    }
+}
+
+fn enqueue_task(
+    task_queues: &mut Query<&mut TaskQueue, With<Unit>>,
+    next_task_id: &mut NextTaskId,
+    entity: Entity,
+    task: QueuedTask,
+) {
+    if let Ok(mut queue) = task_queues.get_mut(entity) {
+        orders::push_queued_task(&mut queue, next_task_id, task);
+    }
+}
+
+fn clear_task_queue(task_queues: &mut Query<&mut TaskQueue, With<Unit>>, entity: Entity) {
+    if let Ok(mut queue) = task_queues.get_mut(entity) {
+        orders::clear_task_queue(&mut queue);
+    }
+}
+
+fn set_current_task(
+    task_queues: &mut Query<&mut TaskQueue, With<Unit>>,
+    next_task_id: &mut NextTaskId,
+    entity: Entity,
+    task: QueuedTask,
+) {
+    if let Ok(mut queue) = task_queues.get_mut(entity) {
+        queue.clear_queued();
+        orders::set_current_task(&mut queue, next_task_id, task);
     }
 }
 
@@ -794,11 +825,13 @@ fn handle_right_click_move(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    mut next_task_id: ResMut<NextTaskId>,
     viewport: (
         Query<(&Camera, &GlobalTransform)>,
         Query<&Window, With<PrimaryWindow>>,
     ),
     selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
+    mut task_queues: Query<&mut TaskQueue, With<Unit>>,
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
     pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
@@ -993,20 +1026,24 @@ fn handle_right_click_move(
             RClickAction::AttackEnemy | RClickAction::AttackExplosive => {
                 for (entity, _kind) in &units_vec {
                     if shift {
-                        commands
-                            .entity(*entity)
-                            .entry::<TaskQueue>()
-                            .and_modify(move |mut tq| {
-                                tq.queue.push_back(QueuedTask::Attack(target_entity));
-                            });
+                        enqueue_task(
+                            &mut task_queues,
+                            &mut next_task_id,
+                            *entity,
+                            QueuedTask::Attack(target_entity),
+                        );
                     } else {
                         let mut ec = commands.entity(*entity);
                         ec.remove::<MoveTarget>()
                             .insert(AttackTarget(target_entity))
                             .insert(UnitState::Attacking(target_entity))
                             .insert(TaskSource::Manual);
-                        ec.entry::<TaskQueue>()
-                            .and_modify(|mut tq| tq.queue.clear());
+                        set_current_task(
+                            &mut task_queues,
+                            &mut next_task_id,
+                            *entity,
+                            QueuedTask::Attack(target_entity),
+                        );
                     }
                 }
             }
@@ -1028,12 +1065,11 @@ fn handle_right_click_move(
                                 && current_count + assigned < processor.max_workers as usize
                             {
                                 if shift {
-                                    commands.entity(*entity).entry::<TaskQueue>().and_modify(
-                                        move |mut tq| {
-                                            tq.queue.push_back(QueuedTask::AssignToProcessor(
-                                                target_entity,
-                                            ));
-                                        },
+                                    enqueue_task(
+                                        &mut task_queues,
+                                        &mut next_task_id,
+                                        *entity,
+                                        QueuedTask::AssignToProcessor(target_entity),
                                     );
                                 } else {
                                     if let Ok(gt) =
@@ -1045,10 +1081,12 @@ fn handle_right_click_move(
                                             .insert(MoveTarget(gt.translation()))
                                             .insert(UnitState::MovingToProcessor(target_entity))
                                             .insert(TaskSource::Manual);
-                                        commands
-                                            .entity(*entity)
-                                            .entry::<TaskQueue>()
-                                            .and_modify(|mut tq| tq.queue.clear());
+                                        set_current_task(
+                                            &mut task_queues,
+                                            &mut next_task_id,
+                                            *entity,
+                                            QueuedTask::AssignToProcessor(target_entity),
+                                        );
                                     }
                                 }
                                 assigned += 1;
@@ -1073,10 +1111,11 @@ fn handle_right_click_move(
                 for (entity, kind) in &units_vec {
                     if *kind == EntityKind::Worker {
                         if shift {
-                            commands.entity(*entity).entry::<TaskQueue>().and_modify(
-                                move |mut tq| {
-                                    tq.queue.push_back(QueuedTask::Build(target_entity));
-                                },
+                            enqueue_task(
+                                &mut task_queues,
+                                &mut next_task_id,
+                                *entity,
+                                QueuedTask::Build(target_entity),
                             );
                         } else {
                             commands
@@ -1085,10 +1124,12 @@ fn handle_right_click_move(
                                 .remove::<MoveTarget>()
                                 .insert(UnitState::MovingToBuild(target_entity))
                                 .insert(TaskSource::Manual);
-                            commands
-                                .entity(*entity)
-                                .entry::<TaskQueue>()
-                                .and_modify(|mut tq| tq.queue.clear());
+                            set_current_task(
+                                &mut task_queues,
+                                &mut next_task_id,
+                                *entity,
+                                QueuedTask::Build(target_entity),
+                            );
                         }
                     } else if let Ok(pos) = construction_pos {
                         commands
@@ -1104,10 +1145,11 @@ fn handle_right_click_move(
                 for (entity, kind) in &units_vec {
                     if *kind == EntityKind::Worker {
                         if shift {
-                            commands.entity(*entity).entry::<TaskQueue>().and_modify(
-                                move |mut tq| {
-                                    tq.queue.push_back(QueuedTask::Gather(target_entity));
-                                },
+                            enqueue_task(
+                                &mut task_queues,
+                                &mut next_task_id,
+                                *entity,
+                                QueuedTask::Gather(target_entity),
                             );
                         } else {
                             if let Ok(gt) = pickables.get(target_entity).map(|(_, gt, _, _)| gt) {
@@ -1117,10 +1159,12 @@ fn handle_right_click_move(
                                     .insert(MoveTarget(gt.translation()))
                                     .insert(UnitState::Gathering(target_entity))
                                     .insert(TaskSource::Manual);
-                                commands
-                                    .entity(*entity)
-                                    .entry::<TaskQueue>()
-                                    .and_modify(|mut tq| tq.queue.clear());
+                                set_current_task(
+                                    &mut task_queues,
+                                    &mut next_task_id,
+                                    *entity,
+                                    QueuedTask::Gather(target_entity),
+                                );
                             }
                         }
                     } else if let Ok(gt) = pickables.get(target_entity).map(|(_, gt, _, _)| gt) {
@@ -1153,10 +1197,11 @@ fn handle_right_click_move(
                         };
                         let dest = pos + offset;
                         if shift {
-                            commands.entity(*entity).entry::<TaskQueue>().and_modify(
-                                move |mut tq| {
-                                    tq.queue.push_back(QueuedTask::Move(dest));
-                                },
+                            enqueue_task(
+                                &mut task_queues,
+                                &mut next_task_id,
+                                *entity,
+                                QueuedTask::Move(dest),
                             );
                         } else {
                             commands
@@ -1165,10 +1210,12 @@ fn handle_right_click_move(
                                 .insert(MoveTarget(dest))
                                 .insert(UnitState::Moving(dest))
                                 .insert(TaskSource::Manual);
-                            commands
-                                .entity(*entity)
-                                .entry::<TaskQueue>()
-                                .and_modify(|mut tq| tq.queue.clear());
+                            set_current_task(
+                                &mut task_queues,
+                                &mut next_task_id,
+                                *entity,
+                                QueuedTask::Move(dest),
+                            );
                         }
                     }
                 }
@@ -1196,10 +1243,11 @@ fn handle_right_click_move(
                 for (entity, kind) in &units_vec {
                     if *kind == EntityKind::Worker {
                         if shift {
-                            commands.entity(*entity).entry::<TaskQueue>().and_modify(
-                                move |mut tq| {
-                                    tq.queue.push_back(QueuedTask::Build(site_entity));
-                                },
+                            enqueue_task(
+                                &mut task_queues,
+                                &mut next_task_id,
+                                *entity,
+                                QueuedTask::Build(site_entity),
                             );
                         } else {
                             commands
@@ -1208,10 +1256,12 @@ fn handle_right_click_move(
                                 .remove::<MoveTarget>()
                                 .insert(UnitState::MovingToBuild(site_entity))
                                 .insert(TaskSource::Manual);
-                            commands
-                                .entity(*entity)
-                                .entry::<TaskQueue>()
-                                .and_modify(|mut tq| tq.queue.clear());
+                            set_current_task(
+                                &mut task_queues,
+                                &mut next_task_id,
+                                *entity,
+                                QueuedTask::Build(site_entity),
+                            );
                         }
                     } else {
                         commands
@@ -1228,12 +1278,12 @@ fn handle_right_click_move(
                 if n == 1 {
                     let (ent, _kind) = &units_vec[0];
                     if shift {
-                        commands
-                            .entity(*ent)
-                            .entry::<TaskQueue>()
-                            .and_modify(move |mut tq| {
-                                tq.queue.push_back(QueuedTask::Move(point));
-                            });
+                        enqueue_task(
+                            &mut task_queues,
+                            &mut next_task_id,
+                            *ent,
+                            QueuedTask::Move(point),
+                        );
                     } else {
                         commands
                             .entity(*ent)
@@ -1241,10 +1291,12 @@ fn handle_right_click_move(
                             .insert(MoveTarget(point))
                             .insert(UnitState::Moving(point))
                             .insert(TaskSource::Manual);
-                        commands
-                            .entity(*ent)
-                            .entry::<TaskQueue>()
-                            .and_modify(|mut tq| tq.queue.clear());
+                        set_current_task(
+                            &mut task_queues,
+                            &mut next_task_id,
+                            *ent,
+                            QueuedTask::Move(point),
+                        );
                     }
                 } else if n > 1 {
                     let spacing = 1.5;
@@ -1254,10 +1306,11 @@ fn handle_right_click_move(
                         let offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
                         let dest = point + offset;
                         if shift {
-                            commands.entity(*entity).entry::<TaskQueue>().and_modify(
-                                move |mut tq| {
-                                    tq.queue.push_back(QueuedTask::Move(dest));
-                                },
+                            enqueue_task(
+                                &mut task_queues,
+                                &mut next_task_id,
+                                *entity,
+                                QueuedTask::Move(dest),
                             );
                         } else {
                             commands
@@ -1266,10 +1319,12 @@ fn handle_right_click_move(
                                 .insert(MoveTarget(dest))
                                 .insert(UnitState::Moving(dest))
                                 .insert(TaskSource::Manual);
-                            commands
-                                .entity(*entity)
-                                .entry::<TaskQueue>()
-                                .and_modify(|mut tq| tq.queue.clear());
+                            set_current_task(
+                                &mut task_queues,
+                                &mut next_task_id,
+                                *entity,
+                                QueuedTask::Move(dest),
+                            );
                         }
                     }
                 }
@@ -1292,9 +1347,11 @@ fn handle_unit_command_hotkeys(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut cmd_mode: ResMut<CommandMode>,
+    mut next_task_id: ResMut<NextTaskId>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
     selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
+    mut task_queues: Query<&mut TaskQueue, With<Unit>>,
     active_player: Res<ActivePlayer>,
     ui_clicked: Res<UiClickedThisFrame>,
     ui_press: Res<UiPressActive>,
@@ -1325,10 +1382,12 @@ fn handle_unit_command_hotkeys(
                     .remove::<AttackTarget>()
                     .insert(UnitState::HoldPosition)
                     .insert(TaskSource::Manual);
-                commands
-                    .entity(entity)
-                    .entry::<TaskQueue>()
-                    .and_modify(|mut tq| tq.queue.clear());
+                set_current_task(
+                    &mut task_queues,
+                    &mut next_task_id,
+                    entity,
+                    QueuedTask::HoldPosition,
+                );
             }
             *cmd_mode = CommandMode::Normal;
             return;
@@ -1345,10 +1404,7 @@ fn handle_unit_command_hotkeys(
                     .remove::<AttackTarget>()
                     .insert(UnitState::Idle)
                     .insert(TaskSource::Auto);
-                commands
-                    .entity(entity)
-                    .entry::<TaskQueue>()
-                    .and_modify(|mut tq| tq.queue.clear());
+                clear_task_queue(&mut task_queues, entity);
             }
             *cmd_mode = CommandMode::Normal;
             return;
@@ -1440,12 +1496,12 @@ fn handle_unit_command_hotkeys(
                 };
                 let dest = point + offset;
                 if shift {
-                    commands
-                        .entity(*entity)
-                        .entry::<TaskQueue>()
-                        .and_modify(move |mut tq| {
-                            tq.queue.push_back(QueuedTask::AttackMove(dest));
-                        });
+                    enqueue_task(
+                        &mut task_queues,
+                        &mut next_task_id,
+                        *entity,
+                        QueuedTask::AttackMove(dest),
+                    );
                 } else {
                     commands
                         .entity(*entity)
@@ -1453,22 +1509,24 @@ fn handle_unit_command_hotkeys(
                         .insert(MoveTarget(dest))
                         .insert(UnitState::AttackMoving(dest))
                         .insert(TaskSource::Manual);
-                    commands
-                        .entity(*entity)
-                        .entry::<TaskQueue>()
-                        .and_modify(|mut tq| tq.queue.clear());
+                    set_current_task(
+                        &mut task_queues,
+                        &mut next_task_id,
+                        *entity,
+                        QueuedTask::AttackMove(dest),
+                    );
                 }
             }
         }
         CommandMode::Patrol => {
             for (entity, _kind) in &units_vec {
                 if shift {
-                    commands
-                        .entity(*entity)
-                        .entry::<TaskQueue>()
-                        .and_modify(move |mut tq| {
-                            tq.queue.push_back(QueuedTask::Patrol(point));
-                        });
+                    enqueue_task(
+                        &mut task_queues,
+                        &mut next_task_id,
+                        *entity,
+                        QueuedTask::Patrol(point),
+                    );
                 } else {
                     commands
                         .entity(*entity)
@@ -1479,10 +1537,12 @@ fn handle_unit_command_hotkeys(
                             origin: point,
                         })
                         .insert(TaskSource::Manual);
-                    commands
-                        .entity(*entity)
-                        .entry::<TaskQueue>()
-                        .and_modify(|mut tq| tq.queue.clear());
+                    set_current_task(
+                        &mut task_queues,
+                        &mut next_task_id,
+                        *entity,
+                        QueuedTask::Patrol(point),
+                    );
                 }
             }
         }
