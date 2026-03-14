@@ -195,9 +195,8 @@ fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
         0.01,
     );
 
-    // Unexplored fog noise pattern
     tweaks.add_float(
-        "Visuals/FoW Fog Noise",
+        "Visuals/FoW Shader",
         "Scale",
         s.fog_noise_scale,
         1.0,
@@ -205,7 +204,7 @@ fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
         0.5,
     );
     tweaks.add_float(
-        "Visuals/FoW Fog Noise",
+        "Visuals/FoW Shader",
         "Speed",
         s.fog_noise_speed,
         0.0,
@@ -213,7 +212,7 @@ fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
         0.005,
     );
     tweaks.add_float(
-        "Visuals/FoW Fog Noise",
+        "Visuals/FoW Shader",
         "Warp",
         s.fog_noise_warp,
         0.0,
@@ -221,7 +220,7 @@ fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
         0.1,
     );
     tweaks.add_float(
-        "Visuals/FoW Fog Noise",
+        "Visuals/FoW Shader",
         "Contrast",
         s.fog_noise_contrast,
         0.0,
@@ -229,7 +228,7 @@ fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
         0.05,
     );
     tweaks.add_float(
-        "Visuals/FoW Fog Noise",
+        "Visuals/FoW Shader",
         "Octaves",
         s.fog_noise_octaves,
         1.0,
@@ -237,7 +236,7 @@ fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
         1.0,
     );
     tweaks.add_float(
-        "Visuals/FoW Fog Noise",
+        "Visuals/FoW Shader",
         "Tendril Scale",
         s.fog_tendril_scale,
         1.0,
@@ -245,7 +244,7 @@ fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
         0.5,
     );
     tweaks.add_float(
-        "Visuals/FoW Fog Noise",
+        "Visuals/FoW Shader",
         "Tendril Strength",
         s.fog_tendril_strength,
         0.0,
@@ -253,7 +252,7 @@ fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
         0.05,
     );
     tweaks.add_float(
-        "Visuals/FoW Fog Noise",
+        "Visuals/FoW Shader",
         "Warp Speed",
         s.fog_warp_speed,
         0.0,
@@ -294,14 +293,7 @@ fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
         20.0,
         0.5,
     );
-    tweaks.add_float(
-        "Visuals/FoW Gameplay",
-        "Enable LOS",
-        if t.enable_los { 1.0 } else { 0.0 },
-        0.0,
-        1.0,
-        1.0,
-    );
+    tweaks.add_bool("Visuals/FoW Gameplay", "Enable LOS", t.enable_los);
     tweaks.add_float(
         "Visuals/FoW Gameplay",
         "LOS Ray Count",
@@ -618,6 +610,8 @@ fn update_fog_textures(
 }
 
 // ── Shader Time Update ──
+// Owns "Visuals/FoW Shader" folder (shader + noise params). Gameplay params
+// ("Visuals/FoW Gameplay") are synced in debug.rs::sync_fog_tweaks.
 
 fn update_fog_material_time(
     time: Res<Time>,
@@ -681,28 +675,28 @@ fn update_fog_material_time(
     }
 
     // Apply fog noise tweaks
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Scale") {
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Scale") {
         mat.settings.fog_noise_scale = v;
     }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Speed") {
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Speed") {
         mat.settings.fog_noise_speed = v;
     }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Warp") {
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Warp") {
         mat.settings.fog_noise_warp = v;
     }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Contrast") {
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Contrast") {
         mat.settings.fog_noise_contrast = v;
     }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Octaves") {
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Octaves") {
         mat.settings.fog_noise_octaves = v;
     }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Tendril Scale") {
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Tendril Scale") {
         mat.settings.fog_tendril_scale = v;
     }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Tendril Strength") {
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Tendril Strength") {
         mat.settings.fog_tendril_strength = v;
     }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Fog Noise", "Warp Speed") {
+    if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Warp Speed") {
         mat.settings.fog_warp_speed = v;
     }
 }

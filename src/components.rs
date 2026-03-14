@@ -1563,6 +1563,8 @@ pub struct PatrolState {
     pub center: Vec3,
     pub radius: f32,
     pub patrol_target: Option<Vec3>,
+    /// How long (seconds) this mob has been chasing a target.
+    pub chase_elapsed: f32,
 }
 
 // ── Fog of War ──

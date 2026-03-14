@@ -234,6 +234,7 @@ fn spawn_mob_camps(
                 center,
                 radius: patrol_radius,
                 patrol_target: None,
+                chase_elapsed: 0.0,
             });
         }
 
@@ -276,6 +277,7 @@ fn spawn_mob_camps(
                     center,
                     radius: patrol_radius,
                     patrol_target: None,
+                    chase_elapsed: 0.0,
                 },
             ));
         }
@@ -287,11 +289,17 @@ fn mob_patrol(
     registry: Res<BlueprintRegistry>,
     height_map: Res<HeightMap>,
     mut mobs: Query<
-        (&mut Transform, &mut PatrolState, &UnitSpeed, &EntityKind),
+        (
+            &mut Transform,
+            &mut PatrolState,
+            &UnitSpeed,
+            &EntityKind,
+            &mut Health,
+        ),
         (With<Mob>, Without<AttackTarget>),
     >,
 ) {
-    for (mut tf, mut patrol, speed, kind) in &mut mobs {
+    for (mut tf, mut patrol, speed, kind, mut health) in &mut mobs {
         let y_off = registry
             .get(*kind)
             .movement
@@ -330,6 +338,10 @@ fn mob_patrol(
                 }
             }
             PatrolStateKind::Returning => {
+                // Regenerate health while returning home (10% max HP per second)
+                health.current =
+                    (health.current + health.max * 0.1 * time.delta_secs()).min(health.max);
+
                 let dir = Vec3::new(
                     patrol.center.x - tf.translation.x,
                     0.0,
@@ -337,9 +349,12 @@ fn mob_patrol(
                 );
                 let dist = dir.length();
                 if dist < 2.0 {
+                    // Fully heal when arriving home
+                    health.current = health.max;
                     patrol.state = PatrolStateKind::Idle;
                 } else {
-                    let step = dir.normalize() * speed.0 * time.delta_secs();
+                    // Move faster when returning (1.5x speed)
+                    let step = dir.normalize() * speed.0 * 1.5 * time.delta_secs();
                     tf.translation += step;
                     tf.translation.y =
                         height_map.sample(tf.translation.x, tf.translation.z) + y_off;
@@ -429,11 +444,32 @@ fn mob_chase(
     >,
     targets: Query<&Transform, Without<Mob>>,
 ) {
+    // Leash: max distance from camp center before giving up chase
+    const LEASH_DISTANCE: f32 = 40.0;
+    // Max seconds a mob will chase before giving up
+    const MAX_CHASE_SECS: f32 = 15.0;
+
     for (mob_entity, mut tf, mut patrol, attack_target, speed, range, kind, faction) in &mut mobs {
         let Ok(target_tf) = targets.get(attack_target.0) else {
             patrol.state = PatrolStateKind::Returning;
+            patrol.chase_elapsed = 0.0;
             continue;
         };
+
+        // Leash check: distance from home or chase duration exceeded
+        let dist_from_home = Vec2::new(
+            tf.translation.x - patrol.center.x,
+            tf.translation.z - patrol.center.z,
+        )
+        .length();
+        patrol.chase_elapsed += time.delta_secs();
+
+        if dist_from_home > LEASH_DISTANCE || patrol.chase_elapsed > MAX_CHASE_SECS {
+            patrol.state = PatrolStateKind::Returning;
+            patrol.chase_elapsed = 0.0;
+            commands.entity(mob_entity).remove::<AttackTarget>();
+            continue;
+        }
 
         let target_is_wall = walls.get(attack_target.0).is_ok();
         if !target_is_wall {
@@ -482,6 +518,8 @@ fn mob_chase(
 
         if dist <= range.0 {
             patrol.state = PatrolStateKind::Attacking;
+            // Reset chase timer while in combat range
+            patrol.chase_elapsed = 0.0;
         } else {
             patrol.state = PatrolStateKind::Chasing;
             let step = dir.normalize() * speed.0 * time.delta_secs();

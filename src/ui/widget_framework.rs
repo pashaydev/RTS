@@ -610,7 +610,7 @@ pub fn handle_widget_drag(
         for (interaction, handle) in &interactions {
             if *interaction == Interaction::Pressed || *interaction == Interaction::Hovered {
                 let widget_entity = handle.0;
-                if let Ok((mut node, mut z_index, _, _)) = widget_nodes.get_mut(widget_entity) {
+                if let Ok((node, mut z_index, _, _)) = widget_nodes.get_mut(widget_entity) {
                     registry.top_z += 1;
                     *z_index = ZIndex(registry.top_z);
 

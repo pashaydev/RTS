@@ -847,6 +847,7 @@ fn apply_load_overrides(
                 center: Vec3::new(center[0], center[1], center[2]),
                 radius,
                 patrol_target: None,
+                chase_elapsed: 0.0,
             });
         }
     }

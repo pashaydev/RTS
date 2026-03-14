@@ -117,6 +117,22 @@ fn register_lighting_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
     tweaks.add_float("Visuals/Entity Lights", "Night Factor", 1.0, 0.0, 1.0, 0.05);
     tweaks.add_float("Visuals/Entity Lights", "Day Factor", 0.3, 0.0, 1.0, 0.05);
     tweaks.add_readonly("Visuals/Entity Lights", "Active Lights", "0");
+
+    // Volumetric Fog folder (native only)
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        tweaks.add_bool("Visuals/Volumetric Fog", "Enabled", true);
+        tweaks.add_bool("Visuals/Volumetric Fog", "Override", false);
+        tweaks.add_float("Visuals/Volumetric Fog", "Step Count", 64.0, 0.0, 256.0, 8.0);
+        tweaks.add_float("Visuals/Volumetric Fog", "Density", 0.02, 0.0, 0.2, 0.005);
+        tweaks.add_float("Visuals/Volumetric Fog", "Color R", 0.8, 0.0, 1.0, 0.01);
+        tweaks.add_float("Visuals/Volumetric Fog", "Color G", 0.85, 0.0, 1.0, 0.01);
+        tweaks.add_float("Visuals/Volumetric Fog", "Color B", 0.9, 0.0, 1.0, 0.01);
+        tweaks.add_float("Visuals/Volumetric Fog", "Ambient Intensity", 0.1, 0.0, 1.0, 0.01);
+        tweaks.add_float("Visuals/Volumetric Fog", "Light Intensity", 1.0, 0.0, 5.0, 0.1);
+        tweaks.add_float("Visuals/Volumetric Fog", "Scattering", 0.3, 0.0, 2.0, 0.05);
+        tweaks.add_float("Visuals/Volumetric Fog", "Absorption", 0.3, 0.0, 2.0, 0.05);
+    }
 }
 
 // ── Day/Night Cycle ──

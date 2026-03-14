@@ -56,13 +56,13 @@ impl Default for FogSettings {
     fn default() -> Self {
         Self {
             time: 0.0,
-            noise_scale: 8.0,
+            noise_scale: 5.5,
             edge_glow_width: 0.08,
             edge_glow_intensity: 0.6,
-            fog_color: Vec4::new(0.01, 0.01, 0.02, 0.95),
-            glow_color: Vec4::new(0.3, 0.5, 0.8, 1.0),
-            explored_tint: Vec4::new(0.0, 0.0, 0.0, 0.15),
-            fog_noise_scale: 5.0,
+            fog_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
+            glow_color: Vec4::new(0.0, 0.0, 0.0, 1.0),
+            explored_tint: Vec4::new(1.0, 1.0, 1.0, 0.15),
+            fog_noise_scale: 10.0,
             fog_noise_speed: 0.01,
             fog_noise_warp: 0.8,
             fog_noise_contrast: 0.2,

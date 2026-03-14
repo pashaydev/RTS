@@ -3048,6 +3048,7 @@ pub fn spawn_from_blueprint_with_faction(
             center: Vec3::new(pos.x, height_map.sample(pos.x, pos.z), pos.z),
             radius: bp.mob_ai.as_ref().unwrap().patrol_radius,
             patrol_target: None,
+            chase_elapsed: 0.0,
         });
     }
 

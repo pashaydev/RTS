@@ -246,6 +246,29 @@ impl DebugTweaks {
             }
         }
     }
+
+    fn get_color_rgb(&self, folder: &str) -> Option<[f32; 3]> {
+        match (
+            self.get_float(folder, "Color R"),
+            self.get_float(folder, "Color G"),
+            self.get_float(folder, "Color B"),
+        ) {
+            (Some(r), Some(g), Some(b)) => Some([r, g, b]),
+            _ => None,
+        }
+    }
+
+    fn sync_color_rgb_back(&mut self, folder: &str, color: &Srgba, active: &ActiveSlider) {
+        if !active.is_dragging(folder, "Color R") {
+            self.set_float_if_changed(folder, "Color R", color.red);
+        }
+        if !active.is_dragging(folder, "Color G") {
+            self.set_float_if_changed(folder, "Color G", color.green);
+        }
+        if !active.is_dragging(folder, "Color B") {
+            self.set_float_if_changed(folder, "Color B", color.blue);
+        }
+    }
 }
 
 // ── Config serialization format: folder → { label → value } ──
@@ -377,6 +400,12 @@ struct TweakStructureVersion {
 struct ActiveSlider {
     folder: Option<String>,
     label: Option<String>,
+}
+
+impl ActiveSlider {
+    fn is_dragging(&self, folder: &str, label: &str) -> bool {
+        self.folder.as_deref() == Some(folder) && self.label.as_deref() == Some(label)
+    }
 }
 
 // ── UI marker components ──
@@ -1598,12 +1627,25 @@ fn sync_lighting_tweaks(
     >,
     #[cfg(not(target_arch = "wasm32"))] mut cam_fog_q: Query<&mut VolumetricFog>,
 ) {
-    // Helper: check if a specific entry is actively being dragged
-    let is_dragging = |folder: &str, label: &str| -> bool {
-        active.folder.as_deref() == Some(folder) && active.label.as_deref() == Some(label)
-    };
+    sync_time_of_day_tweaks(&mut tweaks, &active, &mut cycle);
+    sync_sunlight_tweaks(&mut tweaks, &active, &mut overrides, &sun_q);
+    sync_ambient_tweaks(&mut tweaks, &active, &mut overrides, &ambient);
+    sync_sky_color_tweaks(&mut tweaks, &active, &mut overrides, &clear);
+    #[cfg(not(target_arch = "wasm32"))]
+    sync_volumetric_fog_tweaks(
+        &mut tweaks,
+        &active,
+        &mut overrides,
+        &mut fog_vol_q,
+        &mut cam_fog_q,
+    );
+}
 
-    // ── Time of Day folder ──
+fn sync_time_of_day_tweaks(
+    tweaks: &mut DebugTweaks,
+    active: &ActiveSlider,
+    cycle: &mut DayCycle,
+) {
     if let Some(v) = tweaks.get_float("Visuals/Time of Day", "Cycle Duration") {
         if (cycle.cycle_duration - v).abs() > f32::EPSILON {
             cycle.cycle_duration = v;
@@ -1624,24 +1666,23 @@ fn sync_lighting_tweaks(
         "Phase",
         &format!("{:?}", cycle.phase),
     );
-    if !cycle.paused && !is_dragging("Visuals/Time of Day", "Time") {
+    if !cycle.paused && !active.is_dragging("Visuals/Time of Day", "Time") {
         tweaks.set_float_if_changed("Visuals/Time of Day", "Time", cycle.time);
     }
+}
 
-    // ── Sunlight folder ──
+fn sync_sunlight_tweaks(
+    tweaks: &mut DebugTweaks,
+    active: &ActiveSlider,
+    overrides: &mut LightingOverrides,
+    sun_q: &Query<(&DirectionalLight, &Transform), With<SunLight>>,
+) {
     let sun_override = tweaks
         .get_bool("Visuals/Sunlight", "Override")
         .unwrap_or(false);
     if sun_override {
         overrides.sun_illuminance = tweaks.get_float("Visuals/Sunlight", "Illuminance");
-        overrides.sun_color = match (
-            tweaks.get_float("Visuals/Sunlight", "Color R"),
-            tweaks.get_float("Visuals/Sunlight", "Color G"),
-            tweaks.get_float("Visuals/Sunlight", "Color B"),
-        ) {
-            (Some(r), Some(g), Some(b)) => Some([r, g, b]),
-            _ => None,
-        };
+        overrides.sun_color = tweaks.get_color_rgb("Visuals/Sunlight");
         overrides.sun_pitch = tweaks.get_float("Visuals/Sunlight", "Pitch");
         overrides.sun_yaw = tweaks.get_float("Visuals/Sunlight", "Yaw");
         overrides.shadows_enabled = tweaks.get_bool("Visuals/Sunlight", "Shadows");
@@ -1652,205 +1693,165 @@ fn sync_lighting_tweaks(
         overrides.sun_yaw = None;
 
         if let Ok((sun, sun_tf)) = sun_q.single() {
-            if !is_dragging("Visuals/Sunlight", "Illuminance") {
+            if !active.is_dragging("Visuals/Sunlight", "Illuminance") {
                 tweaks.set_float_if_changed("Visuals/Sunlight", "Illuminance", sun.illuminance);
             }
-            let c = sun.color.to_srgba();
-            if !is_dragging("Visuals/Sunlight", "Color R") {
-                tweaks.set_float_if_changed("Visuals/Sunlight", "Color R", c.red);
-            }
-            if !is_dragging("Visuals/Sunlight", "Color G") {
-                tweaks.set_float_if_changed("Visuals/Sunlight", "Color G", c.green);
-            }
-            if !is_dragging("Visuals/Sunlight", "Color B") {
-                tweaks.set_float_if_changed("Visuals/Sunlight", "Color B", c.blue);
-            }
+            tweaks.sync_color_rgb_back("Visuals/Sunlight", &sun.color.to_srgba(), active);
 
             let (pitch, yaw, _) = sun_tf.rotation.to_euler(EulerRot::XYZ);
-            if !is_dragging("Visuals/Sunlight", "Pitch") {
+            if !active.is_dragging("Visuals/Sunlight", "Pitch") {
                 tweaks.set_float_if_changed("Visuals/Sunlight", "Pitch", pitch);
             }
-            if !is_dragging("Visuals/Sunlight", "Yaw") {
+            if !active.is_dragging("Visuals/Sunlight", "Yaw") {
                 tweaks.set_float_if_changed("Visuals/Sunlight", "Yaw", yaw);
             }
         }
 
         overrides.shadows_enabled = tweaks.get_bool("Visuals/Sunlight", "Shadows");
     }
+}
 
-    // ── Ambient Light folder ──
+fn sync_ambient_tweaks(
+    tweaks: &mut DebugTweaks,
+    active: &ActiveSlider,
+    overrides: &mut LightingOverrides,
+    ambient: &GlobalAmbientLight,
+) {
     let amb_override = tweaks
         .get_bool("Visuals/Ambient Light", "Override")
         .unwrap_or(false);
     if amb_override {
         overrides.ambient_brightness = tweaks.get_float("Visuals/Ambient Light", "Brightness");
-        overrides.ambient_color = match (
-            tweaks.get_float("Visuals/Ambient Light", "Color R"),
-            tweaks.get_float("Visuals/Ambient Light", "Color G"),
-            tweaks.get_float("Visuals/Ambient Light", "Color B"),
-        ) {
-            (Some(r), Some(g), Some(b)) => Some([r, g, b]),
-            _ => None,
-        };
+        overrides.ambient_color = tweaks.get_color_rgb("Visuals/Ambient Light");
     } else {
         overrides.ambient_brightness = None;
         overrides.ambient_color = None;
 
-        if !is_dragging("Visuals/Ambient Light", "Brightness") {
+        if !active.is_dragging("Visuals/Ambient Light", "Brightness") {
             tweaks.set_float_if_changed("Visuals/Ambient Light", "Brightness", ambient.brightness);
         }
-        let c = ambient.color.to_srgba();
-        if !is_dragging("Visuals/Ambient Light", "Color R") {
-            tweaks.set_float_if_changed("Visuals/Ambient Light", "Color R", c.red);
-        }
-        if !is_dragging("Visuals/Ambient Light", "Color G") {
-            tweaks.set_float_if_changed("Visuals/Ambient Light", "Color G", c.green);
-        }
-        if !is_dragging("Visuals/Ambient Light", "Color B") {
-            tweaks.set_float_if_changed("Visuals/Ambient Light", "Color B", c.blue);
-        }
+        tweaks.sync_color_rgb_back("Visuals/Ambient Light", &ambient.color.to_srgba(), active);
     }
+}
 
-    // ── Sky Color folder ──
+fn sync_sky_color_tweaks(
+    tweaks: &mut DebugTweaks,
+    active: &ActiveSlider,
+    overrides: &mut LightingOverrides,
+    clear: &ClearColor,
+) {
     let fog_override = tweaks
         .get_bool("Visuals/Sky Color", "Override")
         .unwrap_or(false);
     if fog_override {
-        overrides.fog_color = match (
-            tweaks.get_float("Visuals/Sky Color", "Color R"),
-            tweaks.get_float("Visuals/Sky Color", "Color G"),
-            tweaks.get_float("Visuals/Sky Color", "Color B"),
-        ) {
-            (Some(r), Some(g), Some(b)) => Some([r, g, b]),
-            _ => None,
-        };
+        overrides.fog_color = tweaks.get_color_rgb("Visuals/Sky Color");
     } else {
         overrides.fog_color = None;
+        tweaks.sync_color_rgb_back("Visuals/Sky Color", &clear.0.to_srgba(), active);
+    }
+}
 
-        let c = clear.0.to_srgba();
-        if !is_dragging("Visuals/Sky Color", "Color R") {
-            tweaks.set_float_if_changed("Visuals/Sky Color", "Color R", c.red);
-        }
-        if !is_dragging("Visuals/Sky Color", "Color G") {
-            tweaks.set_float_if_changed("Visuals/Sky Color", "Color G", c.green);
-        }
-        if !is_dragging("Visuals/Sky Color", "Color B") {
-            tweaks.set_float_if_changed("Visuals/Sky Color", "Color B", c.blue);
+#[cfg(not(target_arch = "wasm32"))]
+fn sync_volumetric_fog_tweaks(
+    tweaks: &mut DebugTweaks,
+    active: &ActiveSlider,
+    overrides: &mut LightingOverrides,
+    fog_vol_q: &mut Query<&mut FogVolume, With<AtmosphericFogVolume>>,
+    cam_fog_q: &mut Query<&mut VolumetricFog>,
+) {
+    let vol_enabled = tweaks
+        .get_bool("Visuals/Volumetric Fog", "Enabled")
+        .unwrap_or(true);
+    let vol_override = tweaks
+        .get_bool("Visuals/Volumetric Fog", "Override")
+        .unwrap_or(false);
+
+    if let Ok(mut fog_vol) = fog_vol_q.single_mut() {
+        if !vol_enabled {
+            fog_vol.density_factor = 0.0;
         }
     }
 
-    // ── Volumetric Fog folder (not available on WASM) ──
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let vol_enabled = tweaks
-            .get_bool("Visuals/Volumetric Fog", "Enabled")
-            .unwrap_or(true);
-        let vol_override = tweaks
-            .get_bool("Visuals/Volumetric Fog", "Override")
-            .unwrap_or(false);
+    if let Ok(mut vol_fog) = cam_fog_q.single_mut() {
+        if !vol_enabled {
+            vol_fog.step_count = 0;
+        } else if let Some(sc) = tweaks.get_float("Visuals/Volumetric Fog", "Step Count") {
+            vol_fog.step_count = sc as u32;
+        }
+    }
 
-        // Toggle visibility of the fog volume
+    if vol_override {
+        overrides.vol_density = tweaks.get_float("Visuals/Volumetric Fog", "Density");
+        overrides.vol_color = tweaks.get_color_rgb("Visuals/Volumetric Fog");
+        overrides.vol_ambient_intensity =
+            tweaks.get_float("Visuals/Volumetric Fog", "Ambient Intensity");
+        overrides.vol_light_intensity =
+            tweaks.get_float("Visuals/Volumetric Fog", "Light Intensity");
+
         if let Ok(mut fog_vol) = fog_vol_q.single_mut() {
-            if !vol_enabled {
-                fog_vol.density_factor = 0.0;
+            if let Some(s) = tweaks.get_float("Visuals/Volumetric Fog", "Scattering") {
+                fog_vol.scattering = s;
+            }
+            if let Some(a) = tweaks.get_float("Visuals/Volumetric Fog", "Absorption") {
+                fog_vol.absorption = a;
+            }
+        }
+    } else {
+        overrides.vol_density = None;
+        overrides.vol_color = None;
+        overrides.vol_ambient_intensity = None;
+        overrides.vol_light_intensity = None;
+
+        if let Ok(fog_vol) = fog_vol_q.single() {
+            if !active.is_dragging("Visuals/Volumetric Fog", "Density") {
+                tweaks.set_float_if_changed(
+                    "Visuals/Volumetric Fog",
+                    "Density",
+                    fog_vol.density_factor,
+                );
+            }
+            tweaks.sync_color_rgb_back(
+                "Visuals/Volumetric Fog",
+                &fog_vol.fog_color.to_srgba(),
+                active,
+            );
+            if !active.is_dragging("Visuals/Volumetric Fog", "Light Intensity") {
+                tweaks.set_float_if_changed(
+                    "Visuals/Volumetric Fog",
+                    "Light Intensity",
+                    fog_vol.light_intensity,
+                );
+            }
+            if !active.is_dragging("Visuals/Volumetric Fog", "Scattering") {
+                tweaks.set_float_if_changed(
+                    "Visuals/Volumetric Fog",
+                    "Scattering",
+                    fog_vol.scattering,
+                );
+            }
+            if !active.is_dragging("Visuals/Volumetric Fog", "Absorption") {
+                tweaks.set_float_if_changed(
+                    "Visuals/Volumetric Fog",
+                    "Absorption",
+                    fog_vol.absorption,
+                );
             }
         }
 
-        // Toggle camera volumetric fog step_count to 0 to disable
-        if let Ok(mut vol_fog) = cam_fog_q.single_mut() {
-            if !vol_enabled {
-                vol_fog.step_count = 0;
-            } else if let Some(sc) = tweaks.get_float("Visuals/Volumetric Fog", "Step Count") {
-                vol_fog.step_count = sc as u32;
+        if let Ok(vol_fog) = cam_fog_q.single() {
+            if !active.is_dragging("Visuals/Volumetric Fog", "Ambient Intensity") {
+                tweaks.set_float_if_changed(
+                    "Visuals/Volumetric Fog",
+                    "Ambient Intensity",
+                    vol_fog.ambient_intensity,
+                );
             }
-        }
-
-        if vol_override {
-            overrides.vol_density = tweaks.get_float("Visuals/Volumetric Fog", "Density");
-            overrides.vol_color = match (
-                tweaks.get_float("Visuals/Volumetric Fog", "Color R"),
-                tweaks.get_float("Visuals/Volumetric Fog", "Color G"),
-                tweaks.get_float("Visuals/Volumetric Fog", "Color B"),
-            ) {
-                (Some(r), Some(g), Some(b)) => Some([r, g, b]),
-                _ => None,
-            };
-            overrides.vol_ambient_intensity =
-                tweaks.get_float("Visuals/Volumetric Fog", "Ambient Intensity");
-            overrides.vol_light_intensity =
-                tweaks.get_float("Visuals/Volumetric Fog", "Light Intensity");
-
-            // Apply scattering/absorption directly
-            if let Ok(mut fog_vol) = fog_vol_q.single_mut() {
-                if let Some(s) = tweaks.get_float("Visuals/Volumetric Fog", "Scattering") {
-                    fog_vol.scattering = s;
-                }
-                if let Some(a) = tweaks.get_float("Visuals/Volumetric Fog", "Absorption") {
-                    fog_vol.absorption = a;
-                }
-            }
-        } else {
-            overrides.vol_density = None;
-            overrides.vol_color = None;
-            overrides.vol_ambient_intensity = None;
-            overrides.vol_light_intensity = None;
-
-            if let Ok(fog_vol) = fog_vol_q.single() {
-                if !is_dragging("Visuals/Volumetric Fog", "Density") {
-                    tweaks.set_float_if_changed(
-                        "Visuals/Volumetric Fog",
-                        "Density",
-                        fog_vol.density_factor,
-                    );
-                }
-                let c = fog_vol.fog_color.to_srgba();
-                if !is_dragging("Visuals/Volumetric Fog", "Color R") {
-                    tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color R", c.red);
-                }
-                if !is_dragging("Visuals/Volumetric Fog", "Color G") {
-                    tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color G", c.green);
-                }
-                if !is_dragging("Visuals/Volumetric Fog", "Color B") {
-                    tweaks.set_float_if_changed("Visuals/Volumetric Fog", "Color B", c.blue);
-                }
-                if !is_dragging("Visuals/Volumetric Fog", "Light Intensity") {
-                    tweaks.set_float_if_changed(
-                        "Visuals/Volumetric Fog",
-                        "Light Intensity",
-                        fog_vol.light_intensity,
-                    );
-                }
-                if !is_dragging("Visuals/Volumetric Fog", "Scattering") {
-                    tweaks.set_float_if_changed(
-                        "Visuals/Volumetric Fog",
-                        "Scattering",
-                        fog_vol.scattering,
-                    );
-                }
-                if !is_dragging("Visuals/Volumetric Fog", "Absorption") {
-                    tweaks.set_float_if_changed(
-                        "Visuals/Volumetric Fog",
-                        "Absorption",
-                        fog_vol.absorption,
-                    );
-                }
-            }
-
-            if let Ok(vol_fog) = cam_fog_q.single() {
-                if !is_dragging("Visuals/Volumetric Fog", "Ambient Intensity") {
-                    tweaks.set_float_if_changed(
-                        "Visuals/Volumetric Fog",
-                        "Ambient Intensity",
-                        vol_fog.ambient_intensity,
-                    );
-                }
-                if !is_dragging("Visuals/Volumetric Fog", "Step Count") {
-                    tweaks.set_float_if_changed(
-                        "Visuals/Volumetric Fog",
-                        "Step Count",
-                        vol_fog.step_count as f32,
-                    );
-                }
+            if !active.is_dragging("Visuals/Volumetric Fog", "Step Count") {
+                tweaks.set_float_if_changed(
+                    "Visuals/Volumetric Fog",
+                    "Step Count",
+                    vol_fog.step_count as f32,
+                );
             }
         }
     }
@@ -1891,6 +1892,8 @@ fn sync_entity_light_tweaks(
 }
 
 // ── Sync: Fog ↔ DebugTweaks ──
+// Owns "Visuals/FoW Gameplay" folder. Shader params ("Visuals/FoW Shader") are
+// synced in fog.rs::update_fog_material_time.
 
 fn sync_fog_tweaks(tweaks: Res<DebugTweaks>, mut fog_settings: ResMut<FogTweakSettings>) {
     // Shader tweaks are now applied directly in fog.rs update_fog_material_time.
@@ -1909,8 +1912,8 @@ fn sync_fog_tweaks(tweaks: Res<DebugTweaks>, mut fog_settings: ResMut<FogTweakSe
     if let Some(v) = tweaks.get_float("Visuals/FoW Gameplay", "Transition Speed") {
         fog_settings.transition_speed = v;
     }
-    if let Some(v) = tweaks.get_float("Visuals/FoW Gameplay", "Enable LOS") {
-        fog_settings.enable_los = v > 0.5;
+    if let Some(v) = tweaks.get_bool("Visuals/FoW Gameplay", "Enable LOS") {
+        fog_settings.enable_los = v;
     }
     if let Some(v) = tweaks.get_float("Visuals/FoW Gameplay", "LOS Ray Count") {
         fog_settings.los_ray_count = v as usize;
@@ -2039,79 +2042,24 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
         ],
         0,
     );
-    tweaks.add_readonly(PLAYER_FOLDER, "AI Status", "P2: AI, P3: AI, P4: AI");
-    tweaks.add_cycle_enum(
-        PLAYER_FOLDER,
-        "Team Mode",
-        vec![
-            "2v2 (P1+P2 vs P3+P4)".to_string(),
-            "FFA (all vs all)".to_string(),
-            "1v3 (P1 vs rest)".to_string(),
-        ],
-        0,
-    );
 
     // AI Settings folder
-    tweaks.add_bool(AI_FOLDER, "P2 AI Enabled", true);
-    tweaks.add_bool(AI_FOLDER, "P3 AI Enabled", true);
-    tweaks.add_bool(AI_FOLDER, "P4 AI Enabled", true);
-    tweaks.add_cycle_enum(
-        AI_FOLDER,
-        "P2 Difficulty",
-        vec!["Easy".to_string(), "Medium".to_string(), "Hard".to_string()],
-        1,
-    );
-    tweaks.add_cycle_enum(
-        AI_FOLDER,
-        "P3 Difficulty",
-        vec!["Easy".to_string(), "Medium".to_string(), "Hard".to_string()],
-        1,
-    );
-    tweaks.add_cycle_enum(
-        AI_FOLDER,
-        "P4 Difficulty",
-        vec!["Easy".to_string(), "Medium".to_string(), "Hard".to_string()],
-        1,
-    );
-    tweaks.add_cycle_enum(
-        AI_FOLDER,
-        "P2 Personality",
-        vec![
-            "Balanced".to_string(),
-            "Aggressive".to_string(),
-            "Defensive".to_string(),
-            "Economic".to_string(),
-            "Supportive".to_string(),
-        ],
-        0,
-    );
-    tweaks.add_cycle_enum(
-        AI_FOLDER,
-        "P3 Personality",
-        vec![
-            "Balanced".to_string(),
-            "Aggressive".to_string(),
-            "Defensive".to_string(),
-            "Economic".to_string(),
-            "Supportive".to_string(),
-        ],
-        0,
-    );
-    tweaks.add_cycle_enum(
-        AI_FOLDER,
-        "P4 Personality",
-        vec![
-            "Balanced".to_string(),
-            "Aggressive".to_string(),
-            "Defensive".to_string(),
-            "Economic".to_string(),
-            "Supportive".to_string(),
-        ],
-        0,
-    );
-    tweaks.add_readonly(AI_FOLDER, "P2 State", "--");
-    tweaks.add_readonly(AI_FOLDER, "P3 State", "--");
-    tweaks.add_readonly(AI_FOLDER, "P4 State", "--");
+    for prefix in ["P2", "P3", "P4"] {
+        tweaks.add_bool(AI_FOLDER, &format!("{prefix} AI Enabled"), true);
+        tweaks.add_cycle_enum(
+            AI_FOLDER,
+            &format!("{prefix} Difficulty"),
+            vec!["Easy".into(), "Medium".into(), "Hard".into()],
+            1,
+        );
+        tweaks.add_cycle_enum(
+            AI_FOLDER,
+            &format!("{prefix} Personality"),
+            vec!["Balanced".into(), "Aggressive".into(), "Defensive".into(), "Economic".into(), "Supportive".into()],
+            0,
+        );
+        tweaks.add_readonly(AI_FOLDER, &format!("{prefix} State"), "--");
+    }
 
     // Save & Load folder
     tweaks.add_button(SAVE_FOLDER, "Save Game");
@@ -2307,12 +2255,8 @@ fn sync_entity_selected_tweaks(
     }
 
     // Only apply HP%/Speed sliders when actively dragging them
-    let is_dragging = |label: &str| -> bool {
-        active.folder.as_deref() == Some(SELECTED_FOLDER) && active.label.as_deref() == Some(label)
-    };
-
     if count > 0 {
-        if is_dragging("Set HP %") {
+        if active.is_dragging(SELECTED_FOLDER, "Set HP %") {
             if let Some(hp_pct) = tweaks.get_float(SELECTED_FOLDER, "Set HP %") {
                 for (_, mut hp) in &mut health_q {
                     let target = hp.max * hp_pct / 100.0;
@@ -2320,7 +2264,7 @@ fn sync_entity_selected_tweaks(
                 }
             }
         }
-        if is_dragging("Set Speed") {
+        if active.is_dragging(SELECTED_FOLDER, "Set Speed") {
             if let Some(spd) = tweaks.get_float(SELECTED_FOLDER, "Set Speed") {
                 for mut s in &mut speed_q {
                     s.0 = spd;
@@ -2360,7 +2304,7 @@ fn sync_player_control_tweaks(
     mut commands: Commands,
     tweaks: Res<DebugTweaks>,
     mut active_player: ResMut<ActivePlayer>,
-    mut team_config: ResMut<TeamConfig>,
+    _team_config: ResMut<TeamConfig>,
     mut camera_q: Query<&mut RtsCamera>,
     selected_entities: Query<Entity, With<Selected>>,
     mut inspected_enemy: ResMut<InspectedEnemy>,
@@ -2396,9 +2340,6 @@ fn sync_player_control_tweaks(
             }
         }
     }
-
-    // Team Mode switching — only override if debug tweak was actively changed
-    // (don't overwrite the config set by apply_game_config on every frame)
 }
 
 fn sync_ai_debug_tweaks(
