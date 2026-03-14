@@ -169,6 +169,7 @@ fn setup_minimap(
     if let Ok(content_entity) = content_q.single() {
         let minimap_image = commands
             .spawn((
+                GameWorld,
                 MinimapNode,
                 Interaction::default(),
                 RelativeCursorPosition::default(),

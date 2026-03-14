@@ -17,6 +17,7 @@ mod minimap;
 mod mobs;
 mod model_assets;
 mod orders;
+mod pause_menu;
 mod pathvis;
 mod resources;
 mod roads;
@@ -94,5 +95,6 @@ fn main() {
         .add_plugins(attention::AttentionPlugin)
         .add_plugins(ai::AiPlugin)
         .add_plugins(unit_ai::UnitAiPlugin)
+        .add_plugins(pause_menu::PauseMenuPlugin)
         .run();
 }

@@ -4,7 +4,7 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use rand::SeedableRng;
 
 use crate::components::{
-    AppState, Biome, BiomeMap, GameSetupConfig, Ground, MapSeed, ModelAssets,
+    AppState, Biome, BiomeMap, GameSetupConfig, GameWorld, Ground, MapSeed, ModelAssets,
 };
 
 pub const MAP_SIZE: f32 = 500.0;
@@ -328,6 +328,7 @@ pub fn spawn_ground(
     mesh.insert_indices(Indices::U32(indices));
 
     commands.spawn((
+        GameWorld,
         Ground,
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(materials.add(StandardMaterial {
@@ -436,6 +437,7 @@ fn spawn_border_mountain(
     let scale = rng.random_range(base_scale * 0.9..base_scale * 1.15);
 
     commands.spawn((
+        GameWorld,
         SceneRoot(scene),
         Transform::from_translation(Vec3::new(x, y - 0.5, z))
             .with_rotation(Quat::from_rotation_y(

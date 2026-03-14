@@ -1,10 +1,10 @@
 {
   "resolution": [
-    1920,
-    1080
+    1280,
+    720
   ],
   "fullscreen": false,
-  "shadow_quality": "Low",
+  "shadow_quality": "High",
   "entity_lights": true,
   "ui_scale": 1.0
 }

@@ -421,6 +421,45 @@ pub fn handle_scuttle_unit_button(
     }
 }
 
+// ── Drop cargo button handler ──
+
+pub fn handle_drop_cargo_button(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<DropCargoButton>)>,
+    mut workers: Query<
+        (Entity, &EntityKind, &Faction, &mut Carrying, &mut UnitState),
+        (With<Unit>, With<Selected>),
+    >,
+    active_player: Res<ActivePlayer>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+
+        for (_, kind, faction, mut carrying, mut state) in &mut workers {
+            if *faction != active_player.0 || *kind != EntityKind::Worker {
+                continue;
+            }
+            carrying.amount = 0;
+            carrying.weight = 0.0;
+            carrying.resource_type = None;
+            // If the worker was stuck returning/waiting, reset to idle
+            if matches!(
+                *state,
+                UnitState::ReturningToDeposit { .. }
+                    | UnitState::WaitingForStorage { .. }
+                    | UnitState::Depositing { .. }
+            ) {
+                *state = UnitState::Idle;
+            }
+        }
+    }
+}
+
 // ── Rally point button handler ──
 
 pub fn handle_rally_point_button(

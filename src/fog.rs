@@ -395,6 +395,7 @@ fn spawn_fog_overlay(
     });
 
     commands.spawn((
+        GameWorld,
         FogOverlay,
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(material),

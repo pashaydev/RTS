@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::blueprints::EntityKind;
 
@@ -1950,6 +1950,8 @@ pub struct ConstructionWorkers(pub u8);
 pub struct TrainingQueue {
     pub queue: Vec<EntityKind>,
     pub timer: Option<Timer>,
+    /// Running counter used to scatter spawn positions (golden-angle offset).
+    pub total_trained: u32,
 }
 
 #[derive(Component)]
@@ -2075,6 +2077,9 @@ pub struct RallyPointButton;
 
 #[derive(Component)]
 pub struct ScuttleUnitButton;
+
+#[derive(Component)]
+pub struct DropCargoButton;
 
 #[derive(Component)]
 pub struct ConfirmDemolishButton;
@@ -2396,3 +2401,69 @@ pub struct AllyToggleButton {
 
 #[derive(Component)]
 pub struct RandomNameButton;
+
+// ── In-Game Overlay ──
+
+#[derive(Resource, Default, PartialEq, Eq, Clone, Copy, Debug)]
+pub enum InGameOverlay {
+    #[default]
+    None,
+    PauseMenu,
+    PauseOptions,
+    DeathScreen,
+    Spectating,
+}
+
+/// Run-condition: returns true only when no overlay is active (player can issue commands).
+pub fn player_can_command(overlay: Res<InGameOverlay>) -> bool {
+    *overlay == InGameOverlay::None
+}
+
+#[derive(Resource, Default)]
+pub struct FactionStats {
+    pub stats: HashMap<Faction, FactionStatus>,
+}
+
+#[derive(Default, Clone)]
+pub struct FactionStatus {
+    pub unit_count: u32,
+    pub building_count: u32,
+    pub eliminated: bool,
+}
+
+/// Inserted as a resource when Restart is requested; menu reads & removes it.
+#[derive(Resource)]
+pub struct RestartRequested;
+
+// ── Overlay UI markers ──
+
+#[derive(Component)]
+pub struct PauseOverlayRoot;
+
+#[derive(Component)]
+pub struct DeathScreenRoot;
+
+#[derive(Component)]
+pub struct SpectatorHudRoot;
+
+/// Marks all in-game entities for cleanup on exit.
+#[derive(Component)]
+pub struct GameWorld;
+
+#[derive(Component)]
+pub struct PauseMenuButton(pub PauseAction);
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PauseAction {
+    Continue,
+    Restart,
+    MainMenu,
+    Options,
+    Quit,
+    BackFromOptions,
+    ApplySettings,
+    Spectate,
+}
+
+#[derive(Component)]
+pub struct SpectatorStatsText;

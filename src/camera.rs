@@ -4,7 +4,7 @@ use bevy::light::cluster::{ClusterConfig, ClusterZConfig};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::components::{AppState, CursorOverUi, DragState, GameSetupConfig, MapSeed, RtsCamera};
+use crate::components::{AppState, CursorOverUi, DragState, GameSetupConfig, GameWorld, MapSeed, RtsCamera};
 
 // ── Tuning constants ──
 
@@ -72,6 +72,7 @@ fn spawn_camera(mut commands: Commands, config: Res<GameSetupConfig>, map_seed: 
     let offset = Vec3::new(angle.sin() * h_dist, height, angle.cos() * h_dist);
 
     commands.spawn((
+        GameWorld,
         RtsCamera {
             pivot,
             distance,

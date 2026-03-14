@@ -171,7 +171,16 @@ fn spawn_menu(
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
     fonts: Res<UiFonts>,
+    restart: Option<Res<RestartRequested>>,
+    mut next_state: ResMut<NextState<AppState>>,
 ) {
+    // If restart was requested, skip the menu entirely and go back to InGame
+    if restart.is_some() {
+        commands.remove_resource::<RestartRequested>();
+        next_state.set(AppState::InGame);
+        return;
+    }
+
     commands.spawn((
         MenuCamera,
         Camera2d,

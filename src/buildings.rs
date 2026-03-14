@@ -126,6 +126,14 @@ impl Plugin for BuildingsPlugin {
                     confirm_wall_plot,
                     confirm_gate_plot,
                     cancel_placement,
+                )
+                    .chain()
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
+            )
+            .add_systems(
+                Update,
+                (
                     pending_build_arrival_system,
                     pending_build_cleanup_system,
                     construction_progress_system,
@@ -1282,6 +1290,7 @@ fn construction_progress_system(
                     commands.entity(entity).insert(TrainingQueue {
                         queue: vec![],
                         timer: None,
+                        total_trained: 0,
                     });
                 }
             }
@@ -1388,12 +1397,13 @@ fn training_queue_system(
             &mut TrainingQueue,
             Option<&RallyPoint>,
             &Faction,
+            &BuildingLevel,
         ),
         With<Building>,
     >,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
-    for (transform, _kind, mut queue, rally_point, building_faction) in &mut buildings {
+    for (transform, building_kind, mut queue, rally_point, building_faction, building_level) in &mut buildings {
         if queue.queue.is_empty() {
             continue;
         }
@@ -1402,14 +1412,36 @@ fn training_queue_system(
         if queue.timer.is_none() {
             let unit_kind = queue.queue[0];
             let bp = registry.get(unit_kind);
-            queue.timer = Some(Timer::from_seconds(bp.train_time_secs, TimerMode::Once));
+            let mut train_secs = bp.train_time_secs;
+
+            // Apply TrainTimeMultiplier from building level bonuses
+            let building_bp = registry.get(*building_kind);
+            if let Some(ref bd) = building_bp.building {
+                for (i, ld) in bd.level_upgrades.iter().enumerate() {
+                    if (i as u8 + 2) <= building_level.0 {
+                        if let LevelBonus::TrainTimeMultiplier(mult) = ld.bonus {
+                            train_secs *= mult;
+                        }
+                    }
+                }
+            }
+
+            queue.timer = Some(Timer::from_seconds(train_secs, TimerMode::Once));
         }
 
         if let Some(ref mut timer) = queue.timer {
             timer.tick(time.delta());
             if timer.is_finished() {
                 let unit_kind = queue.queue.remove(0);
-                let spawn_pos = transform.translation + Vec3::new(3.0, 0.0, 3.0);
+
+                // Scatter spawn positions around the building to avoid stacking
+                let spawn_index = queue.total_trained;
+                queue.total_trained = queue.total_trained.wrapping_add(1);
+                let angle = std::f32::consts::TAU * (spawn_index as f32 * 0.618034); // golden angle
+                let radius = 3.5;
+                let offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
+                let spawn_pos = transform.translation + offset;
+
                 let unit_entity = spawn_from_blueprint_with_faction(
                     &mut commands,
                     &cache,
@@ -1431,9 +1463,14 @@ fn training_queue_system(
                     Some(*building_faction),
                 );
 
-                // If building has a rally point, send the unit there
+                // If building has a rally point, set UnitState::Moving so the
+                // unit actually walks there (plain MoveTarget gets stripped by
+                // the unit-state executor when state is Idle).
                 if let Some(rally) = rally_point {
-                    commands.entity(unit_entity).insert(MoveTarget(rally.0));
+                    commands
+                        .entity(unit_entity)
+                        .insert(MoveTarget(rally.0))
+                        .insert(UnitState::Moving(rally.0));
                 }
 
                 queue.timer = None;
@@ -1569,7 +1606,7 @@ fn building_upgrade_system(
         vision,
         attack_range,
         attack_damage,
-        storage_inv,
+        mut storage_inv,
         processor,
         respawn_config,
     ) in &mut buildings
@@ -1718,6 +1755,14 @@ fn building_upgrade_system(
                     let current_secs = rc.respawn_timer.duration().as_secs_f32();
                     rc.respawn_timer =
                         Timer::from_seconds((current_secs * 0.75).max(10.0), TimerMode::Repeating);
+                }
+                // Grant storage capacity for newly unlocked resource types
+                if let Some(ref mut inv) = storage_inv {
+                    for rt in unlock_resources {
+                        if inv.caps[rt.index()] == 0 {
+                            inv.caps[rt.index()] = 500;
+                        }
+                    }
                 }
             }
             LevelBonus::UnlockRecipe {

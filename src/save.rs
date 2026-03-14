@@ -776,6 +776,7 @@ fn apply_load_overrides(
             commands.entity(entity).insert(TrainingQueue {
                 queue: queue.clone(),
                 timer,
+                total_trained: 0,
             });
         }
 

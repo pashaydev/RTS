@@ -2686,6 +2686,7 @@ pub fn spawn_from_blueprint_with_faction(
     let mut entity_cmds = if is_gltf {
         // GLTF buildings/characters: no Mesh3d/MeshMaterial3d on parent
         commands.spawn((
+            GameWorld,
             kind,
             faction,
             PickRadius(pick_radius),
@@ -2701,6 +2702,7 @@ pub fn spawn_from_blueprint_with_faction(
         ))
     } else {
         commands.spawn((
+            GameWorld,
             kind,
             faction,
             PickRadius(pick_radius),

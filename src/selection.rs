@@ -38,7 +38,8 @@ impl Plugin for SelectionPlugin {
                     .chain()
                     .in_set(SelectionSet)
                     .after(MinimapSet)
-                    .run_if(in_state(AppState::InGame)),
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
             )
             .add_systems(
                 Update,
@@ -48,11 +49,22 @@ impl Plugin for SelectionPlugin {
                 )
                     .in_set(SelectionSet)
                     .after(MinimapSet)
-                    .run_if(in_state(AppState::InGame)),
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
             )
             .add_systems(Update, update_entity_visuals)
-            .add_systems(Update, handle_right_click_move)
-            .add_systems(Update, handle_unit_command_hotkeys)
+            .add_systems(
+                Update,
+                handle_right_click_move
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
+            )
+            .add_systems(
+                Update,
+                handle_unit_command_hotkeys
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
+            )
             .add_systems(
                 Update,
                 (update_hover_ring, update_hover_tooltip)
@@ -307,6 +319,7 @@ fn setup_hover_assets(
 
 fn spawn_selection_box(mut commands: Commands) {
     commands.spawn((
+        GameWorld,
         SelectionBox,
         Node {
             position_type: PositionType::Absolute,

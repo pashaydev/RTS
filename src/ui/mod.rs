@@ -83,7 +83,8 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 (buttons::handle_build_buttons, buttons::handle_train_buttons)
-                    .run_if(in_state(AppState::InGame)),
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
             )
             .add_systems(
                 Update,
@@ -92,12 +93,20 @@ impl Plugin for UiPlugin {
                     buttons::handle_demolish_button,
                     buttons::handle_demolish_confirm,
                     buttons::handle_scuttle_unit_button,
+                    buttons::handle_drop_cargo_button,
                     buttons::handle_rally_point_button,
                     buttons::handle_toggle_auto_attack,
                     buttons::handle_cancel_train,
                     buttons::handle_assign_worker_button,
                     buttons::handle_unassign_worker_button,
                     buttons::handle_unassign_specific_worker_button,
+                )
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
+            )
+            .add_systems(
+                Update,
+                (
                     buttons::update_training_queue_display,
                     buttons::update_construction_progress_display,
                     buttons::update_train_cost_colors,
@@ -112,13 +121,20 @@ impl Plugin for UiPlugin {
                     buttons::show_action_tooltips,
                     buttons::update_action_tooltip_positions,
                     buttons::cleanup_action_tooltips,
+                )
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
                     buttons::handle_attack_move_button,
                     buttons::handle_patrol_button,
                     buttons::handle_hold_position_button,
                     buttons::handle_stop_button,
                     buttons::handle_cycle_stance_button,
                 )
-                    .run_if(in_state(AppState::InGame)),
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
             )
             // These run in ALL states so menu buttons animate too
             .add_systems(
@@ -168,10 +184,15 @@ impl Plugin for UiPlugin {
                     event_log_widget::update_event_log,
                     event_log_widget::handle_event_log_click,
                     group_hotkeys_widget::update_group_hotkeys_widget,
-                    group_hotkeys_widget::handle_control_group_keys,
                     group_hotkeys_widget::handle_group_slot_click,
                 )
                     .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                group_hotkeys_widget::handle_control_group_keys
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
             )
             // Animation systems run in ALL states so menu animations work
             .add_systems(
@@ -257,6 +278,7 @@ pub fn spawn_hud(
     // Root full-screen container for widget grid
     let root = commands
         .spawn((
+            GameWorld,
             UiRoot,
             Node {
                 width: Val::Percent(100.0),

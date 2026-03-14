@@ -5,7 +5,8 @@ use bevy::light::{FogVolume, VolumetricFog, VolumetricLight};
 use bevy::prelude::*;
 
 use crate::components::{
-    AppState, Building, GameSetupConfig, GhostBuilding, Unit, WallPostPiece, WallSegmentPiece,
+    AppState, Building, GameSetupConfig, GameWorld, GhostBuilding, Unit, WallPostPiece,
+    WallSegmentPiece,
 };
 
 pub struct LightingPlugin;
@@ -264,6 +265,7 @@ fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
     // Directional light (sun)
     #[cfg(not(target_arch = "wasm32"))]
     commands.spawn((
+        GameWorld,
         SunLight,
         DirectionalLight {
             illuminance: 6000.0,
@@ -276,6 +278,7 @@ fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
     ));
     #[cfg(target_arch = "wasm32")]
     commands.spawn((
+        GameWorld,
         SunLight,
         DirectionalLight {
             illuminance: 6000.0,

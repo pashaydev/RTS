@@ -2,7 +2,7 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
-use crate::blueprints::EntityKind;
+use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
 use crate::components::*;
 use crate::ground::{is_in_mountain_border, BorderSettings, HeightMap};
 use crate::theme;
@@ -309,6 +309,7 @@ fn spawn_resource_nodes(
                     if rt == ResourceType::Wood && has_tree_models {
                         let scene_handle = random_model(&mut rng, &model_assets.trees).unwrap();
                         commands.spawn((
+                            GameWorld,
                             ResourceNode {
                                 resource_type: rt,
                                 amount_remaining: amount,
@@ -330,6 +331,7 @@ fn spawn_resource_nodes(
                     {
                         let scene_handle = random_model(&mut rng, &model_assets.rocks).unwrap();
                         commands.spawn((
+                            GameWorld,
                             ResourceNode {
                                 resource_type: rt,
                                 amount_remaining: amount,
@@ -346,6 +348,7 @@ fn spawn_resource_nodes(
                     else {
                         let y = height_map.sample(x, z) + half_h;
                         commands.spawn((
+                            GameWorld,
                             ResourceNode {
                                 resource_type: rt,
                                 amount_remaining: amount,
@@ -374,6 +377,7 @@ fn spawn_resource_nodes(
                             let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
                             let scale_factor = rng.random_range(0.8_f32..1.2);
                             commands.spawn((
+                                GameWorld,
                                 ResourceNode {
                                     resource_type: rt,
                                     amount_remaining: amount,
@@ -392,6 +396,7 @@ fn spawn_resource_nodes(
                         } else {
                             let y = height_map.sample(offset_x, offset_z) + half_h;
                             commands.spawn((
+                                GameWorld,
                                 ResourceNode {
                                     resource_type: rt,
                                     amount_remaining: amount,
@@ -482,6 +487,7 @@ fn spawn_explosive_props(
 
             let y = height_map.sample(x, z) + 0.55;
             commands.spawn((
+                GameWorld,
                 ExplosiveProp {
                     damage: 45.0,
                     radius: 4.5,
@@ -597,6 +603,7 @@ fn spawn_decorations(
                 let scale = rng.random_range(scale_min..scale_max);
 
                 commands.spawn((
+                    GameWorld,
                     Decoration,
                     FogHideable::Object,
                     SceneRoot(scene_handle),
@@ -798,6 +805,7 @@ fn spawn_dense_grass(
 
         let entity = commands
             .spawn((
+                GameWorld,
                 GrassChunk {
                     chunk_x: cx,
                     chunk_z: cz,
@@ -1029,9 +1037,15 @@ fn worker_ai_system(
                 }
                 if let Some(site) = closest_site {
                     *state = UnitState::MovingToBuild(site);
-                } else if let Some(node) =
-                    find_nearest_node(&tf.translation, auto_scan_range, &all_nodes)
-                {
+                } else if let Some(node) = find_nearest_node(
+                    &tf.translation,
+                    auto_scan_range,
+                    &all_nodes,
+                    &nodes,
+                    Some(worker_faction),
+                    Some(&deposit_points),
+                    Some(&inventories),
+                ) {
                     *state = UnitState::Gathering(node);
                 }
             }
@@ -1332,8 +1346,15 @@ fn worker_ai_system(
                     }
                 }
                 // No gather node or depleted — scan broadly for next resource
-                if let Some(node) = find_nearest_node(&tf.translation, auto_scan_range, &all_nodes)
-                {
+                if let Some(node) = find_nearest_node(
+                    &tf.translation,
+                    auto_scan_range,
+                    &all_nodes,
+                    &nodes,
+                    Some(worker_faction),
+                    Some(&deposit_points),
+                    Some(&inventories),
+                ) {
                     *state = UnitState::Gathering(node);
                 } else {
                     *state = UnitState::Idle;
@@ -1514,6 +1535,7 @@ fn production_chain_system(
     time: Res<Time>,
     mut commands: Commands,
     mut all_resources: ResMut<AllPlayerResources>,
+    registry: Res<BlueprintRegistry>,
     mut producers: Query<
         (
             Entity,
@@ -1523,12 +1545,13 @@ fn production_chain_system(
             &BuildingLevel,
             &Faction,
             Option<&mut StorageInventory>,
+            &EntityKind,
         ),
         With<Building>,
     >,
     vfx_assets: Option<Res<VfxAssets>>,
 ) {
-    for (_entity, building_tf, mut production, state, level, faction, mut storage) in &mut producers {
+    for (_entity, building_tf, mut production, state, level, faction, mut storage, building_kind) in &mut producers {
         if *state != BuildingState::Complete {
             continue;
         }
@@ -1550,7 +1573,19 @@ fn production_chain_system(
         // Copy recipe data to avoid borrow conflicts
         let inputs: Vec<(ResourceType, u32)> = production.recipes[recipe_idx].inputs.clone();
         let outputs: Vec<(ResourceType, u32)> = production.recipes[recipe_idx].outputs.clone();
-        let cycle_secs = production.recipes[recipe_idx].cycle_secs;
+        let mut cycle_secs = production.recipes[recipe_idx].cycle_secs;
+
+        // Apply ProductionSpeedMultiplier from building level bonuses
+        let building_bp = registry.get(*building_kind);
+        if let Some(ref bd) = building_bp.building {
+            for (i, ld) in bd.level_upgrades.iter().enumerate() {
+                if (i as u8 + 2) <= level.0 {
+                    if let LevelBonus::ProductionSpeedMultiplier(mult) = ld.bonus {
+                        cycle_secs *= mult;
+                    }
+                }
+            }
+        }
 
         // Check if we have inputs in the buffer — if not, auto-pull from player resources
         if !production.has_inputs_for_active() {
@@ -1716,19 +1751,44 @@ fn return_to_depot_or_idle(
 }
 
 /// Scan for the nearest resource node within range.
+/// When `faction` is provided, skips nodes whose resource type has no
+/// accepting depot — this prevents workers from gathering resources they
+/// cannot deposit, which previously caused them to get stuck carrying.
 fn find_nearest_node(
     pos: &Vec3,
     range: f32,
     all_nodes: &Query<(Entity, &Transform), (With<ResourceNode>, Without<Unit>)>,
+    node_data_q: &Query<(&Transform, &mut ResourceNode), Without<Unit>>,
+    faction: Option<&Faction>,
+    deposit_points: Option<
+        &Query<
+            (Entity, &Transform, &BuildingState, &Faction),
+            (With<DepositPoint>, Without<Unit>),
+        >,
+    >,
+    inventories: Option<
+        &Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>,
+    >,
 ) -> Option<Entity> {
     let mut closest_dist = f32::MAX;
     let mut closest_node = None;
     for (node_entity, node_tf) in all_nodes {
         let dist = pos.distance(node_tf.translation);
-        if dist < range && dist < closest_dist {
-            closest_dist = dist;
-            closest_node = Some(node_entity);
+        if dist >= range || dist >= closest_dist {
+            continue;
         }
+        // When depot info is available, skip resource types with no accepting depot
+        if let (Some(f), Some(dp)) = (faction, deposit_points) {
+            if let Ok((_, node_data)) = node_data_q.get(node_entity) {
+                if find_nearest_deposit_for(pos, f, Some(node_data.resource_type), dp, inventories)
+                    .is_none()
+                {
+                    continue;
+                }
+            }
+        }
+        closest_dist = dist;
+        closest_node = Some(node_entity);
     }
     closest_node
 }
@@ -2063,6 +2123,7 @@ fn spawn_saplings_system(
         let initial_scale = 0.15;
 
         commands.spawn((
+            GameWorld,
             Sapling {
                 timer: Timer::from_seconds(config.sapling_duration, TimerMode::Once),
                 target_scale,

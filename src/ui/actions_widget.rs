@@ -517,6 +517,44 @@ fn spawn_units_action_bar(
         commands.entity(cmd_row).add_child(btn_id);
     }
 
+    // "Drop Cargo" button — shown when any selected worker is carrying resources
+    let any_carrying = worker_count > 0
+        && selected_units
+            .iter()
+            .any(|(k, c, _, _)| *k == EntityKind::Worker && c.map_or(false, |c| c.amount > 0));
+    if any_carrying {
+        let drop_btn = commands
+            .spawn((
+                Button,
+                DropCargoButton,
+                ButtonAnimState::new([0.0, 0.0, 0.0, 0.0]),
+                ButtonStyle::Filled,
+                ActionTooltipTrigger {
+                    text: "Drop Cargo\nDiscard carried resources on the ground".to_string(),
+                },
+                Node {
+                    margin: UiRect::top(Val::Px(6.0)),
+                    align_self: AlignSelf::FlexStart,
+                    padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Text::new("Drop Cargo"),
+                    TextFont {
+                        font_size: theme::FONT_BODY,
+                        ..default()
+                    },
+                    TextColor(theme::WARNING),
+                ));
+            })
+            .id();
+        commands.entity(container).add_child(drop_btn);
+    }
+
     if worker_count > 0 && worker_count == unit_count {
         let scuttle_btn = commands
             .spawn((
