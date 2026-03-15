@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use std::f32::consts::TAU;
 
 use crate::blueprints::EntityKind;
 use crate::components::*;
@@ -479,6 +480,9 @@ pub fn unit_state_executor_system(
                         continue;
                     }
                     if let Ok(build_tf) = transforms.get(building) {
+                        let angle = (entity.index_u32() as f32 * 2.399) % TAU;
+                        let offset = Vec3::new(angle.cos() * 2.5, 0.0, angle.sin() * 2.5);
+                        let target_pos = build_tf.translation + offset;
                         let dist = tf.translation.distance(build_tf.translation);
                         if dist <= build_range {
                             commands.entity(entity).remove::<MoveTarget>();
@@ -486,7 +490,7 @@ pub fn unit_state_executor_system(
                         } else {
                             commands
                                 .entity(entity)
-                                .insert(MoveTarget(build_tf.translation));
+                                .insert(MoveTarget(target_pos));
                         }
                     }
                 } else {
@@ -509,7 +513,16 @@ pub fn unit_state_executor_system(
                         if dist > build_range {
                             *state = UnitState::MovingToBuild(building);
                         } else {
-                            commands.entity(entity).remove::<MoveTarget>();
+                            // Gently steer back to offset position if drifted
+                            let angle = (entity.index_u32() as f32 * 2.399) % TAU;
+                            let offset = Vec3::new(angle.cos() * 2.5, 0.0, angle.sin() * 2.5);
+                            let target_pos = build_tf.translation + offset;
+                            let drift = tf.translation.distance(target_pos);
+                            if drift > 1.0 {
+                                commands.entity(entity).insert(MoveTarget(target_pos));
+                            } else {
+                                commands.entity(entity).remove::<MoveTarget>();
+                            }
                         }
                     }
                 } else {

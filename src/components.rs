@@ -385,6 +385,31 @@ pub struct UiPressActive(pub bool);
 #[derive(Resource, Default)]
 pub struct CursorOverUi(pub bool);
 
+/// Tracks double-tap timing for group recall + camera center
+#[derive(Resource, Default)]
+pub struct ControlGroupState {
+    pub active_group: Option<usize>,
+    pub last_recall_group: Option<usize>,
+    pub last_recall_time: f64,
+}
+
+/// Tracks Tab cycling through unit types in current selection
+#[derive(Resource, Default)]
+pub struct SubgroupCycleState {
+    pub subgroup_kinds: Vec<EntityKind>,
+    pub current_index: usize,
+    pub active: bool,
+    /// Snapshot of entities at time subgroup mode was activated
+    pub original_selection: Vec<Entity>,
+}
+
+/// Tracks double-click detection for same-type selection
+#[derive(Resource, Default)]
+pub struct DoubleClickDetector {
+    pub last_click_entity: Option<Entity>,
+    pub last_click_time: f64,
+}
+
 /// Active command mode for hotkey-based unit commands (A-click, P-click).
 #[derive(Resource, Default, PartialEq, Eq, Debug, Clone, Copy)]
 pub enum CommandMode {
@@ -1075,14 +1100,107 @@ pub struct ResourceNodeMaterials {
 
 // ── Path visualization ──
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Hash)]
+pub enum PathVisCategory {
+    #[default]
+    Move,
+    Attack,
+    Patrol,
+    Gather,
+    Build,
+}
+
+impl PathVisCategory {
+    pub const ALL: [PathVisCategory; 5] = [
+        PathVisCategory::Move,
+        PathVisCategory::Attack,
+        PathVisCategory::Patrol,
+        PathVisCategory::Gather,
+        PathVisCategory::Build,
+    ];
+
+    /// Returns (base_color, emissive, ring_base_color, ring_emissive)
+    pub fn colors(&self) -> (Color, LinearRgba, Color, LinearRgba) {
+        match self {
+            PathVisCategory::Move => (
+                Color::srgba(1.0, 0.8, 0.2, 0.8),
+                LinearRgba::new(1.2, 0.8, 0.2, 1.0),
+                Color::srgba(0.9, 0.7, 0.15, 0.65),
+                LinearRgba::new(0.7, 0.45, 0.05, 1.0),
+            ),
+            PathVisCategory::Attack => (
+                Color::srgba(1.0, 0.2, 0.15, 0.85),
+                LinearRgba::new(1.5, 0.15, 0.1, 1.0),
+                Color::srgba(1.0, 0.15, 0.1, 0.7),
+                LinearRgba::new(1.5, 0.1, 0.05, 1.0),
+            ),
+            PathVisCategory::Patrol => (
+                Color::srgba(0.2, 0.75, 1.0, 0.75),
+                LinearRgba::new(0.2, 0.9, 1.4, 1.0),
+                Color::srgba(0.15, 0.65, 0.9, 0.6),
+                LinearRgba::new(0.15, 0.7, 1.2, 1.0),
+            ),
+            PathVisCategory::Gather => (
+                Color::srgba(0.3, 0.9, 0.35, 0.75),
+                LinearRgba::new(0.2, 1.0, 0.25, 1.0),
+                Color::srgba(0.25, 0.8, 0.3, 0.6),
+                LinearRgba::new(0.15, 0.8, 0.2, 1.0),
+            ),
+            PathVisCategory::Build => (
+                Color::srgba(1.0, 0.65, 0.15, 0.8),
+                LinearRgba::new(1.2, 0.6, 0.1, 1.0),
+                Color::srgba(0.9, 0.55, 0.1, 0.65),
+                LinearRgba::new(1.0, 0.5, 0.08, 1.0),
+            ),
+        }
+    }
+
+    /// Dash scale multiplier per category
+    pub fn dash_scale(&self) -> f32 {
+        match self {
+            PathVisCategory::Attack => 1.2,
+            PathVisCategory::Gather => 0.85,
+            _ => 1.0,
+        }
+    }
+
+    /// Spacing multiplier per category
+    pub fn spacing_mult(&self) -> f32 {
+        match self {
+            PathVisCategory::Attack => 0.8,
+            _ => 1.0,
+        }
+    }
+
+    /// Flow animation speed (Hz)
+    pub fn flow_speed(&self) -> f32 {
+        match self {
+            PathVisCategory::Attack => 2.5,
+            PathVisCategory::Patrol => 1.2,
+            _ => 1.5,
+        }
+    }
+}
+
 #[derive(Component)]
 pub struct PathDash {
     pub owner: Entity,
 }
 
 #[derive(Component)]
+pub struct PathDashMeta {
+    pub frac: f32,
+    pub category: PathVisCategory,
+    pub base_y: f32,
+    pub base_scale: f32,
+}
+
+#[derive(Component)]
 pub struct PathRing {
     pub owner: Entity,
+    pub category: PathVisCategory,
+    pub base_y: f32,
+    pub base_scale: f32,
 }
 
 #[derive(Component)]
@@ -1090,14 +1208,17 @@ pub struct PathVisEntities {
     pub entities: Vec<Entity>,
     pub last_pos: Vec3,
     pub target: Vec3,
+    pub category: PathVisCategory,
 }
 
 #[derive(Resource)]
 pub struct PathVisAssets {
     pub dash_mesh: Handle<Mesh>,
-    pub dash_material: Handle<StandardMaterial>,
     pub ring_mesh: Handle<Mesh>,
-    pub ring_material: Handle<StandardMaterial>,
+    pub crosshair_h_mesh: Handle<Mesh>,
+    pub crosshair_v_mesh: Handle<Mesh>,
+    pub dash_materials: std::collections::HashMap<PathVisCategory, Handle<StandardMaterial>>,
+    pub ring_materials: std::collections::HashMap<PathVisCategory, Handle<StandardMaterial>>,
 }
 
 // ── Camera ──

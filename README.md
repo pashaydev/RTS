@@ -23,7 +23,6 @@ A real-time strategy game prototype built with [Bevy](https://bevyengine.org/) 0
 - **Economy** — 10 resource types: 5 raw (Wood, Copper, Iron, Gold, Oil) gathered from biome nodes + 5 processed (Planks, Charcoal, Bronze, Steel, Gunpowder) produced via production chains. Worker assignment model with visible workers walking between nodes and buildings; 30% trickle rate with no workers, scaling up with assigned workers
 - **Tree Growth** — Saplings spawn and grow through stages into harvestable mature trees over time
 - **Day/Night Cycle** — 600-second animated cycle (Dawn/Day/Dusk/Night) with keyframed sun illuminance, color, pitch, ambient light, and sky color
-- **Volumetric Fog** — Atmospheric fog volume on camera with density and color animated per time-of-day phase
 - **Entity Lights** — Dynamic point lights spawned at entity clusters (buildings and units), intensity scales with day/night cycle (full at night, 30% during day)
 - **Fog of War** — Texture-based fog of war with per-entity vision ranges, edge glow, noise overlay, and explored/unexplored tinting
 - **Save/Load** — JSON game state serialization with stable entity IDs, cross-reference resolution, and resource node position matching

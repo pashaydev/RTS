@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use std::collections::HashSet;
 
 use crate::blueprints::EntityKind;
 use crate::components::*;
@@ -176,13 +177,20 @@ pub fn ai_tactical_system(
                 base_pos
             };
 
+            // Build set of alive entities for command guards
+            let alive: HashSet<Entity> = own_entities_q
+                .iter()
+                .filter(|(_, f, _, _)| **f == faction)
+                .map(|(e, _, _, _)| e)
+                .collect();
+
             // Recall defense squad to threat
-            defend_own_base(&mut commands, brain, threat_center);
+            defend_own_base(&mut commands, brain, threat_center, &alive);
 
             // Friendly AI: also defend player's base area
             if is_friendly {
                 if let Some(pbp) = player_base_pos {
-                    defend_ally_base(&mut commands, brain, &threat_positions, pbp);
+                    defend_ally_base(&mut commands, brain, &threat_positions, pbp, &alive);
                 }
             }
         }
@@ -239,7 +247,7 @@ fn detect_threats_near_ally(
 }
 
 /// Recall defense and attack squads to own base threat center.
-fn defend_own_base(commands: &mut Commands, brain: &AiFactionBrain, threat_center: Vec3) {
+fn defend_own_base(commands: &mut Commands, brain: &AiFactionBrain, threat_center: Vec3, alive: &HashSet<Entity>) {
     let mut recall_entities: Vec<Entity> = Vec::new();
     if let Some(squad) = brain.get_squad(SquadRole::DefenseSquad) {
         recall_entities.extend(&squad.members);
@@ -249,7 +257,9 @@ fn defend_own_base(commands: &mut Commands, brain: &AiFactionBrain, threat_cente
     }
 
     for entity in &recall_entities {
-        commands.entity(*entity).insert(MoveTarget(threat_center));
+        if alive.contains(entity) {
+            commands.entity(*entity).insert(MoveTarget(threat_center));
+        }
     }
 }
 
@@ -259,6 +269,7 @@ fn defend_ally_base(
     brain: &AiFactionBrain,
     threat_positions: &[Vec3],
     player_base_pos: Vec3,
+    alive: &HashSet<Entity>,
 ) {
     let player_threats: Vec<Vec3> = threat_positions
         .iter()
@@ -271,9 +282,11 @@ fn defend_ally_base(
             player_threats.iter().copied().sum::<Vec3>() / player_threats.len() as f32;
         if let Some(squad) = brain.get_squad(SquadRole::DefenseSquad) {
             for &entity in &squad.members {
-                commands
-                    .entity(entity)
-                    .insert(MoveTarget(player_threat_center));
+                if alive.contains(&entity) {
+                    commands
+                        .entity(entity)
+                        .insert(MoveTarget(player_threat_center));
+                }
             }
         }
     }

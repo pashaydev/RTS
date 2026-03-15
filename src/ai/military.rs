@@ -245,8 +245,10 @@ pub fn ai_military_system(
             if !route.is_empty() {
                 if let Some(squad) = brain.get_squad(SquadRole::Scout) {
                     for &entity in &squad.members {
-                        let wp = route[waypoint_idx % route.len()];
-                        commands.entity(entity).insert(MoveTarget(wp));
+                        if units_q.get(entity).is_ok() {
+                            let wp = route[waypoint_idx % route.len()];
+                            commands.entity(entity).insert(MoveTarget(wp));
+                        }
                     }
                 }
                 brain.next_scout_waypoint = (waypoint_idx + 1) % route.len().max(1);
@@ -295,7 +297,9 @@ pub fn ai_military_system(
                         find_enemy_resource_area(&enemy_buildings_q, &teams, &faction)
                     {
                         for &e in &raiders {
-                            commands.entity(e).insert(MoveTarget(target));
+                            if units_q.get(e).is_ok() {
+                                commands.entity(e).insert(MoveTarget(target));
+                            }
                         }
                     }
                     brain.raid_cooldown = 30.0;
@@ -397,7 +401,9 @@ pub fn ai_military_system(
 
                 if let Some(target_pos) = target {
                     for entity in &attack_members {
-                        commands.entity(*entity).insert(MoveTarget(target_pos));
+                        if units_q.get(*entity).is_ok() {
+                            commands.entity(*entity).insert(MoveTarget(target_pos));
+                        }
                     }
                     brain.last_attack_time = game_time;
                     brain.attack_started_at = game_time;
@@ -460,7 +466,9 @@ pub fn ai_military_system(
                         brain.posture = TacticalPosture::Retreating;
                         brain.posture_cooldown = 20.0;
                         for &e in &attack_members {
-                            commands.entity(e).insert(MoveTarget(base_pos));
+                            if units_q.get(e).is_ok() {
+                                commands.entity(e).insert(MoveTarget(base_pos));
+                            }
                         }
                         if top_state == AiTopState::Attacking {
                             brain.transition_to(AiTopState::Defending);

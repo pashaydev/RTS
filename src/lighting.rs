@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 #[cfg(not(target_arch = "wasm32"))]
-use bevy::light::{FogVolume, VolumetricFog, VolumetricLight};
+use bevy::light::VolumetricLight;
 use bevy::prelude::*;
 
 use crate::components::{
@@ -17,17 +17,12 @@ impl Plugin for LightingPlugin {
             .init_resource::<EntityLightConfig>()
             .add_systems(Startup, register_lighting_tweaks)
             .add_systems(OnEnter(AppState::InGame), setup_lighting)
-            .add_systems(Update, {
-                #[cfg(not(target_arch = "wasm32"))]
-                let systems = (advance_day_cycle, update_lighting, update_volumetric_fog)
+            .add_systems(
+                Update,
+                (advance_day_cycle, update_lighting)
                     .chain()
-                    .run_if(in_state(AppState::InGame));
-                #[cfg(target_arch = "wasm32")]
-                let systems = (advance_day_cycle, update_lighting)
-                    .chain()
-                    .run_if(in_state(AppState::InGame));
-                systems
-            })
+                    .run_if(in_state(AppState::InGame)),
+            )
             .add_systems(
                 Update,
                 (update_entity_light_grid, manage_cluster_lights)
@@ -118,21 +113,6 @@ fn register_lighting_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
     tweaks.add_float("Visuals/Entity Lights", "Day Factor", 0.3, 0.0, 1.0, 0.05);
     tweaks.add_readonly("Visuals/Entity Lights", "Active Lights", "0");
 
-    // Volumetric Fog folder (native only)
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        tweaks.add_bool("Visuals/Volumetric Fog", "Enabled", true);
-        tweaks.add_bool("Visuals/Volumetric Fog", "Override", false);
-        tweaks.add_float("Visuals/Volumetric Fog", "Step Count", 64.0, 0.0, 256.0, 8.0);
-        tweaks.add_float("Visuals/Volumetric Fog", "Density", 0.02, 0.0, 0.2, 0.005);
-        tweaks.add_float("Visuals/Volumetric Fog", "Color R", 0.8, 0.0, 1.0, 0.01);
-        tweaks.add_float("Visuals/Volumetric Fog", "Color G", 0.85, 0.0, 1.0, 0.01);
-        tweaks.add_float("Visuals/Volumetric Fog", "Color B", 0.9, 0.0, 1.0, 0.01);
-        tweaks.add_float("Visuals/Volumetric Fog", "Ambient Intensity", 0.1, 0.0, 1.0, 0.01);
-        tweaks.add_float("Visuals/Volumetric Fog", "Light Intensity", 1.0, 0.0, 5.0, 0.1);
-        tweaks.add_float("Visuals/Volumetric Fog", "Scattering", 0.3, 0.0, 2.0, 0.05);
-        tweaks.add_float("Visuals/Volumetric Fog", "Absorption", 0.3, 0.0, 2.0, 0.05);
-    }
 }
 
 // ── Day/Night Cycle ──
@@ -179,9 +159,6 @@ fn phase_from_time(t: f32) -> DayPhase {
 #[derive(Component)]
 pub struct SunLight;
 
-#[derive(Component)]
-pub struct AtmosphericFogVolume;
-
 #[derive(Resource, Default)]
 pub struct LightingOverrides {
     pub sun_illuminance: Option<f32>,
@@ -192,10 +169,6 @@ pub struct LightingOverrides {
     pub ambient_brightness: Option<f32>,
     pub ambient_color: Option<[f32; 3]>,
     pub fog_color: Option<[f32; 3]>,
-    pub vol_density: Option<f32>,
-    pub vol_color: Option<[f32; 3]>,
-    pub vol_ambient_intensity: Option<f32>,
-    pub vol_light_intensity: Option<f32>,
 }
 
 // ── Keyframe data ──
@@ -371,53 +344,6 @@ fn update_lighting(
         .fog_color
         .unwrap_or_else(|| sample_rgb(&KF_TIMES, &KF_FOG_COLOR, t));
     clear.0 = Color::srgb(fc[0], fc[1], fc[2]);
-}
-
-// ── Volumetric fog keyframes ──
-
-const KF_VOL_DENSITY: [f32; 5] = [0.002, 0.005, 0.003, 0.006, 0.002];
-
-const KF_VOL_COLOR: [[f32; 3]; 5] = [
-    [0.3, 0.35, 0.5],
-    [0.85, 0.7, 0.5],
-    [0.75, 0.7, 0.6],
-    [0.9, 0.6, 0.4],
-    [0.3, 0.35, 0.5],
-];
-
-const KF_VOL_AMBIENT: [f32; 5] = [0.02, 0.06, 0.05, 0.06, 0.02];
-
-const KF_VOL_LIGHT_INT: [f32; 5] = [0.3, 1.5, 1.0, 1.5, 0.3];
-
-#[cfg(not(target_arch = "wasm32"))]
-fn update_volumetric_fog(
-    cycle: Res<DayCycle>,
-    overrides: Res<LightingOverrides>,
-    mut fog_vol_q: Query<&mut FogVolume, With<AtmosphericFogVolume>>,
-    mut cam_fog_q: Query<&mut VolumetricFog>,
-) {
-    let t = cycle.time;
-
-    if let Ok(mut fog_vol) = fog_vol_q.single_mut() {
-        fog_vol.density_factor = overrides
-            .vol_density
-            .unwrap_or_else(|| sample_f32(&KF_TIMES, &KF_VOL_DENSITY, t));
-
-        let vc = overrides
-            .vol_color
-            .unwrap_or_else(|| sample_rgb(&KF_TIMES, &KF_VOL_COLOR, t));
-        fog_vol.fog_color = Color::srgb(vc[0], vc[1], vc[2]);
-
-        fog_vol.light_intensity = overrides
-            .vol_light_intensity
-            .unwrap_or_else(|| sample_f32(&KF_TIMES, &KF_VOL_LIGHT_INT, t));
-    }
-
-    if let Ok(mut vol_fog) = cam_fog_q.single_mut() {
-        vol_fog.ambient_intensity = overrides
-            .vol_ambient_intensity
-            .unwrap_or_else(|| sample_f32(&KF_TIMES, &KF_VOL_AMBIENT, t));
-    }
 }
 
 // ══════════════════════════════════════════════════════════════════════

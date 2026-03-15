@@ -29,6 +29,8 @@ impl Plugin for SelectionPlugin {
             .init_resource::<UiPressActive>()
             .init_resource::<CommandMode>()
             .init_resource::<NextTaskId>()
+            .init_resource::<SubgroupCycleState>()
+            .init_resource::<DoubleClickDetector>()
             .add_systems(Startup, setup_hover_assets)
             .add_systems(OnEnter(AppState::InGame), spawn_selection_box)
             .add_systems(First, reset_ui_clicked.run_if(in_state(AppState::InGame)))
@@ -70,6 +72,14 @@ impl Plugin for SelectionPlugin {
                 (update_hover_ring, update_hover_tooltip)
                     .after(SelectionSet)
                     .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (tab_subgroup_cycle_system, reset_subgroup_on_selection_change)
+                    .chain()
+                    .after(SelectionSet)
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
             )
             .add_systems(
                 PostUpdate,
@@ -495,12 +505,17 @@ fn handle_click_select(
     ui_interactions: Query<&Interaction, With<Node>>,
     active_player: Res<ActivePlayer>,
     faction_q: Query<&Faction>,
-    _unit_state_q: Query<&UnitState>,
+    mut extra: (
+        Res<Time<Real>>,
+        ResMut<DoubleClickDetector>,
+        Query<&EntityKind>,
+    ),
 ) {
     let (ref mut drag, ref mut inspected) = state;
     let (ref units, ref buildings, ref mobs, ref resource_nodes, ref explosive_props) =
         entity_queries;
     let (ref minimap_interaction, ref ui_clicked, ref ui_press) = flags;
+    let (ref time, ref mut dbl_click, ref entity_kinds) = extra;
     if !mouse.just_released(MouseButton::Left) {
         return;
     }
@@ -622,16 +637,59 @@ fn handle_click_select(
                 } else {
                     inspected.entity = None;
 
-                    if !shift {
-                        for entity in &selected {
-                            commands.entity(entity).remove::<Selected>();
-                        }
-                    }
+                    // Double-click detection: select all visible same-type units
+                    let now = time.elapsed_secs_f64();
+                    let is_double_click = dbl_click.last_click_entity == Some(result.entity)
+                        && (now - dbl_click.last_click_time) < 0.4;
+                    dbl_click.last_click_entity = Some(result.entity);
+                    dbl_click.last_click_time = now;
 
-                    if shift && selected.contains(result.entity) {
-                        commands.entity(result.entity).remove::<Selected>();
+                    if is_double_click && !shift {
+                        if let Ok(clicked_kind) = entity_kinds.get(result.entity) {
+                            let target_kind = *clicked_kind;
+                            // Deselect all
+                            for entity in &selected {
+                                commands.entity(entity).remove::<Selected>();
+                            }
+                            // Select all own units of same type visible on screen
+                            let Ok((camera, cam_gt)) = camera_q.single() else {
+                                return;
+                            };
+                            for entity in units.iter() {
+                                if let Ok(f) = faction_q.get(entity) {
+                                    if *f != active_player.0 {
+                                        continue;
+                                    }
+                                }
+                                if let Ok(kind) = entity_kinds.get(entity) {
+                                    if *kind != target_kind {
+                                        continue;
+                                    }
+                                }
+                                if let Ok(gt) = unit_transforms.get(entity) {
+                                    if camera
+                                        .world_to_viewport(cam_gt, gt.translation())
+                                        .is_ok()
+                                    {
+                                        commands.entity(entity).insert(Selected);
+                                    }
+                                }
+                            }
+                        }
+                        // Clear double-click state so triple doesn't re-trigger
+                        dbl_click.last_click_entity = None;
                     } else {
-                        commands.entity(result.entity).insert(Selected);
+                        if !shift {
+                            for entity in &selected {
+                                commands.entity(entity).remove::<Selected>();
+                            }
+                        }
+
+                        if shift && selected.contains(result.entity) {
+                            commands.entity(result.entity).remove::<Selected>();
+                        } else {
+                            commands.entity(result.entity).insert(Selected);
+                        }
                     }
                 }
             }
@@ -1593,4 +1651,107 @@ fn handle_unit_command_hotkeys(
     }
 
     *cmd_mode = CommandMode::Normal;
+}
+
+// ── Tab Subgroup Cycling ──
+
+fn tab_subgroup_cycle_system(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut subgroup: ResMut<SubgroupCycleState>,
+    selected: Query<(Entity, &EntityKind), (With<Unit>, With<Selected>)>,
+    all_unit_kinds: Query<&EntityKind, With<Unit>>,
+) {
+    if !keys.just_pressed(KeyCode::Tab) {
+        return;
+    }
+    if selected.is_empty() {
+        return;
+    }
+
+    if !subgroup.active {
+        // Entering subgroup mode: snapshot selection and build kind list
+        let mut kinds_set: Vec<EntityKind> = Vec::new();
+        subgroup.original_selection.clear();
+        for (entity, kind) in &selected {
+            subgroup.original_selection.push(entity);
+            if !kinds_set.contains(kind) {
+                kinds_set.push(*kind);
+            }
+        }
+        // Only cycle if there are multiple types
+        if kinds_set.len() <= 1 {
+            return;
+        }
+        kinds_set.sort_by_key(|k| format!("{:?}", k));
+        subgroup.subgroup_kinds = kinds_set;
+        subgroup.current_index = 0;
+        subgroup.active = true;
+    } else {
+        // Advance to next subgroup
+        subgroup.current_index += 1;
+        if subgroup.current_index >= subgroup.subgroup_kinds.len() {
+            // Wrapped around: restore full selection and deactivate
+            subgroup.current_index = 0;
+            subgroup.active = false;
+
+            // Restore original selection
+            for (entity, _) in &selected {
+                commands.entity(entity).remove::<Selected>();
+            }
+            for &entity in &subgroup.original_selection {
+                if all_unit_kinds.get(entity).is_ok() {
+                    commands.entity(entity).try_insert(Selected);
+                }
+            }
+            return;
+        }
+    }
+
+    // Select only units of the current subgroup kind from the original selection
+    let target_kind = subgroup.subgroup_kinds[subgroup.current_index];
+    // Deselect all
+    for (entity, _) in &selected {
+        commands.entity(entity).remove::<Selected>();
+    }
+    // Select matching from original
+    for &entity in &subgroup.original_selection {
+        if let Ok(kind) = all_unit_kinds.get(entity) {
+            if *kind == target_kind {
+                commands.entity(entity).try_insert(Selected);
+            }
+        }
+    }
+}
+
+fn reset_subgroup_on_selection_change(
+    mut subgroup: ResMut<SubgroupCycleState>,
+    selected: Query<Entity, (With<Unit>, With<Selected>)>,
+    keys: Res<ButtonInput<KeyCode>>,
+) {
+    if !subgroup.active {
+        return;
+    }
+    // Don't reset if Tab was just pressed (we just changed it)
+    if keys.just_pressed(KeyCode::Tab) {
+        return;
+    }
+
+    // Check if selection changed externally (click, box select, group recall)
+    let current: Vec<Entity> = selected.iter().collect();
+    let expected_kind = &subgroup.subgroup_kinds.get(subgroup.current_index);
+    if expected_kind.is_none() {
+        subgroup.active = false;
+        subgroup.original_selection.clear();
+        return;
+    }
+
+    // If any selected entity is not in the original selection, reset
+    let any_external = current
+        .iter()
+        .any(|e| !subgroup.original_selection.contains(e));
+    if any_external {
+        subgroup.active = false;
+        subgroup.original_selection.clear();
+    }
 }

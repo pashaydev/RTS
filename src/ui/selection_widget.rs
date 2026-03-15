@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use super::group_hotkeys_widget::{group_color, ControlGroups};
 use super::shared::spawn_hp_bar;
 use crate::blueprints::EntityKind;
 use crate::components::*;
@@ -54,6 +55,7 @@ pub fn rebuild_selection_panel(
         With<Unit>,
     >,
     inspected_building_q: Query<(&EntityKind, &BuildingState, &Health), With<Building>>,
+    control_groups: Res<ControlGroups>,
 ) {
     let Ok(panel_entity) = panel_q.single() else {
         return;
@@ -188,7 +190,7 @@ pub fn rebuild_selection_panel(
                 commands.entity(grid_container).add_child(grid);
 
                 for (entity, health) in entities {
-                    spawn_unit_mini_card(&mut commands, grid, *entity, *kind, health, &icons);
+                    spawn_unit_mini_card(&mut commands, grid, *entity, *kind, health, &icons, &control_groups);
                 }
             }
 
@@ -224,7 +226,7 @@ pub fn rebuild_selection_panel(
                 commands.entity(grid_container).add_child(grid);
 
                 for (entity, health) in entities {
-                    spawn_unit_mini_card(&mut commands, grid, *entity, *kind, health, &icons);
+                    spawn_unit_mini_card(&mut commands, grid, *entity, *kind, health, &icons, &control_groups);
                 }
             }
         }
@@ -752,7 +754,10 @@ fn spawn_unit_mini_card(
     kind: EntityKind,
     health: &Health,
     icons: &IconAssets,
+    control_groups: &ControlGroups,
 ) {
+    let groups = control_groups.groups_for_entity(entity);
+
     let card = commands
         .spawn((
             UnitCardRef(entity),
@@ -767,6 +772,7 @@ fn spawn_unit_mini_card(
                 flex_grow: 1.0,
                 border: UiRect::all(Val::Px(1.0)),
                 border_radius: BorderRadius::all(Val::Px(5.0)),
+                position_type: PositionType::Relative,
                 ..default()
             },
             BackgroundColor(theme::BG_SURFACE),
@@ -788,4 +794,39 @@ fn spawn_unit_mini_card(
     commands.entity(card).add_child(icon);
 
     spawn_hp_bar(commands, card, entity, health, 54.0);
+
+    // Group membership badge(s) — small colored numbers in top-right corner
+    if !groups.is_empty() {
+        let badge_row = commands
+            .spawn(Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(-1.0),
+                right: Val::Px(-1.0),
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(1.0),
+                ..default()
+            })
+            .id();
+        commands.entity(card).add_child(badge_row);
+
+        for &gi in &groups {
+            let badge = commands
+                .spawn((
+                    Text::new(format!("{}", gi + 1)),
+                    TextFont {
+                        font_size: 7.0,
+                        ..default()
+                    },
+                    TextColor(Color::srgb(0.0, 0.0, 0.0)),
+                    Node {
+                        padding: UiRect::axes(Val::Px(2.0), Val::Px(0.0)),
+                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                        ..default()
+                    },
+                    BackgroundColor(group_color(gi)),
+                ))
+                .id();
+            commands.entity(badge_row).add_child(badge);
+        }
+    }
 }

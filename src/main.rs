@@ -17,6 +17,7 @@ mod minimap;
 mod mobs;
 mod model_assets;
 mod orders;
+mod pathfinding;
 mod pause_menu;
 mod pathvis;
 mod resources;
@@ -88,6 +89,7 @@ fn main() {
             fog::FogPlugin,
         ))
         .add_plugins(spatial::SpatialPlugin)
+        .add_plugins(pathfinding::PathfindingPlugin)
         .add_plugins(roads::RoadPlugin)
         .add_plugins(save::SavePlugin)
         .add_plugins(animation::AnimationPlugin)

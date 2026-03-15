@@ -36,6 +36,7 @@ impl Plugin for UiPlugin {
             .init_resource::<widget_framework::WidgetDragState>()
             .init_resource::<widget_framework::GridInteractionActive>()
             .init_resource::<group_hotkeys_widget::ControlGroups>()
+            .init_resource::<ControlGroupState>()
             .init_resource::<event_log_widget::GameEventLog>()
             .init_resource::<event_log_widget::EventLogRenderState>()
             .add_systems(
@@ -393,6 +394,17 @@ pub fn spawn_hud(
     commands
         .entity(minimap_content)
         .insert(crate::minimap::MinimapWidgetContent);
+
+    // Spawn Debug widget
+    let debug_content = spawn_widget_frame(
+        &mut commands,
+        root,
+        WidgetId::Debug,
+        registry.slots.get(&WidgetId::Debug).unwrap(),
+        registry.is_visible(WidgetId::Debug),
+        &fonts,
+    );
+    crate::debug::spawn_debug_content(&mut commands, debug_content);
 
     // Spawn notification container
     notifications::spawn_notification_container(&mut commands, root);

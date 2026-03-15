@@ -714,16 +714,46 @@ pub fn handle_unit_card_click(
     interactions: Query<(&Interaction, &UnitCardRef), (Changed<Interaction>, With<Button>)>,
     selected: Query<Entity, With<Selected>>,
     mut ui_press: ResMut<UiPressActive>,
+    keys: Res<ButtonInput<KeyCode>>,
+    entity_kinds: Query<&EntityKind, With<Unit>>,
 ) {
     for (interaction, card_ref) in &interactions {
         if *interaction != Interaction::Pressed {
             continue;
         }
         ui_press.0 = true;
-        for entity in &selected {
-            commands.entity(entity).remove::<Selected>();
+
+        let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+
+        if ctrl {
+            // Ctrl+click: select all units of the same type from current selection
+            if let Ok(clicked_kind) = entity_kinds.get(card_ref.0) {
+                let target_kind = *clicked_kind;
+                // Collect entities to keep (same type) and remove (different type)
+                let mut to_deselect = Vec::new();
+                let mut has_target = false;
+                for entity in &selected {
+                    if let Ok(kind) = entity_kinds.get(entity) {
+                        if *kind == target_kind {
+                            has_target = true;
+                        } else {
+                            to_deselect.push(entity);
+                        }
+                    }
+                }
+                if has_target {
+                    for entity in to_deselect {
+                        commands.entity(entity).remove::<Selected>();
+                    }
+                }
+            }
+        } else {
+            // Normal click: solo-select that unit
+            for entity in &selected {
+                commands.entity(entity).remove::<Selected>();
+            }
+            commands.entity(card_ref.0).insert(Selected);
         }
-        commands.entity(card_ref.0).insert(Selected);
     }
 }
 

@@ -1126,8 +1126,8 @@ fn pending_build_arrival_system(
             continue;
         };
 
-        let dist = w_tf.translation.distance(pending.position);
-        if dist > plot_range {
+        let flat_dist = Vec2::new(w_tf.translation.x - pending.position.x, w_tf.translation.z - pending.position.z).length();
+        if flat_dist > plot_range {
             continue; // Still walking
         }
 

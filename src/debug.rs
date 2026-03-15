@@ -1,6 +1,4 @@
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
-use bevy::ecs::message::MessageReader;
-use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -8,19 +6,16 @@ use std::collections::BTreeMap;
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::{
     ActivePlayer, AiControlledFactions, AiDifficulty, AiFactionSettings, AiPersonality, AppState,
-    Faction, Health, InspectedEnemy, RtsCamera, Selected, TeamConfig, UiClickedThisFrame,
-    UiPressActive, UnitSpeed,
+    Faction, Health, InspectedEnemy, RtsCamera, Selected, TeamConfig, UiPressActive, UnitSpeed,
 };
 use crate::fog::FogTweakSettings;
 use crate::ground::HeightMap;
 use crate::lighting::{
-    AtmosphericFogVolume, DayCycle, EntityClusterLight, EntityLightConfig, EntityLightGrid,
+    DayCycle, EntityClusterLight, EntityLightConfig, EntityLightGrid,
     LightingOverrides, SunLight,
 };
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::theme;
-#[cfg(not(target_arch = "wasm32"))]
-use bevy::light::{FogVolume, VolumetricFog};
 use bevy::window::PrimaryWindow;
 
 const DEBUG_CONFIG_PATH: &str = "config/debug_tweaks.json";
@@ -40,19 +35,18 @@ impl Plugin for DebugPlugin {
                 0.0,
                 TimerMode::Once,
             )))
-            .add_systems(Startup, (spawn_debug_overlay, register_entity_debug_tweaks))
+            .add_systems(Startup, register_entity_debug_tweaks)
             .add_systems(
                 Update,
                 (
-                    toggle_debug_panel,
                     update_fps_tracker,
                     update_debug_texts,
                     handle_folder_collapse,
+                    handle_expand_button,
                     handle_toggle_click,
                     handle_cycle_click,
                     handle_button_click,
                     handle_slider_interaction,
-                    handle_debug_scroll,
                     handle_save_config_click,
                     update_save_button_feedback,
                     apply_saved_config,
@@ -72,7 +66,6 @@ impl Plugin for DebugPlugin {
                     sync_ai_debug_tweaks,
                     rebuild_tweak_panel,
                     update_tweak_visuals,
-                    block_input_over_debug_panel,
                 )
                     .run_if(in_state(AppState::InGame)),
             );
@@ -360,7 +353,7 @@ fn apply_config_to_tweaks(tweaks: &mut DebugTweaks, config: &ConfigMap) {
 
 #[derive(Resource, Default)]
 pub struct DebugPanelState {
-    pub visible: bool,
+    pub tweaks_expanded: bool,
     pub collapsed_folders: Vec<String>,
 }
 
@@ -411,7 +404,7 @@ impl ActiveSlider {
 // ── UI marker components ──
 
 #[derive(Component)]
-struct DebugOverlayRoot;
+struct DebugExpandButton;
 
 #[derive(Component)]
 struct DebugFpsText;
@@ -507,190 +500,151 @@ pub struct DebugButtonPressed {
     pub pressed: Vec<(String, String)>, // (folder, label)
 }
 
-// ── Spawn the debug overlay (hidden by default) ──
+// ── Populate the debug widget content area ──
 
-fn spawn_debug_overlay(mut commands: Commands) {
-    commands
+pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
+    // Stats section (always visible)
+    let fps = commands
         .spawn((
-            DebugOverlayRoot,
-            Interaction::default(),
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(8.0),
-                top: Val::Px(8.0),
-                width: Val::Px(320.0),
-                max_height: Val::Percent(85.0),
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::all(Val::Px(10.0)),
-                row_gap: Val::Px(4.0),
-                overflow: Overflow::scroll_y(),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+            DebugFpsText,
+            Text::new("FPS: --"),
+            TextFont {
+                font_size: theme::FONT_BODY,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.02, 0.02, 0.05, 0.88)),
-            Visibility::Hidden,
-            GlobalZIndex(100),
+            TextColor(theme::TEXT_SECONDARY),
         ))
-        .with_children(|panel| {
-            // Title row with Save button
-            panel
-                .spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    justify_content: JustifyContent::SpaceBetween,
-                    align_items: AlignItems::Center,
-                    width: Val::Percent(100.0),
-                    ..default()
-                })
-                .with_children(|row| {
-                    row.spawn((
-                        Text::new("Debug Panel (F3)"),
-                        TextFont {
-                            font_size: theme::FONT_LARGE,
-                            ..default()
-                        },
-                        TextColor(Color::srgba(1.0, 1.0, 1.0, 0.9)),
-                    ));
+        .id();
+    commands.entity(parent).add_child(fps);
 
-                    row.spawn((
-                        SaveConfigButton,
-                        Interaction::default(),
-                        Button,
-                        Node {
-                            padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
-                            border_radius: BorderRadius::all(Val::Px(3.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)),
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            SaveConfigButtonText,
-                            Pickable::IGNORE,
-                            Text::new("Save"),
-                            TextFont {
-                                font_size: theme::FONT_BODY,
-                                ..default()
-                            },
-                            TextColor(Color::WHITE),
-                        ));
-                    });
-                });
+    let ent_count = commands
+        .spawn((
+            DebugEntityCountText,
+            Text::new("Entities: --"),
+            TextFont {
+                font_size: theme::FONT_BODY,
+                ..default()
+            },
+            TextColor(theme::TEXT_SECONDARY),
+        ))
+        .id();
+    commands.entity(parent).add_child(ent_count);
 
-            spawn_separator(panel);
+    let day_cycle = commands
+        .spawn((
+            DebugDayCycleText,
+            Text::new("Day: --"),
+            TextFont {
+                font_size: theme::FONT_BODY,
+                ..default()
+            },
+            TextColor(theme::TEXT_SECONDARY),
+        ))
+        .id();
+    commands.entity(parent).add_child(day_cycle);
 
-            // FPS
-            panel.spawn((
-                DebugFpsText,
-                Text::new("FPS: --"),
-                TextFont {
-                    font_size: theme::FONT_MEDIUM,
-                    ..default()
-                },
-                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
-            ));
+    // Separator
+    let sep = commands
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Px(1.0),
+                margin: UiRect::axes(Val::ZERO, Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(theme::SEPARATOR),
+        ))
+        .id();
+    commands.entity(parent).add_child(sep);
 
-            // Entity count
-            panel.spawn((
-                DebugEntityCountText,
-                Text::new("Entities: --"),
-                TextFont {
-                    font_size: theme::FONT_MEDIUM,
-                    ..default()
-                },
-                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
-            ));
-
-            // Day cycle
-            panel.spawn((
-                DebugDayCycleText,
-                Text::new("Day: --"),
-                TextFont {
-                    font_size: theme::FONT_MEDIUM,
-                    ..default()
-                },
-                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.7)),
-            ));
-
-            spawn_separator(panel);
-
-            // Tweak panel container
-            panel.spawn((
-                DebugTweakPanel,
-                TweakPanelBuiltVersion(0),
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(2.0),
-                    width: Val::Percent(100.0),
-                    ..default()
-                },
-            ));
-        });
-}
-
-fn spawn_separator(parent: &mut ChildSpawnerCommands) {
-    parent.spawn((
-        Node {
+    // Button row: Expand/Collapse + Save Config
+    let btn_row = commands
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(4.0),
             width: Val::Percent(100.0),
-            height: Val::Px(1.0),
-            margin: UiRect::axes(Val::ZERO, Val::Px(4.0)),
             ..default()
-        },
-        BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)),
-    ));
-}
+        })
+        .id();
+    commands.entity(parent).add_child(btn_row);
 
-// ── Block gameplay input when cursor is over the debug panel ──
+    // Expand/Collapse tweaks button
+    let expand_btn = commands
+        .spawn((
+            DebugExpandButton,
+            Interaction::default(),
+            Button,
+            Node {
+                padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                border_radius: BorderRadius::all(Val::Px(3.0)),
+                flex_grow: 1.0,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(theme::BG_SURFACE),
+        ))
+        .id();
+    let expand_text = commands
+        .spawn((
+            Pickable::IGNORE,
+            Text::new("Dev Tool"),
+            TextFont {
+                font_size: theme::FONT_BODY,
+                ..default()
+            },
+            TextColor(theme::TEXT_PRIMARY),
+        ))
+        .id();
+    commands.entity(expand_btn).add_child(expand_text);
+    commands.entity(btn_row).add_child(expand_btn);
 
-fn block_input_over_debug_panel(
-    state: Res<DebugPanelState>,
-    mut ui_clicked: ResMut<UiClickedThisFrame>,
-    mut ui_press: ResMut<UiPressActive>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window>,
-    panel_q: Query<(&ComputedNode, &UiGlobalTransform), With<DebugOverlayRoot>>,
-) {
-    if !state.visible {
-        return;
-    }
+    // Save config button
+    let save_btn = commands
+        .spawn((
+            SaveConfigButton,
+            Interaction::default(),
+            Button,
+            Node {
+                padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                border_radius: BorderRadius::all(Val::Px(3.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(theme::BG_SURFACE),
+        ))
+        .id();
+    let save_text = commands
+        .spawn((
+            SaveConfigButtonText,
+            Pickable::IGNORE,
+            Text::new("Save"),
+            TextFont {
+                font_size: theme::FONT_BODY,
+                ..default()
+            },
+            TextColor(theme::TEXT_PRIMARY),
+        ))
+        .id();
+    commands.entity(save_btn).add_child(save_text);
+    commands.entity(btn_row).add_child(save_btn);
 
-    let Some(cursor_phys) = windows
-        .single()
-        .ok()
-        .and_then(|w| w.physical_cursor_position())
-    else {
-        return;
-    };
-
-    for (computed, ui_tf) in &panel_q {
-        if computed.contains_point(*ui_tf, cursor_phys) {
-            // Cursor is over the debug panel — block all gameplay input
-            if mouse.pressed(MouseButton::Left) || mouse.pressed(MouseButton::Right) {
-                ui_press.0 = true;
-            }
-            if mouse.just_pressed(MouseButton::Left) || mouse.just_pressed(MouseButton::Right) {
-                ui_clicked.0 = 2;
-            }
-        }
-    }
-}
-
-// ── Toggle panel with F3 ──
-
-fn toggle_debug_panel(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut state: ResMut<DebugPanelState>,
-    mut root_q: Query<&mut Visibility, With<DebugOverlayRoot>>,
-) {
-    if keys.just_pressed(KeyCode::F3) {
-        state.visible = !state.visible;
-        if let Ok(mut vis) = root_q.single_mut() {
-            *vis = if state.visible {
-                Visibility::Visible
-            } else {
-                Visibility::Hidden
-            };
-        }
-    }
+    // Tweak panel container (hidden by default, expanded via F3)
+    let tweak_panel = commands
+        .spawn((
+            DebugTweakPanel,
+            TweakPanelBuiltVersion(0),
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(2.0),
+                width: Val::Percent(100.0),
+                ..default()
+            },
+            Visibility::Hidden,
+        ))
+        .id();
+    commands.entity(parent).add_child(tweak_panel);
 }
 
 // ── FPS tracking ──
@@ -709,7 +663,6 @@ fn update_fps_tracker(mut tracker: ResMut<FpsTracker>, time: Res<Time>) {
 // ── Update metric text nodes ──
 
 fn update_debug_texts(
-    state: Res<DebugPanelState>,
     tracker: Res<FpsTracker>,
     cycle: Res<DayCycle>,
     entities: Query<Entity>,
@@ -738,10 +691,6 @@ fn update_debug_texts(
         ),
     >,
 ) {
-    if !state.visible {
-        return;
-    }
-
     if let Ok(mut t) = fps_q.single_mut() {
         let warning = if tracker.fps >= 55.0 {
             ""
@@ -775,9 +724,30 @@ fn rebuild_tweak_panel(
     panel_state: Res<DebugPanelState>,
     mut structure: ResMut<TweakStructureVersion>,
     mut commands: Commands,
-    mut panel_q: Query<(Entity, &mut TweakPanelBuiltVersion), With<DebugTweakPanel>>,
+    mut panel_q: Query<
+        (Entity, &mut TweakPanelBuiltVersion, &mut Visibility),
+        With<DebugTweakPanel>,
+    >,
     children_q: Query<&Children>,
 ) {
+    let Ok((panel_entity, mut built_ver, mut panel_vis)) = panel_q.single_mut() else {
+        return;
+    };
+
+    // Toggle visibility based on expanded state
+    let target_vis = if panel_state.tweaks_expanded {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    if *panel_vis != target_vis {
+        *panel_vis = target_vis;
+    }
+
+    if !panel_state.tweaks_expanded {
+        return;
+    }
+
     // Detect structural changes: folder count or entry counts changed
     let folder_count = tweaks.folders.len();
     let entry_counts: Vec<usize> = tweaks.folders.values().map(|v| v.len()).collect();
@@ -792,10 +762,6 @@ fn rebuild_tweak_panel(
     structure.last_folder_count = folder_count;
     structure.last_entry_counts = entry_counts;
     structure.version += 1;
-
-    let Ok((panel_entity, mut built_ver)) = panel_q.single_mut() else {
-        return;
-    };
     built_ver.0 = structure.version;
 
     // Despawn old children
@@ -901,7 +867,7 @@ fn update_tweak_visuals(
         ),
     >,
 ) {
-    if !state.visible {
+    if !state.tweaks_expanded {
         return;
     }
 
@@ -951,11 +917,7 @@ fn update_tweak_visuals(
     // Update toggle button colors
     for (tog, mut bg) in &mut toggle_q {
         if let Some(v) = tweaks.get_bool(&tog.folder, &tog.label) {
-            let target = if v {
-                Color::srgba(1.0, 1.0, 1.0, 0.35)
-            } else {
-                Color::srgba(1.0, 1.0, 1.0, 0.12)
-            };
+            let target = if v { theme::ACCENT } else { theme::BG_SURFACE };
             bg.0 = target;
         }
     }
@@ -1010,7 +972,7 @@ fn spawn_section_header(parent: &mut ChildSpawnerCommands, section: &str) {
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
-            BorderColor::all(Color::srgba(1.0, 1.0, 1.0, 0.2)),
+            BorderColor::all(theme::SEPARATOR),
         ))
         .with_children(|row| {
             row.spawn((
@@ -1019,7 +981,7 @@ fn spawn_section_header(parent: &mut ChildSpawnerCommands, section: &str) {
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(Color::srgba(0.6, 0.8, 1.0, 0.7)),
+                TextColor(theme::ACCENT),
             ));
         });
 }
@@ -1043,7 +1005,7 @@ fn spawn_folder_header(
                 width: Val::Percent(100.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.08)),
+            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.05)),
         ))
         .with_children(|header| {
             header.spawn((
@@ -1052,7 +1014,7 @@ fn spawn_folder_header(
                     font_size: theme::FONT_MEDIUM,
                     ..default()
                 },
-                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.85)),
+                TextColor(theme::TEXT_PRIMARY),
             ));
         });
 }
@@ -1084,7 +1046,7 @@ fn spawn_slider_row(
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(Color::srgb(0.65, 0.65, 0.65)),
+                TextColor(theme::TEXT_SECONDARY),
                 Node {
                     width: Val::Px(95.0),
                     ..default()
@@ -1103,7 +1065,7 @@ fn spawn_slider_row(
                     border_radius: BorderRadius::all(Val::Px(3.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.15)),
+                BackgroundColor(theme::BG_SURFACE),
             ))
             .with_children(|track| {
                 track.spawn((
@@ -1117,7 +1079,7 @@ fn spawn_slider_row(
                         border_radius: BorderRadius::all(Val::Px(3.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.5)),
+                    BackgroundColor(theme::ACCENT),
                 ));
             });
 
@@ -1158,7 +1120,7 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(Color::srgb(0.65, 0.65, 0.65)),
+                TextColor(theme::TEXT_SECONDARY),
                 Node {
                     width: Val::Px(95.0),
                     ..default()
@@ -1166,9 +1128,9 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
             ));
 
             let (bg, text) = if value {
-                (Color::srgba(1.0, 1.0, 1.0, 0.35), "ON")
+                (theme::ACCENT, "ON")
             } else {
-                (Color::srgba(1.0, 1.0, 1.0, 0.12), "OFF")
+                (theme::BG_SURFACE, "OFF")
             };
 
             row.spawn((
@@ -1223,7 +1185,7 @@ fn spawn_readonly_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &s
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(Color::srgb(0.65, 0.65, 0.65)),
+                TextColor(theme::TEXT_SECONDARY),
                 Node {
                     width: Val::Px(95.0),
                     ..default()
@@ -1240,7 +1202,7 @@ fn spawn_readonly_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &s
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(Color::srgb(0.5, 0.5, 0.5)),
+                TextColor(theme::TEXT_DISABLED),
             ));
         });
 }
@@ -1262,7 +1224,7 @@ fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: 
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(Color::srgb(0.45, 0.45, 0.45)),
+                TextColor(theme::TEXT_DISABLED),
                 Node {
                     width: Val::Px(95.0),
                     ..default()
@@ -1303,7 +1265,7 @@ fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str,
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(Color::srgb(0.65, 0.65, 0.65)),
+                TextColor(theme::TEXT_SECONDARY),
                 Node {
                     width: Val::Px(95.0),
                     ..default()
@@ -1326,7 +1288,7 @@ fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str,
                     align_items: AlignItems::Center,
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.3, 0.5, 1.0, 0.25)),
+                BackgroundColor(theme::BG_ELEVATED),
             ))
             .with_children(|btn| {
                 btn.spawn((
@@ -1421,48 +1383,14 @@ fn handle_folder_collapse(
     }
 }
 
-const SCROLL_LINE_HEIGHT: f32 = 24.0;
-
-fn handle_debug_scroll(
-    state: Res<DebugPanelState>,
-    mut mouse_wheel: MessageReader<MouseWheel>,
-    windows: Query<&Window>,
-    mut panel_q: Query<
-        (&mut ScrollPosition, &ComputedNode, &UiGlobalTransform),
-        With<DebugOverlayRoot>,
-    >,
+fn handle_expand_button(
+    mut state: ResMut<DebugPanelState>,
+    btn_q: Query<&Interaction, (Changed<Interaction>, With<DebugExpandButton>)>,
 ) {
-    if !state.visible {
-        return;
-    }
-
-    let mut dy = 0.0;
-    for ev in mouse_wheel.read() {
-        dy += match ev.unit {
-            MouseScrollUnit::Line => -ev.y * SCROLL_LINE_HEIGHT,
-            MouseScrollUnit::Pixel => -ev.y,
-        };
-    }
-
-    if dy.abs() < 0.001 {
-        return;
-    }
-
-    let Some(cursor_phys) = windows
-        .single()
-        .ok()
-        .and_then(|w| w.physical_cursor_position())
-    else {
-        return;
-    };
-
-    for (mut scroll_pos, computed, ui_tf) in &mut panel_q {
-        if !computed.contains_point(*ui_tf, cursor_phys) {
-            continue;
+    for interaction in &btn_q {
+        if *interaction == Interaction::Pressed {
+            state.tweaks_expanded = !state.tweaks_expanded;
         }
-        let max_scroll = (computed.content_size().y - computed.size().y).max(0.0)
-            * computed.inverse_scale_factor();
-        scroll_pos.y = (scroll_pos.y + dy).clamp(0.0, max_scroll);
     }
 }
 
@@ -1621,24 +1549,11 @@ fn sync_lighting_tweaks(
     sun_q: Query<(&DirectionalLight, &Transform), With<SunLight>>,
     ambient: Res<GlobalAmbientLight>,
     clear: Res<ClearColor>,
-    #[cfg(not(target_arch = "wasm32"))] mut fog_vol_q: Query<
-        &mut FogVolume,
-        With<AtmosphericFogVolume>,
-    >,
-    #[cfg(not(target_arch = "wasm32"))] mut cam_fog_q: Query<&mut VolumetricFog>,
 ) {
     sync_time_of_day_tweaks(&mut tweaks, &active, &mut cycle);
     sync_sunlight_tweaks(&mut tweaks, &active, &mut overrides, &sun_q);
     sync_ambient_tweaks(&mut tweaks, &active, &mut overrides, &ambient);
     sync_sky_color_tweaks(&mut tweaks, &active, &mut overrides, &clear);
-    #[cfg(not(target_arch = "wasm32"))]
-    sync_volumetric_fog_tweaks(
-        &mut tweaks,
-        &active,
-        &mut overrides,
-        &mut fog_vol_q,
-        &mut cam_fog_q,
-    );
 }
 
 fn sync_time_of_day_tweaks(
@@ -1752,111 +1667,6 @@ fn sync_sky_color_tweaks(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn sync_volumetric_fog_tweaks(
-    tweaks: &mut DebugTweaks,
-    active: &ActiveSlider,
-    overrides: &mut LightingOverrides,
-    fog_vol_q: &mut Query<&mut FogVolume, With<AtmosphericFogVolume>>,
-    cam_fog_q: &mut Query<&mut VolumetricFog>,
-) {
-    let vol_enabled = tweaks
-        .get_bool("Visuals/Volumetric Fog", "Enabled")
-        .unwrap_or(true);
-    let vol_override = tweaks
-        .get_bool("Visuals/Volumetric Fog", "Override")
-        .unwrap_or(false);
-
-    if let Ok(mut fog_vol) = fog_vol_q.single_mut() {
-        if !vol_enabled {
-            fog_vol.density_factor = 0.0;
-        }
-    }
-
-    if let Ok(mut vol_fog) = cam_fog_q.single_mut() {
-        if !vol_enabled {
-            vol_fog.step_count = 0;
-        } else if let Some(sc) = tweaks.get_float("Visuals/Volumetric Fog", "Step Count") {
-            vol_fog.step_count = sc as u32;
-        }
-    }
-
-    if vol_override {
-        overrides.vol_density = tweaks.get_float("Visuals/Volumetric Fog", "Density");
-        overrides.vol_color = tweaks.get_color_rgb("Visuals/Volumetric Fog");
-        overrides.vol_ambient_intensity =
-            tweaks.get_float("Visuals/Volumetric Fog", "Ambient Intensity");
-        overrides.vol_light_intensity =
-            tweaks.get_float("Visuals/Volumetric Fog", "Light Intensity");
-
-        if let Ok(mut fog_vol) = fog_vol_q.single_mut() {
-            if let Some(s) = tweaks.get_float("Visuals/Volumetric Fog", "Scattering") {
-                fog_vol.scattering = s;
-            }
-            if let Some(a) = tweaks.get_float("Visuals/Volumetric Fog", "Absorption") {
-                fog_vol.absorption = a;
-            }
-        }
-    } else {
-        overrides.vol_density = None;
-        overrides.vol_color = None;
-        overrides.vol_ambient_intensity = None;
-        overrides.vol_light_intensity = None;
-
-        if let Ok(fog_vol) = fog_vol_q.single() {
-            if !active.is_dragging("Visuals/Volumetric Fog", "Density") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Density",
-                    fog_vol.density_factor,
-                );
-            }
-            tweaks.sync_color_rgb_back(
-                "Visuals/Volumetric Fog",
-                &fog_vol.fog_color.to_srgba(),
-                active,
-            );
-            if !active.is_dragging("Visuals/Volumetric Fog", "Light Intensity") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Light Intensity",
-                    fog_vol.light_intensity,
-                );
-            }
-            if !active.is_dragging("Visuals/Volumetric Fog", "Scattering") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Scattering",
-                    fog_vol.scattering,
-                );
-            }
-            if !active.is_dragging("Visuals/Volumetric Fog", "Absorption") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Absorption",
-                    fog_vol.absorption,
-                );
-            }
-        }
-
-        if let Ok(vol_fog) = cam_fog_q.single() {
-            if !active.is_dragging("Visuals/Volumetric Fog", "Ambient Intensity") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Ambient Intensity",
-                    vol_fog.ambient_intensity,
-                );
-            }
-            if !active.is_dragging("Visuals/Volumetric Fog", "Step Count") {
-                tweaks.set_float_if_changed(
-                    "Visuals/Volumetric Fog",
-                    "Step Count",
-                    vol_fog.step_count as f32,
-                );
-            }
-        }
-    }
-}
-
 // ── Sync: Entity Lights ↔ DebugTweaks ──
 
 fn sync_entity_light_tweaks(
@@ -2187,7 +1997,7 @@ fn sync_entity_spawn_tweaks(
     if spawn_state.click_to_spawn
         && mouse.just_pressed(MouseButton::Left)
         && !ui_press.0
-        && panel_state.visible
+        && panel_state.tweaks_expanded
     {
         if let Some(world_pos) = cursor_ground_pos(&cam_query, &windows) {
             let (kind, faction) = get_selected_kind_and_faction(&tweaks);

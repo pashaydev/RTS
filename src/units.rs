@@ -7,6 +7,7 @@ use crate::blueprints::{
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::model_assets::UnitModelAssets;
+use crate::pathfinding::{NavDirect, NavPath, NavPending};
 use crate::spatial::{SpatialHashGrid, WallSpatialGrid};
 use std::f32::consts::PI;
 
@@ -26,7 +27,7 @@ impl Plugin for UnitsPlugin {
             )
             .add_systems(
                 Update,
-                (steer_avoidance, move_units)
+                (move_units, steer_avoidance)
                     .chain()
                     .run_if(in_state(AppState::InGame)),
             );
@@ -171,34 +172,112 @@ fn spawn_all_players(
     }
 }
 
+/// Extract the building entity a unit is currently targeting/interacting with.
+fn target_building(state: &UnitState, attack_target: Option<&AttackTarget>) -> Option<Entity> {
+    match state {
+        UnitState::MovingToBuild(e) | UnitState::Building(e) => Some(*e),
+        UnitState::ReturningToDeposit { depot, .. }
+        | UnitState::Depositing { depot, .. }
+        | UnitState::WaitingForStorage { depot, .. } => Some(*depot),
+        UnitState::AssignedGathering { building, .. } => Some(*building),
+        UnitState::Attacking(e) => Some(*e),
+        _ => attack_target.map(|at| at.0),
+    }
+}
+
 fn steer_avoidance(
     time: Res<Time>,
     spatial_grid: Res<SpatialHashGrid>,
-    mut units: Query<(Entity, &mut Transform), With<Unit>>,
+    wall_grid: Res<WallSpatialGrid>,
+    mut units: Query<
+        (
+            Entity,
+            &mut Transform,
+            Option<&MoveTarget>,
+            &UnitState,
+            Option<&AttackTarget>,
+        ),
+        With<Unit>,
+    >,
+    buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<Unit>)>,
 ) {
-    let avoidance_radius = 1.8;
-    let strength = 4.0;
+    let unit_avoidance_radius = 2.5;
+    let unit_strength = 10.0;
+    let wall_avoidance_radius = 3.5;
+    let wall_strength = 12.0;
+    let building_avoidance_radius = 1.5; // extra margin beyond footprint
+    let building_strength = 15.0;
 
-    for (entity, mut transform) in &mut units {
+    for (entity, mut transform, move_target, unit_state, attack_target) in &mut units {
         let my_pos = transform.translation;
         let mut separation = Vec3::ZERO;
+        let is_moving = move_target.is_some();
 
-        // Use spatial grid to find only nearby units instead of O(n^2)
-        let nearby = spatial_grid.query_radius(my_pos, avoidance_radius);
+        // Determine which building (if any) this unit is trying to reach
+        let my_target_building = target_building(unit_state, attack_target);
+
+        // ── Unit-to-unit avoidance ──
+        let nearby = spatial_grid.query_radius(my_pos, unit_avoidance_radius);
         for (other_e, other_pos) in &nearby {
             if *other_e == entity {
+                continue;
+            }
+            // Skip buildings in spatial grid
+            if buildings.get(*other_e).is_ok() {
                 continue;
             }
             let diff = my_pos - *other_pos;
             let flat_diff = Vec3::new(diff.x, 0.0, diff.z);
             let dist = flat_diff.length();
-            if dist > 0.01 && dist < avoidance_radius {
-                separation += flat_diff.normalize() * (avoidance_radius - dist) / avoidance_radius;
+            if dist > 0.01 && dist < unit_avoidance_radius {
+                let weight = (unit_avoidance_radius - dist) / unit_avoidance_radius;
+                separation += flat_diff.normalize() * weight;
+            }
+        }
+
+        // ── Wall repulsion ── (push away from nearby walls)
+        if is_moving {
+            let nearby_walls = wall_grid.query_radius(my_pos, wall_avoidance_radius);
+            for (_wall_entity, wall_pos, wall_fp, _wall_faction) in &nearby_walls {
+                // Repel from all walls (not just hostile) to avoid clipping
+                let diff = my_pos - *wall_pos;
+                let flat_diff = Vec3::new(diff.x, 0.0, diff.z);
+                let dist = flat_diff.length();
+                let min_dist = wall_fp + 1.0;
+                if dist > 0.01 && dist < min_dist + 1.5 {
+                    let weight = (min_dist + 1.5 - dist) / 1.5;
+                    separation += flat_diff.normalize() * weight * (wall_strength / unit_strength);
+                }
+            }
+        }
+
+        // ── Building repulsion ── (avoid walking through buildings)
+        if is_moving {
+            let nearby_buildings = spatial_grid.query_radius(my_pos, 8.0);
+            for (b_entity, b_pos) in &nearby_buildings {
+                if *b_entity == entity {
+                    continue;
+                }
+                // Skip the building this unit is trying to interact with
+                if my_target_building == Some(*b_entity) {
+                    continue;
+                }
+                if let Ok((_, footprint)) = buildings.get(*b_entity) {
+                    let diff = my_pos - *b_pos;
+                    let flat_diff = Vec3::new(diff.x, 0.0, diff.z);
+                    let dist = flat_diff.length();
+                    let min_dist = footprint.0 + building_avoidance_radius;
+                    if dist > 0.01 && dist < min_dist {
+                        let weight = (min_dist - dist) / building_avoidance_radius;
+                        separation +=
+                            flat_diff.normalize() * weight * (building_strength / unit_strength);
+                    }
+                }
             }
         }
 
         if separation.length_squared() > 0.0 {
-            transform.translation += separation * strength * time.delta_secs();
+            transform.translation += separation * unit_strength * time.delta_secs();
         }
     }
 }
@@ -221,6 +300,8 @@ fn move_units(
             Option<&Carrying>,
             Option<&CarryCapacity>,
             Option<&AttackTarget>,
+            Option<&mut NavPath>,
+            Has<NavPending>,
         ),
         With<Unit>,
     >,
@@ -235,14 +316,62 @@ fn move_units(
         carrying,
         capacity,
         attack_target,
+        nav_path,
+        is_pending,
     ) in &mut query
     {
-        let direction = target.0 - transform.translation;
+        // Wait for path computation — don't walk blindly
+        if is_pending {
+            // Still snap Y to terrain
+            transform.translation.y = height_map
+                .sample(transform.translation.x, transform.translation.z)
+                + y_offset_for(*kind, &registry);
+            continue;
+        }
+
+        // Determine immediate move target: next waypoint or MoveTarget directly
+        let immediate_target = if let Some(ref nav) = nav_path {
+            if nav.current_index < nav.waypoints.len() {
+                nav.waypoints[nav.current_index]
+            } else {
+                target.0
+            }
+        } else {
+            target.0
+        };
+
+        let direction = immediate_target - transform.translation;
         let flat_dir = Vec3::new(direction.x, 0.0, direction.z);
         let distance = flat_dir.length();
 
-        if distance < 0.2 {
-            commands.entity(entity).remove::<MoveTarget>();
+        // Waypoint arrival threshold (tighter for intermediate waypoints)
+        let arrival_dist = if nav_path
+            .as_ref()
+            .map_or(false, |n| n.current_index + 1 < n.waypoints.len())
+        {
+            1.8 // intermediate waypoint
+        } else {
+            0.5 // final destination
+        };
+
+        if distance < arrival_dist {
+            // Advance waypoint or finish
+            if let Some(mut nav) = nav_path {
+                nav.current_index += 1;
+                if nav.current_index >= nav.waypoints.len() {
+                    // Path complete
+                    commands
+                        .entity(entity)
+                        .remove::<MoveTarget>()
+                        .remove::<NavPath>()
+                        .remove::<NavDirect>();
+                }
+            } else {
+                commands
+                    .entity(entity)
+                    .remove::<MoveTarget>()
+                    .remove::<NavDirect>();
+            }
         } else {
             // Encumbrance: slow down when carrying heavy loads
             let speed_mult = if let (Some(carry), Some(cap)) = (carrying, capacity) {
@@ -256,27 +385,42 @@ fn move_units(
                 1.0
             };
 
-            let step = flat_dir.normalize() * unit_speed.0 * speed_mult * time.delta_secs();
+            let move_dir = flat_dir.normalize();
+            let speed = unit_speed.0 * speed_mult * time.delta_secs();
+            let step = move_dir * speed;
             let candidate = transform.translation + step;
             let ignore_wall = attack_target.map(|at| at.0);
 
-            // Use wall spatial grid for collision check
-            let nearby_walls = wall_grid.query_radius(candidate, 3.0);
-            let blocked = nearby_walls
-                .iter()
-                .any(|(wall_entity, wall_pos, wall_fp, wall_faction)| {
-                    if Some(*wall_entity) == ignore_wall {
-                        return false;
-                    }
-                    if !teams.is_hostile(faction, wall_faction) {
-                        return false;
-                    }
-                    let a = Vec2::new(candidate.x, candidate.z);
-                    let b = Vec2::new(wall_pos.x, wall_pos.z);
-                    a.distance(b) < wall_fp + 0.6
-                });
-            if !blocked {
+            // Wall collision check helper
+            let is_blocked = |pos: Vec3| -> bool {
+                let nearby_walls = wall_grid.query_radius(pos, 3.0);
+                nearby_walls
+                    .iter()
+                    .any(|(wall_entity, wall_pos, wall_fp, wall_faction)| {
+                        if Some(*wall_entity) == ignore_wall {
+                            return false;
+                        }
+                        if !teams.is_hostile(faction, wall_faction) {
+                            return false;
+                        }
+                        let a = Vec2::new(pos.x, pos.z);
+                        let b = Vec2::new(wall_pos.x, wall_pos.z);
+                        a.distance(b) < wall_fp + 0.6
+                    })
+            };
+
+            if !is_blocked(candidate) {
                 transform.translation = candidate;
+            } else {
+                // Wall sliding: try moving along X or Z axis only
+                let slide_x = transform.translation + Vec3::new(step.x, 0.0, 0.0);
+                let slide_z = transform.translation + Vec3::new(0.0, 0.0, step.z);
+                if step.x.abs() > 0.001 && !is_blocked(slide_x) {
+                    transform.translation = slide_x;
+                } else if step.z.abs() > 0.001 && !is_blocked(slide_z) {
+                    transform.translation = slide_z;
+                }
+                // If both axes blocked, unit stays put (avoidance steering will push it)
             }
         }
         // Snap Y to terrain
