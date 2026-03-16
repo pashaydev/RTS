@@ -30,12 +30,16 @@ impl Plugin for UnitsPlugin {
                 (move_units, steer_avoidance)
                     .chain()
                     .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                PostUpdate,
+                snap_units_to_terrain.run_if(in_state(AppState::InGame)),
             );
     }
 }
 
 /// Applies GameSetupConfig to TeamConfig, AiControlledFactions, etc.
-fn apply_game_config(
+pub fn apply_game_config(
     config: Res<GameSetupConfig>,
     mut teams: ResMut<TeamConfig>,
     mut ai_controlled: ResMut<AiControlledFactions>,
@@ -285,9 +289,7 @@ fn steer_avoidance(
 fn move_units(
     mut commands: Commands,
     time: Res<Time>,
-    registry: Res<BlueprintRegistry>,
     teams: Res<TeamConfig>,
-    height_map: Res<HeightMap>,
     wall_grid: Res<WallSpatialGrid>,
     mut query: Query<
         (
@@ -295,7 +297,6 @@ fn move_units(
             &mut Transform,
             &MoveTarget,
             &UnitSpeed,
-            &EntityKind,
             &Faction,
             Option<&Carrying>,
             Option<&CarryCapacity>,
@@ -311,7 +312,6 @@ fn move_units(
         mut transform,
         target,
         unit_speed,
-        kind,
         faction,
         carrying,
         capacity,
@@ -322,10 +322,6 @@ fn move_units(
     {
         // Wait for path computation — don't walk blindly
         if is_pending {
-            // Still snap Y to terrain
-            transform.translation.y = height_map
-                .sample(transform.translation.x, transform.translation.z)
-                + y_offset_for(*kind, &registry);
             continue;
         }
 
@@ -423,7 +419,18 @@ fn move_units(
                 // If both axes blocked, unit stays put (avoidance steering will push it)
             }
         }
-        // Snap Y to terrain
+    }
+}
+
+/// Snaps ALL units to terrain height every frame.
+/// Runs after both movement and avoidance so Y is always correct
+/// regardless of what modified XZ position.
+fn snap_units_to_terrain(
+    registry: Res<BlueprintRegistry>,
+    height_map: Res<HeightMap>,
+    mut units: Query<(&mut Transform, &EntityKind), With<Unit>>,
+) {
+    for (mut transform, kind) in &mut units {
         transform.translation.y = height_map
             .sample(transform.translation.x, transform.translation.z)
             + y_offset_for(*kind, &registry);

@@ -12,7 +12,7 @@ pub const HALF_MAP: f32 = 250.0;
 
 
 /// Pre-computed grid of terrain heights that matches the rendered mesh exactly.
-/// Use `sample(x, z)` for bilinear interpolation between grid vertices.
+/// Use `sample(x, z)` for triangle-matched interpolation between grid vertices.
 #[derive(Resource)]
 pub struct HeightMap {
     pub heights: Vec<f32>,
@@ -23,8 +23,8 @@ pub struct HeightMap {
 }
 
 impl HeightMap {
-    /// Sample terrain height at any world position using bilinear interpolation
-    /// of the actual mesh grid vertices.
+    /// Sample terrain height at any world position using triangle interpolation
+    /// that exactly matches the rendered mesh triangulation (tl-bl-tr / tr-bl-br).
     pub fn sample(&self, x: f32, z: f32) -> f32 {
         let gx = (x + self.half_map) / self.step;
         let gz = (z + self.half_map) / self.step;
@@ -33,14 +33,30 @@ impl HeightMap {
         let fx = (gx - ix as f32).clamp(0.0, 1.0);
         let fz = (gz - iz as f32).clamp(0.0, 1.0);
 
-        let h00 = self.heights[iz * self.grid_size + ix];
-        let h10 = self.heights[iz * self.grid_size + ix + 1];
-        let h01 = self.heights[(iz + 1) * self.grid_size + ix];
-        let h11 = self.heights[(iz + 1) * self.grid_size + ix + 1];
+        let h00 = self.heights[iz * self.grid_size + ix]; // tl
+        let h10 = self.heights[iz * self.grid_size + ix + 1]; // tr
+        let h01 = self.heights[(iz + 1) * self.grid_size + ix]; // bl
+        let h11 = self.heights[(iz + 1) * self.grid_size + ix + 1]; // br
 
-        let h0 = h00 + (h10 - h00) * fx;
-        let h1 = h01 + (h11 - h01) * fx;
-        h0 + (h1 - h0) * fz
+        // Match mesh triangulation: diagonal from bl(0,1) to tr(1,0)
+        if fx + fz <= 1.0 {
+            // Triangle 1 (tl, bl, tr)
+            h00 + (h10 - h00) * fx + (h01 - h00) * fz
+        } else {
+            // Triangle 2 (tr, bl, br)
+            h11 + (h10 - h11) * (1.0 - fz) + (h01 - h11) * (1.0 - fx)
+        }
+    }
+
+    /// Returns the maximum slope (rise/run) under a building footprint.
+    pub fn max_slope_under_footprint(&self, x: f32, z: f32, footprint: f32) -> f32 {
+        let r = footprint * 0.7;
+        let h_center = self.sample(x, z);
+        let offsets = [(r, 0.0), (-r, 0.0), (0.0, r), (0.0, -r)];
+        offsets
+            .iter()
+            .map(|(dx, dz)| (self.sample(x + dx, z + dz) - h_center).abs() / r)
+            .fold(0.0_f32, f32::max)
     }
 }
 const NOISE_SCALE: f64 = 0.008;

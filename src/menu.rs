@@ -5,6 +5,9 @@ use bevy::prelude::*;
 use rand::Rng;
 
 use crate::components::*;
+use crate::multiplayer::{
+    self, ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole,
+};
 use crate::theme;
 use crate::ui::fonts::{self, UiFonts};
 
@@ -16,6 +19,9 @@ enum MenuPage {
     Title,
     NewGame,
     Options,
+    Multiplayer,
+    HostLobby,
+    JoinLobby,
 }
 
 #[derive(Component)]
@@ -38,6 +44,15 @@ enum MenuAction {
     Back,
     StartGame,
     ApplySettings,
+    Multiplayer,
+    HostGame,
+    JoinGame,
+    ConnectToHost,
+    StartMultiplayer,
+    BackToMultiplayer,
+    CopySessionCode,
+    CancelHost,
+    Disconnect,
 }
 
 #[derive(Component)]
@@ -76,6 +91,24 @@ struct SeedDisplay;
 
 #[derive(Component)]
 struct RandomizeSeedButton;
+
+#[derive(Component)]
+struct LobbyStatusText;
+
+#[derive(Component)]
+struct LobbyPlayerSlot(usize);
+
+#[derive(Component)]
+struct SessionCodeText;
+
+#[derive(Component)]
+struct SessionCodeInput;
+
+#[derive(Component)]
+struct CopyCodeButton;
+
+#[derive(Component)]
+struct CopyCodeLabel;
 
 // ── Plugin ──
 
@@ -116,6 +149,11 @@ impl Plugin for MenuPlugin {
                     menu_scroll_system,
                     randomize_seed_system,
                 )
+                    .run_if(in_state(AppState::MainMenu)),
+            )
+            .add_systems(
+                Update,
+                (update_lobby_ui, connect_to_host_system, copy_session_code_system)
                     .run_if(in_state(AppState::MainMenu)),
             );
     }
@@ -210,6 +248,9 @@ fn spawn_menu(
         MenuPage::Title => spawn_title_page(&mut commands, container, &fonts),
         MenuPage::NewGame => spawn_new_game_page(&mut commands, container, &config, &fonts),
         MenuPage::Options => spawn_options_page(&mut commands, container, &graphics, &fonts),
+        MenuPage::Multiplayer => spawn_multiplayer_page(&mut commands, container, &fonts),
+        MenuPage::HostLobby => spawn_host_lobby_page(&mut commands, container, &fonts),
+        MenuPage::JoinLobby => spawn_join_lobby_page(&mut commands, container, &fonts),
     }
 }
 
@@ -286,6 +327,7 @@ fn spawn_title_page(commands: &mut Commands, container: Entity, fonts: &UiFonts)
     // Buttons
     for (label, action) in [
         ("NEW GAME", MenuAction::NewGame),
+        ("MULTIPLAYER", MenuAction::Multiplayer),
         ("OPTIONS", MenuAction::Options),
         ("QUIT", MenuAction::Quit),
     ] {
@@ -1315,6 +1357,43 @@ fn handle_menu_buttons(
                 *page = MenuPage::Title;
                 rebuild_menu(&mut commands, &roots);
             }
+            MenuAction::Multiplayer => {
+                *page = MenuPage::Multiplayer;
+                rebuild_menu(&mut commands, &roots);
+            }
+            MenuAction::HostGame => {
+                start_hosting(&mut commands);
+                *page = MenuPage::HostLobby;
+                rebuild_menu(&mut commands, &roots);
+            }
+            MenuAction::JoinGame => {
+                *page = MenuPage::JoinLobby;
+                rebuild_menu(&mut commands, &roots);
+            }
+            MenuAction::ConnectToHost => {
+                // Handled by connect_to_host_system
+            }
+            MenuAction::StartMultiplayer => {
+                // Insert marker — update_lobby_ui sends GameStart to clients, then transitions
+                commands.insert_resource(PendingGameStart);
+            }
+            MenuAction::BackToMultiplayer => {
+                *page = MenuPage::Multiplayer;
+                rebuild_menu(&mut commands, &roots);
+            }
+            MenuAction::CopySessionCode => {
+                // Copy session code — handled separately
+            }
+            MenuAction::CancelHost => {
+                stop_hosting(&mut commands);
+                *page = MenuPage::Multiplayer;
+                rebuild_menu(&mut commands, &roots);
+            }
+            MenuAction::Disconnect => {
+                stop_client(&mut commands);
+                *page = MenuPage::Multiplayer;
+                rebuild_menu(&mut commands, &roots);
+            }
         }
     }
 }
@@ -1356,6 +1435,9 @@ fn page_transition_system(
             MenuPage::Title => spawn_title_page(&mut commands, container, &fonts),
             MenuPage::NewGame => spawn_new_game_page(&mut commands, container, &config, &fonts),
             MenuPage::Options => spawn_options_page(&mut commands, container, &graphics, &fonts),
+            MenuPage::Multiplayer => spawn_multiplayer_page(&mut commands, container, &fonts),
+            MenuPage::HostLobby => spawn_host_lobby_page(&mut commands, container, &fonts),
+            MenuPage::JoinLobby => spawn_join_lobby_page(&mut commands, container, &fonts),
         }
     }
 }
@@ -1705,6 +1787,7 @@ fn text_input_system(
         &Interaction,
         &Children,
         Option<&TextInputFocused>,
+        Option<&SessionCodeInput>,
     )>,
     mut commands: Commands,
     mut config: ResMut<GameSetupConfig>,
@@ -1713,14 +1796,14 @@ fn text_input_system(
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     let mut clicked_entity: Option<Entity> = None;
-    for (entity, _, interaction, _, _) in &inputs {
+    for (entity, _, interaction, _, _, _) in &inputs {
         if *interaction == Interaction::Pressed {
             clicked_entity = Some(entity);
         }
     }
 
     if let Some(clicked) = clicked_entity {
-        for (entity, _, _, _, focused) in &inputs {
+        for (entity, _, _, _, focused, _) in &inputs {
             if entity == clicked {
                 if focused.is_none() {
                     commands.entity(entity).insert(TextInputFocused);
@@ -1742,7 +1825,12 @@ fn text_input_system(
         return;
     }
 
-    for (entity, mut field, _, children, focused) in &mut inputs {
+    let cmd_key = keys.pressed(KeyCode::SuperLeft)
+        || keys.pressed(KeyCode::SuperRight)
+        || keys.pressed(KeyCode::ControlLeft)
+        || keys.pressed(KeyCode::ControlRight);
+
+    for (entity, mut field, _, children, focused, is_session_code) in &mut inputs {
         if focused.is_none() {
             continue;
         }
@@ -1752,6 +1840,35 @@ fn text_input_system(
             }
 
             let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+
+            // Cmd/Ctrl+V — paste from clipboard
+            if cmd_key && event.key_code == KeyCode::KeyV {
+                if let Some(clip) = clipboard_read() {
+                    for ch in clip.chars() {
+                        if field.value.len() >= field.max_len {
+                            break;
+                        }
+                        if ch.is_ascii_graphic() || ch == ' ' {
+                            let pos = field.cursor_pos;
+                            field.value.insert(pos, ch);
+                            field.cursor_pos += 1;
+                        }
+                    }
+                }
+                continue;
+            }
+
+            // Cmd/Ctrl+C — copy field value
+            if cmd_key && event.key_code == KeyCode::KeyC {
+                clipboard_write(&field.value);
+                continue;
+            }
+
+            // Cmd/Ctrl+A — select all (move cursor to end for now)
+            if cmd_key && event.key_code == KeyCode::KeyA {
+                field.cursor_pos = field.value.len();
+                continue;
+            }
 
             match event.key_code {
                 KeyCode::Backspace => {
@@ -1808,7 +1925,10 @@ fn text_input_system(
             }
         }
 
-        config.player_name = field.value.clone();
+        // Only update player_name for the name input, not session code inputs
+        if is_session_code.is_none() {
+            config.player_name = field.value.clone();
+        }
         for child in children.iter() {
             if let Ok(mut text) = text_query.get_mut(child) {
                 **text = field.value.clone();
@@ -1845,24 +1965,92 @@ fn keycode_to_char(code: KeyCode, shift: bool) -> Option<char> {
         KeyCode::KeyX => 'x',
         KeyCode::KeyY => 'y',
         KeyCode::KeyZ => 'z',
-        KeyCode::Digit0 => '0',
-        KeyCode::Digit1 => '1',
-        KeyCode::Digit2 => '2',
-        KeyCode::Digit3 => '3',
-        KeyCode::Digit4 => '4',
-        KeyCode::Digit5 => '5',
-        KeyCode::Digit6 => '6',
-        KeyCode::Digit7 => '7',
-        KeyCode::Digit8 => '8',
-        KeyCode::Digit9 => '9',
-        KeyCode::Minus => '-',
-        KeyCode::Period => '.',
+        KeyCode::Digit0 => return if shift { Some(')') } else { Some('0') },
+        KeyCode::Digit1 => return if shift { Some('!') } else { Some('1') },
+        KeyCode::Digit2 => return if shift { Some('@') } else { Some('2') },
+        KeyCode::Digit3 => return if shift { Some('#') } else { Some('3') },
+        KeyCode::Digit4 => return if shift { Some('$') } else { Some('4') },
+        KeyCode::Digit5 => return if shift { Some('%') } else { Some('5') },
+        KeyCode::Digit6 => return if shift { Some('^') } else { Some('6') },
+        KeyCode::Digit7 => return if shift { Some('&') } else { Some('7') },
+        KeyCode::Digit8 => return if shift { Some('*') } else { Some('8') },
+        KeyCode::Digit9 => return if shift { Some('(') } else { Some('9') },
+        KeyCode::Minus => return if shift { Some('_') } else { Some('-') },
+        KeyCode::Period => return if shift { Some('>') } else { Some('.') },
+        KeyCode::Semicolon => return if shift { Some(':') } else { Some(';') },
+        KeyCode::Slash => return if shift { Some('?') } else { Some('/') },
+        KeyCode::BracketLeft => return if shift { Some('{') } else { Some('[') },
+        KeyCode::BracketRight => return if shift { Some('}') } else { Some(']') },
+        KeyCode::Backquote => return if shift { Some('~') } else { Some('`') },
+        KeyCode::Equal => return if shift { Some('+') } else { Some('=') },
+        KeyCode::Backslash => return if shift { Some('|') } else { Some('\\') },
+        KeyCode::Quote => return if shift { Some('"') } else { Some('\'') },
+        KeyCode::Comma => return if shift { Some('<') } else { Some(',') },
         _ => return None,
     };
     if shift && ch.is_ascii_alphabetic() {
         Some(ch.to_ascii_uppercase())
     } else {
         Some(ch)
+    }
+}
+
+// ── Clipboard helpers ──
+
+fn clipboard_read() -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::process::Command::new("pbpaste")
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    String::from_utf8(o.stdout).ok()
+                } else {
+                    // Fallback for Linux: try xclip
+                    std::process::Command::new("xclip")
+                        .args(["-selection", "clipboard", "-o"])
+                        .output()
+                        .ok()
+                        .and_then(|o2| String::from_utf8(o2.stdout).ok())
+                }
+            })
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        None
+    }
+}
+
+fn clipboard_write(text: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::io::Write;
+        if let Ok(mut child) = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+        {
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = stdin.write_all(text.as_bytes());
+            }
+            let _ = child.wait();
+        } else {
+            // Fallback for Linux: try xclip
+            if let Ok(mut child) = std::process::Command::new("xclip")
+                .args(["-selection", "clipboard"])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+            {
+                if let Some(ref mut stdin) = child.stdin {
+                    let _ = stdin.write_all(text.as_bytes());
+                }
+                let _ = child.wait();
+            }
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = text;
     }
 }
 
@@ -1975,5 +2163,990 @@ fn update_ally_toggle_visuals(
                 **text = label.to_string();
             }
         }
+    }
+}
+
+// ── Multiplayer Page ──
+
+fn spawn_multiplayer_page(commands: &mut Commands, container: Entity, fonts: &UiFonts) {
+    spawn_page_header(commands, container, "MULTIPLAYER", fonts);
+
+    spawn_animated_section_divider(commands, container, "LAN GAME", fonts);
+
+    let desc = commands
+        .spawn((
+            Text::new("Play with others on your local network"),
+            TextFont {
+                font_size: theme::FONT_MEDIUM,
+                ..default()
+            },
+            TextColor(theme::TEXT_SECONDARY),
+            Node {
+                margin: UiRect::bottom(Val::Px(20.0)),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(container).add_child(desc);
+
+    let host_btn = spawn_menu_button(commands, "HOST GAME", MenuAction::HostGame, true, fonts);
+    commands.entity(container).add_child(host_btn);
+
+    let join_btn = spawn_menu_button(commands, "JOIN GAME", MenuAction::JoinGame, false, fonts);
+    commands.entity(container).add_child(join_btn);
+}
+
+// ── Host Lobby Page ──
+
+fn spawn_host_lobby_page(commands: &mut Commands, container: Entity, fonts: &UiFonts) {
+    spawn_page_header_with_action(commands, container, "HOST LOBBY", MenuAction::CancelHost, fonts);
+
+    spawn_animated_section_divider(commands, container, "SESSION CODE", fonts);
+
+    // Session code display + copy button
+    let code_row = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(12.0),
+            margin: UiRect::vertical(Val::Px(8.0)),
+            ..default()
+        })
+        .with_children(|parent| {
+            parent.spawn((
+                SessionCodeText,
+                Text::new("Starting..."),
+                TextFont {
+                    font_size: 24.0,
+                    ..default()
+                },
+                TextColor(theme::ACCENT),
+            ));
+            // Copy button
+            parent
+                .spawn((
+                    CopyCodeButton,
+                    Button,
+                    ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
+                    ButtonStyle::Filled,
+                    Node {
+                        padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
+                        ..default()
+                    },
+                    BackgroundColor(theme::BTN_PRIMARY),
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        CopyCodeLabel,
+                        Text::new("COPY"),
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
+                        TextColor(theme::TEXT_SECONDARY),
+                        Pickable::IGNORE,
+                    ));
+                });
+        })
+        .id();
+    commands.entity(container).add_child(code_row);
+
+    let hint = commands
+        .spawn((
+            Text::new("Share this code with players on your LAN"),
+            TextFont {
+                font_size: theme::FONT_SMALL,
+                ..default()
+            },
+            TextColor(theme::TEXT_SECONDARY),
+            Node {
+                margin: UiRect::bottom(Val::Px(12.0)),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(container).add_child(hint);
+
+    spawn_animated_section_divider(commands, container, "PLAYERS", fonts);
+
+    // Player slots
+    for i in 0..4 {
+        let label = if i == 0 {
+            "Host (You)"
+        } else {
+            "Waiting..."
+        };
+        let color = if i == 0 {
+            theme::SUCCESS
+        } else {
+            theme::TEXT_SECONDARY
+        };
+        let slot = commands
+            .spawn((
+                LobbyPlayerSlot(i),
+                Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                    margin: UiRect::vertical(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.5)),
+            ))
+            .with_children(|parent| {
+                // Status dot
+                parent.spawn((
+                    Node {
+                        width: Val::Px(8.0),
+                        height: Val::Px(8.0),
+                        margin: UiRect::right(Val::Px(10.0)),
+                        ..default()
+                    },
+                    BackgroundColor(color),
+                ));
+                parent.spawn((
+                    Text::new(label),
+                    TextFont {
+                        font_size: theme::FONT_MEDIUM,
+                        ..default()
+                    },
+                    TextColor(color),
+                ));
+            })
+            .id();
+        commands.entity(container).add_child(slot);
+    }
+
+    spawn_animated_section_divider(commands, container, "", fonts);
+
+    // Status text
+    let status = commands
+        .spawn((
+            LobbyStatusText,
+            Text::new("Waiting for players..."),
+            TextFont {
+                font_size: theme::FONT_MEDIUM,
+                ..default()
+            },
+            TextColor(theme::TEXT_SECONDARY),
+            Node {
+                margin: UiRect::vertical(Val::Px(8.0)),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(container).add_child(status);
+
+    // Start Game button
+    let start_btn = commands
+        .spawn((
+            MenuButton(MenuAction::StartMultiplayer),
+            Button,
+            ButtonAnimState::new(theme::ACCENT.to_srgba().to_f32_array()),
+            ButtonStyle::Filled,
+            UiGlowPulse {
+                color: theme::ACCENT,
+                intensity: 0.6,
+            },
+            Node {
+                width: Val::Px(280.0),
+                height: Val::Px(50.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                margin: UiRect::top(Val::Px(12.0)),
+                ..default()
+            },
+            BackgroundColor(theme::ACCENT),
+            BoxShadow::new(
+                Color::srgba(0.29, 0.62, 1.0, 0.3),
+                Val::Px(0.0),
+                Val::Px(0.0),
+                Val::Px(0.0),
+                Val::Px(8.0),
+            ),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new("START GAME"),
+                fonts::heading(fonts, theme::FONT_BUTTON),
+                TextColor(Color::WHITE),
+                Pickable::IGNORE,
+            ));
+        })
+        .id();
+    commands.entity(container).add_child(start_btn);
+}
+
+// ── Join Lobby Page ──
+
+fn spawn_join_lobby_page(commands: &mut Commands, container: Entity, fonts: &UiFonts) {
+    spawn_page_header_with_action(commands, container, "JOIN GAME", MenuAction::BackToMultiplayer, fonts);
+
+    spawn_animated_section_divider(commands, container, "SESSION CODE", fonts);
+
+    // Text input for session code (IP:port)
+    let input_row = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            margin: UiRect::vertical(Val::Px(6.0)),
+            ..default()
+        })
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new("Code:"),
+                TextFont {
+                    font_size: theme::FONT_MEDIUM,
+                    ..default()
+                },
+                TextColor(theme::TEXT_SECONDARY),
+                Node {
+                    width: Val::Px(80.0),
+                    ..default()
+                },
+            ));
+
+            parent
+                .spawn((
+                    SessionCodeInput,
+                    TextInputField {
+                        value: String::new(),
+                        cursor_pos: 0,
+                        max_len: 21,
+                    },
+                    Button,
+                    Node {
+                        width: Val::Px(280.0),
+                        height: Val::Px(32.0),
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        align_items: AlignItems::Center,
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                    BackgroundColor(theme::INPUT_BG),
+                    BorderColor::all(theme::INPUT_BORDER),
+                ))
+                .with_children(|input| {
+                    input.spawn((
+                        Text::new(""),
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
+                        TextColor(theme::TEXT_PRIMARY),
+                        Pickable::IGNORE,
+                    ));
+                    input.spawn((
+                        TextInputCursor,
+                        Text::new("|"),
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
+                        TextColor(Color::NONE),
+                        Pickable::IGNORE,
+                    ));
+                });
+        })
+        .id();
+    commands.entity(container).add_child(input_row);
+
+    // Connect button
+    let connect_btn =
+        spawn_menu_button(commands, "CONNECT", MenuAction::ConnectToHost, true, fonts);
+    commands.entity(container).add_child(connect_btn);
+
+    spawn_animated_section_divider(commands, container, "STATUS", fonts);
+
+    // Status text
+    let status = commands
+        .spawn((
+            LobbyStatusText,
+            Text::new("Enter the host's session code and press CONNECT"),
+            TextFont {
+                font_size: theme::FONT_MEDIUM,
+                ..default()
+            },
+            TextColor(theme::TEXT_SECONDARY),
+            Node {
+                margin: UiRect::vertical(Val::Px(8.0)),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(container).add_child(status);
+
+    spawn_animated_section_divider(commands, container, "PLAYERS", fonts);
+
+    // Player slots (updated from host lobby broadcasts)
+    for i in 0..4 {
+        let slot = commands
+            .spawn((
+                LobbyPlayerSlot(i),
+                Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                    margin: UiRect::vertical(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.5)),
+            ))
+            .with_children(|parent| {
+                parent.spawn((
+                    Node {
+                        width: Val::Px(8.0),
+                        height: Val::Px(8.0),
+                        margin: UiRect::right(Val::Px(10.0)),
+                        ..default()
+                    },
+                    BackgroundColor(theme::TEXT_SECONDARY),
+                ));
+                parent.spawn((
+                    Text::new("—"),
+                    TextFont {
+                        font_size: theme::FONT_MEDIUM,
+                        ..default()
+                    },
+                    TextColor(theme::TEXT_SECONDARY),
+                ));
+            })
+            .id();
+        commands.entity(container).add_child(slot);
+    }
+
+    // Disconnect button
+    let dc_btn = spawn_menu_button(commands, "DISCONNECT", MenuAction::Disconnect, false, fonts);
+    commands.entity(container).add_child(dc_btn);
+}
+
+fn spawn_page_header_with_action(
+    commands: &mut Commands,
+    container: Entity,
+    title: &str,
+    back_action: MenuAction,
+    fonts: &UiFonts,
+) {
+    let row = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            margin: UiRect::bottom(Val::Px(16.0)),
+            ..default()
+        })
+        .with_children(|parent| {
+            parent
+                .spawn((
+                    MenuButton(back_action),
+                    Button,
+                    ButtonAnimState::new([0.0, 0.0, 0.0, 0.0]),
+                    ButtonStyle::Ghost,
+                    Node {
+                        padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::NONE),
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        Text::new("<< BACK"),
+                        fonts::body_emphasis(fonts, theme::FONT_MEDIUM),
+                        TextColor(theme::TEXT_SECONDARY),
+                        Pickable::IGNORE,
+                    ));
+                });
+
+            parent.spawn((
+                Text::new(title),
+                fonts::heading(fonts, theme::FONT_HEADING),
+                TextColor(Color::WHITE),
+            ));
+        })
+        .id();
+    commands.entity(container).add_child(row);
+}
+
+// ── Networking helpers (menu-side) ──
+
+const DEFAULT_PORT: u16 = 7878;
+
+fn start_hosting(commands: &mut Commands) {
+    use crate::multiplayer::transport;
+    use std::net::TcpListener;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+    use std::sync::Arc;
+
+    let ip = transport::detect_lan_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+    let addr = format!("0.0.0.0:{}", DEFAULT_PORT);
+    let listener = match TcpListener::bind(&addr) {
+        Ok(l) => l,
+        Err(e) => {
+            warn!("Failed to bind TCP listener on {}: {}", addr, e);
+            return;
+        }
+    };
+
+    let session_code = format!("{}:{}", ip, DEFAULT_PORT);
+    info!("Hosting on {}", session_code);
+
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let (new_client_tx, new_client_rx) = mpsc::channel();
+    let (cmd_tx, cmd_rx) = mpsc::channel();
+    let (dc_tx, dc_rx) = mpsc::channel();
+
+    // Store cmd_tx for spawning reader threads later
+    let cmd_tx_clone = cmd_tx.clone();
+    let dc_tx_clone = dc_tx.clone();
+    let shutdown_clone = shutdown.clone();
+
+    // Start listener thread
+    let shutdown_listener = shutdown.clone();
+    std::thread::spawn(move || {
+        transport::host_listener_thread(listener, new_client_tx, shutdown_listener);
+    });
+
+    commands.insert_resource(HostNetState {
+        incoming_commands: std::sync::Mutex::new(cmd_rx),
+        client_senders: std::sync::Mutex::new(Vec::new()),
+        new_clients: std::sync::Mutex::new(new_client_rx),
+        disconnect_rx: std::sync::Mutex::new(dc_rx),
+        shutdown: shutdown.clone(),
+        seq: std::sync::Mutex::new(0),
+    });
+
+    // Store the command sender for spawning reader threads — we'll use a side-channel
+    commands.insert_resource(HostConnectionFactory {
+        cmd_tx: cmd_tx_clone,
+        dc_tx: dc_tx_clone,
+        shutdown: shutdown_clone,
+    });
+
+    commands.insert_resource(NetRole::Host);
+    commands.insert_resource(LobbyState {
+        players: vec![LobbyPlayer {
+            name: "Host".to_string(),
+            faction: Faction::Player1,
+            is_host: true,
+            connected: true,
+        }],
+        session_code,
+        status: LobbyStatus::Waiting,
+    });
+}
+
+/// Temporary resource to allow spawning reader/writer threads for new clients.
+#[derive(Resource)]
+struct HostConnectionFactory {
+    cmd_tx: std::sync::mpsc::Sender<(u8, game_state::message::ClientMessage)>,
+    dc_tx: std::sync::mpsc::Sender<u8>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+fn stop_hosting(commands: &mut Commands) {
+    // Removing the resources causes channel disconnection, which signals threads to stop.
+    commands.remove_resource::<HostNetState>();
+    commands.remove_resource::<HostConnectionFactory>();
+    commands.insert_resource(NetRole::Offline);
+    commands.insert_resource(LobbyState::default());
+}
+
+fn stop_client(commands: &mut Commands) {
+    commands.remove_resource::<ClientNetState>();
+    commands.insert_resource(NetRole::Offline);
+    commands.insert_resource(LobbyState::default());
+}
+
+/// Marker resource: host pressed "Start Game", lobby system should send event and transition.
+#[derive(Resource)]
+struct PendingGameStart;
+
+fn connect_to_host_system(
+    interactions: Query<(&Interaction, &MenuButton), Changed<Interaction>>,
+    text_inputs: Query<&TextInputField, With<SessionCodeInput>>,
+    mut commands: Commands,
+    mut lobby: ResMut<LobbyState>,
+    mut status_texts: Query<&mut Text, With<LobbyStatusText>>,
+) {
+    for (interaction, btn) in &interactions {
+        if *interaction != Interaction::Pressed || btn.0 != MenuAction::ConnectToHost {
+            continue;
+        }
+
+        // Read the session code from the text input
+        let code = if let Ok(input) = text_inputs.single() {
+            input.value.trim().to_string()
+        } else {
+            continue;
+        };
+
+        if code.is_empty() {
+            for mut text in &mut status_texts {
+                **text = "Please enter a session code (IP:port)".to_string();
+            }
+            continue;
+        }
+
+        // Parse and connect
+        let addr = if code.contains(':') {
+            code.clone()
+        } else {
+            format!("{}:{}", code, DEFAULT_PORT)
+        };
+
+        for mut text in &mut status_texts {
+            **text = format!("Connecting to {}...", addr);
+        }
+
+        match std::net::TcpStream::connect_timeout(
+            &addr.parse().unwrap_or_else(|_| {
+                std::net::SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT))
+            }),
+            std::time::Duration::from_secs(3),
+        ) {
+            Ok(stream) => {
+                stream.set_nodelay(true).ok();
+
+                let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let (incoming_tx, incoming_rx) = std::sync::mpsc::channel();
+                let (outgoing_tx, outgoing_rx) = std::sync::mpsc::channel();
+
+                // Clone stream for writer thread
+                let read_stream = stream.try_clone().expect("Failed to clone TCP stream");
+                let write_stream = stream;
+
+                let shutdown_r = shutdown.clone();
+                std::thread::spawn(move || {
+                    multiplayer::transport::client_reader_thread(
+                        read_stream,
+                        incoming_tx,
+                        shutdown_r,
+                    );
+                });
+
+                let shutdown_w = shutdown.clone();
+                std::thread::spawn(move || {
+                    multiplayer::transport::client_writer_thread_fn(
+                        write_stream,
+                        outgoing_rx,
+                        shutdown_w,
+                    );
+                });
+
+                // Send join request
+                let join_msg = game_state::message::ClientMessage::JoinRequest {
+                    seq: 0,
+                    timestamp: 0.0,
+                    player_name: "Client".to_string(),
+                };
+                if let Ok(json) = serde_json::to_vec(&join_msg) {
+                    let _ = outgoing_tx.send(json);
+                }
+
+                commands.insert_resource(ClientNetState {
+                    incoming: std::sync::Mutex::new(incoming_rx),
+                    outgoing: outgoing_tx,
+                    shutdown,
+                    my_faction: Faction::Player2, // Will be assigned by host in v2
+                    seq: std::sync::Mutex::new(0),
+                });
+                commands.insert_resource(NetRole::Client);
+
+                lobby.status = LobbyStatus::Connected;
+                for mut text in &mut status_texts {
+                    **text = "Connected! Waiting for host to start...".to_string();
+                }
+            }
+            Err(e) => {
+                lobby.status = LobbyStatus::Failed(e.to_string());
+                for mut text in &mut status_texts {
+                    **text = format!("Failed: {}", e);
+                }
+            }
+        }
+    }
+}
+
+fn copy_session_code_system(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<CopyCodeButton>)>,
+    lobby: Res<LobbyState>,
+    mut labels: Query<&mut Text, With<CopyCodeLabel>>,
+) {
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed && !lobby.session_code.is_empty() {
+            clipboard_write(&lobby.session_code);
+            for mut text in &mut labels {
+                **text = "COPIED!".to_string();
+            }
+        }
+    }
+}
+
+/// Update lobby UI — polls channels for new connections (host) or lobby updates (client).
+fn update_lobby_ui(
+    page: Res<MenuPage>,
+    mut lobby: ResMut<LobbyState>,
+    host_state: Option<Res<HostNetState>>,
+    host_factory: Option<Res<HostConnectionFactory>>,
+    client_state: Option<Res<ClientNetState>>,
+    pending_start: Option<Res<PendingGameStart>>,
+    mut commands: Commands,
+    mut next_state: ResMut<NextState<AppState>>,
+    mut session_code_texts: Query<&mut Text, With<SessionCodeText>>,
+    mut status_texts: Query<&mut Text, (With<LobbyStatusText>, Without<SessionCodeText>)>,
+    slot_texts: Query<(&LobbyPlayerSlot, &Children)>,
+    mut child_texts: Query<&mut Text, (Without<LobbyStatusText>, Without<SessionCodeText>, Without<LobbyPlayerSlot>)>,
+    mut child_bgs: Query<&mut BackgroundColor, Without<LobbyPlayerSlot>>,
+    mut config: ResMut<GameSetupConfig>,
+) {
+    // Update session code display
+    if *page == MenuPage::HostLobby {
+        for mut text in &mut session_code_texts {
+            if **text != lobby.session_code && !lobby.session_code.is_empty() {
+                **text = lobby.session_code.clone();
+            }
+        }
+    }
+
+    // ── Host: check for new clients ──
+    if let (Some(host), Some(factory)) = (host_state.as_ref(), host_factory.as_ref()) {
+        let new_clients_rx = host.new_clients.lock().unwrap();
+        let mut new_client_joined = false;
+        loop {
+            match new_clients_rx.try_recv() {
+                Ok(event) => {
+                    let player_id = event.player_id;
+                    info!("New client {} in lobby", player_id);
+
+                    let faction_idx = lobby.players.len().min(3);
+                    let faction = Faction::PLAYERS[faction_idx];
+
+                    lobby.players.push(LobbyPlayer {
+                        name: format!("Player {}", player_id),
+                        faction,
+                        is_host: false,
+                        connected: true,
+                    });
+
+                    // Spawn reader/writer threads for this client
+                    let read_stream = event
+                        .stream
+                        .try_clone()
+                        .expect("Failed to clone client stream");
+                    let write_stream = event.stream;
+
+                    let (writer_tx, writer_rx) = std::sync::mpsc::channel();
+
+                    let cmd_tx = factory.cmd_tx.clone();
+                    let dc_tx = factory.dc_tx.clone();
+                    let shutdown = factory.shutdown.clone();
+
+                    std::thread::spawn(move || {
+                        multiplayer::transport::host_client_reader_thread(
+                            read_stream,
+                            cmd_tx,
+                            dc_tx,
+                            player_id,
+                            shutdown,
+                        );
+                    });
+
+                    let shutdown_w = factory.shutdown.clone();
+                    std::thread::spawn(move || {
+                        multiplayer::transport::client_writer_thread(
+                            write_stream,
+                            writer_rx,
+                            shutdown_w,
+                        );
+                    });
+
+                    host.client_senders.lock().unwrap().push((player_id, writer_tx));
+                    new_client_joined = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+
+        // Broadcast lobby update to all clients when a new player joined
+        if new_client_joined {
+            broadcast_lobby_update(&lobby, host);
+        }
+
+        // Update host lobby status text
+        if *page == MenuPage::HostLobby {
+            let connected = lobby.players.iter().filter(|p| p.connected).count();
+            for mut text in &mut status_texts {
+                **text = format!(
+                    "{} player(s) in lobby{}",
+                    connected,
+                    if connected >= 2 { " — ready to start!" } else { "" }
+                );
+            }
+        }
+
+        // ── Host: handle PendingGameStart ──
+        if pending_start.is_some() {
+            // Resolve seed now so host and client use the same one
+            if config.map_seed == 0 {
+                config.map_seed = rand::random::<u64>();
+                info!("Host resolved random map seed: {}", config.map_seed);
+            }
+
+            // Adjust AI count: total 4 factions, subtract human players
+            let human_count = lobby.players.iter().filter(|p| p.connected).count() as u8;
+            config.num_ai_opponents = (4u8.saturating_sub(human_count)).min(3);
+            info!(
+                "Multiplayer: {} humans, {} AI opponents",
+                human_count, config.num_ai_opponents
+            );
+
+            let config_json = serde_json::to_string(&SerializableGameConfig::from_config(&config, &lobby))
+                .unwrap_or_default();
+
+            let start_event = game_state::message::ServerMessage::Event {
+                seq: 0,
+                timestamp: 0.0,
+                events: vec![game_state::message::GameEvent::GameStart { config_json }],
+            };
+            if let Ok(json) = serde_json::to_vec(&start_event) {
+                let senders = host.client_senders.lock().unwrap();
+                for (_id, sender) in senders.iter() {
+                    let _ = sender.send(json.clone());
+                }
+            }
+
+            commands.remove_resource::<PendingGameStart>();
+            next_state.set(AppState::InGame);
+        }
+    }
+
+    // ── Client: poll incoming for lobby updates and game start ──
+    if let Some(client) = client_state.as_ref() {
+        let rx = client.incoming.lock().unwrap();
+        loop {
+            match rx.try_recv() {
+                Ok(game_state::message::ServerMessage::Event { events, .. }) => {
+                    for event in &events {
+                        match event {
+                            game_state::message::GameEvent::LobbyUpdate { players } => {
+                                lobby.players.clear();
+                                for p in players {
+                                    lobby.players.push(LobbyPlayer {
+                                        name: p.name.clone(),
+                                        faction: Faction::PLAYERS
+                                            .get(p.faction_index as usize)
+                                            .copied()
+                                            .unwrap_or(Faction::Neutral),
+                                        is_host: p.is_host,
+                                        connected: p.connected,
+                                    });
+                                }
+                                lobby.status = LobbyStatus::Connected;
+                                for mut text in &mut status_texts {
+                                    **text = format!(
+                                        "Connected — {} player(s) in lobby",
+                                        lobby.players.len()
+                                    );
+                                }
+                            }
+                            game_state::message::GameEvent::GameStart { config_json } => {
+                                info!("Received GameStart from host");
+                                // Apply host's config so we generate the same world
+                                if let Ok(net_config) = serde_json::from_str::<SerializableGameConfig>(config_json) {
+                                    net_config.apply_to_config(&mut config);
+                                    info!("Applied host config: seed={}, map_size={}", config.map_seed, net_config.map_size);
+                                }
+                                // ActivePlayer is set by configure_multiplayer_ai on OnEnter(InGame)
+                                next_state.set(AppState::InGame);
+                                return;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Ok(_) => {
+                    // Ignore non-event messages in lobby
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+    }
+
+    // ── Update player slot UI for both host and client ──
+    update_player_slot_ui(&lobby, &slot_texts, &mut child_texts, &mut child_bgs);
+}
+
+fn update_player_slot_ui(
+    lobby: &LobbyState,
+    slot_texts: &Query<(&LobbyPlayerSlot, &Children)>,
+    child_texts: &mut Query<&mut Text, (Without<LobbyStatusText>, Without<SessionCodeText>, Without<LobbyPlayerSlot>)>,
+    child_bgs: &mut Query<&mut BackgroundColor, Without<LobbyPlayerSlot>>,
+) {
+    for (slot, children) in slot_texts {
+        let idx = slot.0;
+        let (label, color) = if let Some(player) = lobby.players.get(idx) {
+            let c = if player.connected {
+                if player.is_host {
+                    theme::SUCCESS
+                } else {
+                    theme::ACCENT
+                }
+            } else {
+                theme::DESTRUCTIVE
+            };
+            let l = if player.is_host {
+                format!("{} (Host)", player.name)
+            } else if player.connected {
+                player.name.clone()
+            } else {
+                format!("{} (disconnected)", player.name)
+            };
+            (l, c)
+        } else {
+            ("Waiting...".to_string(), theme::TEXT_SECONDARY)
+        };
+
+        // children[0] = status dot (BackgroundColor), children[1] = text
+        let mut child_iter = children.iter();
+        if let Some(dot_entity) = child_iter.next() {
+            if let Ok(mut bg) = child_bgs.get_mut(dot_entity) {
+                *bg = BackgroundColor(color);
+            }
+        }
+        if let Some(text_entity) = child_iter.next() {
+            if let Ok(mut text) = child_texts.get_mut(text_entity) {
+                if **text != label {
+                    **text = label;
+                }
+            }
+        }
+    }
+}
+
+fn broadcast_lobby_update(lobby: &LobbyState, host: &HostNetState) {
+    use game_state::message::{GameEvent, LobbyPlayerInfo, ServerMessage};
+
+    let players: Vec<LobbyPlayerInfo> = lobby
+        .players
+        .iter()
+        .map(|p| LobbyPlayerInfo {
+            name: p.name.clone(),
+            faction_index: Faction::PLAYERS
+                .iter()
+                .position(|f| *f == p.faction)
+                .unwrap_or(0) as u8,
+            is_host: p.is_host,
+            connected: p.connected,
+        })
+        .collect();
+
+    let msg = ServerMessage::Event {
+        seq: 0,
+        timestamp: 0.0,
+        events: vec![GameEvent::LobbyUpdate { players }],
+    };
+
+    if let Ok(json) = serde_json::to_vec(&msg) {
+        let senders = host.client_senders.lock().unwrap();
+        for (_id, sender) in senders.iter() {
+            let _ = sender.send(json.clone());
+        }
+    }
+}
+
+/// All world-affecting config fields for network transmission.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SerializableGameConfig {
+    pub map_seed: u64,
+    pub num_ai_opponents: u8,
+    pub ai_difficulties: [u8; 3],
+    pub team_mode: u8,
+    pub player_teams: [u8; 4],
+    pub map_size: u8,
+    pub resource_density: u8,
+    pub day_cycle_secs: f32,
+    pub starting_resources_mult: f32,
+    /// Faction indices that are human-controlled (not AI).
+    pub human_factions: Vec<u8>,
+}
+
+impl SerializableGameConfig {
+    fn from_config(config: &GameSetupConfig, lobby: &LobbyState) -> Self {
+        let human_factions: Vec<u8> = lobby
+            .players
+            .iter()
+            .filter(|p| p.connected)
+            .map(|p| {
+                Faction::PLAYERS
+                    .iter()
+                    .position(|f| *f == p.faction)
+                    .unwrap_or(0) as u8
+            })
+            .collect();
+
+        Self {
+            map_seed: config.map_seed,
+            num_ai_opponents: config.num_ai_opponents,
+            ai_difficulties: config.ai_difficulties.map(|d| match d {
+                AiDifficulty::Easy => 0,
+                AiDifficulty::Medium => 1,
+                AiDifficulty::Hard => 2,
+            }),
+            team_mode: match config.team_mode {
+                TeamMode::FFA => 0,
+                TeamMode::Teams => 1,
+                TeamMode::Custom => 2,
+            },
+            player_teams: config.player_teams,
+            map_size: match config.map_size {
+                MapSize::Small => 0,
+                MapSize::Medium => 1,
+                MapSize::Large => 2,
+            },
+            resource_density: match config.resource_density {
+                ResourceDensity::Sparse => 0,
+                ResourceDensity::Normal => 1,
+                ResourceDensity::Dense => 2,
+            },
+            day_cycle_secs: config.day_cycle_secs,
+            starting_resources_mult: config.starting_resources_mult,
+            human_factions,
+        }
+    }
+
+    fn apply_to_config(&self, config: &mut GameSetupConfig) {
+        config.map_seed = self.map_seed;
+        config.num_ai_opponents = self.num_ai_opponents;
+        config.ai_difficulties = self.ai_difficulties.map(|d| match d {
+            0 => AiDifficulty::Easy,
+            1 => AiDifficulty::Medium,
+            _ => AiDifficulty::Hard,
+        });
+        config.team_mode = match self.team_mode {
+            0 => TeamMode::FFA,
+            1 => TeamMode::Teams,
+            _ => TeamMode::Custom,
+        };
+        config.player_teams = self.player_teams;
+        config.map_size = match self.map_size {
+            0 => MapSize::Small,
+            1 => MapSize::Medium,
+            _ => MapSize::Large,
+        };
+        config.resource_density = match self.resource_density {
+            0 => ResourceDensity::Sparse,
+            1 => ResourceDensity::Normal,
+            _ => ResourceDensity::Dense,
+        };
+        config.day_cycle_secs = self.day_cycle_secs;
+        config.starting_resources_mult = self.starting_resources_mult;
     }
 }

@@ -373,15 +373,29 @@ fn update_placement_preview(
         }
     }
 
+    // Slope validation (walls are exempt — they're designed for varied terrain)
+    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost) {
+        const MAX_BUILDING_SLOPE: f32 = 0.5; // ~27 degrees
+        let slope = height_map.max_slope_under_footprint(world_pos.x, world_pos.z, new_footprint);
+        if slope > MAX_BUILDING_SLOPE {
+            valid = false;
+            if hint.is_none() {
+                hint = Some("Terrain too steep".to_owned());
+            }
+        }
+    }
+
     for (building_tf, existing_footprint) in &existing_buildings {
         let min_dist = existing_footprint.0 + new_footprint;
-        if building_tf.translation.distance(ghost_tf.translation) < min_dist {
+        let dx = building_tf.translation.x - ghost_tf.translation.x;
+        let dz = building_tf.translation.z - ghost_tf.translation.z;
+        if (dx * dx + dz * dz).sqrt() < min_dist {
             valid = false;
             break;
         }
     }
 
-    let half_map = 250.0;
+    let half_map = height_map.half_map;
     if world_pos.x.abs() > half_map - 5.0 || world_pos.z.abs() > half_map - 5.0 {
         valid = false;
     }
@@ -690,6 +704,7 @@ fn confirm_placement(
     mut pending_drains: ResMut<PendingCarriedDrains>,
     registry: Res<BlueprintRegistry>,
     extras: (Res<AllCompletedBuildings>, Option<Res<BiomeMap>>),
+    height_map: Res<HeightMap>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
     ui_interactions: Query<&Interaction, With<Node>>,
@@ -760,13 +775,22 @@ fn confirm_placement(
             return;
         }
     }
-    for (building_tf, existing_fp) in &existing_buildings {
-        let check_pos = Vec3::new(world_pos.x, building_tf.translation.y, world_pos.z);
-        if building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint {
+    // Slope validation (walls exempt)
+    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost) {
+        const MAX_BUILDING_SLOPE: f32 = 0.5;
+        let slope = height_map.max_slope_under_footprint(world_pos.x, world_pos.z, new_footprint);
+        if slope > MAX_BUILDING_SLOPE {
             return;
         }
     }
-    let half_map = 250.0;
+    for (building_tf, existing_fp) in &existing_buildings {
+        let dx = building_tf.translation.x - world_pos.x;
+        let dz = building_tf.translation.z - world_pos.z;
+        if (dx * dx + dz * dz).sqrt() < existing_fp.0 + new_footprint {
+            return;
+        }
+    }
+    let half_map = height_map.half_map;
     if world_pos.x.abs() > half_map - 5.0 || world_pos.z.abs() > half_map - 5.0 {
         return;
     }

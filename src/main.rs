@@ -14,6 +14,8 @@ mod hover_material;
 mod lighting;
 mod menu;
 mod minimap;
+mod multiplayer;
+mod net_bridge;
 mod mobs;
 mod model_assets;
 mod orders;
@@ -98,5 +100,7 @@ fn main() {
         .add_plugins(ai::AiPlugin)
         .add_plugins(unit_ai::UnitAiPlugin)
         .add_plugins(pause_menu::PauseMenuPlugin)
+        .add_plugins(net_bridge::NetBridgePlugin)
+        .add_plugins(multiplayer::MultiplayerPlugin)
         .run();
 }

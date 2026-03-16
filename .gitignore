@@ -16,6 +16,7 @@ Thumbs.db
 # Bevy
 /assets/cache/
 /dist/
+/game_state/target/
 
 
 # Assets

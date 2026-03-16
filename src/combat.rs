@@ -1,9 +1,8 @@
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
-use crate::blueprints::{BlueprintRegistry, EntityKind, IsRanged};
+use crate::blueprints::{EntityKind, IsRanged};
 use crate::components::*;
-use crate::ground::HeightMap;
 use crate::spatial::{SpatialHashGrid, WallSpatialGrid};
 
 pub struct CombatPlugin;
@@ -164,8 +163,6 @@ fn approach_attack_target(
     mut commands: Commands,
     time: Res<Time>,
     teams: Res<TeamConfig>,
-    registry: Res<BlueprintRegistry>,
-    height_map: Res<HeightMap>,
     wall_grid: Res<WallSpatialGrid>,
     mut attackers: Query<
         (
@@ -174,7 +171,6 @@ fn approach_attack_target(
             &AttackTarget,
             &UnitSpeed,
             &AttackRange,
-            Option<&EntityKind>,
             &Faction,
             Option<&mut UnitState>,
         ),
@@ -189,7 +185,7 @@ fn approach_attack_target(
     >,
     targets: Query<&Transform, Without<AttackTarget>>,
 ) {
-    for (attacker_entity, mut tf, attack_target, speed, range, opt_kind, faction, opt_state) in
+    for (attacker_entity, mut tf, attack_target, speed, range, faction, opt_state) in
         &mut attackers
     {
         let Ok(target_tf) = targets.get(attack_target.0) else {
@@ -275,18 +271,6 @@ fn approach_attack_target(
                 continue;
             }
             tf.translation = candidate;
-
-            let y_off = if let Some(kind) = opt_kind {
-                registry
-                    .get(*kind)
-                    .movement
-                    .as_ref()
-                    .map(|m| m.y_offset)
-                    .unwrap_or(0.8)
-            } else {
-                0.8
-            };
-            tf.translation.y = height_map.sample(tf.translation.x, tf.translation.z) + y_off;
         }
     }
 }
