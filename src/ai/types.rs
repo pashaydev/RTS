@@ -107,16 +107,6 @@ impl SquadRole {
         )
     }
 
-    pub fn resource_type(&self) -> Option<ResourceType> {
-        match self {
-            SquadRole::GatherWood => Some(ResourceType::Wood),
-            SquadRole::GatherCopper => Some(ResourceType::Copper),
-            SquadRole::GatherIron => Some(ResourceType::Iron),
-            SquadRole::GatherGold => Some(ResourceType::Gold),
-            SquadRole::GatherOil => Some(ResourceType::Oil),
-            _ => None,
-        }
-    }
 }
 
 // ── Data Structs ──
@@ -125,7 +115,6 @@ impl SquadRole {
 pub struct Squad {
     pub role: SquadRole,
     pub members: Vec<Entity>,
-    pub rally_point: Option<Vec3>,
 }
 
 #[derive(Clone, Debug)]
@@ -262,7 +251,6 @@ impl AiFactionBrain {
             self.squads.push(Squad {
                 role,
                 members: Vec::new(),
-                rally_point: None,
             });
         }
         self.squads.iter_mut().find(|s| s.role == role).unwrap()

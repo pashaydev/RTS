@@ -118,7 +118,7 @@ pub struct WidgetContent;
 pub struct WidgetCloseButton(pub WidgetId);
 
 #[derive(Component)]
-pub struct WidgetTitleBar(pub WidgetId);
+pub struct WidgetTitleBar(#[allow(dead_code)] pub WidgetId);
 
 #[derive(Component)]
 pub struct WidgetDragHandle(pub Entity);

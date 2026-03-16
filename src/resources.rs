@@ -2017,13 +2017,13 @@ fn update_carry_visuals(
             }
         } else if carrying.amount == 0 {
             if let Some(visual) = carry_visual {
-                commands.entity(visual.0).despawn();
+                commands.entity(visual.0).try_despawn();
                 commands.entity(entity).remove::<CarryVisual>();
             }
         } else if let Some(visual) = carry_visual {
             // Update scale based on current weight
             let scale_factor = 0.5 + 0.5 * (carrying.weight / capacity.0).min(1.0);
-            commands.entity(visual.0).insert(
+            commands.entity(visual.0).try_insert(
                 Transform::from_translation(Vec3::new(0.0, 0.8, -0.3))
                     .with_scale(Vec3::splat(scale_factor)),
             );
@@ -2358,8 +2358,6 @@ fn processor_worker_visual_system(
                     *phase = AssignedPhase::SeekingNode;
                 }
             }
-            // FetchingInput and DeliveringInput are handled elsewhere (production buildings)
-            _ => {}
         }
     }
 }

@@ -1766,7 +1766,7 @@ fn spawn_construction_action_bar(
 
 /// New component replacing BuildCard for the grid-based building buttons
 #[derive(Component)]
-pub struct BuildGridButton(pub EntityKind);
+pub struct BuildGridButton(#[allow(dead_code)] pub EntityKind);
 
 fn spawn_found_base_panel(
     commands: &mut Commands,

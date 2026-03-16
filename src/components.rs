@@ -101,14 +101,6 @@ impl MapSize {
             MapSize::Large => 700.0,
         }
     }
-
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            MapSize::Small => "Small",
-            MapSize::Medium => "Medium",
-            MapSize::Large => "Large",
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -127,14 +119,6 @@ impl ResourceDensity {
             ResourceDensity::Dense => 1.5,
         }
     }
-
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            ResourceDensity::Sparse => "Sparse",
-            ResourceDensity::Normal => "Normal",
-            ResourceDensity::Dense => "Dense",
-        }
-    }
 }
 
 // ── Graphics Settings ──
@@ -147,15 +131,6 @@ pub enum ShadowQuality {
     High,
 }
 
-impl ShadowQuality {
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            ShadowQuality::Off => "Off",
-            ShadowQuality::Low => "Low",
-            ShadowQuality::High => "High",
-        }
-    }
-}
 
 #[derive(Resource, Clone, Debug, Serialize, Deserialize)]
 pub struct GraphicsSettings {
@@ -275,10 +250,7 @@ impl ResourceType {
         }
     }
 
-    pub fn is_raw(self) -> bool {
-        self.index() < 5
-    }
-
+    #[allow(dead_code)]
     pub fn is_processed(self) -> bool {
         self.index() >= 5
     }
@@ -476,14 +448,6 @@ pub enum UnitStance {
 }
 
 impl UnitStance {
-    pub fn display_name(self) -> &'static str {
-        match self {
-            Self::Passive => "Passive",
-            Self::Defensive => "Defensive",
-            Self::Aggressive => "Aggressive",
-        }
-    }
-
     pub fn cycle(self) -> Self {
         match self {
             Self::Passive => Self::Defensive,
@@ -512,18 +476,6 @@ impl UnitStance {
 }
 
 /// High-level role hint for the AI decision layer.
-#[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
-pub enum AutoRole {
-    /// No automatic behavior — wait for orders.
-    #[default]
-    None,
-    /// Gather resources and build.
-    Economy,
-    /// Explore the map and pick up loot.
-    Explore,
-    /// Defend a specific area.
-    DefendArea(Vec3),
-}
 
 /// Remembers where a unit was when it started chasing a target (for leash return).
 #[derive(Component, Clone, Copy, Debug)]
@@ -731,10 +683,6 @@ impl StorageInventory {
         self.amounts[rt.index()]
     }
 
-    pub fn set_cap(&mut self, rt: ResourceType, cap: u32) {
-        self.caps[rt.index()] = cap;
-    }
-
     pub fn scale_caps(&mut self, factor: f32) {
         for cap in &mut self.caps {
             if *cap > 0 {
@@ -775,8 +723,6 @@ pub struct ResourceProcessor {
     pub max_workers: u8,
     /// Internal buffer before transfer to storage
     pub buffer: u32,
-    /// Max buffer size
-    pub buffer_capacity: u32,
     /// Each worker adds this fraction of base rate (default 0.5 = 50%)
     pub worker_rate_bonus: f32,
     /// Timer that controls harvest tick interval
@@ -790,7 +736,9 @@ pub struct ResourceProcessor {
 pub struct ResourcePopup {
     pub lifetime: Timer,
     pub world_pos: Vec3,
+    #[allow(dead_code)]
     pub resource_type: ResourceType,
+    #[allow(dead_code)]
     pub amount: u32,
 }
 
@@ -809,19 +757,12 @@ pub enum AssignedPhase {
     Depositing {
         timer_secs: f32,
     },
-    /// For production buildings: fetching input from storage
-    FetchingInput {
-        from_depot: Entity,
-        resource: ResourceType,
-    },
-    /// Delivering fetched input to the production building
-    DeliveringInput,
 }
 
 /// Marker: this worker is assigned to a building. The building entity is stored here
 /// for quick lookup without needing to check UnitState.
 #[derive(Component)]
-pub struct BuildingAssignment(pub Entity);
+pub struct BuildingAssignment(#[allow(dead_code)] pub Entity);
 
 // ── Production chain ──
 
@@ -1030,21 +971,6 @@ impl PlayerResources {
     }
 }
 
-#[derive(Resource)]
-pub struct LastPlayerResources {
-    pub amounts: [u32; ResourceType::COUNT],
-}
-
-impl Default for LastPlayerResources {
-    fn default() -> Self {
-        let mut amounts = [0; ResourceType::COUNT];
-        amounts[ResourceType::Wood.index()] = 220;
-        amounts[ResourceType::Copper.index()] = 20;
-        amounts[ResourceType::Iron.index()] = 40;
-        Self { amounts }
-    }
-}
-
 // ── Model assets (3D models loaded from .glb files) ──
 
 #[derive(Resource, Default)]
@@ -1060,8 +986,6 @@ pub struct ModelAssets {
 #[derive(Component)]
 pub struct Decoration;
 
-#[derive(Component)]
-pub struct DenseGrass;
 
 #[derive(Component)]
 pub struct GrassChunk {
@@ -1330,6 +1254,16 @@ impl Faction {
             Faction::Neutral => Color::srgb(0.8, 0.2, 0.2),
         }
     }
+
+    pub fn team_color(&self) -> TeamColor {
+        match self {
+            Faction::Player1 => TeamColor::Blue,
+            Faction::Player2 => TeamColor::Red,
+            Faction::Player3 => TeamColor::Purple,
+            Faction::Player4 => TeamColor::Green,
+            Faction::Neutral => TeamColor::Black,
+        }
+    }
 }
 
 /// Team configuration — factions with the same team number are allied.
@@ -1370,22 +1304,6 @@ impl TeamConfig {
         !self.is_allied(a, b)
     }
 
-    /// All factions on the same team as `faction` (including itself).
-    pub fn allies_of(&self, faction: &Faction) -> Vec<Faction> {
-        if *faction == Faction::Neutral {
-            return vec![Faction::Neutral];
-        }
-        let team = self.teams.get(faction).copied();
-        match team {
-            Some(t) => self
-                .teams
-                .iter()
-                .filter(|(_, &team_num)| team_num == t)
-                .map(|(&f, _)| f)
-                .collect(),
-            None => vec![*faction],
-        }
-    }
 }
 
 /// Which factions are AI-controlled (not human players).
@@ -1414,14 +1332,6 @@ pub enum AiDifficulty {
 }
 
 impl AiDifficulty {
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::Easy => "Easy",
-            Self::Medium => "Medium",
-            Self::Hard => "Hard",
-        }
-    }
-
     pub fn tick_multiplier(&self) -> f32 {
         match self {
             Self::Easy => 1.5,
@@ -1435,14 +1345,6 @@ impl AiDifficulty {
             Self::Easy => 0.0,
             Self::Medium => 0.0,
             Self::Hard => 0.15,
-        }
-    }
-
-    pub fn attack_threshold_offset(&self) -> i32 {
-        match self {
-            Self::Easy => 4,
-            Self::Medium => 0,
-            Self::Hard => -2,
         }
     }
 
@@ -1474,17 +1376,6 @@ pub enum AiPersonality {
     Supportive,
 }
 
-impl AiPersonality {
-    pub fn display_name(&self) -> &'static str {
-        match self {
-            Self::Balanced => "Balanced",
-            Self::Aggressive => "Aggressive",
-            Self::Defensive => "Defensive",
-            Self::Economic => "Economic",
-            Self::Supportive => "Supportive",
-        }
-    }
-}
 
 /// Relation of an AI faction to the human player.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -1507,7 +1398,6 @@ pub struct AllyNotification {
 pub enum AllyNotifyKind {
     UnderAttack,
     Attacking,
-    NeedHelp,
     ReadyToAttack,
     EnemySpotted,
 }
@@ -1515,7 +1405,7 @@ pub enum AllyNotifyKind {
 impl AllyNotifyKind {
     pub fn color(&self) -> Color {
         match self {
-            Self::UnderAttack | Self::NeedHelp => Color::srgb(1.0, 0.6, 0.2),
+            Self::UnderAttack => Color::srgb(1.0, 0.6, 0.2),
             Self::Attacking | Self::ReadyToAttack => Color::srgb(0.3, 0.8, 1.0),
             Self::EnemySpotted => Color::srgb(0.9, 0.9, 0.3),
         }
@@ -1730,13 +1620,6 @@ impl FogOfWarMap {
         self.world_to_idx(x, z)
             .map(|i| self.explored[i])
             .unwrap_or(false)
-    }
-
-    /// Smoothed display value for rendering (0.0–1.0).
-    pub fn get_display(&self, x: f32, z: f32) -> f32 {
-        self.world_to_idx(x, z)
-            .map(|i| self.display[i])
-            .unwrap_or(0.0)
     }
 
     /// Backward-compatible: 1.0 if visible, 0.5 if explored, 0.0 if unexplored.
@@ -1963,7 +1846,6 @@ pub struct TreeGrowthConfig {
     pub sapling_duration: f32,
     pub growth_stage_duration: f32,
     pub max_saplings: u32,
-    pub max_growing: u32,
     pub spawn_radius: f32,
     pub mature_wood_amount: u32,
 }
@@ -1975,7 +1857,6 @@ impl Default for TreeGrowthConfig {
             sapling_duration: 30.0,
             growth_stage_duration: 20.0,
             max_saplings: 30,
-            max_growing: 30,
             spawn_radius: 15.0,
             mature_wood_amount: 200,
         }
@@ -2129,17 +2010,6 @@ pub struct WallPlotPreview {
     pub ghost_entities: Vec<Entity>,
     pub total_cost: crate::blueprints::ResourceCost,
     pub valid: bool,
-}
-
-#[derive(Resource, Default)]
-pub struct CompletedBuildings {
-    pub completed: Vec<EntityKind>,
-}
-
-impl CompletedBuildings {
-    pub fn has(&self, kind: EntityKind) -> bool {
-        self.completed.contains(&kind)
-    }
 }
 
 // ── Building upgrades & interactions ──
@@ -2379,9 +2249,33 @@ pub enum AnimState {
     #[default]
     Idle,
     Walk,
-    Attack,
-    Die,
+    Run,
+    AttackA,
+    AttackB,
+    CastA,
+    CastB,
+    Damage,
+    DeathA,
+    DeathB,
 }
+
+/// Team color for texture-based faction coloring (ToonyTinyPeople assets).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum TeamColor {
+    Blue,
+    Red,
+    Purple,
+    Green,
+    Black,
+}
+
+/// Marker: team color texture has been applied to this entity's scene meshes.
+#[derive(Component)]
+pub struct TeamColorApplied;
+
+/// Tracks which construction stage model is currently shown (0=foundation, 1=partial, 2=complete).
+#[derive(Component)]
+pub struct ConstructionStage(pub u8);
 
 #[derive(Resource, Default)]
 pub struct RallyPointMode(pub bool);
@@ -2404,16 +2298,6 @@ pub struct GhostValid(pub bool);
 /// Marker for mesh entities under the ghost whose materials have been overridden.
 #[derive(Component)]
 pub struct GhostMaterialApplied;
-
-// ── Build Card (legacy, kept for grid button compatibility) ──
-
-#[derive(Component)]
-pub struct BuildCard {
-    pub building_kind: EntityKind,
-    pub index: usize,
-    pub total: usize,
-    pub enabled: bool,
-}
 
 /// Marker for standard (non-ghost) buttons that receive hover/press visuals.
 #[derive(Component)]
@@ -2522,10 +2406,6 @@ pub struct UiGlowPulse {
     pub intensity: f32,
 }
 
-/// Queue count badge on a train button.
-#[derive(Component)]
-pub struct TrainButtonQueueBadge(pub EntityKind);
-
 /// Tracks what text entity belongs to a train button's cost text (for coloring).
 #[derive(Component)]
 pub struct TrainCostText {
@@ -2546,7 +2426,9 @@ pub struct UnderAttackTimer(pub Timer);
 #[derive(Component)]
 pub struct DamagePopup {
     pub timer: Timer,
+    #[allow(dead_code)]
     pub amount: f32,
+    #[allow(dead_code)]
     pub is_damage: bool,
     pub world_pos: Vec3,
     pub offset_x: f32,
@@ -2651,6 +2533,7 @@ pub struct GameWorld;
 #[derive(Component)]
 pub struct PauseMenuButton(pub PauseAction);
 
+#[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PauseAction {
     Continue,

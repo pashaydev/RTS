@@ -14,8 +14,6 @@ const ASTAR_NODE_LIMIT: usize = 12_000;
 const PATHS_PER_FRAME: usize = 12;
 /// Distance threshold below which we skip A* and just walk directly
 const DIRECT_MOVE_THRESHOLD: f32 = 3.0;
-/// Waypoint arrival distance
-const WAYPOINT_ARRIVAL_DIST: f32 = 1.8;
 /// Cost for cells near obstacles (soft margin — guides paths away but doesn't block)
 const OBSTACLE_MARGIN_COST: u8 = 40;
 
@@ -73,9 +71,6 @@ impl NavGrid {
         gz * self.grid_size + gx
     }
 
-    pub fn is_passable(&self, gx: usize, gz: usize) -> bool {
-        self.costs[self.index(gx, gz)] > 0
-    }
 }
 
 #[derive(Resource)]

@@ -51,6 +51,7 @@ impl Plugin for DebugPlugin {
                     update_save_button_feedback,
                     apply_saved_config,
                     sync_lighting_tweaks,
+                    #[cfg(not(target_arch = "wasm32"))]
                     sync_entity_light_tweaks,
                     sync_fog_tweaks,
                 )

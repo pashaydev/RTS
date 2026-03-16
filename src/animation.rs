@@ -1,7 +1,8 @@
 use bevy::prelude::*;
 
+use crate::blueprints::EntityKind;
 use crate::components::*;
-use crate::model_assets::AnimationAssets;
+use crate::model_assets::{ttp_anim_set, AnimationAssets, UnitAnimationRegistry};
 
 pub struct AnimationPlugin;
 
@@ -22,24 +23,24 @@ impl Plugin for AnimationPlugin {
 /// Walk the hierarchy of entities with `UnitSceneChild` to find the `AnimationPlayer`
 /// deep in the GLTF scene graph. Once found, insert `AnimPlayerRef` and `AnimationController`
 /// on the parent unit entity and start the idle animation.
+///
+/// Uses per-unit-type animation graphs from `UnitAnimationRegistry` for TTP units,
+/// and falls back to the legacy shared graph for KayKit mobs.
 fn discover_animation_players(
     mut commands: Commands,
     scene_children: Query<(Entity, &ChildOf), With<UnitSceneChild>>,
     parents_without_anim: Query<Entity, (With<Unit>, Without<AnimPlayerRef>)>,
     mob_parents_without_anim: Query<Entity, (With<Mob>, Without<AnimPlayerRef>)>,
+    kind_q: Query<&EntityKind>,
     children_q: Query<&Children>,
     anim_players: Query<Entity, With<AnimationPlayer>>,
-    anim_assets: Option<Res<AnimationAssets>>,
+    registry: Option<Res<UnitAnimationRegistry>>,
+    legacy_assets: Option<Res<AnimationAssets>>,
     mut anim_player_mut: Query<&mut AnimationPlayer>,
 ) {
-    let Some(ref assets) = anim_assets else {
-        return;
-    };
-
     for (scene_entity, child_of) in &scene_children {
         let parent = child_of.parent();
 
-        // Check if parent is a unit or mob that doesn't have AnimPlayerRef yet
         let is_unit = parents_without_anim.contains(parent);
         let is_mob = mob_parents_without_anim.contains(parent);
         if !is_unit && !is_mob {
@@ -47,25 +48,68 @@ fn discover_animation_players(
         }
 
         // Walk the hierarchy of the scene child to find AnimationPlayer
-        if let Some(player_entity) = find_animation_player(scene_entity, &children_q, &anim_players)
-        {
-            commands.entity(parent).insert((
-                AnimPlayerRef(player_entity),
-                AnimationController {
-                    current_state: AnimState::Idle,
-                },
-            ));
+        let Some(player_entity) =
+            find_animation_player(scene_entity, &children_q, &anim_players)
+        else {
+            continue;
+        };
 
-            // Insert the animation graph on the player entity and start idle
-            commands.entity(player_entity).insert((
-                AnimationGraphHandle(assets.graph.clone()),
-                AnimationTransitions::new(),
-            ));
+        // Determine which animation graph to use
+        let kind = kind_q.get(parent).ok().copied();
 
-            if let Ok(mut player) = anim_player_mut.get_mut(player_entity) {
-                if let Some(&node_idx) = assets.node_indices.get(&AnimState::Idle) {
-                    player.play(node_idx).repeat();
+        // Skip TTP units if the registry isn't ready yet — they need their
+        // per-unit-type graph, not the legacy KayKit one.
+        let is_ttp = kind.map_or(false, |k| ttp_anim_set(k).is_some());
+        if is_ttp && registry.is_none() {
+            continue;
+        }
+
+        let (graph_handle, idle_node) = if let Some(ref reg) = registry {
+            // Try per-unit-type graph first (TTP units)
+            if let Some(kind) = kind {
+                if let Some(anim_data) = reg.data.get(&kind) {
+                    let idle = anim_data.node_indices.get(&AnimState::Idle).copied();
+                    (Some(anim_data.graph.clone()), idle)
+                } else if let Some(ref legacy) = reg.legacy {
+                    // Fallback to legacy graph (mobs/summons)
+                    let idle = legacy.node_indices.get(&AnimState::Idle).copied();
+                    (Some(legacy.graph.clone()), idle)
+                } else {
+                    (None, None)
                 }
+            } else if let Some(ref legacy) = reg.legacy {
+                let idle = legacy.node_indices.get(&AnimState::Idle).copied();
+                (Some(legacy.graph.clone()), idle)
+            } else {
+                (None, None)
+            }
+        } else if let Some(ref assets) = legacy_assets {
+            // Registry not ready yet, use legacy assets (mobs only — TTP units skipped above)
+            let idle = assets.node_indices.get(&AnimState::Idle).copied();
+            (Some(assets.graph.clone()), idle)
+        } else {
+            (None, None)
+        };
+
+        let Some(graph) = graph_handle else {
+            continue;
+        };
+
+        commands.entity(parent).insert((
+            AnimPlayerRef(player_entity),
+            AnimationController {
+                current_state: AnimState::Idle,
+            },
+        ));
+
+        commands.entity(player_entity).insert((
+            AnimationGraphHandle(graph),
+            AnimationTransitions::new(),
+        ));
+
+        if let Some(node_idx) = idle_node {
+            if let Ok(mut player) = anim_player_mut.get_mut(player_entity) {
+                player.play(node_idx).repeat();
             }
         }
     }
@@ -90,11 +134,13 @@ fn find_animation_player(
 }
 
 /// Determine desired AnimState from entity state and transition if changed.
+/// Uses per-unit-type animation graphs from UnitAnimationRegistry.
 fn drive_animations(
     mut anim_controllers: Query<(
         &mut AnimationController,
         &AnimPlayerRef,
         &Health,
+        &EntityKind,
         Option<&UnitState>,
         Option<&MoveTarget>,
         Option<&AttackTarget>,
@@ -102,17 +148,15 @@ fn drive_animations(
         &Transform,
     )>,
     target_transforms: Query<&Transform, Without<AnimationController>>,
-    anim_assets: Option<Res<AnimationAssets>>,
+    registry: Option<Res<UnitAnimationRegistry>>,
+    legacy_assets: Option<Res<AnimationAssets>>,
     mut anim_players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
 ) {
-    let Some(ref assets) = anim_assets else {
-        return;
-    };
-
     for (
         mut controller,
         anim_ref,
         health,
+        kind,
         unit_state,
         move_target,
         attack_target,
@@ -121,16 +165,20 @@ fn drive_animations(
     ) in &mut anim_controllers
     {
         let desired = if health.current <= 0.0 {
-            AnimState::Die
+            AnimState::DeathA
         } else if unit_state.map_or(false, |s| matches!(s, UnitState::Gathering(_))) {
-            // Reuse the attack clip as a short work-loop while harvesting.
-            AnimState::Attack
+            AnimState::AttackA
         } else if let Some(at) = attack_target {
             if let Ok(target_tf) = target_transforms.get(at.0) {
                 let dist = my_tf.translation.distance(target_tf.translation);
                 let range = attack_range.map(|r| r.0).unwrap_or(2.0);
                 if dist <= range * 1.5 {
-                    AnimState::Attack
+                    // Use CastA for staff-type casters, AttackA for others
+                    if matches!(kind, EntityKind::Mage | EntityKind::Priest) {
+                        AnimState::CastA
+                    } else {
+                        AnimState::AttackA
+                    }
                 } else {
                     AnimState::Walk
                 }
@@ -146,14 +194,30 @@ fn drive_animations(
         if desired != controller.current_state {
             controller.current_state = desired;
 
-            if let Some(&node_idx) = assets.node_indices.get(&desired) {
+            // Look up node index from per-unit-type graph or legacy
+            let node_idx = if let Some(ref reg) = registry {
+                reg.data
+                    .get(kind)
+                    .and_then(|d| d.node_indices.get(&desired).copied())
+                    .or_else(|| {
+                        reg.legacy
+                            .as_ref()
+                            .and_then(|l| l.node_indices.get(&desired).copied())
+                    })
+            } else {
+                legacy_assets
+                    .as_ref()
+                    .and_then(|a| a.node_indices.get(&desired).copied())
+            };
+
+            if let Some(node_idx) = node_idx {
                 if let Ok((mut player, mut transitions)) = anim_players.get_mut(anim_ref.0) {
                     let transition = transitions.play(
                         &mut player,
                         node_idx,
                         std::time::Duration::from_millis(200),
                     );
-                    if desired != AnimState::Die {
+                    if !matches!(desired, AnimState::DeathA | AnimState::DeathB) {
                         transition.repeat();
                     }
                 }

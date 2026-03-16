@@ -671,7 +671,7 @@ pub fn handle_queue_row_click(
         for entity in &selected {
             commands.entity(entity).remove::<Selected>();
         }
-        commands.entity(row.0).insert(Selected);
+        commands.entity(row.0).try_insert(Selected);
     }
 }
 

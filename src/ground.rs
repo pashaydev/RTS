@@ -10,7 +10,6 @@ use crate::components::{
 pub const MAP_SIZE: f32 = 500.0;
 pub const HALF_MAP: f32 = 250.0;
 
-pub const GRID_SIZE: usize = 201; // 200x200 cells
 
 /// Pre-computed grid of terrain heights that matches the rendered mesh exactly.
 /// Use `sample(x, z)` for bilinear interpolation between grid vertices.

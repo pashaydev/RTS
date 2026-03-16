@@ -161,7 +161,6 @@ const UI_SCALE_OPTIONS: &[(f32, &str)] = &[
     (1.5, "150%"),
 ];
 
-const NUM_PARTICLES: usize = 12;
 
 // ── Spawn Menu ──
 

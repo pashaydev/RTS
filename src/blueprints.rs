@@ -246,14 +246,6 @@ impl EntityKind {
         }
     }
 
-    pub fn is_building(self) -> bool {
-        self.category() == EntityCategory::Building
-    }
-
-    pub fn is_mob(self) -> bool {
-        self.category() == EntityCategory::Mob
-    }
-
     pub fn uses_tower_auto_attack(self) -> bool {
         matches!(
             self,
@@ -276,7 +268,6 @@ pub struct CombatStats {
     pub attack_cooldown_secs: f32,
     pub aggro_range: Option<f32>,
     pub is_ranged: bool,
-    pub projectile_speed: Option<f32>,
 }
 
 #[derive(Clone, Debug)]
@@ -372,10 +363,6 @@ impl ResourceCost {
             .collect()
     }
 
-    /// Returns true if all amounts are zero.
-    pub fn is_free(&self) -> bool {
-        self.amounts.iter().all(|&a| a == 0)
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -386,20 +373,22 @@ pub struct BuildingLevelData {
     pub bonus: LevelBonus,
 }
 
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub enum LevelBonus {
     None,
     VisionBoost(f32),
     TrainTimeMultiplier(f32),
     TrainedStatBoost {
+        #[allow(dead_code)]
         hp_mult: f32,
+        #[allow(dead_code)]
         dmg_mult: f32,
     },
     RangeAndDamage {
         range_boost: f32,
         damage_boost: f32,
     },
-    CooldownMultiplier(f32),
     GatherAura {
         speed_bonus: f32,
         range: f32,
@@ -417,6 +406,7 @@ pub enum LevelBonus {
     },
     /// Unlock a production recipe at a given index and optionally add worker slots.
     UnlockRecipe {
+        #[allow(dead_code)]
         recipe_index: usize,
         extra_worker_slots: u8,
     },
@@ -453,7 +443,6 @@ pub struct VisualDef {
 pub enum MeshKind {
     Capsule { radius: f32, length: f32 },
     Cuboid { x: f32, y: f32, z: f32 },
-    Cylinder { radius: f32, height: f32 },
     GltfScene { pick_radius: f32 },
     GltfCharacter { pick_radius: f32 },
 }
@@ -464,9 +453,6 @@ impl MeshKind {
         let r = match *self {
             MeshKind::Capsule { radius, length } => length / 2.0 + radius,
             MeshKind::Cuboid { x, y, z } => (x * x + y * y + z * z).sqrt() / 2.0,
-            MeshKind::Cylinder { radius, height } => {
-                (radius * radius + (height / 2.0).powi(2)).sqrt()
-            }
             MeshKind::GltfScene { pick_radius } => return pick_radius,
             MeshKind::GltfCharacter { pick_radius } => return pick_radius,
         };
@@ -486,94 +472,16 @@ impl MeshKind {
     }
 }
 
-// ── Ability system ──
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum AbilityId {
-    Fireball,
-    FrostNova,
-    Heal,
-    HolySmite,
-    ShieldBash,
-    Charge,
-    SummonSkeleton,
-    DarkBolt,
-    BoulderThrow,
-}
-
-#[derive(Clone, Debug)]
-pub struct AbilitySlot {
-    pub id: AbilityId,
-    pub cooldown_secs: f32,
-    pub mana_cost: f32,
-    pub range: f32,
-    pub display_name: &'static str,
-}
-
-#[derive(Component, Clone, Debug)]
-pub struct Abilities {
-    pub slots: Vec<AbilityInstance>,
-}
-
-#[derive(Clone, Debug)]
-pub struct AbilityInstance {
-    pub id: AbilityId,
-    pub cooldown: Timer,
-    pub mana_cost: f32,
-    pub range: f32,
-}
-
-impl AbilityInstance {
-    pub fn from_slot(slot: &AbilitySlot) -> Self {
-        Self {
-            id: slot.id,
-            cooldown: Timer::from_seconds(slot.cooldown_secs, TimerMode::Once),
-            mana_cost: slot.mana_cost,
-            range: slot.range,
-        }
-    }
-}
-
-// ── Relationship components ──
-
-#[derive(Component)]
-pub struct SummonedBy(pub Entity);
-
-#[derive(Component)]
-pub struct ActiveSummons {
-    pub entities: Vec<Entity>,
-    pub max_count: u32,
-}
 
 // ── IsRanged marker ──
 
 #[derive(Component)]
 pub struct IsRanged;
 
-// ── Child entity definition ──
-
-#[derive(Clone, Debug)]
-pub struct ChildDef {
-    pub kind: EntityKind,
-    pub offset: Vec3,
-    pub count: u32,
-}
-
-// ── Upgrade path ──
-
-#[derive(Clone, Debug)]
-pub struct UpgradePath {
-    pub target: EntityKind,
-    pub cost: ResourceCost,
-    pub time_secs: f32,
-    pub requires_building: Option<EntityKind>,
-}
-
 // ── Blueprint ──
 
 #[derive(Clone, Debug)]
 pub struct Blueprint {
-    pub kind: EntityKind,
     pub faction: Faction,
     pub combat: Option<CombatStats>,
     pub movement: Option<MovementStats>,
@@ -584,9 +492,6 @@ pub struct Blueprint {
     pub building: Option<BuildingData>,
     pub mob_ai: Option<MobAiData>,
     pub visual: VisualDef,
-    pub children: Vec<ChildDef>,
-    pub abilities: Vec<AbilitySlot>,
-    pub upgrades: Vec<UpgradePath>,
 }
 
 // ── Blueprint Registry ──
@@ -657,7 +562,7 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(
         EntityKind::Worker,
         Blueprint {
-            kind: EntityKind::Worker,
+
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 115.0,
@@ -666,7 +571,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.2,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 5.0,
@@ -688,16 +593,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.3, 0.3, 0.0, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Soldier,
         Blueprint {
-            kind: EntityKind::Soldier,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 100.0,
@@ -706,7 +610,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 4.5,
@@ -725,21 +629,14 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.3, 0.05, 0.05, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![UpgradePath {
-                target: EntityKind::Knight,
-                cost: ResourceCost::new().with(ResourceType::Iron, 30).with(ResourceType::Gold, 20),
-                time_secs: 12.0,
-                requires_building: Some(EntityKind::Stable),
-            }],
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Archer,
         Blueprint {
-            kind: EntityKind::Archer,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 100.0,
@@ -748,7 +645,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.5,
                 aggro_range: None,
                 is_ranged: true,
-                projectile_speed: Some(15.0),
+
             }),
             movement: Some(MovementStats {
                 speed: 5.5,
@@ -767,16 +664,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.05, 0.3, 0.05, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Tank,
         Blueprint {
-            kind: EntityKind::Tank,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 100.0,
@@ -785,7 +681,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 2.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 3.0,
@@ -804,16 +700,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.1, 0.1, 0.12, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Knight,
         Blueprint {
-            kind: EntityKind::Knight,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 200.0,
@@ -822,7 +717,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 0.8,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 6.0,
@@ -841,31 +736,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.2, 0.2, 0.25, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![
-                AbilitySlot {
-                    id: AbilityId::Charge,
-                    cooldown_secs: 15.0,
-                    mana_cost: 0.0,
-                    range: 8.0,
-                    display_name: "Charge",
-                },
-                AbilitySlot {
-                    id: AbilityId::ShieldBash,
-                    cooldown_secs: 8.0,
-                    mana_cost: 0.0,
-                    range: 2.5,
-                    display_name: "Shield Bash",
-                },
-            ],
-            upgrades: vec![],
+
         },
     );
 
     blueprints.insert(
         EntityKind::Mage,
         Blueprint {
-            kind: EntityKind::Mage,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 70.0,
@@ -874,7 +751,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 2.0,
                 aggro_range: None,
                 is_ranged: true,
-                projectile_speed: Some(12.0),
+
             }),
             movement: Some(MovementStats {
                 speed: 4.0,
@@ -893,31 +770,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.1, 0.05, 0.3, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![
-                AbilitySlot {
-                    id: AbilityId::Fireball,
-                    cooldown_secs: 10.0,
-                    mana_cost: 30.0,
-                    range: 16.0,
-                    display_name: "Fireball",
-                },
-                AbilitySlot {
-                    id: AbilityId::FrostNova,
-                    cooldown_secs: 20.0,
-                    mana_cost: 50.0,
-                    range: 8.0,
-                    display_name: "Frost Nova",
-                },
-            ],
-            upgrades: vec![],
+
         },
     );
 
     blueprints.insert(
         EntityKind::Priest,
         Blueprint {
-            kind: EntityKind::Priest,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 80.0,
@@ -926,7 +785,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 2.0,
                 aggro_range: None,
                 is_ranged: true,
-                projectile_speed: Some(10.0),
+
             }),
             movement: Some(MovementStats {
                 speed: 4.5,
@@ -945,31 +804,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.3, 0.28, 0.1, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![
-                AbilitySlot {
-                    id: AbilityId::Heal,
-                    cooldown_secs: 8.0,
-                    mana_cost: 25.0,
-                    range: 12.0,
-                    display_name: "Heal",
-                },
-                AbilitySlot {
-                    id: AbilityId::HolySmite,
-                    cooldown_secs: 12.0,
-                    mana_cost: 35.0,
-                    range: 10.0,
-                    display_name: "Holy Smite",
-                },
-            ],
-            upgrades: vec![],
+
         },
     );
 
     blueprints.insert(
         EntityKind::Cavalry,
         Blueprint {
-            kind: EntityKind::Cavalry,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 150.0,
@@ -978,7 +819,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 0.9,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 7.0,
@@ -997,9 +838,9 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.15, 0.1, 0.05, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
@@ -1008,7 +849,6 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(
         EntityKind::Catapult,
         Blueprint {
-            kind: EntityKind::Catapult,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 150.0,
@@ -1017,7 +857,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 5.0,
                 aggro_range: None,
                 is_ranged: true,
-                projectile_speed: Some(8.0),
+
             }),
             movement: Some(MovementStats {
                 speed: 2.0,
@@ -1040,22 +880,13 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.1, 0.05, 0.02, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![AbilitySlot {
-                id: AbilityId::BoulderThrow,
-                cooldown_secs: 8.0,
-                mana_cost: 0.0,
-                range: 25.0,
-                display_name: "Boulder Throw",
-            }],
-            upgrades: vec![],
+
         },
     );
 
     blueprints.insert(
         EntityKind::BatteringRam,
         Blueprint {
-            kind: EntityKind::BatteringRam,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 200.0,
@@ -1064,7 +895,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 4.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 2.5,
@@ -1087,9 +918,9 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.08, 0.04, 0.01, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
@@ -1098,7 +929,6 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(
         EntityKind::Base,
         Blueprint {
-            kind: EntityKind::Base,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 500.0,
@@ -1107,7 +937,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -1142,16 +972,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Barracks,
         Blueprint {
-            kind: EntityKind::Barracks,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 350.0,
@@ -1160,7 +989,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -1198,16 +1027,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Workshop,
         Blueprint {
-            kind: EntityKind::Workshop,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 400.0,
@@ -1216,7 +1044,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -1254,16 +1082,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Tower,
         Blueprint {
-            kind: EntityKind::Tower,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 200.0,
@@ -1272,7 +1099,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 2.0,
                 aggro_range: None,
                 is_ranged: true,
-                projectile_speed: Some(20.0),
+
             }),
             movement: None,
             gathering: None,
@@ -1313,16 +1140,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::WatchTower,
         Blueprint {
-            kind: EntityKind::WatchTower,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 160.0,
@@ -1331,7 +1157,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.5,
                 aggro_range: None,
                 is_ranged: true,
-                projectile_speed: Some(20.0),
+
             }),
             movement: None,
             gathering: None,
@@ -1372,16 +1198,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::GuardTower,
         Blueprint {
-            kind: EntityKind::GuardTower,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 260.0,
@@ -1390,7 +1215,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 2.0,
                 aggro_range: None,
                 is_ranged: true,
-                projectile_speed: Some(20.0),
+
             }),
             movement: None,
             gathering: None,
@@ -1431,16 +1256,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::BallistaTower,
         Blueprint {
-            kind: EntityKind::BallistaTower,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 220.0,
@@ -1449,7 +1273,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 3.5,
                 aggro_range: None,
                 is_ranged: true,
-                projectile_speed: Some(24.0),
+
             }),
             movement: None,
             gathering: None,
@@ -1490,16 +1314,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::BombardTower,
         Blueprint {
-            kind: EntityKind::BombardTower,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 240.0,
@@ -1508,7 +1331,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 2.8,
                 aggro_range: None,
                 is_ranged: true,
-                projectile_speed: Some(18.0),
+
             }),
             movement: None,
             gathering: None,
@@ -1549,16 +1372,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Outpost,
         Blueprint {
-            kind: EntityKind::Outpost,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 140.0,
@@ -1567,7 +1389,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -1602,16 +1424,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Gatehouse,
         Blueprint {
-            kind: EntityKind::Gatehouse,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 300.0,
@@ -1620,7 +1441,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -1642,16 +1463,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::WallSegment,
         Blueprint {
-            kind: EntityKind::WallSegment,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 180.0,
@@ -1660,7 +1480,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -1686,16 +1506,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::WallPost,
         Blueprint {
-            kind: EntityKind::WallPost,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 220.0,
@@ -1704,7 +1523,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -1730,16 +1549,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Storage,
         Blueprint {
-            kind: EntityKind::Storage,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 200.0,
@@ -1748,7 +1566,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -1789,16 +1607,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::House,
         Blueprint {
-            kind: EntityKind::House,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 150.0,
@@ -1807,7 +1624,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -1849,16 +1666,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::MageTower,
         Blueprint {
-            kind: EntityKind::MageTower,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 300.0,
@@ -1867,7 +1683,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -1905,16 +1721,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Temple,
         Blueprint {
-            kind: EntityKind::Temple,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 250.0,
@@ -1923,7 +1738,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -1964,16 +1779,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Stable,
         Blueprint {
-            kind: EntityKind::Stable,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 300.0,
@@ -1982,7 +1796,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -2020,16 +1834,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::SiegeWorks,
         Blueprint {
-            kind: EntityKind::SiegeWorks,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 350.0,
@@ -2038,7 +1851,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -2076,9 +1889,9 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
@@ -2087,7 +1900,6 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(
         EntityKind::Sawmill,
         Blueprint {
-            kind: EntityKind::Sawmill,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 150.0,
@@ -2096,7 +1908,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -2141,16 +1953,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.3, 0.2, 0.05, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Mine,
         Blueprint {
-            kind: EntityKind::Mine,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 200.0,
@@ -2159,7 +1970,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -2204,16 +2015,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.15, 0.12, 0.08, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::OilRig,
         Blueprint {
-            kind: EntityKind::OilRig,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 150.0,
@@ -2222,7 +2032,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -2267,9 +2077,9 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.1, 0.1, 0.1, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
@@ -2278,7 +2088,6 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(
         EntityKind::Smelter,
         Blueprint {
-            kind: EntityKind::Smelter,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 300.0,
@@ -2287,7 +2096,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -2334,16 +2143,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.15, 0.08, 0.03, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Alchemist,
         Blueprint {
-            kind: EntityKind::Alchemist,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 250.0,
@@ -2352,7 +2160,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: None,
             gathering: None,
@@ -2399,9 +2207,9 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.12, 0.05, 0.05, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
@@ -2410,7 +2218,6 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(
         EntityKind::Goblin,
         Blueprint {
-            kind: EntityKind::Goblin,
             faction: Faction::Neutral,
             combat: Some(CombatStats {
                 hp: 50.0,
@@ -2419,7 +2226,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.2,
                 aggro_range: Some(15.0),
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 3.5,
@@ -2440,16 +2247,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Skeleton,
         Blueprint {
-            kind: EntityKind::Skeleton,
             faction: Faction::Neutral,
             combat: Some(CombatStats {
                 hp: 80.0,
@@ -2458,7 +2264,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.2,
                 aggro_range: Some(18.0),
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 3.0,
@@ -2479,16 +2285,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Orc,
         Blueprint {
-            kind: EntityKind::Orc,
             faction: Faction::Neutral,
             combat: Some(CombatStats {
                 hp: 120.0,
@@ -2497,7 +2302,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.2,
                 aggro_range: Some(20.0),
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 2.5,
@@ -2518,16 +2323,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::Demon,
         Blueprint {
-            kind: EntityKind::Demon,
             faction: Faction::Neutral,
             combat: Some(CombatStats {
                 hp: 200.0,
@@ -2536,7 +2340,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.2,
                 aggro_range: Some(25.0),
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 3.0,
@@ -2557,9 +2361,9 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
@@ -2568,7 +2372,6 @@ pub fn build_registry() -> BlueprintRegistry {
     blueprints.insert(
         EntityKind::SkeletonMinion,
         Blueprint {
-            kind: EntityKind::SkeletonMinion,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 40.0,
@@ -2577,7 +2380,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.0,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 4.0,
@@ -2596,16 +2399,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.1, 0.1, 0.08, 1.0),
                 scale: 0.9,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::SpiritWolf,
         Blueprint {
-            kind: EntityKind::SpiritWolf,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 60.0,
@@ -2614,7 +2416,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 0.8,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 7.0,
@@ -2636,16 +2438,15 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.1, 0.15, 0.25, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
     blueprints.insert(
         EntityKind::FireElemental,
         Blueprint {
-            kind: EntityKind::FireElemental,
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 80.0,
@@ -2654,7 +2455,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 attack_cooldown_secs: 1.5,
                 aggro_range: None,
                 is_ranged: false,
-                projectile_speed: None,
+
             }),
             movement: Some(MovementStats {
                 speed: 3.5,
@@ -2676,9 +2477,9 @@ pub fn build_registry() -> BlueprintRegistry {
                 selected_emissive: LinearRgba::new(0.5, 0.2, 0.05, 1.0),
                 scale: 1.0,
             },
-            children: vec![],
-            abilities: vec![],
-            upgrades: vec![],
+
+
+
         },
     );
 
@@ -2796,7 +2597,6 @@ pub fn spawn_from_blueprint_with_faction(
                 TaskSource::default(),
                 TaskQueue::default(),
                 UnitStance::default(),
-                AutoRole::default(),
             ));
         }
         EntityCategory::Mob => {
@@ -2854,7 +2654,7 @@ pub fn spawn_from_blueprint_with_faction(
                             harvest_rate: 3.0,
                             max_workers: 3,
                             buffer: 0,
-                            buffer_capacity: 50,
+
                             worker_rate_bonus: 0.5,
                             harvest_timer: Timer::from_seconds(3.0, TimerMode::Repeating),
                             harvest_accumulator: 0.0,
@@ -2898,7 +2698,7 @@ pub fn spawn_from_blueprint_with_faction(
                             harvest_rate: 2.0,
                             max_workers: 4,
                             buffer: 0,
-                            buffer_capacity: 40,
+
                             worker_rate_bonus: 0.5,
                             harvest_timer: Timer::from_seconds(4.0, TimerMode::Repeating),
                             harvest_accumulator: 0.0,
@@ -2926,7 +2726,7 @@ pub fn spawn_from_blueprint_with_faction(
                             harvest_rate: 1.5,
                             max_workers: 2,
                             buffer: 0,
-                            buffer_capacity: 30,
+
                             worker_rate_bonus: 0.4,
                             harvest_timer: Timer::from_seconds(5.0, TimerMode::Repeating),
                             harvest_accumulator: 0.0,
@@ -3052,16 +2852,6 @@ pub fn spawn_from_blueprint_with_faction(
         });
     }
 
-    // Abilities
-    if !bp.abilities.is_empty() {
-        entity_cmds.insert(Abilities {
-            slots: bp
-                .abilities
-                .iter()
-                .map(AbilityInstance::from_slot)
-                .collect(),
-        });
-    }
 
     let entity_id = entity_cmds.id();
 
@@ -3127,7 +2917,6 @@ pub fn build_visual_cache(
         let mesh = match bp.visual.mesh_kind {
             MeshKind::Capsule { radius, length } => meshes.add(Capsule3d::new(radius, length)),
             MeshKind::Cuboid { x, y, z } => meshes.add(Cuboid::new(x, y, z)),
-            MeshKind::Cylinder { radius, height } => meshes.add(Cylinder::new(radius, height)),
             MeshKind::GltfScene { .. } => meshes.add(Cuboid::new(4.0, 0.3, 4.0)),
             MeshKind::GltfCharacter { .. } => meshes.add(Cuboid::new(0.5, 0.1, 0.5)),
         };

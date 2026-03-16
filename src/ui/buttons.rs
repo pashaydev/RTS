@@ -752,7 +752,7 @@ pub fn handle_unit_card_click(
             for entity in &selected {
                 commands.entity(entity).remove::<Selected>();
             }
-            commands.entity(card_ref.0).insert(Selected);
+            commands.entity(card_ref.0).try_insert(Selected);
         }
     }
 }

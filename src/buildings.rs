@@ -1218,19 +1218,26 @@ fn construction_progress_system(
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
+    building_models: Res<crate::model_assets::BuildingModelAssets>,
+    construction_assets: Res<crate::model_assets::BuildingConstructionAssets>,
     mut base_state: ResMut<FactionBaseState>,
     mut buildings: Query<(
         Entity,
         &EntityKind,
         &mut BuildingState,
         &mut ConstructionProgress,
+        Option<&mut ConstructionStage>,
         &mut Transform,
         &Faction,
     )>,
     workers: Query<&UnitState, With<Unit>>,
+    children_q: Query<&Children>,
+    scene_child_q: Query<Entity, With<BuildingSceneChild>>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
-    for (entity, kind, mut state, mut progress, mut transform, faction) in &mut buildings {
+    for (entity, kind, mut state, mut progress, construction_stage, mut transform, faction) in
+        &mut buildings
+    {
         if *state != BuildingState::UnderConstruction {
             continue;
         }
@@ -1242,13 +1249,7 @@ fn construction_progress_system(
             .count();
 
         if builder_count == 0 {
-            // No workers assigned — pause and show current scale
             progress.timer.pause();
-            let bp = registry.get(*kind);
-            let base_scale = bp.visual.scale;
-            let fraction = progress.timer.fraction();
-            let current_scale = 0.3 * base_scale + (base_scale - 0.3 * base_scale) * fraction;
-            transform.scale = Vec3::splat(current_scale);
             continue;
         }
 
@@ -1258,31 +1259,109 @@ fn construction_progress_system(
 
         let bp = registry.get(*kind);
         let base_scale = bp.visual.scale;
+        let is_gltf = bp.visual.mesh_kind.is_gltf();
 
         progress
             .timer
             .tick(Duration::from_secs_f32(time.delta_secs() * speed_mult));
 
-        // Lerp scale during construction
         let fraction = progress.timer.fraction();
-        let current_scale = 0.3 * base_scale + (base_scale - 0.3 * base_scale) * fraction;
-        transform.scale = Vec3::splat(current_scale);
+
+        // For GLTF buildings: swap construction stage models at thresholds
+        if is_gltf {
+            let desired_stage = if fraction >= 1.0 {
+                2 // complete
+            } else if fraction >= 0.5 {
+                1 // partial
+            } else {
+                0 // foundation
+            };
+
+            let current = construction_stage.as_ref().map(|s| s.0).unwrap_or(255);
+            if current != desired_stage && desired_stage < 2 {
+                // Swap scene child to construction stage model
+                if let Some(stage_scene) =
+                    construction_assets.stages.get(&(*kind, desired_stage))
+                {
+                    // Remove old scene child
+                    if let Ok(children) = children_q.get(entity) {
+                        for child in children.iter() {
+                            if scene_child_q.contains(child) {
+                                commands.entity(child).despawn();
+                            }
+                        }
+                    }
+
+                    let cal = building_models.calibration.get(kind);
+                    let scale = cal.map(|c| c.scale).unwrap_or(base_scale);
+
+                    let child = commands
+                        .spawn((
+                            SceneRoot(stage_scene.clone()),
+                            BuildingSceneChild,
+                            InheritOutline,
+                            AsyncSceneInheritOutline::default(),
+                            Transform::from_scale(Vec3::splat(scale)),
+                        ))
+                        .id();
+                    commands.entity(entity).add_child(child);
+                    commands
+                        .entity(entity)
+                        .insert(ConstructionStage(desired_stage));
+                }
+            }
+        } else {
+            // Non-GLTF: legacy scale lerp
+            let current_scale =
+                0.3 * base_scale + (base_scale - 0.3 * base_scale) * fraction;
+            transform.scale = Vec3::splat(current_scale);
+        }
 
         if progress.timer.is_finished() {
             *state = BuildingState::Complete;
-            transform.scale = Vec3::splat(base_scale);
+
+            if is_gltf {
+                // Swap to final complete building model
+                if let Ok(children) = children_q.get(entity) {
+                    for child in children.iter() {
+                        if scene_child_q.contains(child) {
+                            commands.entity(child).despawn();
+                        }
+                    }
+                }
+
+                let cal = building_models.calibration.get(kind);
+                let scale = cal.map(|c| c.scale).unwrap_or(base_scale);
+
+                if let Some(complete_scene) =
+                    building_models.scene_for(*kind, 1, transform.translation)
+                {
+                    let child = commands
+                        .spawn((
+                            SceneRoot(complete_scene),
+                            BuildingSceneChild,
+                            InheritOutline,
+                            AsyncSceneInheritOutline::default(),
+                            Transform::from_scale(Vec3::splat(scale)),
+                        ))
+                        .id();
+                    commands.entity(entity).add_child(child);
+                }
+                commands
+                    .entity(entity)
+                    .insert(ConstructionStage(2))
+                    .remove::<TeamColorApplied>();
+            } else {
+                transform.scale = Vec3::splat(base_scale);
+                if let Some(mat) = cache.materials_default.get(kind) {
+                    commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                }
+            }
 
             if *kind == EntityKind::Base {
                 base_state.set_founded(*faction, true);
             }
 
-            // Swap to final material (only for non-GLTF buildings)
-            let is_gltf = bp.visual.mesh_kind.is_gltf();
-            if !is_gltf {
-                if let Some(mat) = cache.materials_default.get(kind) {
-                    commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
-                }
-            }
             commands
                 .entity(entity)
                 .remove::<ConstructionProgress>()
@@ -1701,6 +1780,8 @@ fn building_upgrade_system(
                         ))
                         .id();
                     commands.entity(entity).add_child(child);
+                    // Remove TeamColorApplied so the new scene gets recolored
+                    commands.entity(entity).remove::<TeamColorApplied>();
                 }
             }
         }
@@ -1741,9 +1822,6 @@ fn building_upgrade_system(
                 if let Some(mut ad) = attack_damage {
                     ad.0 += damage_boost;
                 }
-            }
-            LevelBonus::CooldownMultiplier(_mult) => {
-                // Could modify AttackCooldown timer duration — skipped for simplicity
             }
             LevelBonus::GatherAura { speed_bonus, range } => {
                 commands.entity(entity).insert(StorageAura {

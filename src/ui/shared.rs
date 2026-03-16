@@ -2,7 +2,6 @@ use bevy::prelude::*;
 
 use crate::components::*;
 use crate::theme;
-use crate::ui::fonts::{self, UiFonts};
 
 pub fn hp_color(current: f32, max: f32) -> Color {
     let pct = (current / max).clamp(0.0, 1.0);
@@ -58,43 +57,6 @@ pub fn spawn_hp_bar(
         ))
         .id();
     commands.entity(bg).add_child(fill);
-}
-
-/// Spawn a section divider: a label above a horizontal separator line.
-pub fn spawn_section_divider(
-    commands: &mut Commands,
-    parent: Entity,
-    label: &str,
-    fonts: &UiFonts,
-) {
-    let section = commands
-        .spawn(Node {
-            width: Val::Percent(100.0),
-            flex_direction: FlexDirection::Column,
-            margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(16.0), Val::Px(8.0)),
-            ..default()
-        })
-        .with_children(|p| {
-            p.spawn((
-                Text::new(label),
-                fonts::heading(fonts, theme::FONT_MEDIUM),
-                TextColor(theme::TEXT_SECONDARY),
-                Node {
-                    margin: UiRect::bottom(Val::Px(4.0)),
-                    ..default()
-                },
-            ));
-            p.spawn((
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(1.0),
-                    ..default()
-                },
-                BackgroundColor(theme::SEPARATOR),
-            ));
-        })
-        .id();
-    commands.entity(parent).add_child(section);
 }
 
 pub fn format_cost(cost: &crate::blueprints::ResourceCost) -> String {

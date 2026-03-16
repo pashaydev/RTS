@@ -20,7 +20,6 @@ impl Plugin for SpatialPlugin {
 
 #[derive(Resource)]
 pub struct SpatialHashGrid {
-    pub cell_size: f32,
     pub inv_cell_size: f32,
     pub cells: HashMap<IVec2, Vec<(Entity, Vec3)>>,
 }
@@ -28,7 +27,6 @@ pub struct SpatialHashGrid {
 impl Default for SpatialHashGrid {
     fn default() -> Self {
         Self {
-            cell_size: 15.0,
             inv_cell_size: 1.0 / 15.0,
             cells: HashMap::new(),
         }
@@ -75,7 +73,6 @@ impl SpatialHashGrid {
 
 #[derive(Resource)]
 pub struct WallSpatialGrid {
-    pub cell_size: f32,
     pub inv_cell_size: f32,
     pub cells: HashMap<IVec2, Vec<(Entity, Vec3, f32, Faction)>>, // entity, pos, footprint, faction
 }
@@ -83,7 +80,6 @@ pub struct WallSpatialGrid {
 impl Default for WallSpatialGrid {
     fn default() -> Self {
         Self {
-            cell_size: 5.0,
             inv_cell_size: 1.0 / 5.0,
             cells: HashMap::new(),
         }

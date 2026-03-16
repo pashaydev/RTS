@@ -21,27 +21,11 @@ pub const WARNING: Color = Color::srgb(1.0, 0.65, 0.15);
 // ── Borders / separators ──
 pub const SEPARATOR: Color = Color::srgb(0.20, 0.20, 0.20);
 pub const BORDER_SUBTLE: Color = Color::srgb(0.33, 0.33, 0.33);
-pub const BORDER_ENEMY: Color = Color::srgb(0.8, 0.3, 0.1);
 
 // ── Buttons ──
 pub const BTN_PRIMARY: Color = Color::srgba(0.17, 0.17, 0.17, 0.94);
 pub const BTN_HOVER: Color = Color::srgba(0.22, 0.22, 0.22, 0.94);
 pub const BTN_PRESSED: Color = Color::srgba(0.10, 0.10, 0.10, 0.94);
-
-// ── Cards ──
-pub const CARD_BG: Color = Color::srgba(0.12, 0.13, 0.16, 0.94);
-pub const CARD_DISABLED: Color = Color::srgba(0.12, 0.12, 0.12, 0.5);
-pub const CARD_BG_TOP: Color = Color::srgba(0.18, 0.19, 0.23, 0.96);
-pub const CARD_BG_BOTTOM: Color = Color::srgba(0.08, 0.08, 0.11, 0.96);
-pub const CARD_BORDER: Color = Color::srgba(0.25, 0.25, 0.30, 0.8);
-pub const CARD_BORDER_HOVER: Color = Color::srgba(0.45, 0.50, 0.60, 0.9);
-pub const CARD_SHINE: Color = Color::srgba(1.0, 1.0, 1.0, 0.08);
-
-// ── Tier accent colors ──
-pub const TIER_COMMON: Color = Color::srgb(0.55, 0.58, 0.63);
-pub const TIER_UNCOMMON: Color = Color::srgb(0.30, 0.75, 0.35);
-pub const TIER_RARE: Color = Color::srgb(0.30, 0.55, 1.0);
-pub const TIER_EPIC: Color = Color::srgb(0.65, 0.30, 0.90);
 
 // ── HP bar backgrounds ──
 pub const HP_BAR_BG: Color = Color::srgba(0.08, 0.08, 0.08, 0.9);
@@ -62,11 +46,6 @@ pub const PANEL_ACCENT_ENEMY: Color = Color::srgba(0.80, 0.27, 0.27, 0.6);
 pub const PANEL_ACCENT_CONSTRUCTION: Color = Color::srgba(1.0, 0.65, 0.15, 0.6);
 pub const ICON_FRAME_BG: Color = Color::srgba(0.16, 0.16, 0.18, 0.95);
 
-// ── Button animation colors ──
-pub const BTN_HOVER_BRIGHT: Color = Color::srgba(0.25, 0.25, 0.25, 0.94);
-pub const BTN_GHOST_HOVER_BG: Color = Color::srgba(0.29, 0.62, 1.0, 0.08);
-pub const BTN_GHOST_PRESS_BG: Color = Color::srgba(0.29, 0.62, 1.0, 0.14);
-
 // ── Input fields ──
 pub const INPUT_BG: Color = BG_SURFACE;
 pub const INPUT_BORDER: Color = BORDER_SUBTLE;
@@ -84,14 +63,5 @@ pub const FONT_CAPTION: f32 = 10.0; // Toolbar, queue labels
 pub const FONT_TINY: f32 = 8.0; // Close buttons, badges
 pub const FONT_MICRO: f32 = 8.0; // Event log timestamps
 
-// ── Processed resource colors ──
-pub const RES_PLANKS: Color = Color::srgb(0.76, 0.60, 0.35);
-pub const RES_CHARCOAL: Color = Color::srgb(0.25, 0.25, 0.25);
-pub const RES_BRONZE: Color = Color::srgb(0.80, 0.50, 0.20);
-pub const RES_STEEL: Color = Color::srgb(0.55, 0.60, 0.70);
-pub const RES_GUNPOWDER: Color = Color::srgb(0.60, 0.20, 0.20);
-
 // ── Grid overlay ──
 pub const GRID_LINE: Color = Color::srgba(0.29, 0.62, 1.0, 0.15);
-#[allow(dead_code)]
-pub const DEMOLISH_HOVER: Color = Color::srgb(0.95, 0.35, 0.35);
