@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::{
-    ActivePlayer, AiControlledFactions, AiDifficulty, AiFactionSettings, AiPersonality, AppState,
-    Faction, Health, InspectedEnemy, RtsCamera, Selected, TeamConfig, UiPressActive, UnitSpeed,
+    AiControlledFactions, AiDifficulty, AiFactionSettings, AiPersonality, AppState, Faction,
+    Health, RtsCamera, Selected, UiPressActive, UnitSpeed,
 };
 use crate::fog::FogTweakSettings;
 use crate::ground::HeightMap;
@@ -63,8 +63,8 @@ impl Plugin for DebugPlugin {
                     sync_entity_spawn_tweaks,
                     sync_entity_selected_tweaks,
                     sync_save_load_tweaks,
-                    sync_player_control_tweaks,
                     sync_ai_debug_tweaks,
+                    initialize_debug_folder_defaults,
                     rebuild_tweak_panel,
                     update_tweak_visuals,
                 )
@@ -263,6 +263,7 @@ impl DebugTweaks {
             self.set_float_if_changed(folder, "Color B", color.blue);
         }
     }
+
 }
 
 // ── Config serialization format: folder → { label → value } ──
@@ -356,6 +357,7 @@ fn apply_config_to_tweaks(tweaks: &mut DebugTweaks, config: &ConfigMap) {
 pub struct DebugPanelState {
     pub tweaks_expanded: bool,
     pub collapsed_folders: Vec<String>,
+    pub seen_folders: Vec<String>,
 }
 
 // ── FPS tracker ──
@@ -438,6 +440,12 @@ struct TweakSliderFill {
 }
 
 #[derive(Component)]
+struct TweakSliderKnob {
+    folder: String,
+    label: String,
+}
+
+#[derive(Component)]
 struct TweakSliderValueText {
     folder: String,
     label: String,
@@ -493,6 +501,30 @@ struct TweakCycleText {
 struct TweakButton {
     folder: String,
     label: String,
+}
+
+fn debug_control_surface() -> Color {
+    theme::ICON_FRAME_BG
+}
+
+fn debug_control_border() -> Color {
+    theme::BORDER_SUBTLE
+}
+
+fn debug_hover_surface() -> Color {
+    theme::BTN_HOVER
+}
+
+fn debug_pressed_surface() -> Color {
+    theme::BTN_PRESSED
+}
+
+fn debug_active_surface() -> Color {
+    theme::ACCENT.with_alpha(0.2)
+}
+
+fn debug_slider_fill() -> Color {
+    theme::ACCENT
 }
 
 /// Tracks which buttons were pressed this frame.
@@ -850,9 +882,10 @@ fn rebuild_tweak_panel(
 fn update_tweak_visuals(
     state: Res<DebugPanelState>,
     tweaks: Res<DebugTweaks>,
-    mut fill_q: Query<(&TweakSliderFill, &mut Node)>,
+    mut fill_q: Query<(&TweakSliderFill, &mut Node), Without<TweakSliderKnob>>,
+    mut knob_q: Query<(&TweakSliderKnob, &mut Node), Without<TweakSliderFill>>,
     mut val_text_q: Query<(&TweakSliderValueText, &mut Text), Without<TweakToggleText>>,
-    mut toggle_q: Query<(&TweakToggle, &mut BackgroundColor), Without<TweakSliderFill>>,
+    mut toggle_q: Query<(&TweakToggle, &Interaction, &mut BackgroundColor), Without<TweakSliderFill>>,
     mut toggle_text_q: Query<(&TweakToggleText, &mut Text), Without<TweakSliderValueText>>,
     mut readonly_q: Query<
         (&TweakReadOnlyText, &mut Text),
@@ -901,6 +934,20 @@ fn update_tweak_visuals(
         }
     }
 
+    for (knob, mut node) in &mut knob_q {
+        if let Some(entries) = tweaks.folders.get(&knob.folder) {
+            if let Some(entry) = entries.iter().find(|e| e.label == knob.label) {
+                if let TweakValue::Float {
+                    value, min, max, ..
+                } = &entry.value
+                {
+                    let pct = ((value - min) / (max - min)).clamp(0.0, 1.0) * 100.0;
+                    node.left = Val::Percent(pct);
+                }
+            }
+        }
+    }
+
     // Update slider value texts
     for (vt, mut text) in &mut val_text_q {
         if let Some(entries) = tweaks.folders.get(&vt.folder) {
@@ -916,9 +963,16 @@ fn update_tweak_visuals(
     }
 
     // Update toggle button colors
-    for (tog, mut bg) in &mut toggle_q {
+    for (tog, interaction, mut bg) in &mut toggle_q {
         if let Some(v) = tweaks.get_bool(&tog.folder, &tog.label) {
-            let target = if v { theme::ACCENT } else { theme::BG_SURFACE };
+            let target = match (*interaction, v) {
+                (Interaction::Pressed, true) => theme::ACCENT.with_alpha(0.38),
+                (Interaction::Hovered, true) => theme::ACCENT.with_alpha(0.3),
+                (_, true) => debug_active_surface(),
+                (Interaction::Pressed, false) => debug_pressed_surface(),
+                (Interaction::Hovered, false) => debug_hover_surface(),
+                (_, false) => debug_control_surface(),
+            };
             bg.0 = target;
         }
     }
@@ -967,8 +1021,8 @@ fn spawn_section_header(parent: &mut ChildSpawnerCommands, section: &str) {
     parent
         .spawn((
             Node {
-                padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
-                margin: UiRect::top(Val::Px(10.0)),
+                padding: UiRect::new(Val::Px(6.0), Val::Px(6.0), Val::Px(8.0), Val::Px(3.0)),
+                margin: UiRect::top(Val::Px(8.0)),
                 width: Val::Percent(100.0),
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
@@ -979,10 +1033,10 @@ fn spawn_section_header(parent: &mut ChildSpawnerCommands, section: &str) {
             row.spawn((
                 Text::new(section.to_uppercase()),
                 TextFont {
-                    font_size: theme::FONT_BODY,
+                    font_size: theme::FONT_SMALL,
                     ..default()
                 },
-                TextColor(theme::ACCENT),
+                TextColor(theme::WARNING),
             ));
         });
 }
@@ -1000,19 +1054,27 @@ fn spawn_folder_header(
             Interaction::default(),
             Button,
             Node {
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
-                margin: UiRect::top(Val::Px(6.0)),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
+                padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
+                margin: UiRect::top(Val::Px(4.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(5.0)),
                 width: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.05)),
+            BackgroundColor(debug_control_surface()),
+            BorderColor::all(if collapsed {
+                debug_control_border()
+            } else {
+                theme::ACCENT.with_alpha(0.45)
+            }),
         ))
         .with_children(|header| {
             header.spawn((
                 Text::new(format!("{} {}", arrow, display_name)),
                 TextFont {
-                    font_size: theme::FONT_MEDIUM,
+                    font_size: theme::FONT_BODY,
                     ..default()
                 },
                 TextColor(theme::TEXT_PRIMARY),
@@ -1031,42 +1093,73 @@ fn spawn_slider_row(
     let pct = ((value - min) / (max - min)).clamp(0.0, 1.0) * 100.0;
 
     parent
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
-            width: Val::Percent(100.0),
-            padding: UiRect::left(Val::Px(10.0)),
-            ..default()
-        })
-        .with_children(|row| {
-            // Label
-            row.spawn((
-                Text::new(label),
-                TextFont {
-                    font_size: theme::FONT_BODY,
-                    ..default()
-                },
-                TextColor(theme::TEXT_SECONDARY),
-                Node {
-                    width: Val::Px(95.0),
-                    ..default()
-                },
-            ));
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                width: Val::Percent(100.0),
+                padding: UiRect::all(Val::Px(6.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(5.0)),
+                ..default()
+            },
+            BackgroundColor(debug_control_surface()),
+            BorderColor::all(debug_control_border()),
+        ))
+        .with_children(|card| {
+            card.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                justify_content: JustifyContent::SpaceBetween,
+                align_items: AlignItems::Center,
+                width: Val::Percent(100.0),
+                ..default()
+            })
+            .with_children(|top| {
+                top.spawn((
+                    Text::new(label),
+                    TextFont {
+                        font_size: theme::FONT_BODY,
+                        ..default()
+                    },
+                    TextColor(theme::TEXT_PRIMARY),
+                ));
 
-            // Slider track
-            row.spawn((
+                top.spawn((
+                    TweakSliderValueText {
+                        folder: folder.to_string(),
+                        label: label.to_string(),
+                    },
+                    Text::new(format_tweak_float(value)),
+                    TextFont {
+                        font_size: theme::FONT_BODY,
+                        ..default()
+                    },
+                    TextColor(theme::WARNING),
+                    Node {
+                        padding: UiRect::axes(Val::Px(5.0), Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(999.0)),
+                        ..default()
+                    },
+                    BackgroundColor(theme::BG_PANEL),
+                ));
+            });
+
+            card.spawn((
                 TweakSlider {
                     folder: folder.to_string(),
                     label: label.to_string(),
                 },
                 Node {
-                    width: Val::Px(120.0),
-                    height: Val::Px(14.0),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    width: Val::Percent(100.0),
+                    height: Val::Px(12.0),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(999.0)),
+                    overflow: Overflow::clip(),
+                    align_items: AlignItems::Center,
                     ..default()
                 },
-                BackgroundColor(theme::BG_SURFACE),
+                BackgroundColor(theme::HP_BAR_BG),
+                BorderColor::all(theme::SEPARATOR),
             ))
             .with_children(|track| {
                 track.spawn((
@@ -1077,43 +1170,58 @@ fn spawn_slider_row(
                     Node {
                         width: Val::Percent(pct),
                         height: Val::Percent(100.0),
-                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                        border_radius: BorderRadius::all(Val::Px(999.0)),
                         ..default()
                     },
-                    BackgroundColor(theme::ACCENT),
+                    BackgroundColor(debug_slider_fill()),
+                    BoxShadow::new(
+                        debug_slider_fill().with_alpha(0.35),
+                        Val::Px(0.0),
+                        Val::Px(0.0),
+                        Val::Px(0.0),
+                        Val::Px(6.0),
+                    ),
+                ));
+
+                track.spawn((
+                    TweakSliderKnob {
+                        folder: folder.to_string(),
+                        label: label.to_string(),
+                    },
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: Val::Percent(pct),
+                        width: Val::Px(12.0),
+                        height: Val::Px(12.0),
+                        margin: UiRect::left(Val::Px(-6.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(999.0)),
+                        ..default()
+                    },
+                    BackgroundColor(theme::TEXT_PRIMARY),
+                    BorderColor::all(theme::ACCENT),
                 ));
             });
-
-            // Value text
-            row.spawn((
-                TweakSliderValueText {
-                    folder: folder.to_string(),
-                    label: label.to_string(),
-                },
-                Text::new(format_tweak_float(value)),
-                TextFont {
-                    font_size: theme::FONT_BODY,
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-                Node {
-                    width: Val::Px(55.0),
-                    ..default()
-                },
-            ));
         });
 }
 
 fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, value: bool) {
     parent
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
-            width: Val::Percent(100.0),
-            padding: UiRect::left(Val::Px(10.0)),
-            ..default()
-        })
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                column_gap: Val::Px(10.0),
+                width: Val::Percent(100.0),
+                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(5.0)),
+                ..default()
+            },
+            BackgroundColor(debug_control_surface()),
+            BorderColor::all(debug_control_border()),
+        ))
         .with_children(|row| {
             row.spawn((
                 Text::new(label),
@@ -1121,18 +1229,19 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme::TEXT_PRIMARY),
                 Node {
-                    width: Val::Px(95.0),
+                    flex_grow: 1.0,
                     ..default()
                 },
             ));
 
-            let (bg, text) = if value {
-                (theme::ACCENT, "ON")
+            let bg = if value {
+                debug_active_surface()
             } else {
-                (theme::BG_SURFACE, "OFF")
+                debug_control_surface()
             };
+            let text = if value { "ON" } else { "OFF" };
 
             row.spawn((
                 TweakToggle {
@@ -1142,14 +1251,20 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                 Interaction::default(),
                 Button,
                 Node {
-                    width: Val::Px(42.0),
-                    height: Val::Px(18.0),
+                    min_width: Val::Px(56.0),
+                    padding: UiRect::axes(Val::Px(8.0), Val::Px(2.0)),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(999.0)),
                     ..default()
                 },
                 BackgroundColor(bg),
+                BorderColor::all(if value {
+                    theme::ACCENT.with_alpha(0.55)
+                } else {
+                    debug_control_border()
+                }),
             ))
             .with_children(|btn| {
                 btn.spawn((
@@ -1163,7 +1278,7 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                         font_size: theme::FONT_BODY,
                         ..default()
                     },
-                    TextColor(Color::WHITE),
+                    TextColor(theme::TEXT_PRIMARY),
                 ));
             });
         });
@@ -1171,14 +1286,21 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
 
 fn spawn_readonly_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, text: &str) {
     parent
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
-            width: Val::Percent(100.0),
-            padding: UiRect::left(Val::Px(10.0)),
-            ..default()
-        })
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                column_gap: Val::Px(10.0),
+                width: Val::Percent(100.0),
+                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(5.0)),
+                ..default()
+            },
+            BackgroundColor(theme::BG_PANEL),
+            BorderColor::all(theme::SEPARATOR),
+        ))
         .with_children(|row| {
             row.spawn((
                 Text::new(label),
@@ -1187,10 +1309,6 @@ fn spawn_readonly_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &s
                     ..default()
                 },
                 TextColor(theme::TEXT_SECONDARY),
-                Node {
-                    width: Val::Px(95.0),
-                    ..default()
-                },
             ));
 
             row.spawn((
@@ -1203,33 +1321,35 @@ fn spawn_readonly_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &s
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(theme::TEXT_DISABLED),
+                TextColor(theme::TEXT_PRIMARY),
             ));
         });
 }
 
 fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: &str) {
     parent
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
-            width: Val::Percent(100.0),
-            padding: UiRect::left(Val::Px(10.0)),
-            ..default()
-        })
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                width: Val::Percent(100.0),
+                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(5.0)),
+                ..default()
+            },
+            BackgroundColor(debug_control_surface()),
+            BorderColor::all(debug_control_border()),
+        ))
         .with_children(|row| {
             row.spawn((
-                Text::new("preview"),
+                Text::new("Preview"),
                 TextFont {
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(theme::TEXT_DISABLED),
-                Node {
-                    width: Val::Px(95.0),
-                    ..default()
-                },
+                TextColor(theme::TEXT_SECONDARY),
             ));
 
             row.spawn((
@@ -1238,42 +1358,49 @@ fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: 
                     prefix: prefix.to_string(),
                 },
                 Node {
-                    width: Val::Px(120.0),
-                    height: Val::Px(14.0),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    width: Val::Px(88.0),
+                    height: Val::Px(18.0),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(999.0)),
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.5, 0.5, 0.5)),
+                BorderColor::all(theme::SEPARATOR),
             ));
         });
 }
 
 fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, display: &str) {
     parent
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
-            width: Val::Percent(100.0),
-            padding: UiRect::left(Val::Px(10.0)),
-            ..default()
-        })
+        .spawn((
+            Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                column_gap: Val::Px(10.0),
+                width: Val::Percent(100.0),
+                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(5.0)),
+                ..default()
+            },
+            BackgroundColor(debug_control_surface()),
+            BorderColor::all(debug_control_border()),
+        ))
         .with_children(|row| {
-            // Label
             row.spawn((
                 Text::new(label),
                 TextFont {
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme::TEXT_PRIMARY),
                 Node {
-                    width: Val::Px(95.0),
+                    flex_grow: 1.0,
                     ..default()
                 },
             ));
 
-            // Clickable cycle button
             row.spawn((
                 TweakCycleEnum {
                     folder: folder.to_string(),
@@ -1282,14 +1409,16 @@ fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str,
                 Interaction::default(),
                 Button,
                 Node {
-                    padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
-                    min_width: Val::Px(120.0),
+                    min_width: Val::Px(124.0),
+                    padding: UiRect::axes(Val::Px(8.0), Val::Px(2.0)),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(999.0)),
                     ..default()
                 },
-                BackgroundColor(theme::BG_ELEVATED),
+                BackgroundColor(theme::BG_PANEL),
+                BorderColor::all(debug_control_border()),
             ))
             .with_children(|btn| {
                 btn.spawn((
@@ -1303,7 +1432,7 @@ fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str,
                         font_size: theme::FONT_BODY,
                         ..default()
                     },
-                    TextColor(Color::WHITE),
+                    TextColor(theme::WARNING),
                 ));
             });
         });
@@ -1312,21 +1441,10 @@ fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str,
 fn spawn_button_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, text: &str) {
     parent
         .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
             width: Val::Percent(100.0),
-            padding: UiRect::left(Val::Px(10.0)),
             ..default()
         })
         .with_children(|row| {
-            // Spacer to align with other rows
-            row.spawn(Node {
-                width: Val::Px(95.0),
-                ..default()
-            });
-
-            // Button
             row.spawn((
                 TweakButton {
                     folder: folder.to_string(),
@@ -1335,13 +1453,16 @@ fn spawn_button_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                 Interaction::default(),
                 Button,
                 Node {
-                    padding: UiRect::axes(Val::Px(10.0), Val::Px(3.0)),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    width: Val::Percent(100.0),
+                    padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(5.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(1.0, 0.6, 0.2, 0.3)),
+                BackgroundColor(theme::WARNING.with_alpha(0.16)),
+                BorderColor::all(theme::WARNING.with_alpha(0.42)),
             ))
             .with_children(|btn| {
                 btn.spawn((
@@ -1351,7 +1472,7 @@ fn spawn_button_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                         font_size: theme::FONT_BODY,
                         ..default()
                     },
-                    TextColor(Color::WHITE),
+                    TextColor(theme::TEXT_PRIMARY),
                 ));
             });
         });
@@ -1364,6 +1485,28 @@ fn format_tweak_float(v: f32) -> String {
         format!("{:.1}", v)
     } else {
         format!("{:.3}", v)
+    }
+}
+
+fn initialize_debug_folder_defaults(
+    tweaks: Res<DebugTweaks>,
+    mut state: ResMut<DebugPanelState>,
+) {
+    if tweaks.folders.is_empty() {
+        return;
+    }
+
+    let mut changed = false;
+    for folder in tweaks.folders.keys() {
+        if !state.seen_folders.iter().any(|seen| seen == folder) {
+            state.seen_folders.push(folder.clone());
+            state.collapsed_folders.push(folder.clone());
+            changed = true;
+        }
+    }
+
+    if !changed {
+        return;
     }
 }
 
@@ -1806,7 +1949,6 @@ pub struct DebugSpawnState {
 
 const SPAWN_FOLDER: &str = "Entities/Spawn";
 const SELECTED_FOLDER: &str = "Entities/Selected";
-const PLAYER_FOLDER: &str = "Game/Player Control";
 const AI_FOLDER: &str = "Game/AI Settings";
 const SAVE_FOLDER: &str = "Game/Save & Load";
 
@@ -1840,19 +1982,6 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_float(SELECTED_FOLDER, "Set Speed", 5.0, 0.0, 20.0, 0.5);
     tweaks.add_button(SELECTED_FOLDER, "Kill Selected");
     tweaks.add_button(SELECTED_FOLDER, "Delete Selected");
-
-    // Player control folder
-    tweaks.add_cycle_enum(
-        PLAYER_FOLDER,
-        "Active Player",
-        vec![
-            "Player 1".to_string(),
-            "Player 2".to_string(),
-            "Player 3".to_string(),
-            "Player 4".to_string(),
-        ],
-        0,
-    );
 
     // AI Settings folder
     for prefix in ["P2", "P3", "P4"] {
@@ -2108,48 +2237,6 @@ fn sync_save_load_tweaks(
         tweaks.set_readonly_if_changed(SAVE_FOLDER, "Status", &status.message);
     } else {
         tweaks.set_readonly_if_changed(SAVE_FOLDER, "Status", "Ready");
-    }
-}
-
-fn sync_player_control_tweaks(
-    mut commands: Commands,
-    tweaks: Res<DebugTweaks>,
-    mut active_player: ResMut<ActivePlayer>,
-    _team_config: ResMut<TeamConfig>,
-    mut camera_q: Query<&mut RtsCamera>,
-    selected_entities: Query<Entity, With<Selected>>,
-    mut inspected_enemy: ResMut<InspectedEnemy>,
-) {
-    // Active Player switching
-    let selected = tweaks
-        .get_cycle_selected(PLAYER_FOLDER, "Active Player")
-        .unwrap_or(0);
-    let new_faction = match selected {
-        0 => Faction::Player1,
-        1 => Faction::Player2,
-        2 => Faction::Player3,
-        3 => Faction::Player4,
-        _ => Faction::Player1,
-    };
-
-    if active_player.0 != new_faction {
-        active_player.0 = new_faction;
-
-        // Deselect all units/buildings from the old faction
-        for entity in &selected_entities {
-            commands.entity(entity).remove::<Selected>();
-        }
-        inspected_enemy.entity = None;
-
-        // Move camera to the new faction's base position
-        if let Some((_, (sx, sz))) = crate::components::SPAWN_POSITIONS
-            .iter()
-            .find(|(f, _)| *f == new_faction)
-        {
-            if let Ok(mut cam) = camera_q.single_mut() {
-                cam.target_pivot = Vec3::new(*sx, 0.0, *sz);
-            }
-        }
     }
 }
 

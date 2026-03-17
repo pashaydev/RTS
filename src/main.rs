@@ -6,6 +6,7 @@ mod buildings;
 mod camera;
 mod combat;
 mod components;
+mod culling;
 mod debug;
 mod fog;
 mod fog_material;
@@ -94,6 +95,7 @@ fn main() {
         .add_plugins(pathfinding::PathfindingPlugin)
         .add_plugins(roads::RoadPlugin)
         .add_plugins(save::SavePlugin)
+        .add_plugins(culling::CullingPlugin)
         .add_plugins(animation::AnimationPlugin)
         .add_plugins(minimap::MinimapPlugin)
         .add_plugins(attention::AttentionPlugin)

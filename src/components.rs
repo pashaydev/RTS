@@ -1145,6 +1145,13 @@ pub struct PathVisAssets {
     pub ring_materials: std::collections::HashMap<PathVisCategory, Handle<StandardMaterial>>,
 }
 
+// ── Frustum Culling ──
+
+/// Marker added to entities outside the camera frustum.
+/// Visual-only systems filter with `Without<FrustumCulled>` to skip off-screen work.
+#[derive(Component)]
+pub struct FrustumCulled;
+
 // ── Camera ──
 
 #[derive(Component)]
@@ -2273,6 +2280,58 @@ pub enum TeamColor {
 #[derive(Component)]
 pub struct TeamColorApplied;
 
+/// Runtime mapping: faction → visual TeamColor.
+/// Defaults to the hardcoded faction colors but can be overridden by
+/// multiplayer seat/color assignments for decoupled visuals.
+#[derive(Resource)]
+pub struct FactionColors {
+    pub colors: std::collections::HashMap<Faction, TeamColor>,
+}
+
+impl Default for FactionColors {
+    fn default() -> Self {
+        let mut colors = std::collections::HashMap::new();
+        colors.insert(Faction::Player1, TeamColor::Blue);
+        colors.insert(Faction::Player2, TeamColor::Red);
+        colors.insert(Faction::Player3, TeamColor::Purple);
+        colors.insert(Faction::Player4, TeamColor::Green);
+        colors.insert(Faction::Neutral, TeamColor::Black);
+        Self { colors }
+    }
+}
+
+impl FactionColors {
+    /// Look up the visual color for a faction. Falls back to the hardcoded default.
+    pub fn get(&self, faction: &Faction) -> TeamColor {
+        self.colors
+            .get(faction)
+            .copied()
+            .unwrap_or(faction.team_color())
+    }
+
+    /// Convert a color_index (from network messages) to a TeamColor.
+    pub fn from_index(index: u8) -> TeamColor {
+        match index {
+            0 => TeamColor::Blue,
+            1 => TeamColor::Red,
+            2 => TeamColor::Purple,
+            3 => TeamColor::Green,
+            _ => TeamColor::Black,
+        }
+    }
+
+    /// Convert a TeamColor to its wire index.
+    pub fn to_index(color: TeamColor) -> u8 {
+        match color {
+            TeamColor::Blue => 0,
+            TeamColor::Red => 1,
+            TeamColor::Purple => 2,
+            TeamColor::Green => 3,
+            TeamColor::Black => 4,
+        }
+    }
+}
+
 /// Tracks which construction stage model is currently shown (0=foundation, 1=partial, 2=complete).
 #[derive(Component)]
 pub struct ConstructionStage(pub u8);
@@ -2490,6 +2549,7 @@ pub enum InGameOverlay {
     None,
     PauseMenu,
     PauseOptions,
+    PauseConfirmEndMatch,
     DeathScreen,
     Spectating,
 }
@@ -2540,6 +2600,8 @@ pub enum PauseAction {
     Restart,
     MainMenu,
     Options,
+    ConfirmHostEnd,
+    CancelHostEnd,
     Quit,
     BackFromOptions,
     ApplySettings,

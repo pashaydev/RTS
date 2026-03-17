@@ -2,11 +2,13 @@ use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+use game_state::message::ClientMessage;
 use rand::Rng;
+use std::sync::atomic::Ordering;
 
 use crate::components::*;
 use crate::multiplayer::{
-    self, ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole,
+    self, ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole, debug_tap,
 };
 use crate::theme;
 use crate::ui::fonts::{self, UiFonts};
@@ -117,6 +119,10 @@ pub struct MenuPlugin;
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MenuPage>()
+            .add_systems(
+                OnEnter(AppState::MainMenu),
+                cleanup_network_on_enter_menu.before(spawn_menu),
+            )
             .add_systems(OnEnter(AppState::MainMenu), spawn_menu)
             .add_systems(OnExit(AppState::MainMenu), cleanup_menu)
             .add_systems(
@@ -157,6 +163,51 @@ impl Plugin for MenuPlugin {
                     .run_if(in_state(AppState::MainMenu)),
             );
     }
+}
+
+fn cleanup_network_on_enter_menu(
+    mut commands: Commands,
+    host_state: Option<Res<HostNetState>>,
+    client_state: Option<Res<ClientNetState>>,
+    host_factory: Option<Res<HostConnectionFactory>>,
+) {
+    if let Some(host) = host_state {
+        host.shutdown.store(true, Ordering::Relaxed);
+    }
+    if let Some(client) = client_state {
+        let seq = {
+            let mut s = client.seq.lock().unwrap();
+            *s += 1;
+            *s
+        };
+        let leave_msg = ClientMessage::LeaveNotice {
+            seq,
+            timestamp: 0.0,
+        };
+        if let Ok(json) = serde_json::to_vec(&leave_msg) {
+            match client.outgoing.send(json) {
+                Ok(_) => debug_tap::record_info(
+                    "menu_cleanup",
+                    format!("queued client leave notice seq={}", seq),
+                ),
+                Err(e) => debug_tap::record_error(
+                    "menu_cleanup",
+                    format!("failed to queue leave notice seq={}: {}", seq, e),
+                ),
+            }
+        }
+        client.shutdown.store(true, Ordering::Relaxed);
+    }
+    if let Some(factory) = host_factory {
+        factory.shutdown.store(true, Ordering::Relaxed);
+    }
+
+    commands.remove_resource::<HostNetState>();
+    commands.remove_resource::<ClientNetState>();
+    commands.remove_resource::<HostConnectionFactory>();
+    commands.remove_resource::<PendingGameStart>();
+    commands.insert_resource(NetRole::Offline);
+    commands.insert_resource(LobbyState::default());
 }
 
 // ── Constants ──
@@ -260,10 +311,10 @@ fn cleanup_menu(
     cameras: Query<Entity, With<MenuCamera>>,
 ) {
     for e in &roots {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     for e in &cameras {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
 }
 
@@ -1400,7 +1451,7 @@ fn handle_menu_buttons(
 
 fn rebuild_menu(commands: &mut Commands, roots: &Query<Entity, With<MenuRoot>>) {
     for e in roots {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
 }
 
@@ -2631,8 +2682,11 @@ fn start_hosting(commands: &mut Commands) {
     commands.insert_resource(NetRole::Host);
     commands.insert_resource(LobbyState {
         players: vec![LobbyPlayer {
+            player_id: 0,
             name: "Host".to_string(),
+            seat_index: 0,
             faction: Faction::Player1,
+            color_index: 0, // seat-defaulted: Blue
             is_host: true,
             connected: true,
         }],
@@ -2744,6 +2798,7 @@ fn connect_to_host_system(
                     seq: 0,
                     timestamp: 0.0,
                     player_name: "Client".to_string(),
+                    preferred_faction_index: None,
                 };
                 if let Ok(json) = serde_json::to_vec(&join_msg) {
                     let _ = outgoing_tx.send(json);
@@ -2753,7 +2808,10 @@ fn connect_to_host_system(
                     incoming: std::sync::Mutex::new(incoming_rx),
                     outgoing: outgoing_tx,
                     shutdown,
-                    my_faction: Faction::Player2, // Will be assigned by host in v2
+                    player_id: 0,
+                    seat_index: 0,     // assigned by host via JoinAccepted
+                    my_faction: Faction::Player2, // assigned by host via JoinAccepted
+                    color_index: 0,    // assigned by host via JoinAccepted
                     seq: std::sync::Mutex::new(0),
                 });
                 commands.insert_resource(NetRole::Client);
@@ -2794,7 +2852,7 @@ fn update_lobby_ui(
     mut lobby: ResMut<LobbyState>,
     host_state: Option<Res<HostNetState>>,
     host_factory: Option<Res<HostConnectionFactory>>,
-    client_state: Option<Res<ClientNetState>>,
+    client_state: Option<ResMut<ClientNetState>>,
     pending_start: Option<Res<PendingGameStart>>,
     mut commands: Commands,
     mut next_state: ResMut<NextState<AppState>>,
@@ -2817,19 +2875,23 @@ fn update_lobby_ui(
     // ── Host: check for new clients ──
     if let (Some(host), Some(factory)) = (host_state.as_ref(), host_factory.as_ref()) {
         let new_clients_rx = host.new_clients.lock().unwrap();
-        let mut new_client_joined = false;
+        let mut lobby_changed = false;
         loop {
             match new_clients_rx.try_recv() {
                 Ok(event) => {
                     let player_id = event.player_id;
                     info!("New client {} in lobby", player_id);
 
-                    let faction_idx = lobby.players.len().min(3);
-                    let faction = Faction::PLAYERS[faction_idx];
+                    let seat_index = lobby.players.len().min(3) as u8;
+                    let faction = Faction::PLAYERS[seat_index as usize];
+                    let color_index = seat_index; // seat-defaulted
 
                     lobby.players.push(LobbyPlayer {
+                        player_id,
                         name: format!("Player {}", player_id),
+                        seat_index,
                         faction,
+                        color_index,
                         is_host: false,
                         connected: true,
                     });
@@ -2867,15 +2929,66 @@ fn update_lobby_ui(
                     });
 
                     host.client_senders.lock().unwrap().push((player_id, writer_tx));
-                    new_client_joined = true;
+                    lobby_changed = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
         }
 
-        // Broadcast lobby update to all clients when a new player joined
-        if new_client_joined {
+        let incoming_commands = host.incoming_commands.lock().unwrap();
+        loop {
+            match incoming_commands.try_recv() {
+                Ok((player_id, game_state::message::ClientMessage::JoinRequest { player_name, .. })) => {
+                    if let Some(player) = lobby.players.iter_mut().find(|p| p.player_id == player_id) {
+                        if !player_name.trim().is_empty() {
+                            player.name = player_name;
+                        }
+
+                        let faction_index = Faction::PLAYERS
+                            .iter()
+                            .position(|f| *f == player.faction)
+                            .unwrap_or(0) as u8;
+                        let seat_index = player.seat_index;
+                        let color_index = player.color_index;
+
+                        let seq = {
+                            let mut s = host.seq.lock().unwrap();
+                            *s += 1;
+                            *s
+                        };
+                        let msg = game_state::message::ServerMessage::Event {
+                            seq,
+                            timestamp: 0.0,
+                            events: vec![game_state::message::GameEvent::JoinAccepted {
+                                player_id,
+                                seat_index,
+                                faction_index,
+                                color_index,
+                            }],
+                        };
+                        if let Ok(json) = serde_json::to_vec(&msg) {
+                            let senders = host.client_senders.lock().unwrap();
+                            if let Some((_, sender)) = senders.iter().find(|(id, _)| *id == player_id) {
+                                let _ = sender.send(json);
+                            }
+                        }
+                        lobby_changed = true;
+                    }
+                }
+                Ok((player_id, game_state::message::ClientMessage::LeaveNotice { .. })) => {
+                    if let Some(player) = lobby.players.iter_mut().find(|p| p.player_id == player_id) {
+                        player.connected = false;
+                        lobby_changed = true;
+                    }
+                }
+                Ok((_player_id, game_state::message::ClientMessage::Input { .. })) => {}
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+
+        if lobby_changed {
             broadcast_lobby_update(&lobby, host);
         }
 
@@ -2928,22 +3041,54 @@ fn update_lobby_ui(
     }
 
     // ── Client: poll incoming for lobby updates and game start ──
-    if let Some(client) = client_state.as_ref() {
-        let rx = client.incoming.lock().unwrap();
-        loop {
-            match rx.try_recv() {
-                Ok(game_state::message::ServerMessage::Event { events, .. }) => {
+    if let Some(mut client) = client_state {
+        let mut incoming = Vec::new();
+        {
+            let rx = client.incoming.lock().unwrap();
+            loop {
+                match rx.try_recv() {
+                    Ok(msg) => incoming.push(msg),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                }
+            }
+        }
+
+        for msg in incoming {
+            match msg {
+                game_state::message::ServerMessage::Event { events, .. } => {
                     for event in &events {
                         match event {
+                            game_state::message::GameEvent::JoinAccepted {
+                                player_id,
+                                seat_index,
+                                faction_index,
+                                color_index,
+                            } => {
+                                client.player_id = *player_id;
+                                client.seat_index = *seat_index;
+                                client.my_faction = Faction::PLAYERS
+                                    .get(*faction_index as usize)
+                                    .copied()
+                                    .unwrap_or(Faction::Player2);
+                                client.color_index = *color_index;
+                                info!(
+                                    "Join accepted: player_id={}, seat={}, faction={:?}, color={}",
+                                    client.player_id, client.seat_index, client.my_faction, client.color_index
+                                );
+                            }
                             game_state::message::GameEvent::LobbyUpdate { players } => {
                                 lobby.players.clear();
                                 for p in players {
                                     lobby.players.push(LobbyPlayer {
+                                        player_id: p.player_id,
                                         name: p.name.clone(),
+                                        seat_index: p.seat_index,
                                         faction: Faction::PLAYERS
                                             .get(p.faction_index as usize)
                                             .copied()
                                             .unwrap_or(Faction::Neutral),
+                                        color_index: p.color_index,
                                         is_host: p.is_host,
                                         connected: p.connected,
                                     });
@@ -2961,7 +3106,13 @@ fn update_lobby_ui(
                                 // Apply host's config so we generate the same world
                                 if let Ok(net_config) = serde_json::from_str::<SerializableGameConfig>(config_json) {
                                     net_config.apply_to_config(&mut config);
-                                    info!("Applied host config: seed={}, map_size={}", config.map_seed, net_config.map_size);
+                                    // Rebuild lobby from authoritative seat assignments
+                                    net_config.apply_to_lobby(&mut lobby);
+                                    info!(
+                                        "Applied host config: seed={}, map_size={}, {} seats",
+                                        config.map_seed, net_config.map_size,
+                                        net_config.seat_assignments.len()
+                                    );
                                 }
                                 // ActivePlayer is set by configure_multiplayer_ai on OnEnter(InGame)
                                 next_state.set(AppState::InGame);
@@ -2971,11 +3122,10 @@ fn update_lobby_ui(
                         }
                     }
                 }
-                Ok(_) => {
-                    // Ignore non-event messages in lobby
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                game_state::message::ServerMessage::RelayedInput { .. } => {}
+                game_state::message::ServerMessage::StateSync { .. } => {}
+                game_state::message::ServerMessage::EntitySpawn { .. } => {}
+                game_state::message::ServerMessage::EntityDespawn { .. } => {}
             }
         }
     }
@@ -3038,11 +3188,14 @@ fn broadcast_lobby_update(lobby: &LobbyState, host: &HostNetState) {
         .players
         .iter()
         .map(|p| LobbyPlayerInfo {
+            player_id: p.player_id,
             name: p.name.clone(),
+            seat_index: p.seat_index,
             faction_index: Faction::PLAYERS
                 .iter()
                 .position(|f| *f == p.faction)
                 .unwrap_or(0) as u8,
+            color_index: p.color_index,
             is_host: p.is_host,
             connected: p.connected,
         })
@@ -3062,6 +3215,16 @@ fn broadcast_lobby_update(lobby: &LobbyState, host: &HostNetState) {
     }
 }
 
+/// Seat assignment info serialized for network transmission.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+struct SeatAssignment {
+    pub player_id: u8,
+    pub seat_index: u8,
+    pub faction_index: u8,
+    pub color_index: u8,
+    pub is_human: bool,
+}
+
 /// All world-affecting config fields for network transmission.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct SerializableGameConfig {
@@ -3074,22 +3237,37 @@ struct SerializableGameConfig {
     pub resource_density: u8,
     pub day_cycle_secs: f32,
     pub starting_resources_mult: f32,
-    /// Faction indices that are human-controlled (not AI).
+    /// Authoritative seat assignments from the lobby.
+    pub seat_assignments: Vec<SeatAssignment>,
+    /// Legacy: faction indices that are human-controlled (kept for backwards compat).
+    #[serde(default)]
     pub human_factions: Vec<u8>,
 }
 
 impl SerializableGameConfig {
     fn from_config(config: &GameSetupConfig, lobby: &LobbyState) -> Self {
-        let human_factions: Vec<u8> = lobby
+        let seat_assignments: Vec<SeatAssignment> = lobby
             .players
             .iter()
-            .filter(|p| p.connected)
             .map(|p| {
-                Faction::PLAYERS
+                let faction_index = Faction::PLAYERS
                     .iter()
                     .position(|f| *f == p.faction)
-                    .unwrap_or(0) as u8
+                    .unwrap_or(0) as u8;
+                SeatAssignment {
+                    player_id: p.player_id,
+                    seat_index: p.seat_index,
+                    faction_index,
+                    color_index: p.color_index,
+                    is_human: p.connected,
+                }
             })
+            .collect();
+
+        let human_factions: Vec<u8> = seat_assignments
+            .iter()
+            .filter(|s| s.is_human)
+            .map(|s| s.faction_index)
             .collect();
 
         Self {
@@ -3118,6 +3296,7 @@ impl SerializableGameConfig {
             },
             day_cycle_secs: config.day_cycle_secs,
             starting_resources_mult: config.starting_resources_mult,
+            seat_assignments,
             human_factions,
         }
     }
@@ -3148,5 +3327,24 @@ impl SerializableGameConfig {
         };
         config.day_cycle_secs = self.day_cycle_secs;
         config.starting_resources_mult = self.starting_resources_mult;
+    }
+
+    /// Rebuild lobby player list from authoritative seat assignments.
+    fn apply_to_lobby(&self, lobby: &mut LobbyState) {
+        lobby.players.clear();
+        for sa in &self.seat_assignments {
+            lobby.players.push(LobbyPlayer {
+                player_id: sa.player_id,
+                name: format!("Player {}", sa.player_id),
+                seat_index: sa.seat_index,
+                faction: Faction::PLAYERS
+                    .get(sa.faction_index as usize)
+                    .copied()
+                    .unwrap_or(Faction::Neutral),
+                color_index: sa.color_index,
+                is_host: sa.seat_index == 0,
+                connected: sa.is_human,
+            });
+        }
     }
 }

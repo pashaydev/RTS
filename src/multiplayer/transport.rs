@@ -8,6 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use game_state::message::{ClientMessage, ServerMessage};
+use serde::Deserialize;
+
+use super::debug_tap;
 
 // ── Wire format: 4-byte big-endian length prefix + JSON payload ─────────────
 
@@ -69,15 +72,88 @@ pub fn recv_framed(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 
     // Sanity check: reject frames > 16 MB
     if len > 16 * 1024 * 1024 {
+        if len_buf[0] == b'{' {
+            bevy::log::warn!(
+                "Detected unframed JSON payload on framed socket; using legacy fallback"
+            );
+            let recovered = recv_legacy_json_payload(stream, len_buf)?;
+            debug_tap::record_rx(
+                "transport_legacy",
+                "recovered unframed JSON payload".to_string(),
+                recovered.len(),
+                Some(debug_tap::payload_preview(&recovered)),
+            );
+            return Ok(recovered);
+        }
+        let ascii = len_buf
+            .iter()
+            .map(|b| {
+                let c = *b as char;
+                if c.is_ascii_graphic() || c == ' ' {
+                    c
+                } else {
+                    '.'
+                }
+            })
+            .collect::<String>();
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("frame too large: {} bytes", len),
+            format!(
+                "frame too large: {} bytes (prefix=0x{:02X}{:02X}{:02X}{:02X} ascii='{}')",
+                len, len_buf[0], len_buf[1], len_buf[2], len_buf[3], ascii
+            ),
         ));
     }
 
     let mut buf = vec![0u8; len];
     read_exact_timeout(stream, &mut buf)?;
     Ok(buf)
+}
+
+/// Compatibility fallback for peers that accidentally send raw JSON without a
+/// length prefix. This path should be rare and is bounded to avoid unbounded
+/// reads on malformed data.
+fn recv_legacy_json_payload(stream: &mut TcpStream, first4: [u8; 4]) -> io::Result<Vec<u8>> {
+    const MAX_LEGACY_JSON_BYTES: usize = 64 * 1024;
+    let mut data = first4.to_vec();
+    let mut chunk = [0u8; 1024];
+
+    while data.len() <= MAX_LEGACY_JSON_BYTES {
+        if is_complete_json_value(&data) {
+            return Ok(data);
+        }
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => data.extend_from_slice(&chunk[..n]),
+            Err(ref e)
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::TimedOut
+                    || e.kind() == io::ErrorKind::Interrupted =>
+            {
+                if is_complete_json_value(&data) {
+                    return Ok(data);
+                }
+                break;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!(
+            "failed to recover unframed JSON payload ({} bytes buffered)",
+            data.len()
+        ),
+    ))
+}
+
+fn is_complete_json_value(buf: &[u8]) -> bool {
+    let mut de = serde_json::Deserializer::from_slice(buf);
+    match serde::de::IgnoredAny::deserialize(&mut de) {
+        Ok(_) => de.end().is_ok(),
+        Err(_) => false,
+    }
 }
 
 // ── LAN IP detection ────────────────────────────────────────────────────────
@@ -95,6 +171,24 @@ pub fn detect_lan_ip() -> Option<String> {
 pub struct NewClientEvent {
     pub player_id: u8,
     pub stream: TcpStream,
+}
+
+fn client_msg_kind(msg: &ClientMessage) -> &'static str {
+    match msg {
+        ClientMessage::Input { .. } => "input",
+        ClientMessage::JoinRequest { .. } => "join",
+        ClientMessage::LeaveNotice { .. } => "leave",
+    }
+}
+
+fn server_msg_kind(msg: &ServerMessage) -> &'static str {
+    match msg {
+        ServerMessage::Event { .. } => "event",
+        ServerMessage::RelayedInput { .. } => "relayed_input",
+        ServerMessage::StateSync { .. } => "state_sync",
+        ServerMessage::EntitySpawn { .. } => "entity_spawn",
+        ServerMessage::EntityDespawn { .. } => "entity_despawn",
+    }
 }
 
 // ── Host threads ────────────────────────────────────────────────────────────
@@ -115,6 +209,10 @@ pub fn host_listener_thread(
         match listener.accept() {
             Ok((stream, addr)) => {
                 bevy::log::info!("New client connected from {}", addr);
+                debug_tap::record_info(
+                    "host_listener",
+                    format!("accepted {} as player {}", addr, next_player_id),
+                );
                 stream.set_nodelay(true).ok();
                 let _ = new_client_tx.send(NewClientEvent {
                     player_id: next_player_id,
@@ -128,6 +226,7 @@ pub fn host_listener_thread(
             Err(e) => {
                 if !shutdown.load(Ordering::Relaxed) {
                     bevy::log::warn!("Listener error: {}", e);
+                    debug_tap::record_error("host_listener", format!("accept error: {}", e));
                 }
                 break;
             }
@@ -144,9 +243,25 @@ pub fn client_writer_thread(
     while !shutdown.load(Ordering::Relaxed) {
         match outgoing_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(data) => {
-                if send_framed(&mut stream, &data).is_err() {
+                let parsed = serde_json::from_slice::<ServerMessage>(&data);
+                let detail = match &parsed {
+                    Ok(msg) => format!("host->client {}", server_msg_kind(msg)),
+                    Err(_) => "host->client raw".to_string(),
+                };
+                let payload = parsed
+                    .as_ref()
+                    .ok()
+                    .and_then(|msg| serde_json::to_string(msg).ok())
+                    .or_else(|| Some(debug_tap::payload_preview(&data)));
+
+                if let Err(e) = send_framed(&mut stream, &data) {
+                    debug_tap::record_error(
+                        "host_client_writer",
+                        format!("send failed ({} bytes): {}", data.len(), e),
+                    );
                     break;
                 }
+                debug_tap::record_tx("host_client_writer", detail, data.len(), payload);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -169,9 +284,40 @@ pub fn host_client_reader_thread(
     while !shutdown.load(Ordering::Relaxed) {
         match recv_framed(&mut stream) {
             Ok(data) => {
-                if let Ok(msg) = serde_json::from_slice::<ClientMessage>(&data) {
-                    if incoming_tx.send((player_id, msg)).is_err() {
-                        break;
+                match serde_json::from_slice::<ClientMessage>(&data) {
+                    Ok(msg) => {
+                        let detail =
+                            format!("player {} -> host {}", player_id, client_msg_kind(&msg));
+                        let payload =
+                            serde_json::to_string(&msg).ok().or_else(|| Some(debug_tap::payload_preview(&data)));
+                        debug_tap::record_rx(
+                            "host_client_reader",
+                            detail,
+                            data.len(),
+                            payload,
+                        );
+                        if incoming_tx.send((player_id, msg)).is_err() {
+                            debug_tap::record_error(
+                                "host_client_reader",
+                                format!("incoming channel closed for player {}", player_id),
+                            );
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        debug_tap::record_error(
+                            "host_client_reader",
+                            format!(
+                                "invalid client message from player {}: {}",
+                                player_id, e
+                            ),
+                        );
+                        debug_tap::record_rx(
+                            "host_client_reader",
+                            format!("player {} -> host raw_invalid", player_id),
+                            data.len(),
+                            Some(debug_tap::payload_preview(&data)),
+                        );
                     }
                 }
             }
@@ -183,11 +329,16 @@ pub fn host_client_reader_thread(
             }
             Err(e) => {
                 bevy::log::warn!("Client {} reader error: {}", player_id, e);
+                debug_tap::record_error(
+                    "host_client_reader",
+                    format!("player {} reader error: {}", player_id, e),
+                );
                 break;
             }
         }
     }
 
+    debug_tap::record_info("host_client_reader", format!("player {} disconnected", player_id));
     let _ = disconnect_tx.send(player_id);
 }
 
@@ -206,9 +357,31 @@ pub fn client_reader_thread(
     while !shutdown.load(Ordering::Relaxed) {
         match recv_framed(&mut stream) {
             Ok(data) => {
-                if let Ok(msg) = serde_json::from_slice::<ServerMessage>(&data) {
-                    if incoming_tx.send(msg).is_err() {
-                        break;
+                match serde_json::from_slice::<ServerMessage>(&data) {
+                    Ok(msg) => {
+                        let detail = format!("host -> client {}", server_msg_kind(&msg));
+                        let payload =
+                            serde_json::to_string(&msg).ok().or_else(|| Some(debug_tap::payload_preview(&data)));
+                        debug_tap::record_rx("client_reader", detail, data.len(), payload);
+                        if incoming_tx.send(msg).is_err() {
+                            debug_tap::record_error(
+                                "client_reader",
+                                "incoming channel closed".to_string(),
+                            );
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        debug_tap::record_error(
+                            "client_reader",
+                            format!("invalid server message: {}", e),
+                        );
+                        debug_tap::record_rx(
+                            "client_reader",
+                            "host -> client raw_invalid".to_string(),
+                            data.len(),
+                            Some(debug_tap::payload_preview(&data)),
+                        );
                     }
                 }
             }
@@ -220,6 +393,7 @@ pub fn client_reader_thread(
             }
             Err(e) => {
                 bevy::log::warn!("Client reader error: {}", e);
+                debug_tap::record_error("client_reader", format!("reader error: {}", e));
                 break;
             }
         }
@@ -235,9 +409,25 @@ pub fn client_writer_thread_fn(
     while !shutdown.load(Ordering::Relaxed) {
         match outgoing_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(data) => {
-                if send_framed(&mut stream, &data).is_err() {
+                let parsed = serde_json::from_slice::<ClientMessage>(&data);
+                let detail = match &parsed {
+                    Ok(msg) => format!("client->host {}", client_msg_kind(msg)),
+                    Err(_) => "client->host raw".to_string(),
+                };
+                let payload = parsed
+                    .as_ref()
+                    .ok()
+                    .and_then(|msg| serde_json::to_string(msg).ok())
+                    .or_else(|| Some(debug_tap::payload_preview(&data)));
+
+                if let Err(e) = send_framed(&mut stream, &data) {
+                    debug_tap::record_error(
+                        "client_writer",
+                        format!("send failed ({} bytes): {}", data.len(), e),
+                    );
                     break;
                 }
+                debug_tap::record_tx("client_writer", detail, data.len(), payload);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,

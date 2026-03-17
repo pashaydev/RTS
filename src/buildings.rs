@@ -1421,6 +1421,8 @@ fn tower_auto_attack(
     time: Res<Time>,
     teams: Res<TeamConfig>,
     vfx_assets: Option<Res<VfxAssets>>,
+    net_role: Res<crate::multiplayer::NetRole>,
+    active_player: Res<ActivePlayer>,
     mut towers: Query<
         (
             &Transform,
@@ -1442,6 +1444,11 @@ fn tower_auto_attack(
         &mut towers
     {
         if !kind.uses_tower_auto_attack() || *state != BuildingState::Complete {
+            continue;
+        }
+
+        // Client: only run tower attacks for local player's towers
+        if *net_role == crate::multiplayer::NetRole::Client && *tower_faction != active_player.0 {
             continue;
         }
 
@@ -2021,7 +2028,7 @@ fn demolish_system(
 fn building_scale_anim_system(
     mut commands: Commands,
     time: Res<Time>,
-    mut buildings: Query<(Entity, &mut Transform, &mut BuildingScaleAnim)>,
+    mut buildings: Query<(Entity, &mut Transform, &mut BuildingScaleAnim), Without<FrustumCulled>>,
 ) {
     for (entity, mut transform, mut anim) in &mut buildings {
         anim.timer.tick(time.delta());

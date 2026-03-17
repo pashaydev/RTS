@@ -3,6 +3,7 @@ use bevy::prelude::*;
 
 use crate::blueprints::{EntityKind, IsRanged};
 use crate::components::*;
+use crate::multiplayer::NetRole;
 use crate::spatial::{SpatialHashGrid, WallSpatialGrid};
 
 pub struct CombatPlugin;
@@ -27,12 +28,17 @@ impl Plugin for CombatPlugin {
 fn explode_props(
     mut commands: Commands,
     vfx_assets: Option<Res<VfxAssets>>,
+    net_role: Res<NetRole>,
     mut queries: ParamSet<(
         Query<(Entity, &Transform, &ExplosiveProp, &Health)>,
         Query<(Entity, &mut Transform, &mut Health), Without<Projectile>>,
     )>,
 ) {
     let Some(vfx) = vfx_assets else { return };
+    // Client: skip explosion damage — host handles it and syncs health
+    if *net_role == NetRole::Client {
+        return;
+    }
 
     let detonations: Vec<_> = queries
         .p0()
@@ -85,6 +91,8 @@ pub fn player_auto_acquire_target(
     mut commands: Commands,
     teams: Res<TeamConfig>,
     spatial_grid: Res<SpatialHashGrid>,
+    net_role: Res<NetRole>,
+    active_player: Res<ActivePlayer>,
     idle_units: Query<
         (
             Entity,
@@ -100,6 +108,10 @@ pub fn player_auto_acquire_target(
     building_check: Query<(), With<Building>>,
 ) {
     for (unit_entity, unit_tf, range, faction, unit_state, opt_stance) in &idle_units {
+        // Client: only auto-acquire for local player's units
+        if *net_role == NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
         // Skip units that are busy (not idle)
         if let Some(state) = unit_state {
             if !matches!(state, UnitState::Idle) {
@@ -164,6 +176,8 @@ fn approach_attack_target(
     time: Res<Time>,
     teams: Res<TeamConfig>,
     wall_grid: Res<WallSpatialGrid>,
+    net_role: Res<NetRole>,
+    active_player: Res<ActivePlayer>,
     mut attackers: Query<
         (
             Entity,
@@ -188,6 +202,10 @@ fn approach_attack_target(
     for (attacker_entity, mut tf, attack_target, speed, range, faction, opt_state) in
         &mut attackers
     {
+        // Client: only approach for local player's units
+        if *net_role == NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
         let Ok(target_tf) = targets.get(attack_target.0) else {
             continue;
         };
@@ -279,6 +297,8 @@ fn execute_attacks(
     mut commands: Commands,
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
+    net_role: Res<NetRole>,
+    active_player: Res<ActivePlayer>,
     mut attackers: Query<(
         &Transform,
         &AttackTarget,
@@ -286,12 +306,17 @@ fn execute_attacks(
         &AttackDamage,
         &AttackRange,
         Option<&IsRanged>,
+        &Faction,
     )>,
     mut healths: Query<(&Transform, &mut Health)>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (atk_tf, attack_target, mut cooldown, damage, range, is_ranged) in &mut attackers {
+    for (atk_tf, attack_target, mut cooldown, damage, range, is_ranged, faction) in &mut attackers {
+        // Client: only execute attacks for local player's units
+        if *net_role == NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
         cooldown.timer.tick(time.delta());
 
         if !cooldown.timer.just_finished() {
@@ -345,6 +370,8 @@ fn execute_attacks(
 
 fn handle_death(
     mut commands: Commands,
+    net_role: Res<NetRole>,
+    active_player: Res<ActivePlayer>,
     dead: Query<(
         Entity,
         &Health,
@@ -361,10 +388,22 @@ fn handle_death(
     time: Res<Time>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
+    let is_client = *net_role == NetRole::Client;
     // Collect dead entities first to avoid borrow issues
+    // On client: only detect death for local player's entities (remote deaths come via EntityDespawn)
     let dead_list: Vec<_> = dead
         .iter()
-        .filter(|(_, health, ..)| health.current <= 0.0)
+        .filter(|(_, health, _, _, _, _, _, opt_faction)| {
+            if health.current > 0.0 {
+                return false;
+            }
+            if is_client {
+                // Only handle death for local player's entities
+                opt_faction.map_or(false, |f| *f == active_player.0)
+            } else {
+                true
+            }
+        })
         .map(
             |(
                 entity,

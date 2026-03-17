@@ -839,7 +839,7 @@ fn extract_grass_instance_assets(
 // ── Team Color Texture Application ──
 
 use crate::components::{
-    BuildingSceneChild, Faction, TeamColorApplied, UnitSceneChild,
+    BuildingSceneChild, Faction, FactionColors, TeamColorApplied, UnitSceneChild,
 };
 
 /// Applies team-color textures to TTP scene meshes after they're instantiated.
@@ -847,6 +847,7 @@ use crate::components::{
 fn apply_team_color_textures(
     mut commands: Commands,
     team_textures: Option<Res<TeamColorTextures>>,
+    faction_colors: Res<FactionColors>,
     mut mat_cache: ResMut<TeamColorMaterialCache>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     // Scene children that need coloring (unit or building), where parent lacks TeamColorApplied
@@ -879,7 +880,7 @@ fn apply_team_color_textures(
             continue;
         };
 
-        let team_color = faction.team_color();
+        let team_color = faction_colors.get(faction);
 
         // Determine if this is a unit or building scene for texture selection
         let is_unit = is_unit_scene.contains(scene_entity);

@@ -20,6 +20,7 @@ impl Plugin for UnitsPlugin {
             .init_resource::<AllCompletedBuildings>()
             .init_resource::<FactionBaseState>()
             .init_resource::<TeamConfig>()
+            .init_resource::<FactionColors>()
             .add_systems(OnEnter(AppState::InGame), apply_game_config)
             .add_systems(
                 OnEnter(AppState::InGame),
@@ -193,6 +194,8 @@ fn steer_avoidance(
     time: Res<Time>,
     spatial_grid: Res<SpatialHashGrid>,
     wall_grid: Res<WallSpatialGrid>,
+    net_role: Res<crate::multiplayer::NetRole>,
+    active_player: Res<ActivePlayer>,
     mut units: Query<
         (
             Entity,
@@ -200,6 +203,7 @@ fn steer_avoidance(
             Option<&MoveTarget>,
             &UnitState,
             Option<&AttackTarget>,
+            &Faction,
         ),
         With<Unit>,
     >,
@@ -212,7 +216,11 @@ fn steer_avoidance(
     let building_avoidance_radius = 1.5; // extra margin beyond footprint
     let building_strength = 15.0;
 
-    for (entity, mut transform, move_target, unit_state, attack_target) in &mut units {
+    for (entity, mut transform, move_target, unit_state, attack_target, faction) in &mut units {
+        // Client: only apply avoidance to local player's units; remote units positioned by state sync
+        if *net_role == crate::multiplayer::NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
         let my_pos = transform.translation;
         let mut separation = Vec3::ZERO;
         let is_moving = move_target.is_some();
@@ -291,6 +299,8 @@ fn move_units(
     time: Res<Time>,
     teams: Res<TeamConfig>,
     wall_grid: Res<WallSpatialGrid>,
+    net_role: Res<crate::multiplayer::NetRole>,
+    active_player: Res<ActivePlayer>,
     mut query: Query<
         (
             Entity,
@@ -320,6 +330,10 @@ fn move_units(
         is_pending,
     ) in &mut query
     {
+        // Client: only move local player's units; remote units are positioned by state sync
+        if *net_role == crate::multiplayer::NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
         // Wait for path computation — don't walk blindly
         if is_pending {
             continue;
@@ -428,9 +442,15 @@ fn move_units(
 fn snap_units_to_terrain(
     registry: Res<BlueprintRegistry>,
     height_map: Res<HeightMap>,
-    mut units: Query<(&mut Transform, &EntityKind), With<Unit>>,
+    net_role: Res<crate::multiplayer::NetRole>,
+    active_player: Res<ActivePlayer>,
+    mut units: Query<(&mut Transform, &EntityKind, &Faction), With<Unit>>,
 ) {
-    for (mut transform, kind) in &mut units {
+    for (mut transform, kind, faction) in &mut units {
+        // Client: only snap local player's units; remote units get correct Y from state sync
+        if *net_role == crate::multiplayer::NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
         transform.translation.y = height_map
             .sample(transform.translation.x, transform.translation.z)
             + y_offset_for(*kind, &registry);

@@ -928,6 +928,9 @@ fn worker_ai_system(
     mut all_resources: ResMut<AllPlayerResources>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     vfx_assets: Option<Res<VfxAssets>>,
+    net_role: Res<crate::multiplayer::NetRole>,
+    active_player: Res<ActivePlayer>,
+    ai_controlled: Res<AiControlledFactions>,
     mut workers: Query<
         (
             Entity,
@@ -980,6 +983,18 @@ fn worker_ai_system(
         mut task_queue,
     ) in &mut workers
     {
+        // Client: only process local player's workers; remote workers driven by state sync
+        if *net_role == crate::multiplayer::NetRole::Client && *worker_faction != active_player.0 {
+            continue;
+        }
+        // Host: skip remote human players' workers — only run auto-behavior for
+        // local player and AI-controlled factions. Remote humans make their own decisions.
+        if *net_role == crate::multiplayer::NetRole::Host
+            && *worker_faction != active_player.0
+            && !ai_controlled.factions.contains(worker_faction)
+        {
+            continue;
+        }
         if *kind != EntityKind::Worker {
             continue;
         }
@@ -2141,7 +2156,7 @@ fn grow_saplings_system(
     mut commands: Commands,
     time: Res<Time>,
     config: Res<TreeGrowthConfig>,
-    mut saplings: Query<(Entity, &mut Sapling, &mut Transform)>,
+    mut saplings: Query<(Entity, &mut Sapling, &mut Transform), Without<FrustumCulled>>,
 ) {
     for (entity, mut sapling, mut tf) in &mut saplings {
         sapling.timer.tick(time.delta());
@@ -2165,7 +2180,7 @@ fn grow_trees_system(
     mut commands: Commands,
     time: Res<Time>,
     config: Res<TreeGrowthConfig>,
-    mut growing: Query<(Entity, &mut GrowingTree, &mut Transform)>,
+    mut growing: Query<(Entity, &mut GrowingTree, &mut Transform), Without<FrustumCulled>>,
 ) {
     for (entity, mut tree, mut tf) in &mut growing {
         tree.timer.tick(time.delta());
@@ -2208,12 +2223,15 @@ fn processor_worker_visual_system(
     mut commands: Commands,
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
+    net_role: Res<crate::multiplayer::NetRole>,
+    active_player: Res<ActivePlayer>,
     mut workers: Query<
         (
             Entity,
             &Transform,
             &mut UnitState,
             &mut Carrying,
+            &Faction,
         ),
         With<Unit>,
     >,
@@ -2222,7 +2240,7 @@ fn processor_worker_visual_system(
 ) {
     // Collect nodes targeted by other workers to avoid clustering
     let mut targeted_nodes: Vec<Entity> = Vec::new();
-    for (_, _, ustate, _) in workers.iter() {
+    for (_, _, ustate, _, _) in workers.iter() {
         if let UnitState::AssignedGathering { phase, .. } = ustate {
             match phase {
                 AssignedPhase::MovingToNode(node) | AssignedPhase::Harvesting { node, .. } => {
@@ -2233,7 +2251,11 @@ fn processor_worker_visual_system(
         }
     }
 
-    for (entity, tf, mut unit_state, _carrying) in &mut workers {
+    for (entity, tf, mut unit_state, _carrying, faction) in &mut workers {
+        // Client: only drive local player's assigned workers; remote workers driven by host
+        if *net_role == crate::multiplayer::NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
         let UnitState::AssignedGathering { building: building_entity, ref mut phase } = *unit_state else {
             continue;
         };
@@ -2524,7 +2546,7 @@ fn resource_respawn_system(
 fn grow_resource_system(
     mut commands: Commands,
     time: Res<Time>,
-    mut growing: Query<(Entity, &mut GrowingResource, &mut Transform)>,
+    mut growing: Query<(Entity, &mut GrowingResource, &mut Transform), Without<FrustumCulled>>,
 ) {
     for (entity, mut res, mut tf) in &mut growing {
         res.timer.tick(time.delta());
@@ -2556,6 +2578,9 @@ fn auto_assign_workers_system(
     mut commands: Commands,
     time: Res<Time>,
     mut timer: Local<Option<Timer>>,
+    net_role: Res<crate::multiplayer::NetRole>,
+    active_player: Res<ActivePlayer>,
+    ai_controlled: Res<AiControlledFactions>,
     mut processors: Query<
         (Entity, &Transform, &ResourceProcessor, &BuildingState, &Faction, &mut AssignedWorkers),
         With<Building>,
@@ -2566,6 +2591,10 @@ fn auto_assign_workers_system(
     >,
     kinds: Query<&crate::blueprints::EntityKind>,
 ) {
+    // Client: don't auto-assign workers — host handles all worker assignment
+    if *net_role == crate::multiplayer::NetRole::Client {
+        return;
+    }
     let t = timer.get_or_insert_with(|| Timer::from_seconds(3.0, TimerMode::Repeating));
     t.tick(time.delta());
     if !t.just_finished() {
@@ -2576,6 +2605,13 @@ fn auto_assign_workers_system(
         &mut processors
     {
         if *state != BuildingState::Complete {
+            continue;
+        }
+        // Host: skip auto-assign for remote human players' buildings
+        if *net_role == crate::multiplayer::NetRole::Host
+            && *building_faction != active_player.0
+            && !ai_controlled.factions.contains(building_faction)
+        {
             continue;
         }
         let slots = processor.max_workers as usize;

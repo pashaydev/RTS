@@ -2,12 +2,16 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_mod_outline::OutlineVolume;
+use game_state::message::{ClientMessage, InputCommand, PlayerInput, ServerMessage};
 
 use crate::blueprints::{EntityKind, EntityVisualCache};
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::hover_material::{HoverRingMaterial, HoverRingSettings};
 use crate::minimap::{MinimapInteraction, MinimapSet};
+use crate::multiplayer::{ClientNetState, HostNetState, NetRole};
+use crate::multiplayer::host_systems::execute_input_command;
+use crate::net_bridge::EntityNetMap;
 use crate::orders;
 use crate::theme;
 use crate::ui::fonts;
@@ -950,12 +954,22 @@ fn handle_right_click_move(
         Res<UiClickedThisFrame>,
         Res<UiPressActive>,
     ),
+    net_params: (
+        Res<NetRole>,
+        Option<Res<ClientNetState>>,
+        Option<Res<HostNetState>>,
+        Option<Res<EntityNetMap>>,
+        Res<Time>,
+        Query<&mut UnitState>,
+        Query<&GlobalTransform>,
+    ),
 ) {
     let (camera_q, windows) = viewport;
     let (mobs, resource_nodes, explosive_props, construction_q, processor_buildings) =
         target_queries;
     let (other_units, other_buildings) = enemy_detect;
     let (minimap_interaction, ui_clicked, ui_press) = ui_flags;
+    let (net_role, client_net, host_net, net_map, time, mut unit_states_q, all_transforms) = net_params;
 
     if !mouse.just_pressed(MouseButton::Right) {
         return;
@@ -1116,7 +1130,117 @@ fn handle_right_click_move(
         None
     };
 
+    let ground_point = ray
+        .intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))
+        .map(|dist| ray.get_point(dist));
+
     let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    let input_player_id = client_net
+        .as_ref()
+        .map(|client| client.player_id as u32)
+        .unwrap_or(0);
+
+    // Build one network input packet for right-click actions supported by current relay path.
+    let make_network_input = || -> Option<PlayerInput> {
+        let net_map = net_map.as_ref()?;
+        let entity_ids: Vec<u32> = units_vec
+            .iter()
+            .filter_map(|(entity, _)| net_map.to_net.get(entity).copied())
+            .collect();
+        if entity_ids.is_empty() {
+            return None;
+        }
+
+        let mut commands = Vec::new();
+        match target_action {
+            Some((target_entity, RClickAction::AttackEnemy | RClickAction::AttackExplosive)) => {
+                let target_id = *net_map.to_net.get(&target_entity)?;
+                commands.push(InputCommand::Attack { target_id });
+            }
+            Some((target_entity, RClickAction::GatherResource)) => {
+                let target_id = *net_map.to_net.get(&target_entity)?;
+                commands.push(InputCommand::Gather { target_id });
+            }
+            Some(_) => {
+                // Unsupported complex right-click action for network relay yet.
+                return None;
+            }
+            None => {
+                let point = ground_point?;
+                commands.push(InputCommand::Move {
+                    target: [point.x, point.y, point.z],
+                });
+            }
+        }
+
+        Some(PlayerInput {
+            player_id: input_player_id,
+            tick: 0,
+            entity_ids,
+            commands,
+        })
+    };
+
+    if *net_role == NetRole::Client {
+        if let Some(client) = client_net.as_ref() {
+            if let Some(input) = make_network_input() {
+                let seq = {
+                    let mut s = client.seq.lock().unwrap();
+                    *s += 1;
+                    *s
+                };
+                let msg = ClientMessage::Input {
+                    seq,
+                    timestamp: time.elapsed_secs_f64(),
+                    input,
+                };
+                if let Ok(json) = serde_json::to_vec(&msg) {
+                    let _ = client.outgoing.send(json);
+                }
+            }
+        }
+        // Client no longer mutates local gameplay state directly; host relays supported inputs.
+        return;
+    }
+
+    if *net_role == NetRole::Host {
+        if let Some(host) = host_net.as_ref() {
+            if let Some(input) = make_network_input() {
+                let seq = {
+                    let mut s = host.seq.lock().unwrap();
+                    *s += 1;
+                    *s
+                };
+                let relay = ServerMessage::RelayedInput {
+                    seq,
+                    timestamp: time.elapsed_secs_f64(),
+                    player_id: 0,
+                    input: input.clone(),
+                };
+                if let Ok(json) = serde_json::to_vec(&relay) {
+                    let senders = host.client_senders.lock().unwrap();
+                    for (_id, sender) in senders.iter() {
+                        let _ = sender.send(json.clone());
+                    }
+                }
+
+                // Execute locally through the same code path as client commands,
+                // so host and clients have identical component setup.
+                if let Some(ref nm) = net_map {
+                    execute_input_command(
+                        &mut commands,
+                        &input,
+                        nm,
+                        &mut unit_states_q,
+                        &mut task_queues,
+                        &mut next_task_id,
+                        &all_transforms,
+                    );
+                }
+                return;
+            }
+        }
+    }
 
     if let Some((target_entity, action)) = target_action {
         match action {

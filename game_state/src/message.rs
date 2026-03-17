@@ -58,6 +58,32 @@ pub struct PlayerInput {
     pub commands: Vec<InputCommand>,
 }
 
+// ── State sync ─────────────────────────────────────────────────────────────
+
+/// Compact snapshot of one entity for state sync (host → client).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EntitySnapshot {
+    pub net_id: EntityId,
+    pub pos: Vec3,
+    /// Y-axis rotation in radians.
+    pub rot_y: f32,
+    /// Current health (if entity has Health component).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<f32>,
+}
+
+/// Describes a newly spawned entity so the client can replicate it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EntitySpawnData {
+    pub net_id: EntityId,
+    /// EntityKind discriminant serialized by name (e.g. "Worker", "Base").
+    pub kind: String,
+    /// Faction name (e.g. "Player1", "Neutral").
+    pub faction: String,
+    pub pos: Vec3,
+    pub rot_y: f32,
+}
+
 // ── Events ──────────────────────────────────────────────────────────────────
 
 /// One-shot server events (not part of world state).
@@ -90,13 +116,29 @@ pub enum GameEvent {
         /// List of (name, faction_index, is_host, connected).
         players: Vec<LobbyPlayerInfo>,
     },
+    /// Host acknowledged join and assigned network player/faction identity.
+    #[serde(rename = "join_accepted")]
+    JoinAccepted {
+        player_id: u8,
+        seat_index: u8,
+        faction_index: u8,
+        color_index: u8,
+    },
+    /// Host ended the active match and is returning everyone to menu.
+    #[serde(rename = "host_shutdown")]
+    HostShutdown {
+        reason: String,
+    },
 }
 
 /// Serializable lobby player info for network transmission.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LobbyPlayerInfo {
+    pub player_id: u8,
     pub name: String,
+    pub seat_index: u8,
     pub faction_index: u8,
+    pub color_index: u8,
     pub is_host: bool,
     pub connected: bool,
 }
@@ -122,6 +164,27 @@ pub enum ServerMessage {
         player_id: u8,
         input: PlayerInput,
     },
+
+    /// Periodic state sync — authoritative entity positions from host.
+    #[serde(rename = "state_sync")]
+    StateSync {
+        seq: u32,
+        entities: Vec<EntitySnapshot>,
+    },
+
+    /// Batch of newly spawned entities the client must create.
+    #[serde(rename = "entity_spawn")]
+    EntitySpawn {
+        seq: u32,
+        spawns: Vec<EntitySpawnData>,
+    },
+
+    /// Batch of despawned entities the client must remove.
+    #[serde(rename = "entity_despawn")]
+    EntityDespawn {
+        seq: u32,
+        net_ids: Vec<EntityId>,
+    },
 }
 
 // ── Client → Server ────────────────────────────────────────────────────────
@@ -143,6 +206,7 @@ pub enum ClientMessage {
         seq: u32,
         timestamp: f64,
         player_name: String,
+        preferred_faction_index: Option<u8>,
     },
 
     /// Notify server of graceful disconnect.
@@ -159,7 +223,10 @@ impl ServerMessage {
     pub fn seq(&self) -> u32 {
         match self {
             Self::Event { seq, .. }
-            | Self::RelayedInput { seq, .. } => *seq,
+            | Self::RelayedInput { seq, .. }
+            | Self::StateSync { seq, .. }
+            | Self::EntitySpawn { seq, .. }
+            | Self::EntityDespawn { seq, .. } => *seq,
         }
     }
 }

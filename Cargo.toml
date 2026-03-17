@@ -6,6 +6,8 @@ edition = "2021"
 [dependencies]
 bevy = { version = "0.18", features = ["webgpu", "webgl2"] }
 bevy_mod_outline = "0.12"
+bevy_ggrs = "0.20"
+bevy_matchbox = { version = "0.14", features = ["ggrs"] }
 noise = "0.9"
 rand = "0.9"
 getrandom = { version = "0.3", features = ["wasm_js"] }

@@ -3,6 +3,7 @@ use std::f32::consts::TAU;
 
 use crate::blueprints::EntityKind;
 use crate::components::*;
+use crate::multiplayer::NetRole;
 use crate::spatial::SpatialHashGrid;
 
 pub struct UnitAiPlugin;
@@ -81,6 +82,8 @@ fn decision_priority_system(
         With<Unit>,
     >,
     factions: Query<&Faction>,
+    net_role: Res<NetRole>,
+    active_player: Res<ActivePlayer>,
     building_check: Query<(), With<Building>>,
     deposit_points: Query<(Entity, &Transform, &Faction), (With<DepositPoint>, Without<Unit>)>,
 ) {
@@ -92,6 +95,11 @@ fn decision_priority_system(
     for (entity, tf, mut state, mut source, stance, faction, health, attack_range, task_queue) in
         &mut units
     {
+        // Client: only process local player's units; remote units are driven by host state sync
+        if *net_role == NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
+
         // Skip units with manual orders or queued tasks
         if *source == TaskSource::Manual || task_queue.current.is_some() || !task_queue.queue.is_empty() {
             continue;
@@ -204,6 +212,8 @@ fn decision_priority_system(
 /// Leash return system — Defensive units that chased too far return to their origin.
 fn leash_return_system(
     mut commands: Commands,
+    net_role: Res<NetRole>,
+    active_player: Res<ActivePlayer>,
     mut units: Query<
         (
             Entity,
@@ -212,11 +222,16 @@ fn leash_return_system(
             &mut TaskSource,
             &UnitStance,
             &LeashOrigin,
+            &Faction,
         ),
         With<Unit>,
     >,
 ) {
-    for (entity, tf, mut state, mut source, stance, leash_origin) in &mut units {
+    for (entity, tf, mut state, mut source, stance, leash_origin, faction) in &mut units {
+        // Client: only process local player's units; remote units driven by host
+        if *net_role == NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
         // Only apply leash to auto-sourced attacks
         if *source != TaskSource::Auto {
             continue;
@@ -258,14 +273,22 @@ pub fn task_queue_advance_system(
             &mut TaskSource,
             &mut TaskQueue,
             &EntityKind,
+            &Faction,
         ),
         With<Unit>,
     >,
     transforms: Query<&Transform>,
     processors: Query<(&ResourceProcessor, &BuildingState, &Faction), With<Building>>,
     mut assigned_workers_q: Query<&mut AssignedWorkers>,
+    net_role: Res<NetRole>,
+    active_player: Res<ActivePlayer>,
 ) {
-    for (entity, mut state, mut source, mut queue, _kind) in &mut units {
+    for (entity, mut state, mut source, mut queue, _kind, faction) in &mut units {
+        // Client: only process local player's units
+        if *net_role == NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
+
         if *state != UnitState::Idle || queue.current.is_some() || queue.queue.is_empty() {
             continue;
         }
@@ -362,6 +385,8 @@ pub fn unit_state_executor_system(
     _time: Res<Time>,
     teams: Res<TeamConfig>,
     spatial_grid: Res<SpatialHashGrid>,
+    net_role: Res<NetRole>,
+    active_player: Res<ActivePlayer>,
     mut units: Query<
         (
             Entity,
@@ -392,6 +417,11 @@ pub fn unit_state_executor_system(
 
     for (entity, tf, mut state, mut source, mut task_queue, _kind, faction, move_target, attack_range) in &mut units
     {
+        // Client: only process local player's units; remote units are driven by host state sync
+        if *net_role == NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
+
         match *state {
             UnitState::Idle | UnitState::HoldPosition => {
                 // Remove stale targets

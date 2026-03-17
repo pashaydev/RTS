@@ -3,6 +3,8 @@
 //! Host runs full simulation, clients receive state updates and send commands.
 
 pub mod client_systems;
+pub mod debug_tap;
+pub mod ggrs_matchbox;
 pub mod host_systems;
 pub mod transport;
 
@@ -13,12 +15,12 @@ use std::sync::{Arc, Mutex};
 
 use game_state::message::{ClientMessage, ServerMessage};
 
-use crate::components::{ActivePlayer, AiControlledFactions, AppState, Faction};
+use crate::components::{ActivePlayer, AiControlledFactions, AppState, Faction, FactionColors};
 use transport::NewClientEvent;
 
 // ── Net Role ────────────────────────────────────────────────────────────────
 
-#[derive(Resource, Default, PartialEq, Eq, Clone, Debug)]
+#[derive(Resource, Default, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum NetRole {
     #[default]
     Offline,
@@ -39,8 +41,11 @@ pub enum LobbyStatus {
 
 #[derive(Debug, Clone)]
 pub struct LobbyPlayer {
+    pub player_id: u8,
     pub name: String,
+    pub seat_index: u8,
     pub faction: Faction,
+    pub color_index: u8,
     pub is_host: bool,
     pub connected: bool,
 }
@@ -71,7 +76,10 @@ pub struct ClientNetState {
     pub incoming: Mutex<Receiver<ServerMessage>>,
     pub outgoing: Sender<Vec<u8>>,
     pub shutdown: Arc<AtomicBool>,
+    pub player_id: u8,
+    pub seat_index: u8,
     pub my_faction: Faction,
+    pub color_index: u8,
     pub seq: Mutex<u32>,
 }
 
@@ -95,59 +103,98 @@ pub fn is_online(role: Res<NetRole>) -> bool {
     *role != NetRole::Offline
 }
 
-/// Runs on `OnEnter(InGame)` when online — sets ActivePlayer for the correct faction
-/// and removes human-controlled factions from AI.
+/// Runs on `OnEnter(InGame)` when online — sets ActivePlayer for the correct faction,
+/// removes human-controlled factions from AI, and builds the FactionColors map
+/// from authoritative seat/color assignments.
 /// Must run after `apply_game_config` but before `spawn_camera`.
 pub fn configure_multiplayer_ai(
     lobby: Res<LobbyState>,
     role: Res<NetRole>,
+    client_state: Option<Res<ClientNetState>>,
     mut ai_factions: ResMut<AiControlledFactions>,
     mut active_player: ResMut<ActivePlayer>,
+    mut faction_colors: ResMut<FactionColors>,
 ) {
+    // Build FactionColors from lobby seat assignments
+    for player in &lobby.players {
+        let color = FactionColors::from_index(player.color_index);
+        faction_colors.colors.insert(player.faction, color);
+        info!(
+            "Multiplayer color: {:?} → {:?} (seat {}, color_index {})",
+            player.faction, color, player.seat_index, player.color_index
+        );
+    }
+
     // Set the active player based on role
     match *role {
         NetRole::Host => {
-            // Host is always Player1 (first in lobby)
             if let Some(host_player) = lobby.players.iter().find(|p| p.is_host) {
                 active_player.0 = host_player.faction;
-                info!("Host playing as {:?}", host_player.faction);
+                info!("Host playing as {:?} (seat {})", host_player.faction, host_player.seat_index);
             }
         }
         NetRole::Client => {
-            // Client is the first non-host connected player
-            if let Some(client_player) = lobby.players.iter().find(|p| !p.is_host && p.connected) {
+            if let Some(client) = client_state.as_ref() {
+                active_player.0 = client.my_faction;
+                info!(
+                    "Client playing as {:?} (seat {}, color_index {})",
+                    client.my_faction, client.seat_index, client.color_index
+                );
+            } else if let Some(client_player) = lobby.players.iter().find(|p| !p.is_host && p.connected) {
                 active_player.0 = client_player.faction;
-                info!("Client playing as {:?}", client_player.faction);
+                info!("Client playing as {:?} (fallback)", client_player.faction);
             }
         }
         NetRole::Offline => {}
     }
 
-    // Remove human-controlled factions from AI
-    for player in &lobby.players {
-        if player.connected {
-            ai_factions.factions.remove(&player.faction);
-            info!(
-                "Multiplayer: {:?} controlled by human ({})",
-                player.faction, player.name
-            );
+    // On the client, disable ALL AI — the host runs simulation and syncs state.
+    // On the host, only remove human-controlled factions from AI.
+    if *role == NetRole::Client {
+        info!("Client: disabling all local AI (host is authoritative)");
+        ai_factions.factions.clear();
+    } else {
+        for player in &lobby.players {
+            if player.connected {
+                ai_factions.factions.remove(&player.faction);
+                info!(
+                    "Multiplayer: {:?} controlled by human ({})",
+                    player.faction, player.name
+                );
+            }
         }
     }
 }
 
 // ── Plugin ──────────────────────────────────────────────────────────────────
 
+fn reset_multiplayer_sync(
+    mut synced: ResMut<host_systems::SyncedEntitySet>,
+    mut pending: ResMut<client_systems::PendingNetSpawns>,
+) {
+    synced.known.clear();
+    pending.spawns.clear();
+    pending.despawns.clear();
+}
+
 pub struct MultiplayerPlugin;
 
 impl Plugin for MultiplayerPlugin {
     fn build(&self, app: &mut App) {
+        debug_tap::ensure_started();
         app.init_resource::<NetRole>()
             .init_resource::<LobbyState>()
+            .init_resource::<host_systems::StateSyncTimer>()
+            .init_resource::<host_systems::SyncedEntitySet>()
+            .init_resource::<client_systems::PendingNetSpawns>()
             .add_systems(
                 Update,
                 (
                     host_systems::host_process_client_commands,
                     host_systems::host_handle_disconnects,
+                    host_systems::host_broadcast_state_sync,
+                    host_systems::host_broadcast_entity_spawns
+                        .after(host_systems::host_broadcast_state_sync),
                 )
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_host),
@@ -156,6 +203,8 @@ impl Plugin for MultiplayerPlugin {
                 Update,
                 (
                     client_systems::client_receive_commands,
+                    client_systems::client_apply_entity_sync
+                        .after(client_systems::client_receive_commands),
                     client_systems::client_handle_disconnect,
                 )
                     .run_if(in_state(AppState::InGame))
@@ -163,9 +212,13 @@ impl Plugin for MultiplayerPlugin {
             )
             .add_systems(
                 OnEnter(AppState::InGame),
-                configure_multiplayer_ai
-                    .after(crate::units::apply_game_config)
-                    .run_if(is_online),
-            );
+                (
+                    configure_multiplayer_ai
+                        .after(crate::units::apply_game_config)
+                        .run_if(is_online),
+                    reset_multiplayer_sync,
+                ),
+            )
+            .add_plugins(ggrs_matchbox::GgrsMatchboxPlugin);
     }
 }

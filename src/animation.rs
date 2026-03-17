@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::model_assets::{ttp_anim_set, AnimationAssets, UnitAnimationRegistry};
+use crate::pathfinding::NavPath;
 
 pub struct AnimationPlugin;
 
@@ -136,17 +137,20 @@ fn find_animation_player(
 /// Determine desired AnimState from entity state and transition if changed.
 /// Uses per-unit-type animation graphs from UnitAnimationRegistry.
 fn drive_animations(
-    mut anim_controllers: Query<(
-        &mut AnimationController,
-        &AnimPlayerRef,
-        &Health,
-        &EntityKind,
-        Option<&UnitState>,
-        Option<&MoveTarget>,
-        Option<&AttackTarget>,
-        Option<&AttackRange>,
-        &Transform,
-    )>,
+    mut anim_controllers: Query<
+        (
+            &mut AnimationController,
+            &AnimPlayerRef,
+            &Health,
+            &EntityKind,
+            Option<&UnitState>,
+            Option<&MoveTarget>,
+            Option<&AttackTarget>,
+            Option<&AttackRange>,
+            &Transform,
+        ),
+        Without<FrustumCulled>,
+    >,
     target_transforms: Query<&Transform, Without<AnimationController>>,
     registry: Option<Res<UnitAnimationRegistry>>,
     legacy_assets: Option<Res<AnimationAssets>>,
@@ -226,24 +230,33 @@ fn drive_animations(
     }
 }
 
-/// Rotate the parent entity to face toward MoveTarget or AttackTarget.
+/// Rotate the parent entity to face toward its immediate navigation or combat target.
 fn face_movement_direction(
     time: Res<Time>,
     mut query: Query<
-        (&mut Transform, Option<&MoveTarget>, Option<&AttackTarget>),
-        Or<(With<Unit>, With<Mob>)>,
+        (
+            &mut Transform,
+            Option<&MoveTarget>,
+            Option<&NavPath>,
+            Option<&AttackTarget>,
+        ),
+        (Or<(With<Unit>, With<Mob>)>, Without<FrustumCulled>),
     >,
     target_transforms: Query<&Transform, (Without<Unit>, Without<Mob>)>,
 ) {
     let rate = 8.0;
 
-    for (mut transform, move_target, attack_target) in &mut query {
+    for (mut transform, move_target, nav_path, attack_target) in &mut query {
         let target_pos = if let Some(at) = attack_target {
             if let Ok(target_tf) = target_transforms.get(at.0) {
                 Some(target_tf.translation)
             } else {
                 None
             }
+        } else if let Some(nav) = nav_path {
+            nav.waypoints.get(nav.current_index).copied().or_else(|| {
+                move_target.map(|mt| mt.0)
+            })
         } else if let Some(mt) = move_target {
             Some(mt.0)
         } else {

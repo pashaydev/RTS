@@ -203,7 +203,7 @@ fn footstep_dust_spawner(
             Option<&Carrying>,
             Option<&CarryCapacity>,
         ),
-        (With<Unit>, With<MoveTarget>),
+        (With<Unit>, With<MoveTarget>, Without<FrustumCulled>),
     >,
 ) {
     let Some(vfx) = vfx_assets else { return };

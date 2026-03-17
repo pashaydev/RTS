@@ -3,6 +3,7 @@ use bevy::prelude::*;
 
 use crate::components::*;
 use crate::fog::FogTweakSettings;
+use crate::multiplayer::{HostNetState, NetRole};
 use crate::theme;
 use crate::ui::fonts::UiFonts;
 
@@ -32,6 +33,13 @@ impl Plugin for PauseMenuPlugin {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PausePanel {
+    Main,
+    Options,
+    HostEndConfirm,
+}
+
 // ── Timer for periodic stats update ──
 
 #[derive(Resource)]
@@ -59,6 +67,7 @@ fn handle_escape_key(
     placement: Res<BuildingPlacementState>,
     pause_roots: Query<Entity, With<PauseOverlayRoot>>,
     fonts: Res<UiFonts>,
+    net_role: Res<NetRole>,
 ) {
     if !keyboard.just_pressed(KeyCode::Escape) {
         return;
@@ -74,34 +83,46 @@ fn handle_escape_key(
                 return;
             }
             *overlay = InGameOverlay::PauseMenu;
-            spawn_pause_overlay(&mut commands, &fonts, false);
+            spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
         }
         InGameOverlay::PauseMenu => {
             *overlay = InGameOverlay::None;
             for e in &pause_roots {
-                commands.entity(e).despawn();
+                commands.entity(e).try_despawn();
             }
         }
         InGameOverlay::PauseOptions => {
             *overlay = InGameOverlay::PauseMenu;
             for e in &pause_roots {
-                commands.entity(e).despawn();
+                commands.entity(e).try_despawn();
             }
-            spawn_pause_overlay(&mut commands, &fonts, false);
+            spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
+        }
+        InGameOverlay::PauseConfirmEndMatch => {
+            *overlay = InGameOverlay::PauseMenu;
+            for e in &pause_roots {
+                commands.entity(e).try_despawn();
+            }
+            spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
         }
         InGameOverlay::DeathScreen => {
             // Can't dismiss death screen with Escape
         }
         InGameOverlay::Spectating => {
             *overlay = InGameOverlay::PauseMenu;
-            spawn_pause_overlay(&mut commands, &fonts, false);
+            spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
         }
     }
 }
 
 // ── Spawn Pause Overlay ──
 
-fn spawn_pause_overlay(commands: &mut Commands, fonts: &UiFonts, is_options: bool) {
+fn spawn_pause_overlay(
+    commands: &mut Commands,
+    fonts: &UiFonts,
+    panel_kind: PausePanel,
+    role: NetRole,
+) {
     let root = commands
         .spawn((
             PauseOverlayRoot,
@@ -152,14 +173,14 @@ fn spawn_pause_overlay(commands: &mut Commands, fonts: &UiFonts, is_options: boo
 
     commands.entity(root).add_child(panel);
 
-    if is_options {
-        spawn_options_content(commands, panel, fonts);
-    } else {
-        spawn_pause_content(commands, panel, fonts);
+    match panel_kind {
+        PausePanel::Main => spawn_pause_content(commands, panel, fonts, role),
+        PausePanel::Options => spawn_options_content(commands, panel, fonts),
+        PausePanel::HostEndConfirm => spawn_host_end_confirm_content(commands, panel, fonts),
     }
 }
 
-fn spawn_pause_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts) {
+fn spawn_pause_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts, role: NetRole) {
     // // Title
     // let title = commands
     //     .spawn((
@@ -179,10 +200,15 @@ fn spawn_pause_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts) 
     // commands.entity(panel).add_child(title);
 
     // Buttons
-    let buttons = [
+    let menu_label = if role == NetRole::Host {
+        "End Match"
+    } else {
+        "Main Menu"
+    };
+    let buttons = vec![
         ("Continue", PauseAction::Continue, true),
         ("Restart", PauseAction::Restart, false),
-        ("Main Menu", PauseAction::MainMenu, false),
+        (menu_label, PauseAction::MainMenu, false),
         ("Quit", PauseAction::Quit, false),
     ];
 
@@ -230,6 +256,46 @@ fn spawn_options_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts
 
     let btn = spawn_overlay_button(commands, "Back", PauseAction::BackFromOptions, true, fonts);
     commands.entity(panel).add_child(btn);
+}
+
+fn spawn_host_end_confirm_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts) {
+    let title = commands
+        .spawn((
+            Text::new("END MATCH FOR EVERYONE?"),
+            TextFont {
+                font: fonts.heading.clone(),
+                font_size: theme::FONT_HEADING,
+                ..default()
+            },
+            TextColor(theme::WARNING),
+            Node {
+                margin: UiRect::bottom(Val::Px(16.0)),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(panel).add_child(title);
+
+    let body = commands
+        .spawn((
+            Text::new("All connected clients will be forced back to main menu."),
+            TextFont {
+                font: fonts.body.clone(),
+                font_size: theme::FONT_BODY,
+                ..default()
+            },
+            TextColor(theme::TEXT_SECONDARY),
+            Node {
+                margin: UiRect::bottom(Val::Px(20.0)),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(panel).add_child(body);
+
+    let cancel_btn = spawn_overlay_button(commands, "Cancel", PauseAction::CancelHostEnd, false, fonts);
+    let confirm_btn = spawn_overlay_button(commands, "End Match", PauseAction::ConfirmHostEnd, true, fonts);
+    commands.entity(panel).add_children(&[cancel_btn, confirm_btn]);
 }
 
 fn spawn_overlay_button(
@@ -297,6 +363,9 @@ fn handle_pause_buttons(
     mut fog_map: Option<ResMut<FogOfWarMap>>,
     faction_stats: Res<FactionStats>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
+    net_role: Res<NetRole>,
+    host_state: Option<Res<HostNetState>>,
+    time: Res<Time>,
 ) {
     for (interaction, btn) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -313,7 +382,7 @@ fn handle_pause_buttons(
                     InGameOverlay::Spectating
                 };
                 for e in &pause_roots {
-                    commands.entity(e).despawn();
+                    commands.entity(e).try_despawn();
                 }
             }
             PauseAction::Restart => {
@@ -321,14 +390,30 @@ fn handle_pause_buttons(
                 next_state.set(AppState::MainMenu);
             }
             PauseAction::MainMenu => {
-                next_state.set(AppState::MainMenu);
+                if *net_role == NetRole::Host {
+                    *overlay = InGameOverlay::PauseConfirmEndMatch;
+                    for e in &pause_roots {
+                        commands.entity(e).try_despawn();
+                    }
+                    for e in &death_roots {
+                        commands.entity(e).try_despawn();
+                    }
+                    spawn_pause_overlay(
+                        &mut commands,
+                        &fonts,
+                        PausePanel::HostEndConfirm,
+                        *net_role,
+                    );
+                } else {
+                    next_state.set(AppState::MainMenu);
+                }
             }
             PauseAction::Options => {
                 *overlay = InGameOverlay::PauseOptions;
                 for e in &pause_roots {
-                    commands.entity(e).despawn();
+                    commands.entity(e).try_despawn();
                 }
-                spawn_pause_overlay(&mut commands, &fonts, true);
+                spawn_pause_overlay(&mut commands, &fonts, PausePanel::Options, *net_role);
             }
             PauseAction::Quit => {
                 exit.write(AppExit::Success);
@@ -336,22 +421,37 @@ fn handle_pause_buttons(
             PauseAction::BackFromOptions => {
                 *overlay = InGameOverlay::PauseMenu;
                 for e in &pause_roots {
-                    commands.entity(e).despawn();
+                    commands.entity(e).try_despawn();
                 }
-                spawn_pause_overlay(&mut commands, &fonts, false);
+                spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
             }
             PauseAction::ApplySettings => {
                 // Handled same as BackFromOptions for now
                 *overlay = InGameOverlay::PauseMenu;
                 for e in &pause_roots {
-                    commands.entity(e).despawn();
+                    commands.entity(e).try_despawn();
                 }
-                spawn_pause_overlay(&mut commands, &fonts, false);
+                spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
+            }
+            PauseAction::ConfirmHostEnd => {
+                if *net_role == NetRole::Host {
+                    if let Some(host) = host_state.as_ref() {
+                        broadcast_host_shutdown(host, &time);
+                    }
+                }
+                next_state.set(AppState::MainMenu);
+            }
+            PauseAction::CancelHostEnd => {
+                *overlay = InGameOverlay::PauseMenu;
+                for e in &pause_roots {
+                    commands.entity(e).try_despawn();
+                }
+                spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
             }
             PauseAction::Spectate => {
                 *overlay = InGameOverlay::Spectating;
                 for e in &death_roots {
-                    commands.entity(e).despawn();
+                    commands.entity(e).try_despawn();
                 }
                 // Disable fog of war
                 fog_settings.enable_los = false;
@@ -369,6 +469,29 @@ fn handle_pause_buttons(
                 // Spawn spectator HUD
                 spawn_spectator_hud(&mut commands, &fonts, &faction_stats);
             }
+        }
+    }
+}
+
+fn broadcast_host_shutdown(host: &HostNetState, time: &Time) {
+    use game_state::message::{GameEvent, ServerMessage};
+
+    let seq = {
+        let mut s = host.seq.lock().unwrap();
+        *s += 1;
+        *s
+    };
+    let msg = ServerMessage::Event {
+        seq,
+        timestamp: time.elapsed_secs_f64(),
+        events: vec![GameEvent::HostShutdown {
+            reason: "Host ended the match".to_string(),
+        }],
+    };
+    if let Ok(json) = serde_json::to_vec(&msg) {
+        let senders = host.client_senders.lock().unwrap();
+        for (_id, sender) in senders.iter() {
+            let _ = sender.send(json.clone());
         }
     }
 }
@@ -784,16 +907,16 @@ fn cleanup_game_world(
     mut fog_settings: ResMut<FogTweakSettings>,
 ) {
     for e in &game_entities {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     for e in &pause_roots {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     for e in &death_roots {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     for e in &spectator_roots {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
 
     // Reset overlay

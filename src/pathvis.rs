@@ -323,7 +323,7 @@ fn spawn_path_visualization(
             if let Some(ref state) = vis_entities {
                 for &e in &state.entities {
                     if let Ok(mut cmd) = commands.get_entity(e) {
-                        cmd.despawn();
+                        cmd.try_despawn();
                     }
                 }
                 commands.entity(entity).remove::<PathVisEntities>();
@@ -346,7 +346,7 @@ fn spawn_path_visualization(
         if let Some(ref state) = vis_entities {
             for &e in &state.entities {
                 if let Ok(mut cmd) = commands.get_entity(e) {
-                    cmd.despawn();
+                    cmd.try_despawn();
                 }
             }
         }
@@ -507,7 +507,7 @@ fn cleanup_path_vis(
     for (unit_entity, vis) in &units_without_target {
         for &e in &vis.entities {
             if let Ok(mut cmd) = commands.get_entity(e) {
-                cmd.despawn();
+                cmd.try_despawn();
             }
         }
         commands.entity(unit_entity).remove::<PathVisEntities>();
@@ -523,12 +523,12 @@ fn cleanup_orphaned_path_vis(
 ) {
     for (e, dash) in &dashes {
         if !entities.contains(dash.owner) {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         }
     }
     for (e, ring) in &rings {
         if !entities.contains(ring.owner) {
-            commands.entity(e).despawn();
+            commands.entity(e).try_despawn();
         }
     }
 }
