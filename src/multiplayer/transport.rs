@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use game_state::message::{ClientMessage, ServerMessage};
 use serde::Deserialize;
+use socket2::SockRef;
 
 use super::debug_tap;
 
@@ -156,6 +157,20 @@ fn is_complete_json_value(buf: &[u8]) -> bool {
     }
 }
 
+// ── TCP keepalive ────────────────────────────────────────────────────────────
+
+/// Enable TCP keepalive on a stream so VPN/Hamachi tunnels don't silently drop.
+/// Sends a keepalive probe every 10 seconds after 15 seconds of idle.
+pub fn configure_keepalive(stream: &TcpStream) {
+    let sock = SockRef::from(stream);
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(15))
+        .with_interval(Duration::from_secs(10));
+    if let Err(e) = sock.set_tcp_keepalive(&keepalive) {
+        bevy::log::warn!("Failed to set TCP keepalive: {}", e);
+    }
+}
+
 // ── LAN IP detection ────────────────────────────────────────────────────────
 
 /// Detect local LAN IP by querying the OS routing table (no packets sent).
@@ -164,6 +179,55 @@ pub fn detect_lan_ip() -> Option<String> {
     socket.connect("8.8.8.8:80").ok()?;
     let addr = socket.local_addr().ok()?;
     Some(addr.ip().to_string())
+}
+
+/// Detected network interface with its IP address and a human-readable label.
+#[derive(Debug, Clone)]
+pub struct DetectedIp {
+    pub ip: String,
+    pub name: String,
+    pub is_likely_vpn: bool,
+}
+
+/// Enumerate all non-loopback IPv4 addresses across all network interfaces.
+/// Flags interfaces that look like VPN/Hamachi adapters (name or IP range heuristics).
+pub fn detect_all_ips() -> Vec<DetectedIp> {
+    let mut results = Vec::new();
+    if let Ok(ifaces) = if_addrs::get_if_addrs() {
+        for iface in ifaces {
+            if iface.is_loopback() {
+                continue;
+            }
+            let addr = iface.addr.ip();
+            if !addr.is_ipv4() {
+                continue;
+            }
+            let ip = addr.to_string();
+            let name_lower = iface.name.to_lowercase();
+            // Heuristics for VPN/virtual adapters:
+            // - Hamachi uses 25.x.x.x or 5.x.x.x ranges and adapters named "ham0", "Hamachi"
+            // - ZeroTier uses "zt*" interface names
+            // - OpenVPN uses "tun*", "tap*"
+            // - WireGuard uses "wg*"
+            // - Generic VPN adapters often use 10.x.x.x ranges on virtual interfaces
+            let is_likely_vpn = name_lower.contains("ham")
+                || name_lower.contains("tun")
+                || name_lower.contains("tap")
+                || name_lower.starts_with("zt")
+                || name_lower.starts_with("wg")
+                || name_lower.contains("vpn")
+                || ip.starts_with("25.")
+                || ip.starts_with("5.");
+            results.push(DetectedIp {
+                ip,
+                name: iface.name.clone(),
+                is_likely_vpn,
+            });
+        }
+    }
+    // Sort: VPN adapters first (more relevant for remote play), then by name
+    results.sort_by(|a, b| b.is_likely_vpn.cmp(&a.is_likely_vpn).then(a.name.cmp(&b.name)));
+    results
 }
 
 // ── New client event ────────────────────────────────────────────────────────
@@ -178,6 +242,7 @@ fn client_msg_kind(msg: &ClientMessage) -> &'static str {
         ClientMessage::Input { .. } => "input",
         ClientMessage::JoinRequest { .. } => "join",
         ClientMessage::LeaveNotice { .. } => "leave",
+        ClientMessage::Ping { .. } => "ping",
     }
 }
 
@@ -188,6 +253,7 @@ fn server_msg_kind(msg: &ServerMessage) -> &'static str {
         ServerMessage::StateSync { .. } => "state_sync",
         ServerMessage::EntitySpawn { .. } => "entity_spawn",
         ServerMessage::EntityDespawn { .. } => "entity_despawn",
+        ServerMessage::Pong { .. } => "pong",
     }
 }
 
@@ -214,6 +280,7 @@ pub fn host_listener_thread(
                     format!("accepted {} as player {}", addr, next_player_id),
                 );
                 stream.set_nodelay(true).ok();
+                configure_keepalive(&stream);
                 let _ = new_client_tx.send(NewClientEvent {
                     player_id: next_player_id,
                     stream,

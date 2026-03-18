@@ -29,7 +29,20 @@ cargo run
 trunk serve --config .trunk.toml
 ```
 
+### Windows
+```sh
+PATH="/tmp:/opt/homebrew/opt/llvm/bin:$PATH" cargo xwin build --release --target x86_64-pc-windows-msvc
+```
+
 The dev profile uses dependency optimization (`opt-level = 2`) for better iteration-time performance.
+
+### Fly.io
+
+The Fly.io deployment is a static web build served by nginx from the generated `dist/` output.
+
+- It is suitable for browser delivery of the web client
+- It does not make the current LAN/TCP multiplayer stack internet-capable
+- Browser deployment should currently be treated as single-player or otherwise web-safe gameplay unless transport is migrated to a browser-compatible protocol
 
 ## Core Gameplay
 
@@ -89,18 +102,31 @@ The main menu already supports a broader skirmish setup than the original README
 
 ### Current Status
 
-The project already has a playable LAN multiplayer path.
+The project already has a playable LAN and VPN multiplayer path.
 
 - Transport: TCP sockets with length-prefixed JSON messages
 - Model: host runs the simulation, clients send inputs and receive authoritative sync
 - Lobby: host game, join by session code (`IP:port`), seat/faction/color assignment, synchronized start
 - Replication: periodic state snapshots plus explicit entity spawn/despawn replication
 - Recovery: disconnected human factions are converted to AI
+- VPN/Hamachi: auto-detects VPN adapters, shows all available IPs, TCP keepalive and app-level heartbeat prevent tunnel dropout
+
+### VPN / Hamachi Play
+
+The multiplayer stack works through Hamachi, ZeroTier, WireGuard, and similar VPN tools:
+
+1. All players install and join the same VPN network
+2. Host opens `Multiplayer` → `Host Game`
+3. The lobby shows all detected IPs — look for the one tagged **[VPN]** (green text)
+4. Share that VPN IP with clients (the Copy button copies the displayed session code)
+5. If the auto-detected VPN IP is wrong, clients can manually enter `HAMACHI_IP:7878`
+
+The host binds on all interfaces (`0.0.0.0`), so any adapter — LAN, Hamachi, ZeroTier, WireGuard — will accept connections. TCP keepalive and a 5-second application ping keep the tunnel alive during idle periods.
 
 ### Current Limits
 
 - `ggrs_matchbox` is scaffolding for a future rollback path, not the active transport
-- The current flow is LAN-oriented, not a production internet matchmaking stack
+- The active transport uses raw TCP sockets, so it is not a browser-compatible multiplayer path
 - Only the command paths wired into the network relay are synchronized
 - The match model currently assumes four total faction seats shared between humans and AI
 
@@ -271,24 +297,63 @@ Use `RTS_NET_DEBUG_PORT` to pin the port.
 
 ## Architecture
 
-The codebase is organized as Bevy plugins around major runtime domains.
+The codebase is organized as Bevy plugins around runtime domains, with a separate shared protocol crate for networked state and messages.
 
 ### Runtime Areas
 
-- `menu`: main menu, options, lobby, host/join flow, synchronized match start
-- `multiplayer`: LAN transport, lobby state, host/client systems, debug tap, rollback scaffolding
+- `menu`, `pause_menu`, `theme`: shell flow, skirmish setup, options, and in-session overlays
+- `multiplayer`: LAN transport, lobby state, host/client systems, debug tap, and rollback scaffolding
+- `game_state`: shared protocol crate for serialized messages and replicated gameplay data
 - `net_bridge`: stable network IDs and ECS/network mapping
-- `ground`, `lighting`, `fog`, `camera`, `minimap`, `pathvis`, `roads`, `attention`, `animation`, `vfx`, `culling`: presentation, feedback, and performance
-- `units`, `buildings`, `resources`, `combat`, `unit_ai`, `mobs`, `ai`, `pathfinding`: gameplay simulation
-- `ui`: HUD widgets, actions, layout, and feedback
-- `save`: local persistence and state restoration
+- `components`, `blueprints`, `orders`, `selection`, `spatial`: shared gameplay state, entity typing, commands, and world queries
+- `units`, `buildings`, `resources`, `combat`, `unit_ai`, `mobs`, `ai`, `pathfinding`: simulation and faction behavior
+- `ground`, `lighting`, `fog`, `fog_material`, `hover_material`, `camera`, `minimap`, `pathvis`, `roads`, `attention`, `animation`, `vfx`, `culling`, `model_assets`: rendering, asset loading, feedback, and performance
+- `ui`: HUD widgets, widgets framework, notifications, and action surfaces
+- `debug`, `save`: local tooling, tweak flows, persistence, and restoration
 
 ### Source Layout
 
 ```text
+game_state/
+├── src/
+│   ├── lib.rs
+│   ├── message.rs
+│   └── types.rs
 src/
 ├── main.rs
+├── animation.rs
+├── attention.rs
+├── blueprints.rs
+├── buildings.rs
+├── camera.rs
+├── combat.rs
+├── components.rs
+├── culling.rs
+├── debug.rs
+├── fog.rs
+├── fog_material.rs
+├── ground.rs
+├── hover_material.rs
+├── lighting.rs
 ├── menu.rs
+├── minimap.rs
+├── mobs.rs
+├── model_assets.rs
+├── net_bridge.rs
+├── orders.rs
+├── pathfinding.rs
+├── pathvis.rs
+├── pause_menu.rs
+├── resources.rs
+├── roads.rs
+├── save.rs
+├── selection.rs
+├── spatial.rs
+├── theme.rs
+├── unit_ai.rs
+├── units.rs
+├── vfx.rs
+├── ai/
 ├── multiplayer/
 │   ├── mod.rs
 │   ├── transport.rs
@@ -296,21 +361,6 @@ src/
 │   ├── client_systems.rs
 │   ├── debug_tap.rs
 │   └── ggrs_matchbox.rs
-├── net_bridge.rs
-├── ground.rs
-├── camera.rs
-├── lighting.rs
-├── roads.rs
-├── attention.rs
-├── animation.rs
-├── culling.rs
-├── units.rs
-├── buildings.rs
-├── resources.rs
-├── combat.rs
-├── unit_ai.rs
-├── mobs.rs
-├── ai/
 └── ui/
 ```
 

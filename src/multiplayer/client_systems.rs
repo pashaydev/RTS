@@ -16,6 +16,16 @@ use super::debug_tap;
 use super::{ClientNetState, NetRole};
 use super::host_systems::execute_input_command;
 
+/// Timer for sending periodic pings to the host (keeps VPN/Hamachi tunnels alive).
+#[derive(Resource)]
+pub struct ClientPingTimer(pub Timer);
+
+impl Default for ClientPingTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(5.0, TimerMode::Repeating))
+    }
+}
+
 /// Pending spawn/despawn events queued by the network receiver,
 /// processed by a separate system that has access to blueprint resources.
 #[derive(Resource, Default)]
@@ -110,6 +120,9 @@ pub fn client_receive_commands(
                         "client_entity_sync",
                         format!("queued {} entity despawns", net_ids.len()),
                     );
+                }
+                ServerMessage::Pong { .. } => {
+                    // Keepalive acknowledged — connection is alive
                 }
                 ServerMessage::Event { events, .. } => {
                     for event in events {
@@ -274,5 +287,29 @@ pub fn client_handle_disconnect(
         debug_tap::record_info("client_state", "host disconnected -> main menu");
         *net_role = NetRole::Offline;
         next_state.set(AppState::MainMenu);
+    }
+}
+
+/// Periodically send Ping to the host to keep VPN/Hamachi tunnels alive.
+pub fn client_send_ping(
+    client: Res<ClientNetState>,
+    time: Res<Time>,
+    mut ping_timer: ResMut<ClientPingTimer>,
+) {
+    ping_timer.0.tick(time.delta());
+    if !ping_timer.0.just_finished() {
+        return;
+    }
+    let seq = {
+        let mut s = client.seq.lock().unwrap();
+        *s += 1;
+        *s
+    };
+    let ping = game_state::message::ClientMessage::Ping {
+        seq,
+        timestamp: time.elapsed_secs_f64(),
+    };
+    if let Ok(json) = serde_json::to_vec(&ping) {
+        let _ = client.outgoing.send(json);
     }
 }

@@ -308,6 +308,26 @@ pub fn host_process_client_commands(
                             format!("player {} leave notice", player_id),
                         );
                     }
+                    ClientMessage::Ping { timestamp, .. } => {
+                        // Reply with Pong to keep VPN/Hamachi tunnels alive
+                        let seq = {
+                            let mut s = host.seq.lock().unwrap();
+                            *s += 1;
+                            *s
+                        };
+                        let pong = ServerMessage::Pong {
+                            seq,
+                            timestamp: *timestamp,
+                        };
+                        if let Ok(json) = serde_json::to_vec(&pong) {
+                            let senders = host.client_senders.lock().unwrap();
+                            for (id, sender) in senders.iter() {
+                                if *id == player_id {
+                                    let _ = sender.send(json.clone());
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Err(TryRecvError::Empty) => break,

@@ -41,6 +41,24 @@ use bevy_mod_outline::OutlinePlugin;
 use components::{AppState, GameSetupConfig, GraphicsSettings};
 
 fn main() {
+    // Resolve the executable's directory so assets/config/saves are found
+    // correctly in distribution builds (especially Windows).
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+
+    if let Some(ref dir) = exe_dir {
+        let _ = std::env::set_current_dir(dir);
+    }
+
+    // Build an absolute asset path from the exe directory so Bevy's
+    // AssetServer works even when CWD is unexpected (Windows shortcuts,
+    // UNC paths, etc.).
+    let asset_path = exe_dir
+        .as_ref()
+        .map(|d| d.join("assets").to_string_lossy().into_owned())
+        .unwrap_or_else(|| "assets".to_string());
+
     let graphics = GraphicsSettings::load_or_default();
     let (w, h) = graphics.resolution;
 
@@ -64,6 +82,7 @@ fn main() {
                     ..default()
                 })
                 .set(AssetPlugin {
+                    file_path: asset_path,
                     meta_check: bevy::asset::AssetMetaCheck::Never,
                     ..default()
                 }),

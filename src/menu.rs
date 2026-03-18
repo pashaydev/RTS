@@ -112,6 +112,14 @@ struct CopyCodeButton;
 #[derive(Component)]
 struct CopyCodeLabel;
 
+/// Container for the list of detected IPs in the host lobby.
+#[derive(Component)]
+struct HostIpList;
+
+/// Tracks whether the IP list has been populated already.
+#[derive(Component)]
+struct HostIpListPopulated;
+
 // ── Plugin ──
 
 pub struct MenuPlugin;
@@ -2305,19 +2313,34 @@ fn spawn_host_lobby_page(commands: &mut Commands, container: Entity, fonts: &UiF
 
     let hint = commands
         .spawn((
-            Text::new("Share this code with players on your LAN"),
+            Text::new("Share this code with players on your network\nFor VPN/Hamachi: use the VPN IP shown below"),
             TextFont {
                 font_size: theme::FONT_SMALL,
                 ..default()
             },
             TextColor(theme::TEXT_SECONDARY),
             Node {
-                margin: UiRect::bottom(Val::Px(12.0)),
+                margin: UiRect::bottom(Val::Px(4.0)),
                 ..default()
             },
         ))
         .id();
     commands.entity(container).add_child(hint);
+
+    // IP list (populated dynamically by update_lobby_ui)
+    let ip_list = commands
+        .spawn((
+            HostIpList,
+            Node {
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                margin: UiRect::bottom(Val::Px(12.0)),
+                row_gap: Val::Px(2.0),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(container).add_child(ip_list);
 
     spawn_animated_section_divider(commands, container, "PLAYERS", fonts);
 
@@ -2634,7 +2657,13 @@ fn start_hosting(commands: &mut Commands) {
     use std::sync::mpsc;
     use std::sync::Arc;
 
-    let ip = transport::detect_lan_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+    // Detect all network interfaces for VPN/Hamachi support
+    let all_ips = transport::detect_all_ips();
+    let primary_ip = if let Some(vpn) = all_ips.iter().find(|ip| ip.is_likely_vpn) {
+        vpn.ip.clone()
+    } else {
+        transport::detect_lan_ip().unwrap_or_else(|| "127.0.0.1".to_string())
+    };
     let addr = format!("0.0.0.0:{}", DEFAULT_PORT);
     let listener = match TcpListener::bind(&addr) {
         Ok(l) => l,
@@ -2644,8 +2673,13 @@ fn start_hosting(commands: &mut Commands) {
         }
     };
 
-    let session_code = format!("{}:{}", ip, DEFAULT_PORT);
+    // Build session code showing primary IP, log all alternatives
+    let session_code = format!("{}:{}", primary_ip, DEFAULT_PORT);
     info!("Hosting on {}", session_code);
+    for detected in &all_ips {
+        let vpn_tag = if detected.is_likely_vpn { " [VPN]" } else { "" };
+        info!("  Available IP: {} ({}{}) ", detected.ip, detected.name, vpn_tag);
+    }
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let (new_client_tx, new_client_rx) = mpsc::channel();
@@ -2680,6 +2714,10 @@ fn start_hosting(commands: &mut Commands) {
     });
 
     commands.insert_resource(NetRole::Host);
+    let all_ips_data: Vec<(String, String, bool)> = all_ips
+        .iter()
+        .map(|d| (d.ip.clone(), d.name.clone(), d.is_likely_vpn))
+        .collect();
     commands.insert_resource(LobbyState {
         players: vec![LobbyPlayer {
             player_id: 0,
@@ -2692,6 +2730,7 @@ fn start_hosting(commands: &mut Commands) {
         }],
         session_code,
         status: LobbyStatus::Waiting,
+        all_ips: all_ips_data,
     });
 }
 
@@ -2762,10 +2801,11 @@ fn connect_to_host_system(
             &addr.parse().unwrap_or_else(|_| {
                 std::net::SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT))
             }),
-            std::time::Duration::from_secs(3),
+            std::time::Duration::from_secs(10),
         ) {
             Ok(stream) => {
                 stream.set_nodelay(true).ok();
+                multiplayer::transport::configure_keepalive(&stream);
 
                 let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
                 let (incoming_tx, incoming_rx) = std::sync::mpsc::channel();
@@ -2862,12 +2902,40 @@ fn update_lobby_ui(
     mut child_texts: Query<&mut Text, (Without<LobbyStatusText>, Without<SessionCodeText>, Without<LobbyPlayerSlot>)>,
     mut child_bgs: Query<&mut BackgroundColor, Without<LobbyPlayerSlot>>,
     mut config: ResMut<GameSetupConfig>,
+    ip_list_q: Query<Entity, (With<HostIpList>, Without<HostIpListPopulated>)>,
 ) {
     // Update session code display
     if *page == MenuPage::HostLobby {
         for mut text in &mut session_code_texts {
             if **text != lobby.session_code && !lobby.session_code.is_empty() {
                 **text = lobby.session_code.clone();
+            }
+        }
+        // Populate IP list once
+        if !lobby.all_ips.is_empty() {
+            for ip_list_entity in &ip_list_q {
+                commands.entity(ip_list_entity).insert(HostIpListPopulated);
+                for (ip, iface_name, is_vpn) in &lobby.all_ips {
+                    let label = if *is_vpn {
+                        format!("{} ({}) [VPN]", ip, iface_name)
+                    } else {
+                        format!("{} ({})", ip, iface_name)
+                    };
+                    let color = if *is_vpn {
+                        Color::srgb(0.4, 0.9, 0.4)
+                    } else {
+                        theme::TEXT_SECONDARY
+                    };
+                    let child = commands.spawn((
+                        Text::new(label),
+                        TextFont {
+                            font_size: theme::FONT_SMALL,
+                            ..default()
+                        },
+                        TextColor(color),
+                    )).id();
+                    commands.entity(ip_list_entity).add_child(child);
+                }
             }
         }
     }
@@ -2983,6 +3051,7 @@ fn update_lobby_ui(
                     }
                 }
                 Ok((_player_id, game_state::message::ClientMessage::Input { .. })) => {}
+                Ok((_player_id, game_state::message::ClientMessage::Ping { .. })) => {}
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
@@ -3126,6 +3195,7 @@ fn update_lobby_ui(
                 game_state::message::ServerMessage::StateSync { .. } => {}
                 game_state::message::ServerMessage::EntitySpawn { .. } => {}
                 game_state::message::ServerMessage::EntityDespawn { .. } => {}
+                game_state::message::ServerMessage::Pong { .. } => {}
             }
         }
     }

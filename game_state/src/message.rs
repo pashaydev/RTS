@@ -185,6 +185,13 @@ pub enum ServerMessage {
         seq: u32,
         net_ids: Vec<EntityId>,
     },
+
+    /// Application-level keepalive pong (reply to client Ping).
+    #[serde(rename = "pong")]
+    Pong {
+        seq: u32,
+        timestamp: f64,
+    },
 }
 
 // ── Client → Server ────────────────────────────────────────────────────────
@@ -215,6 +222,13 @@ pub enum ClientMessage {
         seq: u32,
         timestamp: f64,
     },
+
+    /// Application-level keepalive ping.
+    #[serde(rename = "ping")]
+    Ping {
+        seq: u32,
+        timestamp: f64,
+    },
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -226,7 +240,8 @@ impl ServerMessage {
             | Self::RelayedInput { seq, .. }
             | Self::StateSync { seq, .. }
             | Self::EntitySpawn { seq, .. }
-            | Self::EntityDespawn { seq, .. } => *seq,
+            | Self::EntityDespawn { seq, .. }
+            | Self::Pong { seq, .. } => *seq,
         }
     }
 }
@@ -236,7 +251,8 @@ impl ClientMessage {
         match self {
             Self::Input { seq, .. }
             | Self::JoinRequest { seq, .. }
-            | Self::LeaveNotice { seq, .. } => *seq,
+            | Self::LeaveNotice { seq, .. }
+            | Self::Ping { seq, .. } => *seq,
         }
     }
 }

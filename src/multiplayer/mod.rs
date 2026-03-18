@@ -55,6 +55,8 @@ pub struct LobbyState {
     pub players: Vec<LobbyPlayer>,
     pub session_code: String,
     pub status: LobbyStatus,
+    /// All detected IPs (LAN + VPN/Hamachi) for display in host lobby.
+    pub all_ips: Vec<(String, String, bool)>, // (ip, iface_name, is_vpn)
 }
 
 // ── Host Net State ──────────────────────────────────────────────────────────
@@ -187,6 +189,7 @@ impl Plugin for MultiplayerPlugin {
             .init_resource::<host_systems::StateSyncTimer>()
             .init_resource::<host_systems::SyncedEntitySet>()
             .init_resource::<client_systems::PendingNetSpawns>()
+            .init_resource::<client_systems::ClientPingTimer>()
             .add_systems(
                 Update,
                 (
@@ -206,6 +209,7 @@ impl Plugin for MultiplayerPlugin {
                     client_systems::client_apply_entity_sync
                         .after(client_systems::client_receive_commands),
                     client_systems::client_handle_disconnect,
+                    client_systems::client_send_ping,
                 )
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_client),

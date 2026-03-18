@@ -1,7 +1,8 @@
 # Stage 1: Build WASM with Trunk
 FROM rust:1.92-bookworm AS builder
 
-# Install wasm target and trunk
+# Install Trunk plus the nightly toolchain needed for `build-std` in
+# `.cargo/config.toml`, so reference-types can be disabled consistently.
 RUN rustup target add wasm32-unknown-unknown
 RUN rustup toolchain install nightly --component rust-src
 RUN rustup target add wasm32-unknown-unknown --toolchain nightly
@@ -14,6 +15,7 @@ WORKDIR /app
 
 # Cache dependencies — copy manifests first
 COPY Cargo.toml Cargo.lock ./
+COPY .cargo/ .cargo/
 COPY game_state/Cargo.toml game_state/Cargo.toml
 RUN mkdir -p src game_state/src && \
     echo "fn main() {}" > src/main.rs && \
@@ -38,9 +40,11 @@ COPY assets/ToonyTinyPeople/textures/units/ assets/ToonyTinyPeople/textures/unit
 COPY assets/KayKit_Skeletons/characters/gltf/ assets/KayKit_Skeletons/characters/gltf/
 COPY assets/KayKit_Character_Animations/Animations/gltf/Rig_Medium/ assets/KayKit_Character_Animations/Animations/gltf/Rig_Medium/
 
-# Disable externref to avoid WebAssembly.Table.grow() failures in browsers
+# Disable reference-types/externref to avoid browser failures in the
+# generated wasm-bindgen bootstrap on stricter WebAssembly runtimes.
 ENV WASM_BINDGEN_EXTERNREF=0
 ENV RUSTUP_TOOLCHAIN=nightly
+ENV RUSTFLAGS="-Ctarget-feature=-reference-types"
 RUN trunk build --release --config .trunk.toml
 
 # Stage 2: Serve with nginx
