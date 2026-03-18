@@ -5,6 +5,7 @@ pub mod buttons;
 pub mod event_log_widget;
 pub mod fonts;
 pub mod group_hotkeys_widget;
+pub mod menu_helpers;
 pub mod notifications;
 pub mod production_queue_widget;
 pub mod resources_widget;

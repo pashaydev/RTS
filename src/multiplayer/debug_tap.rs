@@ -9,14 +9,22 @@
 use bevy::log::{info, warn};
 use serde::Serialize;
 use std::collections::VecDeque;
+#[cfg(not(target_arch = "wasm32"))]
 use std::io::{Read, Write};
+#[cfg(not(target_arch = "wasm32"))]
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(not(target_arch = "wasm32"))]
 const DEBUG_HTTP_HOST: &str = "127.0.0.1";
+#[cfg(not(target_arch = "wasm32"))]
 const DEBUG_HTTP_DEFAULT_PORT: u16 = 8787;
+#[cfg(not(target_arch = "wasm32"))]
 const DEBUG_HTTP_MAX_PORT: u16 = 8795;
 const MAX_EVENTS: usize = 2_000;
 const MAX_PAYLOAD_PREVIEW: usize = 2_048;
@@ -40,6 +48,7 @@ struct DebugState {
     next_id: AtomicU64,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Serialize)]
 struct EventsResponse {
     since: u64,
@@ -48,6 +57,7 @@ struct EventsResponse {
     events: Vec<NetDebugEvent>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Serialize)]
 struct HealthResponse<'a> {
     status: &'a str,
@@ -58,12 +68,17 @@ struct HealthResponse<'a> {
 /// Start the debug tap exactly once.
 pub fn ensure_started() {
     let state = DEBUG_STATE.get_or_init(|| {
+        #[cfg(not(target_arch = "wasm32"))]
         let (listener, http_addr) = bind_debug_listener();
+        #[cfg(target_arch = "wasm32")]
+        let http_addr: Option<String> = None;
+
         let state = Arc::new(DebugState {
             http_addr,
             events: Mutex::new(VecDeque::with_capacity(MAX_EVENTS)),
             next_id: AtomicU64::new(0),
         });
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(listener) = listener {
             spawn_http_server(listener, state.clone());
         }
@@ -72,6 +87,7 @@ pub fn ensure_started() {
     if let Some(addr) = &state.http_addr {
         info!("Net debug tap ready: http://{}/events", addr);
     } else {
+        #[cfg(not(target_arch = "wasm32"))]
         warn!("Net debug tap disabled: could not bind any local debug port");
     }
 }
@@ -116,10 +132,13 @@ fn record(direction: &str, lane: &str, detail: String, bytes: usize, payload: Op
         return;
     };
     let id = state.next_id.fetch_add(1, Ordering::Relaxed) + 1;
+    #[cfg(not(target_arch = "wasm32"))]
     let ts_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
+    #[cfg(target_arch = "wasm32")]
+    let ts_ms = js_sys::Date::now() as u128;
 
     let mut events = state.events.lock().unwrap();
     events.push_back(NetDebugEvent {
@@ -136,6 +155,7 @@ fn record(direction: &str, lane: &str, detail: String, bytes: usize, payload: Op
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn bind_debug_listener() -> (Option<TcpListener>, Option<String>) {
     if let Ok(port_str) = std::env::var("RTS_NET_DEBUG_PORT") {
         if let Ok(port) = port_str.parse::<u16>() {
@@ -168,6 +188,7 @@ fn bind_debug_listener() -> (Option<TcpListener>, Option<String>) {
     (None, None)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn spawn_http_server(listener: TcpListener, state: Arc<DebugState>) {
     std::thread::spawn(move || {
         listener.set_nonblocking(true).ok();
@@ -192,6 +213,7 @@ fn spawn_http_server(listener: TcpListener, state: Arc<DebugState>) {
     });
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn handle_http_connection(stream: &mut std::net::TcpStream, state: &Arc<DebugState>) -> std::io::Result<()> {
     stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
 
@@ -242,6 +264,7 @@ fn handle_http_connection(stream: &mut std::net::TcpStream, state: &Arc<DebugSta
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn split_path_query(target: &str) -> (&str, &str) {
     if let Some((path, query)) = target.split_once('?') {
         (path, query)
@@ -250,6 +273,7 @@ fn split_path_query(target: &str) -> (&str, &str) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn query_param_u64(query: &str, key: &str) -> Option<u64> {
     for pair in query.split('&') {
         let (k, v) = pair.split_once('=')?;
@@ -262,6 +286,7 @@ fn query_param_u64(query: &str, key: &str) -> Option<u64> {
     None
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn snapshot_since(state: &Arc<DebugState>, since: u64) -> (u64, Vec<NetDebugEvent>) {
     let events = state.events.lock().unwrap();
     let latest_id = events.back().map(|e| e.id).unwrap_or(0);
@@ -273,11 +298,13 @@ fn snapshot_since(state: &Arc<DebugState>, since: u64) -> (u64, Vec<NetDebugEven
     (latest_id, collected)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn clear_events(state: &Arc<DebugState>) {
     let mut events = state.events.lock().unwrap();
     events.clear();
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn write_json(stream: &mut std::net::TcpStream, status: u16, body: &[u8]) -> std::io::Result<()> {
     let status_text = match status {
         200 => "OK",

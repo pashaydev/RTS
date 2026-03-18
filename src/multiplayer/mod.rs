@@ -1,4 +1,4 @@
-//! LAN Multiplayer — host-as-server model with TCP transport.
+//! LAN Multiplayer — host-as-server model with TCP transport (native) and WebSocket (WASM).
 //!
 //! Host runs full simulation, clients receive state updates and send commands.
 
@@ -66,6 +66,8 @@ pub struct HostNetState {
     pub incoming_commands: Mutex<Receiver<(u8, ClientMessage)>>,
     pub client_senders: Mutex<Vec<(u8, Sender<Vec<u8>>)>>,
     pub new_clients: Mutex<Receiver<NewClientEvent>>,
+    /// Receiver for WebSocket new client events (reader/writer already spawned).
+    pub new_ws_clients: Mutex<Receiver<transport::WsNewClientEvent>>,
     pub disconnect_rx: Mutex<Receiver<u8>>,
     pub shutdown: Arc<AtomicBool>,
     pub seq: Mutex<u32>,
@@ -83,6 +85,36 @@ pub struct ClientNetState {
     pub my_faction: Faction,
     pub color_index: u8,
     pub seq: Mutex<u32>,
+}
+
+// ── WASM WebSocket client resource ──────────────────────────────────────────
+
+/// Holds the browser WebSocket and outgoing message receiver for WASM clients.
+/// A Bevy system drains `outgoing_rx` and sends via the WebSocket.
+#[cfg(target_arch = "wasm32")]
+#[derive(Resource)]
+pub struct WasmClientSocket {
+    pub ws: web_sys::WebSocket,
+    pub outgoing_rx: Mutex<Receiver<Vec<u8>>>,
+}
+
+/// Drains queued outgoing messages and sends them via the browser WebSocket.
+#[cfg(target_arch = "wasm32")]
+pub fn wasm_flush_outgoing(socket: Option<Res<WasmClientSocket>>) {
+    let Some(socket) = socket else { return };
+    if socket.ws.ready_state() != 1 {
+        return; // Not OPEN yet
+    }
+    let rx = socket.outgoing_rx.lock().unwrap();
+    for _ in 0..256 {
+        match rx.try_recv() {
+            Ok(data) => {
+                let text = String::from_utf8_lossy(&data).to_string();
+                let _ = socket.ws.send_with_str(&text);
+            }
+            Err(_) => break,
+        }
+    }
 }
 
 // ── Run conditions ──────────────────────────────────────────────────────────
@@ -224,5 +256,14 @@ impl Plugin for MultiplayerPlugin {
                 ),
             )
             .add_plugins(ggrs_matchbox::GgrsMatchboxPlugin);
+
+        // WASM: flush outgoing WebSocket messages each frame
+        #[cfg(target_arch = "wasm32")]
+        app.add_systems(
+            Update,
+            wasm_flush_outgoing
+                .run_if(in_state(AppState::InGame))
+                .run_if(is_client),
+        );
     }
 }

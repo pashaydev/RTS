@@ -479,23 +479,23 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
     // so the model's feet sit at terrain level
     let calibration_data: &[(EntityKind, f32, f32, f32)] = &[
         // TTP player units
-        (EntityKind::Worker, 0.35, -0.8, 0.0),
-        (EntityKind::Soldier, 0.35, -0.9, 0.0),
-        (EntityKind::Archer, 0.35, -0.75, 0.0),
-        (EntityKind::Tank, 0.38, -1.25, 0.0),
-        (EntityKind::Knight, 0.38, -1.2, 0.0),
-        (EntityKind::Mage, 0.35, -0.8, 0.0),
-        (EntityKind::Priest, 0.35, -0.8, 0.0),
-        (EntityKind::Cavalry, 0.35, -1.1, 0.0),
+        (EntityKind::Worker, 0.45, -0.8, 0.0),
+        (EntityKind::Soldier, 0.45, -0.9, 0.0),
+        (EntityKind::Archer, 0.45, -0.75, 0.0),
+        (EntityKind::Tank, 0.48, -1.25, 0.0),
+        (EntityKind::Knight, 0.48, -1.2, 0.0),
+        (EntityKind::Mage, 0.45, -0.8, 0.0),
+        (EntityKind::Priest, 0.45, -0.8, 0.0),
+        (EntityKind::Cavalry, 0.45, -1.1, 0.0),
         // TTP siege machines
         (EntityKind::Catapult, 0.4, -0.9, 0.0),
         (EntityKind::BatteringRam, 0.4, -0.8, 0.0),
         // KayKit mobs (unchanged)
-        (EntityKind::Goblin, 0.28, -0.65, 0.0),
-        (EntityKind::Skeleton, 0.3, -0.78, 0.0),
-        (EntityKind::Orc, 0.38, -1.05, 0.0),
-        (EntityKind::Demon, 0.42, -1.15, 0.0),
-        (EntityKind::SkeletonMinion, 0.28, -0.7, 0.0),
+        (EntityKind::Goblin, 0.38, -0.65, 0.0),
+        (EntityKind::Skeleton, 0.4, -0.78, 0.0),
+        (EntityKind::Orc, 0.58, -1.05, 0.0),
+        (EntityKind::Demon, 0.52, -1.15, 0.0),
+        (EntityKind::SkeletonMinion, 0.38, -0.7, 0.0),
     ];
     let calibration: HashMap<_, _> = calibration_data
         .iter()

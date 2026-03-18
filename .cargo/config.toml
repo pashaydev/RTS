@@ -1,9 +1,5 @@
 [target.wasm32-unknown-unknown]
-rustflags = ["-C", "target-feature=-reference-types"]
+rustflags = ["-C", "target-feature=+reference-types"]
 
 [unstable]
 build-std = ["panic_abort", "std"]
-
-[env]
-CFLAGS_wasm32_unknown_unknown = { value = "-mno-reference-types", force = true }
-CXXFLAGS_wasm32_unknown_unknown = { value = "-mno-reference-types", force = true }

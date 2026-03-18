@@ -60,7 +60,12 @@ pub fn client_receive_commands(
     mut pending_spawns: ResMut<PendingNetSpawns>,
 ) {
     let rx = client.incoming.lock().unwrap();
-    for _ in 0..256 {
+    // On WASM (single-threaded), limit per-frame work to avoid blocking the event loop.
+    #[cfg(target_arch = "wasm32")]
+    const MAX_PER_FRAME: usize = 32;
+    #[cfg(not(target_arch = "wasm32"))]
+    const MAX_PER_FRAME: usize = 256;
+    for _ in 0..MAX_PER_FRAME {
         match rx.try_recv() {
             Ok(msg) => match &msg {
                 ServerMessage::RelayedInput { input, .. } => {
@@ -173,13 +178,19 @@ pub fn client_apply_entity_sync(
     // Query ALL entities with EntityKind+Faction+Transform (may or may not have NetworkId yet)
     all_entities: Query<(Entity, &EntityKind, &Faction, &Transform, Option<&NetworkId>)>,
 ) {
-    // ── Handle spawns ──
+    // ── Handle spawns (batched: max 8 per frame to avoid WASM stalls) ──
     if !pending.spawns.is_empty() {
         // Build set of already-known net IDs (from local spawns or prior sync)
         let known_ids: std::collections::HashSet<u32> =
             existing_with_id.iter().map(|(_, nid)| nid.0).collect();
 
-        let spawns = std::mem::take(&mut pending.spawns);
+        let batch_size = 8;
+        let remaining = if pending.spawns.len() > batch_size {
+            pending.spawns.split_off(batch_size)
+        } else {
+            Vec::new()
+        };
+        let spawns = std::mem::replace(&mut pending.spawns, remaining);
         let mut spawned = 0u32;
         let mut adopted = 0u32;
         for spawn_data in &spawns {

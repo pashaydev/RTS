@@ -43,9 +43,13 @@ use components::{AppState, GameSetupConfig, GraphicsSettings};
 fn main() {
     // Resolve the executable's directory so assets/config/saves are found
     // correctly in distribution builds (especially Windows).
+    // Skip when running inside a cargo `target/` dir (i.e. during development).
     let exe_dir = std::env::current_exe()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .filter(|d| {
+            !d.components().any(|c| c.as_os_str() == "target")
+        });
 
     if let Some(ref dir) = exe_dir {
         let _ = std::env::set_current_dir(dir);
