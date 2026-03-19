@@ -27,6 +27,12 @@ fn next_available_faction(lobby: &LobbyState) -> (Faction, u8) {
     (Faction::Player2, 1)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum JoinTarget {
+    Tcp { host: String, port: u16 },
+    WebSocket { url: String },
+}
+
 // ── Network Cleanup ──
 
 pub(crate) fn cleanup_network_on_enter_menu(
@@ -90,7 +96,7 @@ pub(crate) fn spawn_multiplayer_page(
     spawn_animated_section_divider(commands, container, "NETWORK GAME", fonts);
 
     let desc_text = if cfg!(target_arch = "wasm32") {
-        "Join a game hosted on a native client"
+        "Join a hosted session from the web client"
     } else {
         "Play with others on your network or via VPN"
     };
@@ -509,7 +515,11 @@ pub(crate) fn spawn_join_lobby_page(
     let status = commands
         .spawn((
             LobbyStatusText,
-            Text::new("Enter the host's session code and press CONNECT"),
+            Text::new(if cfg!(target_arch = "wasm32") {
+                "Enter a hosted session code and press CONNECT"
+            } else {
+                "Enter the host's session code and press CONNECT"
+            }),
             TextFont {
                 font_size: theme::FONT_MEDIUM,
                 ..default()
@@ -575,6 +585,111 @@ pub(crate) fn spawn_join_lobby_page(
 // ── Networking helpers ──
 
 const DEFAULT_PORT: u16 = 7878;
+const WEB_SESSION_WS_PATH_PREFIX: &str = "/session";
+
+fn parse_direct_host_port(code: &str, default_port: u16) -> Result<(String, u16), String> {
+    let trimmed = code.trim();
+    if trimmed.is_empty() {
+        return Err("Please enter a session code".to_string());
+    }
+    if trimmed.contains("://") || trimmed.contains('/') || trimmed.contains('?') {
+        return Err("Session code must be a host[:port] or hosted session code".to_string());
+    }
+
+    if let Some((host, port_str)) = trimmed.split_once(':') {
+        let host = host.trim();
+        if host.is_empty() {
+            return Err("Session host is missing".to_string());
+        }
+        let port = port_str
+            .trim()
+            .parse::<u16>()
+            .map_err(|_| "Session port must be a valid number".to_string())?;
+        Ok((host.to_string(), port))
+    } else {
+        Ok((trimmed.to_string(), default_port))
+    }
+}
+
+fn is_valid_hosted_session_code(code: &str) -> bool {
+    let trimmed = code.trim();
+    let len_ok = (4..=32).contains(&trimmed.len());
+    len_ok
+        && trimmed
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+fn resolve_native_join_target(code: &str) -> Result<JoinTarget, String> {
+    let (host, port) = parse_direct_host_port(code, DEFAULT_PORT)?;
+    Ok(JoinTarget::Tcp { host, port })
+}
+
+fn resolve_web_join_target(
+    code: &str,
+    page_protocol: &str,
+    page_host: &str,
+) -> Result<JoinTarget, String> {
+    let trimmed = code.trim();
+    if trimmed.is_empty() {
+        return Err("Please enter a session code".to_string());
+    }
+    if page_host.trim().is_empty() {
+        return Err("Browser origin is unavailable".to_string());
+    }
+
+    if trimmed.contains(':') {
+        if page_protocol == "https:" {
+            return Err(
+                "Direct IP session codes are blocked on HTTPS. Use a hosted session code."
+                    .to_string(),
+            );
+        }
+
+        let (host, port) = parse_direct_host_port(trimmed, DEFAULT_PORT)?;
+        return Ok(JoinTarget::WebSocket {
+            url: format!("ws://{}:{}", host, port + 1),
+        });
+    }
+
+    if !is_valid_hosted_session_code(trimmed) {
+        return Err(
+            "Hosted session codes must be 4-32 characters using letters, numbers, - or _."
+                .to_string(),
+        );
+    }
+
+    let ws_scheme = match page_protocol {
+        "https:" => "wss",
+        "http:" => "ws",
+        other => {
+            return Err(format!(
+                "Unsupported page protocol for WebSocket connection: {}",
+                other
+            ))
+        }
+    };
+
+    Ok(JoinTarget::WebSocket {
+        url: format!(
+            "{}://{}{}/{}/ws",
+            ws_scheme, page_host, WEB_SESSION_WS_PATH_PREFIX, trimmed
+        ),
+    })
+}
+
+#[cfg(target_arch = "wasm32")]
+fn current_browser_origin() -> Result<(String, String), String> {
+    let window = web_sys::window().ok_or_else(|| "Browser window unavailable".to_string())?;
+    let location = window.location();
+    let protocol = location
+        .protocol()
+        .map_err(|_| "Failed to read browser protocol".to_string())?;
+    let host = location
+        .host()
+        .map_err(|_| "Failed to read browser host".to_string())?;
+    Ok((protocol, host))
+}
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
@@ -757,24 +872,21 @@ pub(crate) fn connect_to_host_system(
             continue;
         };
 
-        if code.is_empty() {
-            for mut text in &mut status_texts {
-                **text = "Please enter a session code (IP:port)".to_string();
-            }
-            continue;
-        }
-
-        // Parse host and port from the session code
-        let (host, port) = if code.contains(':') {
-            let parts: Vec<&str> = code.splitn(2, ':').collect();
-            (parts[0].to_string(), parts[1].parse::<u16>().unwrap_or(DEFAULT_PORT))
-        } else {
-            (code.clone(), DEFAULT_PORT)
-        };
-
         // ── Native: connect via TCP ──
         #[cfg(not(target_arch = "wasm32"))]
         {
+            let (host, port) = match resolve_native_join_target(&code) {
+                Ok(JoinTarget::Tcp { host, port }) => (host, port),
+                Ok(JoinTarget::WebSocket { .. }) => unreachable!(),
+                Err(e) => {
+                    lobby.status = LobbyStatus::Failed(e.clone());
+                    for mut text in &mut status_texts {
+                        **text = e.clone();
+                    }
+                    continue;
+                }
+            };
+
             let addr = format!("{}:{}", host, port);
             for mut text in &mut status_texts {
                 **text = format!("Connecting to {}...", addr);
@@ -857,8 +969,29 @@ pub(crate) fn connect_to_host_system(
         // ── WASM: connect via WebSocket ──
         #[cfg(target_arch = "wasm32")]
         {
-            let ws_port = port + 1; // WS port is TCP port + 1
-            let ws_url = format!("ws://{}:{}", host, ws_port);
+            let (page_protocol, page_host) = match current_browser_origin() {
+                Ok(parts) => parts,
+                Err(e) => {
+                    lobby.status = LobbyStatus::Failed(e.clone());
+                    for mut text in &mut status_texts {
+                        **text = e.clone();
+                    }
+                    continue;
+                }
+            };
+
+            let ws_url = match resolve_web_join_target(&code, &page_protocol, &page_host) {
+                Ok(JoinTarget::WebSocket { url }) => url,
+                Ok(JoinTarget::Tcp { .. }) => unreachable!(),
+                Err(e) => {
+                    lobby.status = LobbyStatus::Failed(e.clone());
+                    for mut text in &mut status_texts {
+                        **text = e.clone();
+                    }
+                    continue;
+                }
+            };
+
             for mut text in &mut status_texts {
                 **text = format!("Connecting via WebSocket to {}...", ws_url);
             }
@@ -905,6 +1038,77 @@ pub(crate) fn connect_to_host_system(
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_direct_host_port_defaults_native_port() {
+        assert_eq!(
+            parse_direct_host_port("10.0.0.5", DEFAULT_PORT),
+            Ok(("10.0.0.5".to_string(), DEFAULT_PORT))
+        );
+    }
+
+    #[test]
+    fn parse_direct_host_port_accepts_explicit_port() {
+        assert_eq!(
+            parse_direct_host_port("10.0.0.5:9000", DEFAULT_PORT),
+            Ok(("10.0.0.5".to_string(), 9000))
+        );
+    }
+
+    #[test]
+    fn parse_direct_host_port_rejects_invalid_port() {
+        assert_eq!(
+            parse_direct_host_port("10.0.0.5:notaport", DEFAULT_PORT),
+            Err("Session port must be a valid number".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_web_join_target_builds_same_origin_wss_url() {
+        assert_eq!(
+            resolve_web_join_target("ABCD12", "https:", "rts-game.fly.dev"),
+            Ok(JoinTarget::WebSocket {
+                url: "wss://rts-game.fly.dev/session/ABCD12/ws".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_web_join_target_rejects_direct_ip_code_on_https() {
+        assert_eq!(
+            resolve_web_join_target("100.103.13.12:7878", "https:", "rts-game.fly.dev"),
+            Err(
+                "Direct IP session codes are blocked on HTTPS. Use a hosted session code."
+                    .to_string(),
+            )
+        );
+    }
+
+    #[test]
+    fn resolve_web_join_target_allows_direct_ws_on_http_for_local_dev() {
+        assert_eq!(
+            resolve_web_join_target("127.0.0.1:7878", "http:", "localhost:8080"),
+            Ok(JoinTarget::WebSocket {
+                url: "ws://127.0.0.1:7879".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn resolve_web_join_target_rejects_invalid_hosted_code_characters() {
+        assert_eq!(
+            resolve_web_join_target("bad/code", "https:", "rts-game.fly.dev"),
+            Err(
+                "Hosted session codes must be 4-32 characters using letters, numbers, - or _."
+                    .to_string(),
+            )
+        );
     }
 }
 

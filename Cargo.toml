@@ -20,9 +20,13 @@ game_state = { path = "game_state" }
 socket2 = "0.5"
 if-addrs = "0.13"
 tungstenite = "0.26"
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+tower = { version = "0.5", features = ["util"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3.91", features = ["WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType", "Document", "HtmlDocument", "DataTransfer", "ClipboardEvent", "Clipboard", "Navigator"] }
+web-sys = { version = "0.3.91", features = ["WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType", "Document", "HtmlDocument", "DataTransfer", "ClipboardEvent", "Clipboard", "Navigator", "Window", "Location"] }
 wasm-bindgen = "0.2.114"
 js-sys = "0.3.91"
 

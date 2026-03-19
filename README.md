@@ -9,7 +9,7 @@ A 3D RTS prototype built with [Bevy](https://bevyengine.org/) 0.18. The project 
 - Economy with raw and processed resources, worker assignment, recipes, storage, and building upgrades
 - Combined-arms roster with infantry, ranged, cavalry, siege, casters, towers, walls, and gatehouses
 - Skirmish configuration for AI count, AI difficulty, teams, map size, resource density, day length, seed, and player color
-- LAN multiplayer with host simulation, client command relay, state sync, spawn/despawn replication, and AI takeover on disconnect
+- LAN multiplayer with host simulation, client command relay, delta-compressed state sync, entity and resource node replication, and 30s reconnection grace before AI takeover
 
 ## Quick Start
 
@@ -81,11 +81,11 @@ CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 
 ### Fly.io
 
-The Fly.io deployment is a static web build served by nginx from the generated `dist/` output.
+The Fly.io deployment now uses a native `session_router` process that serves the generated `dist/` output and exposes hosted-session routing endpoints from the same origin.
 
-- It is suitable for browser delivery of the web client
-- It does not make the current LAN/TCP multiplayer stack internet-capable
-- Browser deployment should currently be treated as single-player or otherwise web-safe gameplay unless transport is migrated to a browser-compatible protocol
+- It serves the browser client and same-origin hosted-session API from one app
+- Web clients now resolve hosted session codes to `/session/<code>/ws` on the same origin
+- The hosted-session router is in place, but full internet-capable match hosting still needs host registration and target machine bootstrapping
 
 ## Core Gameplay
 
@@ -124,11 +124,9 @@ The Fly.io deployment is a static web build served by nginx from the generated `
 - Up to 3 AI factions can fill remaining match seats
 - AI runs strategy, economy, tactical, and military layers
 - Friendly AI can respect allied space, gather, expand, scout, rally, defend, and attack
-- Multiplayer disconnects hand abandoned factions back to AI control
+- Multiplayer disconnects enter a 30-second reconnection grace period before handing the faction to AI
 
 ## Match Setup
-
-The main menu already supports a broader skirmish setup than the original README described.
 
 - AI opponents: `0-3`
 - AI difficulty: per slot
@@ -145,14 +143,16 @@ The main menu already supports a broader skirmish setup than the original README
 
 ### Current Status
 
-The project already has a playable LAN and VPN multiplayer path.
+The project has a playable LAN and VPN multiplayer path, plus the first production-oriented hosted-session routing pieces for browser deployment.
 
-- Transport: TCP sockets with length-prefixed JSON messages
-- Model: host runs the simulation, clients send inputs and receive authoritative sync
-- Lobby: host game, join by session code (`IP:port`), seat/faction/color assignment, synchronized start
-- Replication: periodic state snapshots plus explicit entity spawn/despawn replication
-- Recovery: disconnected human factions are converted to AI
+- Transport: TCP (native) and WebSocket (WASM) with 4-byte length-prefixed MessagePack binary framing (JSON fallback for legacy clients)
+- Model: host runs the full simulation, clients send inputs and receive authoritative sync
+- Lobby: native host game, join by direct session code (`IP:port`) for LAN/VPN, plus web-side hosted session code routing groundwork
+- Replication: delta-compressed state sync at ~10Hz, entity spawn/despawn, building sync, resource node amounts via NeutralWorldDelta, player resources, and day/night cycle
+- Recovery: 30-second reconnection grace period with session tokens before AI takeover
 - VPN/Hamachi: auto-detects VPN adapters, shows all available IPs, TCP keepalive and app-level heartbeat prevent tunnel dropout
+- Hosted-session router: same-origin `GET /session/<code>/ws`, `POST /api/sessions`, and `GET /api/sessions/<code>` endpoints via the `session_router` binary
+- See [docs/multiplayer-architecture.md](docs/multiplayer-architecture.md) for the full protocol and system topology
 
 ### VPN / Hamachi Play
 
@@ -169,9 +169,11 @@ The host binds on all interfaces (`0.0.0.0`), so any adapter — LAN, Hamachi, Z
 ### Current Limits
 
 - `ggrs_matchbox` is scaffolding for a future rollback path, not the active transport
-- The active transport uses raw TCP sockets, so it is not a browser-compatible multiplayer path
-- Only the command paths wired into the network relay are synchronized
-- The match model currently assumes four total faction seats shared between humans and AI
+- Native transport uses raw TCP sockets; WASM clients use WebSocket (binary frames)
+- Client commands are fire-and-forget with no rollback or server reconciliation
+- The match model assumes four total faction seats shared between humans and AI
+- No NAT traversal for direct native hosting — LAN or VPN only
+- Hosted browser sessions are not end-to-end complete yet: the router exists, but host registration and per-session machine targeting still need to be wired
 
 ### Quick Start
 
@@ -184,10 +186,21 @@ The host binds on all interfaces (`0.0.0.0`), so any adapter — LAN, Hamachi, Z
 
 #### Client
 
+Native / VPN:
+
 1. Open `Multiplayer`
 2. Choose `Join Game`
 3. Enter the host code as `IP:port`
 4. Wait for host start
+
+Web / hosted-session path:
+
+1. Open the deployed web client
+2. Choose `Join Game`
+3. Enter a hosted session code
+4. The client connects to the same origin using `/session/<code>/ws`
+
+The web UI rejects direct `IP:port` joins on HTTPS because browsers block insecure `ws://` connections from secure pages.
 
 ### Network Debug Tap
 
@@ -346,7 +359,7 @@ The codebase is organized as Bevy plugins around runtime domains, with a separat
 
 - `menu`, `pause_menu`, `theme`: shell flow, skirmish setup, options, and in-session overlays
 - `multiplayer`: LAN transport, lobby state, host/client systems, debug tap, and rollback scaffolding
-- `game_state`: shared protocol crate for serialized messages and replicated gameplay data
+- `game_state`: shared protocol crate for serialized messages, MessagePack codec, and replicated gameplay data
 - `net_bridge`: stable network IDs and ECS/network mapping
 - `components`, `blueprints`, `orders`, `selection`, `spatial`: shared gameplay state, entity typing, commands, and world queries
 - `units`, `buildings`, `resources`, `combat`, `unit_ai`, `mobs`, `ai`, `pathfinding`: simulation and faction behavior
@@ -361,8 +374,10 @@ game_state/
 ├── src/
 │   ├── lib.rs
 │   ├── message.rs
+│   ├── codec.rs
 │   └── types.rs
 src/
+├── lib.rs
 ├── main.rs
 ├── animation.rs
 ├── attention.rs
@@ -378,10 +393,10 @@ src/
 ├── ground.rs
 ├── hover_material.rs
 ├── lighting.rs
-├── menu.rs
 ├── minimap.rs
 ├── mobs.rs
 ├── model_assets.rs
+├── session_router.rs
 ├── net_bridge.rs
 ├── orders.rs
 ├── pathfinding.rs
@@ -397,6 +412,20 @@ src/
 ├── units.rs
 ├── vfx.rs
 ├── ai/
+│   ├── mod.rs
+│   ├── economy.rs
+│   ├── helpers.rs
+│   ├── military.rs
+│   ├── strategy.rs
+│   ├── tactical.rs
+│   └── types.rs
+├── menu/
+│   ├── mod.rs
+│   ├── multiplayer.rs
+│   ├── pages.rs
+│   └── systems.rs
+├── bin/
+│   └── session_router.rs
 ├── multiplayer/
 │   ├── mod.rs
 │   ├── transport.rs
@@ -405,6 +434,23 @@ src/
 │   ├── debug_tap.rs
 │   └── ggrs_matchbox.rs
 └── ui/
+    ├── mod.rs
+    ├── widget_framework.rs
+    ├── widget_toolbar.rs
+    ├── resources_widget.rs
+    ├── selection_widget.rs
+    ├── actions_widget.rs
+    ├── production_queue_widget.rs
+    ├── army_overview_widget.rs
+    ├── tech_tree_widget.rs
+    ├── group_hotkeys_widget.rs
+    ├── event_log_widget.rs
+    ├── animations.rs
+    ├── buttons.rs
+    ├── fonts.rs
+    ├── menu_helpers.rs
+    ├── notifications.rs
+    └── shared.rs
 ```
 
 ## Tech Stack
@@ -412,5 +458,5 @@ src/
 - Rust
 - Bevy 0.18
 - `bevy_mod_outline`
-- `serde` / `serde_json`
-- `bevy_matchbox` and `bevy_ggrs` for the planned rollback migration path
+- `serde` / `serde_json` / `rmp-serde` (MessagePack binary codec)
+- `bevy_matchbox` and `bevy_ggrs` (rollback scaffolding, not the active transport)

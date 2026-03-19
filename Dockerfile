@@ -47,18 +47,22 @@ ENV RUSTUP_TOOLCHAIN=nightly
 ENV RUSTFLAGS="-Ctarget-feature=-reference-types"
 RUN trunk build --release --config .trunk.toml
 
-# Stage 2: Serve with nginx
-FROM nginx:alpine
+# Build the native session router binary.
+RUN cargo build --release --bin session_router
 
-# Remove default nginx config
-RUN rm /etc/nginx/conf.d/default.conf
+# Stage 2: Serve the built web app and session router API from one process.
+FROM debian:bookworm-slim
 
-# Copy custom nginx config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
-# Copy built WASM app
-COPY --from=builder /app/dist /usr/share/nginx/html
+WORKDIR /app
 
-EXPOSE 80
+COPY --from=builder /app/target/release/session_router /app/session_router
+COPY --from=builder /app/dist /app/dist
 
-CMD ["nginx", "-g", "daemon off;"]
+ENV DIST_DIR=/app/dist
+ENV PORT=8080
+
+EXPOSE 8080
+
+CMD ["/app/session_router"]
