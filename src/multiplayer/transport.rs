@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use game_state::codec;
-use game_state::message::{ClientMessage, ServerMessage};
+use game_state::message::{ClientMessage, ServerFrame, ServerMessage};
 #[cfg(not(target_arch = "wasm32"))]
 use serde::Deserialize;
 #[cfg(not(target_arch = "wasm32"))]
@@ -19,6 +19,50 @@ use socket2::SockRef;
 #[cfg(not(target_arch = "wasm32"))]
 use super::debug_tap;
 use super::NET_TRAFFIC;
+
+#[derive(Debug, Clone)]
+enum DecodedServerPayload {
+    Message(ServerMessage),
+    Frame(ServerFrame),
+}
+
+impl DecodedServerPayload {
+    fn into_messages(self) -> Vec<ServerMessage> {
+        match self {
+            Self::Message(msg) => vec![msg],
+            Self::Frame(frame) => frame.messages,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn to_json_text(&self) -> Result<String, String> {
+        match self {
+            Self::Message(msg) => serde_json::to_string(msg).map_err(|err| err.to_string()),
+            Self::Frame(frame) => serde_json::to_string(frame).map_err(|err| err.to_string()),
+        }
+    }
+}
+
+fn decode_server_payload_bytes(data: &[u8]) -> Result<DecodedServerPayload, String> {
+    codec::decode::<ServerMessage>(data)
+        .map(DecodedServerPayload::Message)
+        .or_else(|_| codec::decode::<ServerFrame>(data).map(DecodedServerPayload::Frame))
+        .or_else(|_| {
+            serde_json::from_slice::<ServerMessage>(data)
+                .map(DecodedServerPayload::Message)
+                .map_err(|err| err.to_string())
+        })
+        .or_else(|_| {
+            serde_json::from_slice::<ServerFrame>(data)
+                .map(DecodedServerPayload::Frame)
+                .map_err(|err| err.to_string())
+        })
+        .map_err(|err| err.to_string())
+}
+
+fn decode_server_messages_bytes(data: &[u8]) -> Result<Vec<ServerMessage>, String> {
+    decode_server_payload_bytes(data).map(DecodedServerPayload::into_messages)
+}
 
 // ── Wire format: 4-byte big-endian length prefix + JSON payload ─────────────
 
@@ -316,6 +360,27 @@ pub struct WsNewClientEvent {
     pub writer_tx: Sender<Vec<u8>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WsClientEncoding {
+    Unknown,
+    BinaryMsgpack,
+    TextJson,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn encode_ws_server_payload(
+    data: &[u8],
+    encoding: WsClientEncoding,
+) -> Result<tungstenite::Message, String> {
+    match encoding {
+        WsClientEncoding::BinaryMsgpack => Ok(tungstenite::Message::Binary(data.to_vec().into())),
+        WsClientEncoding::Unknown | WsClientEncoding::TextJson => decode_server_payload_bytes(data)
+            .and_then(|payload| payload.to_json_text())
+            .map(|text| tungstenite::Message::Text(text.into())),
+    }
+}
+
 fn client_msg_kind(msg: &ClientMessage) -> &'static str {
     match msg {
         ClientMessage::Input { .. } => "input",
@@ -346,7 +411,7 @@ fn server_msg_kind(msg: &ServerMessage) -> &'static str {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
-    use game_state::message::{ClientMessage, PlayerInput, ServerMessage};
+    use game_state::message::{ClientMessage, PlayerInput, ServerFrame, ServerMessage};
     use std::io::Write;
     use std::net::{TcpListener, TcpStream};
     use std::thread;
@@ -423,6 +488,41 @@ mod tests {
 
         assert_eq!(client_msg_kind(&client_msg), "input");
         assert_eq!(server_msg_kind(&server_msg), "pong");
+    }
+
+    #[test]
+    fn decode_server_messages_accepts_batched_frame() {
+        let msg = ServerMessage::Pong {
+            seq: 9,
+            timestamp: 1.25,
+        };
+        let frame = ServerFrame {
+            tick: 3,
+            timestamp: 8.5,
+            messages: vec![msg.clone()],
+        };
+        let bytes = codec::encode(&frame).unwrap();
+
+        let decoded = decode_server_messages_bytes(&bytes).unwrap();
+        assert_eq!(decoded, vec![msg]);
+    }
+
+    #[test]
+    fn encode_ws_server_payload_uses_json_text_for_unknown_clients() {
+        let msg = ServerMessage::Pong {
+            seq: 5,
+            timestamp: 2.0,
+        };
+        let bytes = codec::encode(&msg).unwrap();
+
+        let encoded = encode_ws_server_payload(&bytes, WsClientEncoding::Unknown).unwrap();
+        match encoded {
+            tungstenite::Message::Text(text) => {
+                let decoded: ServerMessage = serde_json::from_str(text.as_ref()).unwrap();
+                assert_eq!(decoded, msg);
+            }
+            other => panic!("expected text payload, got {:?}", other),
+        }
     }
 
     #[test]
@@ -507,15 +607,20 @@ pub fn client_writer_thread(
     while !shutdown.load(Ordering::Relaxed) {
         match outgoing_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(data) => {
-                let parsed = codec::decode::<ServerMessage>(&data);
+                let parsed = decode_server_payload_bytes(&data);
                 let detail = match &parsed {
-                    Ok(msg) => format!("host->client {}", server_msg_kind(msg)),
+                    Ok(DecodedServerPayload::Message(msg)) => {
+                        format!("host->client {}", server_msg_kind(msg))
+                    }
+                    Ok(DecodedServerPayload::Frame(frame)) => {
+                        format!("host->client frame({})", frame.messages.len())
+                    }
                     Err(_) => "host->client raw".to_string(),
                 };
                 let payload = parsed
                     .as_ref()
                     .ok()
-                    .map(|msg| codec::to_debug_json(msg))
+                    .and_then(|decoded| decoded.to_json_text().ok())
                     .or_else(|| Some(debug_tap::payload_preview(&data)));
 
                 if let Err(e) = send_framed(&mut stream, &data) {
@@ -631,22 +736,19 @@ pub fn client_reader_thread(
             Ok(data) => {
                 NET_TRAFFIC.bytes_received.fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
                 NET_TRAFFIC.msgs_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                // Try MessagePack first (new protocol), fall back to JSON (legacy)
-                let parsed = codec::decode::<ServerMessage>(&data)
-                    .or_else(|_| serde_json::from_slice::<ServerMessage>(&data).map_err(|e| {
-                        rmp_serde::decode::Error::Uncategorized(e.to_string())
-                    }));
-                match parsed {
-                    Ok(msg) => {
-                        let detail = format!("host -> client {}", server_msg_kind(&msg));
-                        let payload = Some(codec::to_debug_json(&msg));
-                        debug_tap::record_rx("client_reader", detail, data.len(), payload);
-                        if incoming_tx.send(msg).is_err() {
-                            debug_tap::record_error(
-                                "client_reader",
-                                "incoming channel closed".to_string(),
-                            );
-                            break;
+                match decode_server_messages_bytes(&data) {
+                    Ok(messages) => {
+                        for msg in messages {
+                            let detail = format!("host -> client {}", server_msg_kind(&msg));
+                            let payload = Some(codec::to_debug_json(&msg));
+                            debug_tap::record_rx("client_reader", detail, data.len(), payload);
+                            if incoming_tx.send(msg).is_err() {
+                                debug_tap::record_error(
+                                    "client_reader",
+                                    "incoming channel closed".to_string(),
+                                );
+                                break;
+                            }
                         }
                     }
                     Err(e) => {
@@ -787,6 +889,8 @@ fn ws_client_handler(
     player_id: u8,
     shutdown: Arc<AtomicBool>,
 ) {
+    let mut outgoing_encoding = WsClientEncoding::Unknown;
+
     // Blocking handshake (stream is not yet non-blocking at this point)
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
@@ -828,6 +932,7 @@ fn ws_client_handler(
         // ── Read ── (accept both Binary/msgpack and Text/JSON)
         match ws.read() {
             Ok(tungstenite::Message::Binary(data)) => {
+                outgoing_encoding = WsClientEncoding::BinaryMsgpack;
                 NET_TRAFFIC.bytes_received.fetch_add(data.len() as u64, std::sync::atomic::Ordering::Relaxed);
                 NET_TRAFFIC.msgs_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 match codec::decode::<ClientMessage>(&data) {
@@ -851,6 +956,7 @@ fn ws_client_handler(
                 }
             }
             Ok(tungstenite::Message::Text(text)) => {
+                outgoing_encoding = WsClientEncoding::TextJson;
                 // Legacy JSON fallback for older WASM clients
                 NET_TRAFFIC.bytes_received.fetch_add(text.len() as u64, std::sync::atomic::Ordering::Relaxed);
                 NET_TRAFFIC.msgs_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -906,11 +1012,41 @@ fn ws_client_handler(
         // ── Write — drain outgoing queue (binary msgpack frames) ──
         while let Ok(data) = writer_rx.try_recv() {
             let data_len = data.len() as u64;
-            if ws.send(tungstenite::Message::Binary(data.into())).is_err() {
+            let parsed = decode_server_payload_bytes(&data);
+            let detail = match &parsed {
+                Ok(DecodedServerPayload::Message(msg)) => {
+                    format!("host->ws {}", server_msg_kind(msg))
+                }
+                Ok(DecodedServerPayload::Frame(frame)) => {
+                    format!("host->ws frame({})", frame.messages.len())
+                }
+                Err(_) => "host->ws raw".to_string(),
+            };
+            let payload = parsed
+                .as_ref()
+                .ok()
+                .and_then(|decoded| decoded.to_json_text().ok())
+                .or_else(|| Some(debug_tap::payload_preview(&data)));
+
+            let Ok(message) = encode_ws_server_payload(&data, outgoing_encoding) else {
+                debug_tap::record_error(
+                    "ws_writer",
+                    format!("player {} failed to encode outgoing WS payload", player_id),
+                );
+                continue;
+            };
+
+            if let Err(err) = ws.send(message) {
+                bevy::log::warn!("WS handler: send failed for player {}: {}", player_id, err);
+                debug_tap::record_error(
+                    "ws_writer",
+                    format!("player {} ws send failed: {}", player_id, err),
+                );
                 break;
             }
             NET_TRAFFIC.bytes_sent.fetch_add(data_len, std::sync::atomic::Ordering::Relaxed);
             NET_TRAFFIC.msgs_sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            debug_tap::record_tx("ws_writer", detail, data_len as usize, payload);
         }
     }
 
@@ -935,13 +1071,15 @@ fn wasm_join_request_bytes(player_name: &str) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(target_arch = "wasm32")]
-fn wasm_decode_server_payload(data: &JsValue) -> Result<ServerMessage, String> {
+fn wasm_decode_server_payload(data: &JsValue) -> Result<Vec<ServerMessage>, String> {
     if let Some(abuf) = data.dyn_ref::<js_sys::ArrayBuffer>() {
         let arr = js_sys::Uint8Array::new(abuf);
         let bytes = arr.to_vec();
-        game_state::codec::decode::<ServerMessage>(&bytes).map_err(|err| err.to_string())
+        decode_server_messages_bytes(&bytes)
+    } else if let Some(arr) = data.dyn_ref::<js_sys::Uint8Array>() {
+        decode_server_messages_bytes(&arr.to_vec())
     } else if let Some(text) = data.as_string() {
-        serde_json::from_str::<ServerMessage>(&text).map_err(|err| err.to_string())
+        decode_server_messages_bytes(text.as_bytes())
     } else {
         Err("unsupported websocket payload type".to_string())
     }
@@ -977,8 +1115,14 @@ pub fn wasm_ws_connect(
     let onmessage = Closure::wrap(Box::new(move |e: web_sys::MessageEvent| {
         let data = e.data();
         match wasm_decode_server_payload(&data) {
-            Ok(msg) => {
-                let _ = incoming_tx.send(msg);
+            Ok(messages) => {
+                for msg in messages {
+                    bevy::log::info!(
+                        "WS received server message: {:?}",
+                        std::mem::discriminant(&msg)
+                    );
+                    let _ = incoming_tx.send(msg);
+                }
             }
             Err(err) => {
                 bevy::log::warn!("WS payload parse error: {}", err);
@@ -999,8 +1143,13 @@ pub fn wasm_ws_connect(
 
     // onclose
     let shutdown_close = shutdown.clone();
-    let onclose = Closure::wrap(Box::new(move |_: web_sys::CloseEvent| {
-        bevy::log::info!("WebSocket closed");
+    let onclose = Closure::wrap(Box::new(move |e: web_sys::CloseEvent| {
+        bevy::log::info!(
+            "WebSocket closed: code={}, reason='{}', clean={}",
+            e.code(),
+            e.reason(),
+            e.was_clean()
+        );
         shutdown_close.store(true, Ordering::Relaxed);
     }) as Box<dyn FnMut(web_sys::CloseEvent)>);
     ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
@@ -1012,6 +1161,7 @@ pub fn wasm_ws_connect(
 #[cfg(all(test, target_arch = "wasm32"))]
 mod wasm_tests {
     use super::*;
+    use game_state::message::ServerFrame;
     use wasm_bindgen::JsValue;
     use wasm_bindgen_test::*;
 
@@ -1045,7 +1195,7 @@ mod wasm_tests {
         let payload = JsValue::from(array.buffer());
 
         let decoded = wasm_decode_server_payload(&payload).unwrap();
-        assert_eq!(decoded, msg);
+        assert_eq!(decoded, vec![msg]);
     }
 
     #[wasm_bindgen_test]
@@ -1054,7 +1204,23 @@ mod wasm_tests {
         let text = serde_json::to_string(&msg).unwrap();
 
         let decoded = wasm_decode_server_payload(&JsValue::from_str(&text)).unwrap();
-        assert_eq!(decoded, msg);
+        assert_eq!(decoded, vec![msg]);
+    }
+
+    #[wasm_bindgen_test]
+    fn wasm_decode_server_payload_accepts_batched_frames() {
+        let msg = sample_server_message();
+        let frame = ServerFrame {
+            tick: 7,
+            timestamp: 1.5,
+            messages: vec![msg.clone()],
+        };
+        let bytes = game_state::codec::encode(&frame).unwrap();
+        let array = js_sys::Uint8Array::from(bytes.as_slice());
+        let payload = JsValue::from(array.buffer());
+
+        let decoded = wasm_decode_server_payload(&payload).unwrap();
+        assert_eq!(decoded, vec![msg]);
     }
 
     #[wasm_bindgen_test]

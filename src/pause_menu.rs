@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use crate::components::*;
 use crate::fog::FogTweakSettings;
 use crate::multiplayer::{HostNetState, NetRole};
+use crate::net_bridge::EntityNetMap;
 use crate::theme;
 use crate::ui::fonts::UiFonts;
 
@@ -855,8 +856,21 @@ fn check_player_elimination(
     active_player: Res<ActivePlayer>,
     faction_stats: Res<FactionStats>,
     fonts: Res<UiFonts>,
+    net_role: Res<NetRole>,
+    net_map: Option<Res<EntityNetMap>>,
 ) {
     if *overlay != InGameOverlay::None {
+        return;
+    }
+
+    // A network client can enter InGame before the first replicated spawns land.
+    // Avoid showing defeat while the client world is still empty.
+    if *net_role == NetRole::Client
+        && net_map
+            .as_ref()
+            .map(|map| map.to_ecs.is_empty())
+            .unwrap_or(true)
+    {
         return;
     }
 

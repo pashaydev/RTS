@@ -410,7 +410,7 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Enti
                     TextInputField {
                         value: current_name.to_string(),
                         cursor_pos: current_name.len(),
-                        max_len: 20,
+                        max_len: 45,
                     },
                     Button,
                     Node {

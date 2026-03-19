@@ -41,13 +41,17 @@ impl Plugin for UiPlugin {
             .init_resource::<event_log_widget::GameEventLog>()
             .init_resource::<event_log_widget::EventLogRenderState>()
             .init_resource::<event_log_widget::EventLogFilter>()
-            .add_systems(
-                OnEnter(AppState::InGame),
-                (spawn_hud, widget_framework::spawn_grid_overlay),
-            )
+            .add_systems(OnEnter(AppState::InGame), mark_pending_ui_spawn)
             .add_systems(
                 PostUpdate,
                 fonts::apply_default_fonts,
+            )
+            .add_systems(
+                Update,
+                (spawn_hud, widget_framework::spawn_grid_overlay, clear_pending_ui_spawn)
+                    .chain()
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_exists::<PendingUiSpawn>),
             )
             .add_systems(
                 Update,
@@ -276,7 +280,7 @@ fn is_error_hint(hint: &str) -> bool {
 
 /// Root UI container that holds all widgets
 #[derive(Component)]
-struct UiRoot;
+pub(crate) struct UiRoot;
 
 #[derive(Component)]
 struct MainHudRoot;
@@ -285,12 +289,28 @@ struct MainHudRoot;
 #[derive(Component)]
 struct PlacementHintLabel;
 
+#[derive(Resource)]
+struct PendingUiSpawn;
+
+fn mark_pending_ui_spawn(mut commands: Commands) {
+    commands.insert_resource(PendingUiSpawn);
+}
+
+fn clear_pending_ui_spawn(mut commands: Commands) {
+    commands.remove_resource::<PendingUiSpawn>();
+}
+
 pub fn spawn_hud(
     mut commands: Commands,
     icons: Res<IconAssets>,
     registry: Res<WidgetRegistry>,
     fonts: Res<fonts::UiFonts>,
+    existing_roots: Query<Entity, With<UiRoot>>,
 ) {
+    if !existing_roots.is_empty() {
+        return;
+    }
+
     // Root full-screen container for in-game HUD layering
     let root = commands
         .spawn((

@@ -456,7 +456,11 @@ pub fn handle_widget_scroll(
 
 // ── Grid Overlay ──
 
-pub fn spawn_grid_overlay(mut commands: Commands) {
+pub fn spawn_grid_overlay(mut commands: Commands, existing: Query<Entity, With<GridOverlay>>) {
+    if !existing.is_empty() {
+        return;
+    }
+
     commands
         .spawn((
             GridOverlay,

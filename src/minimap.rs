@@ -39,10 +39,11 @@ impl Plugin for MinimapPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MinimapInteraction>()
             .add_systems(
-                OnEnter(AppState::InGame),
+                Update,
                 setup_minimap
                     .after(crate::ground::spawn_ground)
-                    .after(crate::ui::spawn_hud),
+                    .after(crate::ui::spawn_hud)
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
@@ -133,8 +134,13 @@ fn setup_minimap(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     biome_map: Res<BiomeMap>,
+    existing_texture: Option<Res<MinimapTexture>>,
     mut content_q: Query<(Entity, &mut Node), With<MinimapWidgetContent>>,
 ) {
+    if existing_texture.is_some() {
+        return;
+    }
+
     let map_size = biome_map.map_size;
     let half_map = map_size * 0.5;
 

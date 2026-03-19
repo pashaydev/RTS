@@ -609,17 +609,17 @@ stateDiagram-v2
 
 ## Source Files
 
-| File | Purpose | Lines |
-|------|---------|-------|
-| `src/multiplayer/mod.rs` | Plugin, resources, system sets, NetStats, SessionTokens | ~780 |
-| `src/multiplayer/transport.rs` | TCP/WS framing, threads, IP detection, msgpack codec | ~780 |
-| `src/multiplayer/host_systems.rs` | Host broadcast, command execution, delta sync, neutral world sync, reconnect grace | ~1590 |
-| `src/multiplayer/client_systems.rs` | Client receive, interpolation, deterministic entity sync, neutral world apply | ~900 |
-| `src/multiplayer/debug_tap.rs` | HTTP debug server, TX/RX event recording | ~300 |
-| `src/multiplayer/ggrs_matchbox.rs` | GGRS rollback scaffolding (unused) | ~50 |
-| `src/session_router.rs` | Hosted-session registry, route shape, Fly replay payload model | ~200 |
-| `src/bin/session_router.rs` | Native HTTP router serving `dist/` plus hosted-session endpoints | ~240 |
-| `src/net_bridge.rs` | NetworkId assignment (entities + neutral objects), EntityNetMap | ~220 |
-| `src/menu/multiplayer.rs` | Lobby UI, connection flow, config serialization | ~1250 |
-| `game_state/src/message.rs` | All network message types + ServerFrame | ~520 |
-| `game_state/src/codec.rs` | MessagePack encode/decode helpers | ~25 |
+| File | Purpose |
+|------|---------|
+| `src/multiplayer/mod.rs` | Plugin, resources, system sets, NetStats, SessionTokens |
+| `src/multiplayer/transport.rs` | TCP/WS framing, threads, IP detection, msgpack codec |
+| `src/multiplayer/host_systems.rs` | Host broadcast, command execution, delta sync, neutral world sync, reconnect grace |
+| `src/multiplayer/client_systems.rs` | Client receive, interpolation, deterministic entity sync, neutral world apply |
+| `src/multiplayer/debug_tap.rs` | HTTP debug server, TX/RX event recording |
+| `src/multiplayer/ggrs_matchbox.rs` | GGRS rollback scaffolding (unused) |
+| `src/session_router.rs` | Hosted-session registry, route shape, Fly replay payload model |
+| `src/bin/session_router.rs` | Native HTTP router serving `dist/` plus hosted-session endpoints |
+| `src/net_bridge.rs` | NetworkId assignment (entities + neutral objects), EntityNetMap |
+| `src/menu/multiplayer.rs` | Lobby UI, connection flow, config serialization |
+| `game_state/src/message.rs` | All network message types + ServerFrame |
+| `game_state/src/codec.rs` | MessagePack encode/decode helpers |

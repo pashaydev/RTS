@@ -446,6 +446,7 @@ pub(crate) fn spawn_join_lobby_page(
                 Text::new("Code:"),
                 TextFont {
                     font_size: theme::FONT_MEDIUM,
+
                     ..default()
                 },
                 TextColor(theme::TEXT_SECONDARY),
@@ -461,7 +462,7 @@ pub(crate) fn spawn_join_lobby_page(
                     TextInputField {
                         value: String::new(),
                         cursor_pos: 0,
-                        max_len: 21,
+                        max_len: 45,
                     },
                     Button,
                     Node {
@@ -596,19 +597,33 @@ fn parse_direct_host_port(code: &str, default_port: u16) -> Result<(String, u16)
         return Err("Session code must be a host[:port] or hosted session code".to_string());
     }
 
-    if let Some((host, port_str)) = trimmed.split_once(':') {
-        let host = host.trim();
-        if host.is_empty() {
+    let (host, port) = if let Some((h, port_str)) = trimmed.split_once(':') {
+        let h = h.trim();
+        if h.is_empty() {
             return Err("Session host is missing".to_string());
         }
         let port = port_str
             .trim()
             .parse::<u16>()
             .map_err(|_| "Session port must be a valid number".to_string())?;
-        Ok((host.to_string(), port))
+        (h.to_string(), port)
     } else {
-        Ok((trimmed.to_string(), default_port))
+        (trimmed.to_string(), default_port)
+    };
+
+    // Validate that the host looks like a valid IPv4 address or hostname
+    if host.contains('.') {
+        // Looks like an IPv4 address — must be exactly 4 numeric octets
+        let octets: Vec<&str> = host.split('.').collect();
+        if octets.len() != 4 || !octets.iter().all(|o| o.parse::<u8>().is_ok()) {
+            return Err(format!(
+                "Invalid IP address '{}'. Expected format: 1.2.3.4:port",
+                host
+            ));
+        }
     }
+
+    Ok((host, port))
 }
 
 fn is_valid_hosted_session_code(code: &str) -> bool {
@@ -860,7 +875,16 @@ pub(crate) fn connect_to_host_system(
     mut commands: Commands,
     mut lobby: ResMut<LobbyState>,
     mut status_texts: Query<&mut Text, With<LobbyStatusText>>,
+    existing_role: Option<Res<NetRole>>,
 ) {
+    // Already online — don't create a second connection.
+    if existing_role
+        .as_ref()
+        .is_some_and(|role| matches!(**role, NetRole::Host | NetRole::Client))
+    {
+        return;
+    }
+
     for (interaction, btn) in &interactions {
         if *interaction != Interaction::Pressed || btn.0 != MenuAction::ConnectToHost {
             continue;
@@ -1098,6 +1122,16 @@ mod tests {
                 url: "ws://127.0.0.1:7879".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn parse_direct_host_port_rejects_five_octet_ip() {
+        assert!(parse_direct_host_port("100.103.13.12.7878:7878", DEFAULT_PORT).is_err());
+    }
+
+    #[test]
+    fn parse_direct_host_port_rejects_malformed_ip_no_port() {
+        assert!(parse_direct_host_port("100.103.13.12.7878", DEFAULT_PORT).is_err());
     }
 
     #[test]
@@ -1444,6 +1478,26 @@ pub(crate) fn update_lobby_ui(
 
             commands.remove_resource::<PendingGameStart>();
             next_state.set(AppState::InGame);
+        }
+    }
+
+    // ── Client: detect dead connection (async WebSocket failure) ──
+    if let Some(ref client) = client_state {
+        if client
+            .shutdown
+            .load(std::sync::atomic::Ordering::Relaxed)
+            && !matches!(lobby.status, LobbyStatus::Connected)
+        {
+            lobby.status =
+                LobbyStatus::Failed("Connection lost — WebSocket closed".to_string());
+            for mut text in &mut status_texts {
+                **text = "Connection failed — host unreachable".to_string();
+            }
+            commands.remove_resource::<ClientNetState>();
+            commands.remove_resource::<NetRole>();
+            #[cfg(target_arch = "wasm32")]
+            commands.remove_resource::<multiplayer::WasmClientSocket>();
+            return;
         }
     }
 
