@@ -535,8 +535,8 @@ stateDiagram-v2
         Failed --> InputCode: retry
     }
 
-    ConfigSent --> InGame: AppState::InGame
-    ConfigReceived --> InGame: AppState::InGame
+    ConfigSent --> InGame: transition to InGame
+    ConfigReceived --> InGame: transition to InGame
 
     InGame --> MainMenu: Disconnect / Leave
 ```
