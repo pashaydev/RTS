@@ -1,6 +1,7 @@
 # Multiplayer Architecture
 
 > Host-authoritative LAN multiplayer with TCP (native) and WebSocket (WASM) transport.
+> Same-origin hosted-session routing has been added for the deployed web client via a native `session_router`.
 > **MessagePack binary wire protocol** with 4-byte length-prefixed framing. Delta-compressed state sync at ~10Hz.
 > JSON fallback for legacy clients. Numeric entity/faction discriminants. Reconnection with 30s grace period.
 
@@ -28,6 +29,12 @@ flowchart TB
         WS --- FRAME
     end
 
+    subgraph Router["HOSTED SESSION ROUTER (Fly / Native)"]
+        SR["session_router\n- POST /api/sessions\n- GET /api/sessions/:code\n- GET /session/:code/ws"]
+        FR["Fly replay payload\n(target machine + path rewrite)"]
+        SR --> FR
+    end
+
     subgraph Client1["CLIENT (Native)"]
         CECS1["Bevy ECS\n(mirrored state)"]
         CS1["Client Systems\n- client_receive_commands\n- client_apply_entity_sync\n- client_apply_neutral_sync\n- client_interpolate_remote_units\n- client_send_ping"]
@@ -48,6 +55,7 @@ flowchart TB
     HNS -->|ServerMessages| WS
     TCP -->|ClientMessages| HNS
     WS -->|ClientMessages| HNS
+    Router -->|same-origin hosted session path| WS
 
     TCP ---|"TCP stream\n(reader + writer threads)"| CNS1
     WS ---|"WebSocket\n(browser API)"| CNS2
@@ -120,7 +128,13 @@ sequenceDiagram
 
     Note over UI: CLIENT: JOIN GAME
     UI->>Client: User enters session code
-    Client->>Transport: TcpStream::connect (or WS)
+    alt Native LAN/VPN join
+        Client->>Transport: TcpStream::connect (or direct WS)
+    else Hosted web join
+        Client->>Transport: GET /session/:code/ws
+        Transport->>Client: Fly replay response
+        Client->>Transport: WebSocket upgrade to target machine
+    end
     Transport->>Host: new_client_tx (NewClientEvent)
     Host->>Host: Spawn reader + writer threads
 
@@ -541,7 +555,9 @@ stateDiagram-v2
     InGame --> MainMenu: Disconnect / Leave
 ```
 
-**Session code format:** `IP:PORT` (e.g. `192.168.1.5:7878`)
+**Session code formats:**
+- Native LAN/VPN: `IP:PORT` (e.g. `192.168.1.5:7878`)
+- Hosted web path: opaque session code resolved on the same origin as `/session/<code>/ws`
 
 **Player ID assignment:**
 - Host: `player_id = 0`
@@ -574,11 +590,15 @@ stateDiagram-v2
 - **No NAT traversal:** LAN/VPN only (no STUN/TURN)
 - **Max 4 players** (hardcoded faction count)
 - **Reconnection is partial:** Grace period and session tokens work host-side, but the client-side reconnect UI flow (auto-retry + `Reconnect` message) is not yet wired
+- **Hosted-session routing is partial:** The router and same-origin path exist, but session-host registration and replay-to-live-machine bootstrapping are not wired into the host flow yet
 
 ---
 
 ## Known Remaining Work
 
+- **Hosted session registration**: Generate opaque codes and register live host machines with `POST /api/sessions`
+- **Fly machine targeting**: Populate router registrations with real `app`, `machine_id`, `region`, and target WS path metadata
+- **Host bootstrap**: Run a real session host process that exposes the replay target WebSocket endpoint (currently expected to be `/ws`)
 - **Message batching**: Wire `PendingServerFrame` to batch all host broadcast systems into a single `ServerFrame` per tick (`ServerFrame` type and `PendingServerFrame` resource exist but aren't used yet)
 - **Client prediction**: Prediction buffer + server seq stamping + reconciliation loop (currently fire-and-forget, 1 RTT visual delay)
 - **Reconnect UI**: Client-side auto-retry flow (detect disconnect → reconnect with `Reconnect { session_token }`) — host-side grace period + tokens are done
@@ -597,6 +617,8 @@ stateDiagram-v2
 | `src/multiplayer/client_systems.rs` | Client receive, interpolation, deterministic entity sync, neutral world apply | ~900 |
 | `src/multiplayer/debug_tap.rs` | HTTP debug server, TX/RX event recording | ~300 |
 | `src/multiplayer/ggrs_matchbox.rs` | GGRS rollback scaffolding (unused) | ~50 |
+| `src/session_router.rs` | Hosted-session registry, route shape, Fly replay payload model | ~200 |
+| `src/bin/session_router.rs` | Native HTTP router serving `dist/` plus hosted-session endpoints | ~240 |
 | `src/net_bridge.rs` | NetworkId assignment (entities + neutral objects), EntityNetMap | ~220 |
 | `src/menu/multiplayer.rs` | Lobby UI, connection flow, config serialization | ~1250 |
 | `game_state/src/message.rs` | All network message types + ServerFrame | ~520 |
