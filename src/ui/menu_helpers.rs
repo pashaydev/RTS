@@ -19,6 +19,7 @@ pub struct MenuSelector {
 #[allow(dead_code)]
 pub enum SelectorField {
     AiCount,
+    HostAiCount,
     AiDifficulty(usize),
     TeamMode,
     MapSize,
@@ -32,6 +33,7 @@ pub enum SelectorField {
     EntityLights,
     UiScale,
     PlayerColor,
+    HostPlayerColor,
 }
 
 #[derive(Component)]
@@ -475,7 +477,7 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Enti
 
 // ── Color Picker ──
 
-pub fn spawn_color_picker(commands: &mut Commands, selected: usize) -> Entity {
+pub fn spawn_color_picker(commands: &mut Commands, selected: usize, field: SelectorField) -> Entity {
     let colors = [
         Faction::Player1.color(),
         Faction::Player2.color(),
@@ -517,7 +519,7 @@ pub fn spawn_color_picker(commands: &mut Commands, selected: usize) -> Entity {
 
                 let mut dot = parent.spawn((
                     MenuSelector {
-                        field: SelectorField::PlayerColor,
+                        field,
                         index: i,
                     },
                     Button,

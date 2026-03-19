@@ -1500,6 +1500,7 @@ fn tower_auto_attack(
 fn training_queue_system(
     mut commands: Commands,
     time: Res<Time>,
+    net_role: Res<crate::multiplayer::NetRole>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
     unit_models: Option<Res<UnitModelAssets>>,
@@ -1519,6 +1520,10 @@ fn training_queue_system(
     >,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
+    if *net_role == crate::multiplayer::NetRole::Client {
+        return;
+    }
+
     let mut used_by_faction: std::collections::HashMap<Faction, u32> =
         std::collections::HashMap::new();
     for faction in &unit_factions {

@@ -11,6 +11,20 @@ use crate::ui::fonts::{self, UiFonts};
 use crate::ui::menu_helpers::*;
 
 use super::*;
+use super::pages;
+
+/// Pick the first available faction not already taken by any lobby player.
+fn next_available_faction(lobby: &LobbyState) -> (Faction, u8) {
+    let taken: std::collections::HashSet<Faction> =
+        lobby.players.iter().map(|p| p.faction).collect();
+    for (i, &f) in Faction::PLAYERS.iter().enumerate() {
+        if !taken.contains(&f) {
+            return (f, i as u8);
+        }
+    }
+    // Fallback (lobby full) — shouldn't happen with 4-player cap
+    (Faction::Player2, 1)
+}
 
 // ── Network Cleanup ──
 
@@ -122,6 +136,7 @@ pub(crate) fn spawn_multiplayer_page(
 pub(crate) fn spawn_host_lobby_page(
     commands: &mut Commands,
     container: Entity,
+    config: &GameSetupConfig,
     fonts: &UiFonts,
 ) {
     spawn_page_header(commands, container, "HOST LOBBY", MenuButton(MenuAction::CancelHost), fonts);
@@ -207,6 +222,10 @@ pub(crate) fn spawn_host_lobby_page(
 
     spawn_animated_section_divider(commands, container, "PLAYERS", fonts);
 
+    // Host color picker
+    let host_color_row = spawn_color_picker(commands, config.player_color_index, SelectorField::HostPlayerColor);
+    commands.entity(container).add_child(host_color_row);
+
     for i in 0..4 {
         let label = if i == 0 {
             "Host (You)"
@@ -214,7 +233,7 @@ pub(crate) fn spawn_host_lobby_page(
             "Waiting..."
         };
         let color = if i == 0 {
-            theme::SUCCESS
+            Faction::PLAYERS[config.player_color_index].color()
         } else {
             theme::TEXT_SECONDARY
         };
@@ -253,6 +272,84 @@ pub(crate) fn spawn_host_lobby_page(
             .id();
         commands.entity(container).add_child(slot);
     }
+
+    // ── AI Opponents ──
+
+    spawn_animated_section_divider(commands, container, "AI OPPONENTS", fonts);
+
+    spawn_selector_row(
+        commands,
+        container,
+        "Count:",
+        &["0", "1", "2", "3"],
+        config.num_ai_opponents as usize,
+        SelectorField::HostAiCount,
+    );
+
+    for i in 0..3 {
+        let visible = i < config.num_ai_opponents as usize;
+        pages::spawn_ai_card(commands, container, i, config, visible);
+    }
+
+    // ── World Settings ──
+
+    spawn_animated_section_divider(commands, container, "WORLD", fonts);
+
+    let map_idx = match config.map_size {
+        MapSize::Small => 0,
+        MapSize::Medium => 1,
+        MapSize::Large => 2,
+    };
+    spawn_selector_row(
+        commands,
+        container,
+        "Map Size:",
+        &["Small", "Medium", "Large"],
+        map_idx,
+        SelectorField::MapSize,
+    );
+
+    let res_idx = match config.resource_density {
+        ResourceDensity::Sparse => 0,
+        ResourceDensity::Normal => 1,
+        ResourceDensity::Dense => 2,
+    };
+    spawn_selector_row(
+        commands,
+        container,
+        "Resources:",
+        &["Sparse", "Normal", "Dense"],
+        res_idx,
+        SelectorField::ResourceDensity,
+    );
+
+    let day_idx = DAY_CYCLE_OPTIONS
+        .iter()
+        .position(|&(v, _)| (v - config.day_cycle_secs).abs() < 1.0)
+        .unwrap_or(1);
+    let day_labels: Vec<&str> = DAY_CYCLE_OPTIONS.iter().map(|&(_, l)| l).collect();
+    spawn_selector_row(
+        commands,
+        container,
+        "Day Cycle:",
+        &day_labels,
+        day_idx,
+        SelectorField::DayCycle,
+    );
+
+    let start_idx = STARTING_RES_OPTIONS
+        .iter()
+        .position(|&(v, _)| (v - config.starting_resources_mult).abs() < 0.01)
+        .unwrap_or(1);
+    let start_labels: Vec<&str> = STARTING_RES_OPTIONS.iter().map(|&(_, l)| l).collect();
+    spawn_selector_row(
+        commands,
+        container,
+        "Start Res:",
+        &start_labels,
+        start_idx,
+        SelectorField::StartingRes,
+    );
 
     spawn_animated_section_divider(commands, container, "", fonts);
 
@@ -479,7 +576,7 @@ pub(crate) fn spawn_join_lobby_page(
 const DEFAULT_PORT: u16 = 7878;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn start_hosting(commands: &mut Commands) {
+pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
     use crate::multiplayer::transport;
     use std::net::TcpListener;
     use std::sync::atomic::AtomicBool;
@@ -575,8 +672,8 @@ pub(crate) fn start_hosting(commands: &mut Commands) {
             player_id: 0,
             name: "Host".to_string(),
             seat_index: 0,
-            faction: Faction::Player1,
-            color_index: 0,
+            faction: Faction::PLAYERS[config.player_color_index],
+            color_index: config.player_color_index as u8,
             is_host: true,
             connected: true,
         }],
@@ -901,8 +998,8 @@ pub(crate) fn update_lobby_ui(
                     info!("New client {} in lobby", player_id);
 
                     let seat_index = lobby.players.len().min(3) as u8;
-                    let faction = Faction::PLAYERS[seat_index as usize];
-                    let color_index = seat_index;
+                    let (faction, faction_idx) = next_available_faction(&lobby);
+                    let color_index = faction_idx;
 
                     lobby.players.push(LobbyPlayer {
                         player_id,
@@ -965,8 +1062,8 @@ pub(crate) fn update_lobby_ui(
                     info!("New WebSocket client {} in lobby", player_id);
 
                     let seat_index = lobby.players.len().min(3) as u8;
-                    let faction = Faction::PLAYERS[seat_index as usize];
-                    let color_index = seat_index;
+                    let (faction, faction_idx) = next_available_faction(&lobby);
+                    let color_index = faction_idx;
 
                     lobby.players.push(LobbyPlayer {
                         player_id,
@@ -1059,6 +1156,12 @@ pub(crate) fn update_lobby_ui(
         }
 
         if lobby_changed {
+            // Auto-cap AI count when lobby changes (player join/leave)
+            let human_count = lobby.players.iter().filter(|p| p.connected).count() as u8;
+            let max_ai = 4u8.saturating_sub(human_count).min(3);
+            if config.num_ai_opponents > max_ai {
+                config.num_ai_opponents = max_ai;
+            }
             broadcast_lobby_update(&lobby, host);
         }
 
@@ -1085,10 +1188,29 @@ pub(crate) fn update_lobby_ui(
             }
 
             let human_count = lobby.players.iter().filter(|p| p.connected).count() as u8;
-            config.num_ai_opponents = (4u8.saturating_sub(human_count)).min(3);
+            config.human_count = human_count;
+            // Build human_faction_indices from lobby players
+            config.human_faction_indices = lobby
+                .players
+                .iter()
+                .filter(|p| p.connected)
+                .map(|p| {
+                    Faction::PLAYERS
+                        .iter()
+                        .position(|f| *f == p.faction)
+                        .unwrap_or(0)
+                })
+                .collect();
+            let max_ai = 4u8.saturating_sub(human_count).min(3);
+            if config.num_ai_opponents > max_ai {
+                config.num_ai_opponents = max_ai;
+            }
+            // Recalculate AI factions to avoid collisions with human factions
+            config.recalculate_ai_factions();
             info!(
-                "Multiplayer: {} humans, {} AI opponents",
-                human_count, config.num_ai_opponents
+                "Multiplayer: {} humans ({:?}), {} AI opponents ({:?})",
+                human_count, config.human_faction_indices,
+                config.num_ai_opponents, config.ai_faction_indices
             );
 
             let config_json =
@@ -1201,6 +1323,12 @@ pub(crate) fn update_lobby_ui(
                 game_state::message::ServerMessage::StateSync { .. } => {}
                 game_state::message::ServerMessage::EntitySpawn { .. } => {}
                 game_state::message::ServerMessage::EntityDespawn { .. } => {}
+                game_state::message::ServerMessage::BuildingSync { .. } => {}
+                game_state::message::ServerMessage::ResourceSync { .. } => {}
+                game_state::message::ServerMessage::DayCycleSync { .. } => {}
+                game_state::message::ServerMessage::WorldBaseline { .. } => {}
+                game_state::message::ServerMessage::NeutralWorldDelta { .. } => {}
+                game_state::message::ServerMessage::NeutralWorldDespawn { .. } => {}
                 game_state::message::ServerMessage::Pong { .. } => {}
             }
         }
@@ -1226,23 +1354,15 @@ fn update_player_slot_ui(
     for (slot, children) in slot_texts {
         let idx = slot.0;
         let (label, color) = if let Some(player) = lobby.players.get(idx) {
-            let c = if player.connected {
-                if player.is_host {
-                    theme::SUCCESS
-                } else {
-                    theme::ACCENT
-                }
+            let c = player.faction.color();
+            let suffix = if player.is_host {
+                " (Host)"
+            } else if !player.connected {
+                " (disconnected)"
             } else {
-                theme::DESTRUCTIVE
+                ""
             };
-            let l = if player.is_host {
-                format!("{} (Host)", player.name)
-            } else if player.connected {
-                player.name.clone()
-            } else {
-                format!("{} (disconnected)", player.name)
-            };
-            (l, c)
+            (format!("{}{}", player.name, suffix), c)
         } else {
             ("Waiting...".to_string(), theme::TEXT_SECONDARY)
         };
@@ -1264,7 +1384,7 @@ fn update_player_slot_ui(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn broadcast_lobby_update(lobby: &LobbyState, host: &HostNetState) {
+pub(crate) fn broadcast_lobby_update(lobby: &LobbyState, host: &HostNetState) {
     use game_state::message::{GameEvent, LobbyPlayerInfo, ServerMessage};
 
     let players: Vec<LobbyPlayerInfo> = lobby
@@ -1323,11 +1443,25 @@ pub(crate) struct SerializableGameConfig {
     pub seat_assignments: Vec<SeatAssignment>,
     #[serde(default)]
     pub human_factions: Vec<u8>,
+    #[serde(default = "default_ai_faction_indices")]
+    pub ai_faction_indices: [usize; 3],
+    #[serde(default)]
+    pub player_color_index: usize,
+    #[serde(default = "default_human_count")]
+    pub human_count: u8,
+}
+
+fn default_ai_faction_indices() -> [usize; 3] {
+    [1, 2, 3]
+}
+
+fn default_human_count() -> u8 {
+    1
 }
 
 impl SerializableGameConfig {
     pub(crate) fn from_config(config: &GameSetupConfig, lobby: &LobbyState) -> Self {
-        let seat_assignments: Vec<SeatAssignment> = lobby
+        let mut seat_assignments: Vec<SeatAssignment> = lobby
             .players
             .iter()
             .map(|p| {
@@ -1344,6 +1478,19 @@ impl SerializableGameConfig {
                 }
             })
             .collect();
+
+        // Add AI seat assignments using config.ai_faction_indices
+        let human_count = seat_assignments.len() as u8;
+        for i in 0..config.num_ai_opponents as usize {
+            let faction_index = config.ai_faction_indices[i] as u8;
+            seat_assignments.push(SeatAssignment {
+                player_id: 100 + i as u8,
+                seat_index: human_count + i as u8,
+                faction_index,
+                color_index: faction_index,
+                is_human: false,
+            });
+        }
 
         let human_factions: Vec<u8> = seat_assignments
             .iter()
@@ -1379,6 +1526,9 @@ impl SerializableGameConfig {
             starting_resources_mult: config.starting_resources_mult,
             seat_assignments,
             human_factions,
+            ai_faction_indices: config.ai_faction_indices,
+            player_color_index: config.player_color_index,
+            human_count: config.human_count,
         }
     }
 
@@ -1408,6 +1558,10 @@ impl SerializableGameConfig {
         };
         config.day_cycle_secs = self.day_cycle_secs;
         config.starting_resources_mult = self.starting_resources_mult;
+        config.ai_faction_indices = self.ai_faction_indices;
+        config.player_color_index = self.player_color_index;
+        config.human_count = self.human_count;
+        config.human_faction_indices = self.human_factions.iter().map(|&i| i as usize).collect();
     }
 
     pub(crate) fn apply_to_lobby(&self, lobby: &mut LobbyState) {

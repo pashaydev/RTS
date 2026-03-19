@@ -144,6 +144,13 @@ impl Default for DayCycle {
     }
 }
 
+impl DayCycle {
+    pub fn set_time(&mut self, time: f32) {
+        self.time = time.rem_euclid(1.0);
+        self.phase = phase_from_time(self.time);
+    }
+}
+
 fn phase_from_time(t: f32) -> DayPhase {
     match t {
         t if t < 0.20 => DayPhase::Night,
@@ -295,9 +302,8 @@ fn advance_day_cycle(mut cycle: ResMut<DayCycle>, time: Res<Time>) {
     if cycle.paused {
         return;
     }
-    cycle.time += time.delta_secs() / cycle.cycle_duration;
-    cycle.time = cycle.time.rem_euclid(1.0);
-    cycle.phase = phase_from_time(cycle.time);
+    let next_time = cycle.time + time.delta_secs() / cycle.cycle_duration;
+    cycle.set_time(next_time);
 }
 
 // ── Sun / Ambient / Sky update ──

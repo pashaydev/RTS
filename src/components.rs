@@ -33,6 +33,11 @@ pub struct GameSetupConfig {
     pub day_cycle_secs: f32,
     pub starting_resources_mult: f32,
     pub map_seed: u64, // 0 = random
+    pub ai_faction_indices: [usize; 3],
+    /// Number of human players (1 for single-player, 2+ for multiplayer).
+    pub human_count: u8,
+    /// Faction indices for each human player (e.g. [0] for single-player, [0, 2] for two humans).
+    pub human_faction_indices: Vec<usize>,
 }
 
 impl Default for GameSetupConfig {
@@ -49,29 +54,56 @@ impl Default for GameSetupConfig {
             day_cycle_secs: 600.0,
             starting_resources_mult: 1.0,
             map_seed: 0,
+            ai_faction_indices: [1, 2, 3],
+            human_count: 1,
+            human_faction_indices: vec![0],
         }
     }
 }
 
 impl GameSetupConfig {
+    /// Recompute ai_faction_indices so AIs fill remaining slots not taken by humans.
+    pub fn recalculate_ai_factions(&mut self) {
+        let human_set: HashSet<usize> = self.human_faction_indices.iter().copied().collect();
+        let mut slot_idx = 0;
+        for i in 0..3 {
+            // Skip faction indices already taken by humans
+            while human_set.contains(&slot_idx) && slot_idx < 4 {
+                slot_idx += 1;
+            }
+            self.ai_faction_indices[i] = slot_idx.min(3);
+            slot_idx += 1;
+        }
+    }
+
     pub fn spawn_positions(&self, seed: u64) -> Vec<(Faction, (f32, f32))> {
-        let factions = [
-            Faction::Player1,
-            Faction::Player2,
-            Faction::Player3,
-            Faction::Player4,
-        ];
-        let count = (1 + self.num_ai_opponents as usize).min(4);
+        let total = (self.human_count as usize + self.num_ai_opponents as usize).min(4);
         let half_map = self.map_size.world_size() / 2.0;
         let radius = 0.6 * half_map;
         let rotation_offset = (seed % 360) as f32 * std::f32::consts::PI / 180.0;
 
-        (0..count)
-            .map(|i| {
-                let angle = 2.0 * std::f32::consts::PI * i as f32 / count as f32 + rotation_offset;
+        // Build ordered faction list: humans first, then AIs
+        let mut factions = Vec::with_capacity(total);
+        for &idx in &self.human_faction_indices {
+            if factions.len() < total {
+                factions.push(Faction::PLAYERS[idx]);
+            }
+        }
+        for i in 0..self.num_ai_opponents as usize {
+            if factions.len() < total {
+                factions.push(Faction::PLAYERS[self.ai_faction_indices[i]]);
+            }
+        }
+
+        factions
+            .iter()
+            .enumerate()
+            .map(|(i, &faction)| {
+                let angle =
+                    2.0 * std::f32::consts::PI * i as f32 / total as f32 + rotation_offset;
                 let x = angle.cos() * radius;
                 let z = angle.sin() * radius;
-                (factions[i], (x, z))
+                (faction, (x, z))
             })
             .collect()
     }
@@ -2500,6 +2532,11 @@ pub struct AttentionIcon {
     pub kind: AttentionKind,
 }
 
+#[derive(Component)]
+pub struct UnitLabel {
+    pub owner: Entity,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum AttentionKind {
     UnderAttack,
@@ -2585,6 +2622,18 @@ pub struct DeathScreenRoot;
 
 #[derive(Component)]
 pub struct SpectatorHudRoot;
+
+#[derive(Component)]
+pub struct WorldOverlayBackRoot;
+
+#[derive(Component)]
+pub struct WorldOverlayFrontRoot;
+
+#[derive(Component)]
+pub struct WorldOverlayBackItem;
+
+#[derive(Component)]
+pub struct WorldOverlayFrontItem;
 
 /// Marks all in-game entities for cleanup on exit.
 #[derive(Component)]

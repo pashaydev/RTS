@@ -17,6 +17,7 @@ use socket2::SockRef;
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::debug_tap;
+use super::NET_TRAFFIC;
 
 // ── Wire format: 4-byte big-endian length prefix + JSON payload ─────────────
 
@@ -253,6 +254,12 @@ fn server_msg_kind(msg: &ServerMessage) -> &'static str {
         ServerMessage::StateSync { .. } => "state_sync",
         ServerMessage::EntitySpawn { .. } => "entity_spawn",
         ServerMessage::EntityDespawn { .. } => "entity_despawn",
+        ServerMessage::BuildingSync { .. } => "building_sync",
+        ServerMessage::ResourceSync { .. } => "resource_sync",
+        ServerMessage::DayCycleSync { .. } => "day_cycle_sync",
+        ServerMessage::WorldBaseline { .. } => "world_baseline",
+        ServerMessage::NeutralWorldDelta { .. } => "neutral_world_delta",
+        ServerMessage::NeutralWorldDespawn { .. } => "neutral_world_despawn",
         ServerMessage::Pong { .. } => "pong",
     }
 }
@@ -328,6 +335,8 @@ pub fn client_writer_thread(
                     );
                     break;
                 }
+                NET_TRAFFIC.bytes_sent.fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC.msgs_sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 debug_tap::record_tx("host_client_writer", detail, data.len(), payload);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -351,6 +360,8 @@ pub fn host_client_reader_thread(
     while !shutdown.load(Ordering::Relaxed) {
         match recv_framed(&mut stream) {
             Ok(data) => {
+                NET_TRAFFIC.bytes_received.fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC.msgs_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 match serde_json::from_slice::<ClientMessage>(&data) {
                     Ok(msg) => {
                         let detail =
@@ -424,6 +435,8 @@ pub fn client_reader_thread(
     while !shutdown.load(Ordering::Relaxed) {
         match recv_framed(&mut stream) {
             Ok(data) => {
+                NET_TRAFFIC.bytes_received.fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC.msgs_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 match serde_json::from_slice::<ServerMessage>(&data) {
                     Ok(msg) => {
                         let detail = format!("host -> client {}", server_msg_kind(&msg));
@@ -494,6 +507,8 @@ pub fn client_writer_thread_fn(
                     );
                     break;
                 }
+                NET_TRAFFIC.bytes_sent.fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC.msgs_sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 debug_tap::record_tx("client_writer", detail, data.len(), payload);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -615,6 +630,8 @@ fn ws_client_handler(
         // ── Read ──
         match ws.read() {
             Ok(tungstenite::Message::Text(text)) => {
+                NET_TRAFFIC.bytes_received.fetch_add(text.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC.msgs_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 match serde_json::from_str::<ClientMessage>(&text) {
                     Ok(msg) => {
                         debug_tap::record_rx(
@@ -667,9 +684,12 @@ fn ws_client_handler(
         // ── Write — drain outgoing queue ──
         while let Ok(data) = writer_rx.try_recv() {
             let text = String::from_utf8_lossy(&data).to_string();
+            let text_len = text.len() as u64;
             if ws.send(tungstenite::Message::Text(text.into())).is_err() {
                 break;
             }
+            NET_TRAFFIC.bytes_sent.fetch_add(text_len, std::sync::atomic::Ordering::Relaxed);
+            NET_TRAFFIC.msgs_sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 

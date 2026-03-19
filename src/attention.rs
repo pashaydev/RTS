@@ -14,7 +14,9 @@ impl Plugin for AttentionPlugin {
                 track_health_changes,
                 update_damage_popups,
                 manage_attention_icons,
+                manage_unit_labels,
                 position_overlays,
+                position_unit_labels,
                 cleanup_orphaned_icons,
                 update_worker_overlays,
                 position_worker_overlays,
@@ -33,6 +35,7 @@ const UNDER_ATTACK_DURATION: f32 = 2.5;
 const ICON_OFFSET_Y_WORLD: f32 = 1.8;
 const POPUP_OFFSET_Y_WORLD: f32 = 2.2;
 const ICON_SIZE: f32 = 20.0;
+const UNIT_LABEL_OFFSET_Y_WORLD: f32 = 2.9;
 
 // ── System 1: Detect HP changes, spawn popups, manage UnderAttackTimer ──
 
@@ -78,6 +81,7 @@ fn track_health_changes(
                     world_pos: tf.translation + Vec3::Y * POPUP_OFFSET_Y_WORLD,
                     offset_x: scatter,
                 },
+                WorldOverlayBackItem,
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(-1000.0),
@@ -259,6 +263,7 @@ fn spawn_attention_icon(
 
     commands.spawn((
         AttentionIcon { owner, kind },
+        WorldOverlayBackItem,
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(-1000.0),
@@ -274,6 +279,102 @@ fn spawn_attention_icon(
         },
         Pickable::IGNORE,
     ));
+}
+
+fn team_color_ui(color: TeamColor) -> Color {
+    match color {
+        TeamColor::Blue => Color::srgb(0.30, 0.65, 1.0),
+        TeamColor::Red => Color::srgb(1.0, 0.35, 0.30),
+        TeamColor::Purple => Color::srgb(0.75, 0.45, 1.0),
+        TeamColor::Green => Color::srgb(0.35, 0.85, 0.45),
+        TeamColor::Black => Color::srgb(0.45, 0.45, 0.48),
+    }
+}
+
+fn manage_unit_labels(
+    mut commands: Commands,
+    icons: Res<IconAssets>,
+    faction_colors: Res<FactionColors>,
+    units: Query<
+        (Entity, &EntityKind, &Faction, Has<Hovered>, Has<Selected>),
+        With<Unit>,
+    >,
+    existing_labels: Query<(Entity, &UnitLabel)>,
+) {
+    let mut label_map = std::collections::HashMap::new();
+    for (label_entity, label) in &existing_labels {
+        label_map.insert(label.owner, label_entity);
+    }
+
+    for (unit_entity, kind, faction, hovered, selected) in &units {
+        let should_show = hovered || selected;
+        match (label_map.remove(&unit_entity), should_show) {
+            (Some(_), true) => {}
+            (None, false) => {}
+            (Some(label_entity), false) => {
+                commands.entity(label_entity).despawn();
+            }
+            (None, true) => {
+                let accent = team_color_ui(faction_colors.get(faction));
+                let label_entity = commands
+                    .spawn((
+                        UnitLabel { owner: unit_entity },
+                        WorldOverlayBackItem,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: Val::Px(-1000.0),
+                            top: Val::Px(-1000.0),
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(6.0),
+                            padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(5.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::srgba(0.03, 0.04, 0.05, 0.82)),
+                        BorderColor::all(accent),
+                        Pickable::IGNORE,
+                    ))
+                    .with_children(|parent| {
+                        parent.spawn((
+                            Node {
+                                width: Val::Px(3.0),
+                                height: Val::Px(14.0),
+                                border_radius: BorderRadius::all(Val::Px(2.0)),
+                                ..default()
+                            },
+                            BackgroundColor(accent),
+                            Pickable::IGNORE,
+                        ));
+                        parent.spawn((
+                            Node {
+                                width: Val::Px(16.0),
+                                height: Val::Px(16.0),
+                                ..default()
+                            },
+                            ImageNode::new(icons.entity_icon(*kind)),
+                            Pickable::IGNORE,
+                        ));
+                        parent.spawn((
+                            Text::new(kind.display_name()),
+                            TextFont {
+                                font_size: theme::FONT_SMALL,
+                                ..default()
+                            },
+                            TextColor(theme::TEXT_PRIMARY),
+                            Pickable::IGNORE,
+                        ));
+                    })
+                    .id();
+                commands.entity(label_entity).insert(Name::new("UnitLabel"));
+            }
+        }
+    }
+
+    for (_owner, label_entity) in label_map {
+        commands.entity(label_entity).despawn();
+    }
 }
 
 // ── System 4: Project world positions to screen for all overlays ──
@@ -385,6 +486,45 @@ fn position_overlays(
     }
 }
 
+fn position_unit_labels(
+    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+    fog_map: Option<Res<FogOfWarMap>>,
+    transforms: Query<&Transform>,
+    mut labels: Query<(&UnitLabel, &mut Node, &mut Visibility)>,
+    ui_scale: Res<UiScale>,
+) {
+    let Ok((camera, cam_gt)) = camera_q.single() else {
+        return;
+    };
+    let scale = ui_scale.0.max(0.001);
+
+    for (label, mut node, mut vis) in &mut labels {
+        let Ok(owner_tf) = transforms.get(label.owner) else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+
+        let world_pos = owner_tf.translation + Vec3::Y * UNIT_LABEL_OFFSET_Y_WORLD;
+        let fog_visible = fog_map
+            .as_ref()
+            .map(|f| f.get_visible(world_pos.x, world_pos.z) > 0.2)
+            .unwrap_or(true);
+
+        if !fog_visible {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+
+        if let Ok(vp) = camera.world_to_viewport(cam_gt, world_pos) {
+            node.left = Val::Px((vp.x - 42.0) / scale);
+            node.top = Val::Px((vp.y - 12.0) / scale);
+            *vis = Visibility::Inherited;
+        } else {
+            *vis = Visibility::Hidden;
+        }
+    }
+}
+
 // ── System 5: Cleanup orphaned attention icons ──
 
 fn cleanup_orphaned_icons(
@@ -435,6 +575,7 @@ fn update_worker_overlays(
                 WorkerOverlay {
                     building: building_entity,
                 },
+                WorldOverlayBackItem,
                 Node {
                     position_type: PositionType::Absolute,
                     left: Val::Px(-1000.0),
@@ -448,7 +589,6 @@ fn update_worker_overlays(
                 },
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
                 Pickable::IGNORE,
-                GlobalZIndex(5),
             ))
             .id();
 

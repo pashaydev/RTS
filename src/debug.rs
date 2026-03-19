@@ -64,6 +64,7 @@ impl Plugin for DebugPlugin {
                     sync_entity_selected_tweaks,
                     sync_save_load_tweaks,
                     sync_ai_debug_tweaks,
+                    sync_network_debug_tweaks,
                     initialize_debug_folder_defaults,
                     rebuild_tweak_panel,
                     update_tweak_visuals,
@@ -1951,6 +1952,8 @@ const SPAWN_FOLDER: &str = "Entities/Spawn";
 const SELECTED_FOLDER: &str = "Entities/Selected";
 const AI_FOLDER: &str = "Game/AI Settings";
 const SAVE_FOLDER: &str = "Game/Save & Load";
+const NET_CONN_FOLDER: &str = "Network/Connection";
+const NET_TRAFFIC_FOLDER: &str = "Network/Traffic";
 
 fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     // Spawn folder
@@ -2005,6 +2008,12 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_button(SAVE_FOLDER, "Save Game");
     tweaks.add_button(SAVE_FOLDER, "Load Game");
     tweaks.add_readonly(SAVE_FOLDER, "Status", "Ready");
+
+    // Network folders — driven by the field table in multiplayer::mod
+    for field in crate::multiplayer::NET_STAT_FIELDS {
+        let folder = net_folder(field.folder_key);
+        tweaks.add_readonly(folder, field.label, "--");
+    }
 }
 
 fn cursor_ground_pos(
@@ -2319,5 +2328,55 @@ fn sync_ai_debug_tweaks(
             );
             tweaks.set_readonly_if_changed(AI_FOLDER, label, &status);
         }
+    }
+}
+
+/// Maps folder key shorthand → folder constant.
+fn net_folder(key: &str) -> &'static str {
+    match key {
+        "conn" => NET_CONN_FOLDER,
+        "traffic" => NET_TRAFFIC_FOLDER,
+        _ => NET_CONN_FOLDER,
+    }
+}
+
+fn sync_network_debug_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    net_stats: Option<Res<crate::multiplayer::NetStats>>,
+    role: Res<crate::multiplayer::NetRole>,
+    lobby: Option<Res<crate::multiplayer::LobbyState>>,
+) {
+    use crate::multiplayer::{NetRole, NetStatVisibility, NET_STAT_FIELDS};
+
+    // "Status" comes from LobbyState, not NetStats — handle it separately
+    let status = match (*role, &lobby) {
+        (NetRole::Offline, _) => "Offline".to_string(),
+        (_, Some(lobby)) => format!("{:?}", lobby.status),
+        _ => "--".to_string(),
+    };
+    tweaks.set_readonly_if_changed(NET_CONN_FOLDER, "Status", &status);
+
+    // Default stats for when resource isn't present yet
+    let default_stats = crate::multiplayer::NetStats::default();
+    let stats = net_stats.as_deref().unwrap_or(&default_stats);
+
+    for field in NET_STAT_FIELDS {
+        if field.label == "Status" {
+            continue; // handled above
+        }
+
+        let folder = net_folder(field.folder_key);
+        let visible = match field.visibility {
+            NetStatVisibility::Always => *role != NetRole::Offline,
+            NetStatVisibility::HostOnly => *role == NetRole::Host,
+            NetStatVisibility::ClientOnly => *role == NetRole::Client,
+        };
+
+        let display = if visible {
+            stats.display_value(field.label, &role).unwrap_or_else(|| "--".to_string())
+        } else {
+            "--".to_string()
+        };
+        tweaks.set_readonly_if_changed(folder, field.label, &display);
     }
 }

@@ -34,6 +34,12 @@ trunk serve --config .trunk.toml
 PATH="/tmp:/opt/homebrew/opt/llvm/bin:$PATH" cargo xwin build --release --target x86_64-pc-windows-msvc
 ```
 
+### MacOS
+```sh
+rustup target add aarch64-apple-darwin
+cargo build --release --target aarch64-apple-darwin
+```
+
 The dev profile uses dependency optimization (`opt-level = 2`) for better iteration-time performance.
 
 ### Fly.io

@@ -167,6 +167,7 @@ fn distribute_camps(total: usize) -> Vec<usize> {
 
 fn spawn_mob_camps(
     mut commands: Commands,
+    net_role: Res<crate::multiplayer::NetRole>,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
     unit_models: Option<Res<UnitModelAssets>>,
@@ -175,6 +176,10 @@ fn spawn_mob_camps(
     config: Res<GameSetupConfig>,
     map_seed: Res<MapSeed>,
 ) {
+    if *net_role == crate::multiplayer::NetRole::Client {
+        return;
+    }
+
     let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(3000));
     let half_map = config.map_size.world_size() / 2.0;
 

@@ -1673,6 +1673,7 @@ fn spawn_resource_popup(commands: &mut Commands, world_pos: Vec3, rt: ResourceTy
             resource_type: rt,
             amount,
         },
+        WorldOverlayBackItem,
         Node {
             position_type: PositionType::Absolute,
             left: Val::Px(-1000.0),
@@ -2072,6 +2073,7 @@ fn spawn_saplings_system(
     mut commands: Commands,
     time: Res<Time>,
     mut config: ResMut<TreeGrowthConfig>,
+    net_role: Res<crate::multiplayer::NetRole>,
     biome_map: Res<BiomeMap>,
     height_map: Res<HeightMap>,
     model_assets: Res<ModelAssets>,
@@ -2081,6 +2083,10 @@ fn spawn_saplings_system(
     game_config: Res<GameSetupConfig>,
     map_seed: Res<MapSeed>,
 ) {
+    if *net_role == crate::multiplayer::NetRole::Client {
+        return;
+    }
+
     config.spawn_timer.tick(time.delta());
     if !config.spawn_timer.just_finished() {
         return;
@@ -2156,8 +2162,13 @@ fn grow_saplings_system(
     mut commands: Commands,
     time: Res<Time>,
     config: Res<TreeGrowthConfig>,
+    net_role: Res<crate::multiplayer::NetRole>,
     mut saplings: Query<(Entity, &mut Sapling, &mut Transform), Without<FrustumCulled>>,
 ) {
+    if *net_role == crate::multiplayer::NetRole::Client {
+        return;
+    }
+
     for (entity, mut sapling, mut tf) in &mut saplings {
         sapling.timer.tick(time.delta());
         let progress = sapling.timer.fraction();
@@ -2180,8 +2191,13 @@ fn grow_trees_system(
     mut commands: Commands,
     time: Res<Time>,
     config: Res<TreeGrowthConfig>,
+    net_role: Res<crate::multiplayer::NetRole>,
     mut growing: Query<(Entity, &mut GrowingTree, &mut Transform), Without<FrustumCulled>>,
 ) {
+    if *net_role == crate::multiplayer::NetRole::Client {
+        return;
+    }
+
     for (entity, mut tree, mut tf) in &mut growing {
         tree.timer.tick(time.delta());
         let progress = tree.timer.fraction();
@@ -2390,6 +2406,7 @@ fn processor_worker_visual_system(
 fn resource_respawn_system(
     mut commands: Commands,
     time: Res<Time>,
+    net_role: Res<crate::multiplayer::NetRole>,
     height_map: Res<HeightMap>,
     model_assets: Res<ModelAssets>,
     node_mats: Res<ResourceNodeMaterials>,
@@ -2399,6 +2416,10 @@ fn resource_respawn_system(
     growing_resources: Query<(&Transform, &GrowingResource), Without<Building>>,
     building_positions: Query<&Transform, (With<Building>, Without<ResourceNode>)>,
 ) {
+    if *net_role == crate::multiplayer::NetRole::Client {
+        return;
+    }
+
     for (building_tf, mut config, state) in &mut buildings {
         if *state != BuildingState::Complete {
             continue;
@@ -2546,8 +2567,13 @@ fn resource_respawn_system(
 fn grow_resource_system(
     mut commands: Commands,
     time: Res<Time>,
+    net_role: Res<crate::multiplayer::NetRole>,
     mut growing: Query<(Entity, &mut GrowingResource, &mut Transform), Without<FrustumCulled>>,
 ) {
+    if *net_role == crate::multiplayer::NetRole::Client {
+        return;
+    }
+
     for (entity, mut res, mut tf) in &mut growing {
         res.timer.tick(time.delta());
         let progress = res.timer.fraction();

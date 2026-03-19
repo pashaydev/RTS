@@ -3,10 +3,10 @@ use bevy::image::ImageSampler;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::ui::RelativeCursorPosition;
+use bevy::ui::widget::NodeImageMode;
 use bevy::window::PrimaryWindow;
 
 use crate::components::*;
-use crate::ground::{HALF_MAP, MAP_SIZE};
 
 const MINIMAP_TEX_SIZE: usize = 200;
 
@@ -17,6 +17,8 @@ pub struct MinimapSet;
 struct MinimapTexture {
     handle: Handle<Image>,
     base_pixels: Vec<[u8; 4]>,
+    map_size: f32,
+    half_map: f32,
 }
 
 #[derive(Resource, Default)]
@@ -66,15 +68,15 @@ fn biome_color(biome: Biome) -> [u8; 4] {
     }
 }
 
-fn world_to_minimap(wx: f32, wz: f32) -> (usize, usize) {
-    let px = ((wx + HALF_MAP) / MAP_SIZE * MINIMAP_TEX_SIZE as f32) as usize;
-    let py = ((wz + HALF_MAP) / MAP_SIZE * MINIMAP_TEX_SIZE as f32) as usize;
+fn world_to_minimap(wx: f32, wz: f32, map_size: f32, half_map: f32) -> (usize, usize) {
+    let px = ((wx + half_map) / map_size * MINIMAP_TEX_SIZE as f32) as usize;
+    let py = ((wz + half_map) / map_size * MINIMAP_TEX_SIZE as f32) as usize;
     (px.min(MINIMAP_TEX_SIZE - 1), py.min(MINIMAP_TEX_SIZE - 1))
 }
 
-fn minimap_to_world(px: f32, py: f32) -> (f32, f32) {
-    let wx = (px / MINIMAP_TEX_SIZE as f32) * MAP_SIZE - HALF_MAP;
-    let wz = (py / MINIMAP_TEX_SIZE as f32) * MAP_SIZE - HALF_MAP;
+fn minimap_to_world(px: f32, py: f32, map_size: f32, half_map: f32) -> (f32, f32) {
+    let wx = (px / MINIMAP_TEX_SIZE as f32) * map_size - half_map;
+    let wz = (py / MINIMAP_TEX_SIZE as f32) * map_size - half_map;
     (wx, wz)
 }
 
@@ -131,13 +133,16 @@ fn setup_minimap(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
     biome_map: Res<BiomeMap>,
-    content_q: Query<Entity, With<MinimapWidgetContent>>,
+    mut content_q: Query<(Entity, &mut Node), With<MinimapWidgetContent>>,
 ) {
+    let map_size = biome_map.map_size;
+    let half_map = map_size * 0.5;
+
     // Pre-compute biome base pixels
     let mut base_pixels = vec![[0u8; 4]; MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE];
     for py in 0..MINIMAP_TEX_SIZE {
         for px in 0..MINIMAP_TEX_SIZE {
-            let (wx, wz) = minimap_to_world(px as f32 + 0.5, py as f32 + 0.5);
+            let (wx, wz) = minimap_to_world(px as f32 + 0.5, py as f32 + 0.5, map_size, half_map);
             let biome = biome_map.get_biome(wx, wz);
             base_pixels[py * MINIMAP_TEX_SIZE + px] = biome_color(biome);
         }
@@ -163,17 +168,22 @@ fn setup_minimap(
     commands.insert_resource(MinimapTexture {
         handle: handle.clone(),
         base_pixels,
+        map_size,
+        half_map,
     });
 
     // Spawn minimap image inside the widget content area
-    if let Ok(content_entity) = content_q.single() {
+    if let Ok((content_entity, mut content_node)) = content_q.single_mut() {
+        content_node.padding = UiRect::ZERO;
+        content_node.overflow = Overflow::clip();
+
         let minimap_image = commands
             .spawn((
                 GameWorld,
                 MinimapNode,
                 Interaction::default(),
                 RelativeCursorPosition::default(),
-                ImageNode::new(handle),
+                ImageNode::new(handle).with_mode(NodeImageMode::Stretch),
                 Node {
                     width: Val::Percent(100.0),
                     height: Val::Percent(100.0),
@@ -222,7 +232,12 @@ fn update_minimap_texture(
 
         for py in 0..MINIMAP_TEX_SIZE {
             for px in 0..MINIMAP_TEX_SIZE {
-                let (wx, wz) = minimap_to_world(px as f32 + 0.5, py as f32 + 0.5);
+                let (wx, wz) = minimap_to_world(
+                    px as f32 + 0.5,
+                    py as f32 + 0.5,
+                    minimap_tex.map_size,
+                    minimap_tex.half_map,
+                );
                 let vis = fog.get_visibility(wx, wz);
                 let idx = py * MINIMAP_TEX_SIZE + px;
                 let base = [
@@ -286,7 +301,12 @@ fn update_minimap_texture(
                 continue;
             }
         }
-        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z);
+        let (px, py) = world_to_minimap(
+            tf.translation.x,
+            tf.translation.z,
+            minimap_tex.map_size,
+            minimap_tex.half_map,
+        );
         draw_dot(&mut buf, px, py, 1, [255, 220, 50, 255]);
     }
 
@@ -297,7 +317,12 @@ fn update_minimap_texture(
                 continue;
             }
         }
-        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z);
+        let (px, py) = world_to_minimap(
+            tf.translation.x,
+            tf.translation.z,
+            minimap_tex.map_size,
+            minimap_tex.half_map,
+        );
         draw_dot(&mut buf, px, py, 1, [220, 40, 40, 255]);
     }
 
@@ -317,7 +342,12 @@ fn update_minimap_texture(
             Faction::Player4 => [50, 200, 80, 255],
             Faction::Neutral => [220, 40, 40, 255],
         };
-        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z);
+        let (px, py) = world_to_minimap(
+            tf.translation.x,
+            tf.translation.z,
+            minimap_tex.map_size,
+            minimap_tex.half_map,
+        );
         draw_dot(&mut buf, px, py, 2, color);
     }
 
@@ -337,7 +367,12 @@ fn update_minimap_texture(
             Faction::Player4 => [50, 255, 80, 255],
             Faction::Neutral => [220, 40, 40, 255],
         };
-        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z);
+        let (px, py) = world_to_minimap(
+            tf.translation.x,
+            tf.translation.z,
+            minimap_tex.map_size,
+            minimap_tex.half_map,
+        );
         draw_dot(&mut buf, px, py, 1, color);
     }
 
@@ -360,7 +395,12 @@ fn update_minimap_texture(
                         let t = -ray.origin.y / ray.direction.y;
                         if t > 0.0 {
                             let hit = ray.origin + ray.direction * t;
-                            let (px, py) = world_to_minimap(hit.x, hit.z);
+                            let (px, py) = world_to_minimap(
+                                hit.x,
+                                hit.z,
+                                minimap_tex.map_size,
+                                minimap_tex.half_map,
+                            );
                             minimap_corners.push((px as i32, py as i32));
                         }
                     }
@@ -391,6 +431,7 @@ fn update_minimap_texture(
 
 fn handle_minimap_click(
     mouse: Res<ButtonInput<MouseButton>>,
+    minimap_tex: Res<MinimapTexture>,
     minimap_nodes: Query<(&Interaction, &RelativeCursorPosition), With<MinimapNode>>,
     mut camera_q: Query<&mut RtsCamera>,
     mut minimap_interaction: ResMut<MinimapInteraction>,
@@ -416,6 +457,8 @@ fn handle_minimap_click(
         let (wx, wz) = minimap_to_world(
             uv_x * MINIMAP_TEX_SIZE as f32,
             uv_y * MINIMAP_TEX_SIZE as f32,
+            minimap_tex.map_size,
+            minimap_tex.half_map,
         );
 
         if let Ok(mut cam) = camera_q.single_mut() {

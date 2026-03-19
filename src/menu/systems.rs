@@ -8,9 +8,10 @@ use crate::ui::fonts::UiFonts;
 use crate::ui::menu_helpers::*;
 
 use super::*;
-use crate::multiplayer::{ClientNetState, HostNetState};
+use crate::multiplayer::{ClientNetState, HostNetState, LobbyState};
 #[cfg(not(target_arch = "wasm32"))]
 use super::multiplayer::start_hosting;
+use super::multiplayer;
 
 // ── Spawn / Cleanup ──
 
@@ -87,7 +88,7 @@ fn dispatch_page(
             multiplayer::spawn_multiplayer_page(commands, container, fonts)
         }
         MenuPage::HostLobby => {
-            multiplayer::spawn_host_lobby_page(commands, container, fonts)
+            multiplayer::spawn_host_lobby_page(commands, container, config, fonts)
         }
         MenuPage::JoinLobby => {
             multiplayer::spawn_join_lobby_page(commands, container, fonts)
@@ -133,6 +134,7 @@ pub(crate) fn handle_menu_buttons(
     interactions: Query<(&Interaction, &MenuButton), Changed<Interaction>>,
     mut next_state: ResMut<NextState<AppState>>,
     mut page: ResMut<MenuPage>,
+    config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
@@ -187,7 +189,7 @@ pub(crate) fn handle_menu_buttons(
             MenuAction::HostGame => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    start_hosting(&mut commands);
+                    start_hosting(&mut commands, &config);
                     *page = MenuPage::HostLobby;
                     rebuild_menu(&mut commands, &roots);
                 }
@@ -236,6 +238,8 @@ pub(crate) fn handle_selector_clicks(
     interactions: Query<(&Interaction, &MenuSelector), Changed<Interaction>>,
     mut config: ResMut<GameSetupConfig>,
     mut graphics: ResMut<GraphicsSettings>,
+    mut lobby: Option<ResMut<LobbyState>>,
+    host_state: Option<Res<HostNetState>>,
 ) {
     for (interaction, selector) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -245,9 +249,55 @@ pub(crate) fn handle_selector_clicks(
         match selector.field {
             SelectorField::PlayerColor => {
                 config.player_color_index = selector.index;
+                config.recalculate_ai_factions();
+            }
+            SelectorField::HostPlayerColor => {
+                let new_faction = Faction::PLAYERS[selector.index];
+                config.player_color_index = selector.index;
+                config.recalculate_ai_factions();
+                // Update lobby host player's faction + color_index,
+                // swapping any client that already has this faction
+                if let Some(ref mut lobby) = lobby {
+                    // Find current host faction so we can swap it to the conflicting client
+                    let old_host_faction = lobby
+                        .players
+                        .iter()
+                        .find(|p| p.is_host)
+                        .map(|p| (p.faction, p.color_index));
+
+                    // If a non-host client already has this faction, swap them
+                    if let Some((old_faction, old_color)) = old_host_faction {
+                        if let Some(client_player) = lobby
+                            .players
+                            .iter_mut()
+                            .find(|p| !p.is_host && p.faction == new_faction)
+                        {
+                            client_player.faction = old_faction;
+                            client_player.color_index = old_color;
+                        }
+                    }
+
+                    if let Some(host_player) = lobby.players.iter_mut().find(|p| p.is_host) {
+                        host_player.faction = new_faction;
+                        host_player.color_index = selector.index as u8;
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let Some(ref host) = host_state {
+                        multiplayer::broadcast_lobby_update(lobby, host);
+                    }
+                }
             }
             SelectorField::AiCount => {
                 config.num_ai_opponents = (selector.index + 1) as u8;
+            }
+            SelectorField::HostAiCount => {
+                // Cap AI count so total factions (humans + AI) don't exceed 4
+                let human_count = lobby
+                    .as_ref()
+                    .map(|l| l.players.iter().filter(|p| p.connected).count() as u8)
+                    .unwrap_or(1);
+                let max_ai = 4u8.saturating_sub(human_count).min(3);
+                config.num_ai_opponents = (selector.index as u8).min(max_ai);
             }
             SelectorField::AiDifficulty(ai_idx) => {
                 if ai_idx < 3 {
@@ -330,6 +380,7 @@ pub(crate) fn handle_selector_clicks(
 pub(crate) fn update_selector_visuals(
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
+    lobby: Option<Res<crate::multiplayer::LobbyState>>,
     mut selectors: Query<(
         &MenuSelector,
         &mut BackgroundColor,
@@ -341,10 +392,19 @@ pub(crate) fn update_selector_visuals(
     mut text_colors: Query<&mut TextColor>,
     mut commands: Commands,
 ) {
+    // Compute max AI for host lobby (humans + AI <= 4)
+    let max_ai = lobby
+        .as_ref()
+        .map(|l| {
+            let humans = l.players.iter().filter(|p| p.connected).count() as u8;
+            4u8.saturating_sub(humans).min(3)
+        })
+        .unwrap_or(3);
     for (selector, mut bg, children, entity, was_selected, anim_state) in &mut selectors {
         let should_be_selected = match selector.field {
             SelectorField::PlayerColor => selector.index == config.player_color_index,
             SelectorField::AiCount => selector.index == (config.num_ai_opponents - 1) as usize,
+            SelectorField::HostAiCount => selector.index == config.num_ai_opponents as usize,
             SelectorField::AiDifficulty(ai_idx) => {
                 let diff_idx = match config.ai_difficulties[ai_idx] {
                     AiDifficulty::Easy => 0,
@@ -401,13 +461,29 @@ pub(crate) fn update_selector_visuals(
             SelectorField::UiScale => UI_SCALE_OPTIONS
                 .get(selector.index)
                 .map_or(false, |&(v, _)| (v - graphics.ui_scale).abs() < 0.01),
+            SelectorField::HostPlayerColor => selector.index == config.player_color_index,
             SelectorField::MapSeed => false,
         };
 
         // Color picker dots
-        if selector.field == SelectorField::PlayerColor {
+        if matches!(selector.field, SelectorField::PlayerColor | SelectorField::HostPlayerColor) {
+            // Check if this color is taken by a non-host client in the lobby
+            let is_taken_by_client = if matches!(selector.field, SelectorField::HostPlayerColor) {
+                lobby.as_ref().map_or(false, |l| {
+                    let faction = Faction::PLAYERS[selector.index];
+                    l.players
+                        .iter()
+                        .any(|p| !p.is_host && p.connected && p.faction == faction)
+                })
+            } else {
+                false
+            };
+
             let border = if should_be_selected {
                 Color::WHITE
+            } else if is_taken_by_client {
+                // Dim gold border to indicate this color is used by a client
+                Color::srgba(0.9, 0.75, 0.3, 0.7)
             } else {
                 Color::NONE
             };
@@ -445,12 +521,20 @@ pub(crate) fn update_selector_visuals(
             continue;
         }
 
-        let new_bg = if should_be_selected {
+        // Dim HostAiCount options that exceed the max allowed AI
+        let is_disabled = matches!(selector.field, SelectorField::HostAiCount)
+            && selector.index as u8 > max_ai;
+
+        let new_bg = if is_disabled {
+            Color::srgba(0.1, 0.1, 0.1, 0.5)
+        } else if should_be_selected {
             theme::ACCENT
         } else {
             theme::BTN_PRIMARY
         };
-        let text_col = if should_be_selected {
+        let text_col = if is_disabled {
+            theme::TEXT_DISABLED
+        } else if should_be_selected {
             Color::WHITE
         } else {
             theme::TEXT_SECONDARY

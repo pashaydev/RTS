@@ -45,19 +45,29 @@ pub fn apply_game_config(
     mut teams: ResMut<TeamConfig>,
     mut ai_controlled: ResMut<AiControlledFactions>,
 ) {
-    let all_factions = [
-        Faction::Player1,
-        Faction::Player2,
-        Faction::Player3,
-        Faction::Player4,
-    ];
-    let count = (1 + config.num_ai_opponents as usize).min(4);
-    let factions = &all_factions[..count];
+    let count = (config.human_count as usize + config.num_ai_opponents as usize).min(4);
 
-    // Setup AI controlled factions (all except Player1)
+    // Build the faction list: humans first, then AIs
+    let mut factions = Vec::with_capacity(count);
+    for &idx in &config.human_faction_indices {
+        if factions.len() < count {
+            factions.push(Faction::PLAYERS[idx]);
+        }
+    }
+    for i in 0..config.num_ai_opponents as usize {
+        if factions.len() < count {
+            factions.push(Faction::PLAYERS[config.ai_faction_indices[i]]);
+        }
+    }
+
+    // Setup AI controlled factions (only non-human factions)
+    let human_set: HashSet<usize> = config.human_faction_indices.iter().copied().collect();
     let mut ai_facs = HashSet::new();
-    for &f in &factions[1..] {
-        ai_facs.insert(f);
+    for &f in &factions {
+        let idx = Faction::PLAYERS.iter().position(|p| *p == f).unwrap_or(0);
+        if !human_set.contains(&idx) {
+            ai_facs.insert(f);
+        }
     }
     ai_controlled.factions = ai_facs;
 
@@ -96,6 +106,7 @@ pub fn y_offset_for(kind: EntityKind, registry: &BlueprintRegistry) -> f32 {
 
 fn spawn_all_players(
     mut commands: Commands,
+    net_role: Res<crate::multiplayer::NetRole>,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
     unit_models: Option<Res<UnitModelAssets>>,
@@ -106,6 +117,10 @@ fn spawn_all_players(
     config: Res<GameSetupConfig>,
     map_seed: Res<MapSeed>,
 ) {
+    if *net_role == crate::multiplayer::NetRole::Client {
+        return;
+    }
+
     let mut positions = config.spawn_positions(map_seed.0);
 
     // Biome validation: nudge spawn positions away from Water/Mountain

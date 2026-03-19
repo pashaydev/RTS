@@ -4,7 +4,10 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use crate::blueprints::EntityKind;
-use crate::components::{AppState, Faction};
+use crate::components::{
+    AppState, ExplosiveProp, Faction, GrowingResource, GrowingTree, MatureTree, ResourceNode,
+    Sapling,
+};
 use crate::multiplayer::NetRole;
 
 // ── Core bridge types ────────────────────────────────────────────────────────
@@ -12,6 +15,10 @@ use crate::multiplayer::NetRole;
 /// Stable network identity for an ECS entity. Persists across ticks.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct NetworkId(pub u32);
+
+/// Marks gameplay-relevant entities that should eventually participate in network replication.
+#[derive(Component, Clone, Copy, Debug, Default)]
+pub struct ReplicatedNetEntity;
 
 /// Monotonically increasing counter for assigning NetworkIds.
 #[derive(Resource, Default)]
@@ -33,13 +40,40 @@ pub struct EntityNetMap {
 
 // ── System: assign_network_ids ───────────────────────────────────────────────
 
+fn mark_replicated_entities(
+    mut commands: Commands,
+    query: Query<
+        Entity,
+        (
+            Without<ReplicatedNetEntity>,
+            Or<(
+                With<EntityKind>,
+                With<ResourceNode>,
+                With<Sapling>,
+                With<GrowingTree>,
+                With<GrowingResource>,
+                With<MatureTree>,
+                With<ExplosiveProp>,
+            )>,
+        ),
+    >,
+) {
+    for entity in &query {
+        commands.entity(entity).insert(ReplicatedNetEntity);
+    }
+}
+
 fn assign_network_ids(
     mut commands: Commands,
     mut counter: ResMut<NetworkIdCounter>,
     net_role: Res<NetRole>,
     query: Query<
         (Entity, &EntityKind, Option<&Faction>, Option<&Transform>),
-        (With<EntityKind>, Without<NetworkId>),
+        (
+            With<EntityKind>,
+            With<ReplicatedNetEntity>,
+            Without<NetworkId>,
+        ),
     >,
 ) {
     // Client: don't assign IDs locally — all NetworkIds come from the host
@@ -114,7 +148,8 @@ impl Plugin for NetBridgePlugin {
             .add_systems(
                 Update,
                 (
-                    assign_network_ids,
+                    mark_replicated_entities,
+                    assign_network_ids.after(mark_replicated_entities),
                     rebuild_entity_net_map.after(assign_network_ids),
                 )
                     .run_if(in_state(AppState::InGame)),

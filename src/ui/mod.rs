@@ -40,6 +40,7 @@ impl Plugin for UiPlugin {
             .init_resource::<ControlGroupState>()
             .init_resource::<event_log_widget::GameEventLog>()
             .init_resource::<event_log_widget::EventLogRenderState>()
+            .init_resource::<event_log_widget::EventLogFilter>()
             .add_systems(
                 OnEnter(AppState::InGame),
                 (spawn_hud, widget_framework::spawn_grid_overlay),
@@ -58,6 +59,14 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 update_placement_hint.run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
+                    adopt_back_overlay_items,
+                    adopt_front_overlay_items,
+                )
+                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
@@ -183,7 +192,9 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 (
-                    event_log_widget::update_event_log,
+                    event_log_widget::handle_log_level_pills,
+                    event_log_widget::update_event_log
+                        .after(event_log_widget::handle_log_level_pills),
                     event_log_widget::handle_event_log_click,
                     group_hotkeys_widget::update_group_hotkeys_widget,
                     group_hotkeys_widget::handle_group_slot_click,
@@ -267,6 +278,9 @@ fn is_error_hint(hint: &str) -> bool {
 #[derive(Component)]
 struct UiRoot;
 
+#[derive(Component)]
+struct MainHudRoot;
+
 /// Floating label showing biome placement feedback
 #[derive(Component)]
 struct PlacementHintLabel;
@@ -277,7 +291,7 @@ pub fn spawn_hud(
     registry: Res<WidgetRegistry>,
     fonts: Res<fonts::UiFonts>,
 ) {
-    // Root full-screen container for widget grid
+    // Root full-screen container for in-game HUD layering
     let root = commands
         .spawn((
             GameWorld,
@@ -293,13 +307,60 @@ pub fn spawn_hud(
         ))
         .id();
 
+    let back_overlay_root = commands
+        .spawn((
+            GameWorld,
+            WorldOverlayBackRoot,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            GlobalZIndex(-10),
+            Pickable::IGNORE,
+        ))
+        .id();
+    commands.entity(root).add_child(back_overlay_root);
+
+    let hud_root = commands
+        .spawn((
+            GameWorld,
+            MainHudRoot,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            Pickable::IGNORE,
+        ))
+        .id();
+    commands.entity(root).add_child(hud_root);
+
+    let front_overlay_root = commands
+        .spawn((
+            GameWorld,
+            WorldOverlayFrontRoot,
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            GlobalZIndex(80),
+            Pickable::IGNORE,
+        ))
+        .id();
+    commands.entity(root).add_child(front_overlay_root);
+
     // Spawn widget toolbar at top-center
-    widget_toolbar::spawn_toolbar(&mut commands, root, &fonts);
+    widget_toolbar::spawn_toolbar(&mut commands, hud_root, &fonts);
 
     // Spawn Resources widget
     let resources_content = spawn_widget_frame(
         &mut commands,
-        root,
+        hud_root,
         WidgetId::Resources,
         registry.slots.get(&WidgetId::Resources).unwrap(),
         registry.is_visible(WidgetId::Resources),
@@ -310,7 +371,7 @@ pub fn spawn_hud(
     // Spawn Selection widget (content is dynamic, rebuilt by rebuild_selection_panel)
     let selection_content = spawn_widget_frame(
         &mut commands,
-        root,
+        hud_root,
         WidgetId::Selection,
         registry.slots.get(&WidgetId::Selection).unwrap(),
         registry.is_visible(WidgetId::Selection),
@@ -324,7 +385,7 @@ pub fn spawn_hud(
     // Spawn Actions widget (content is dynamic, rebuilt by update_action_bar)
     let actions_content = spawn_widget_frame(
         &mut commands,
-        root,
+        hud_root,
         WidgetId::Actions,
         registry.slots.get(&WidgetId::Actions).unwrap(),
         registry.is_visible(WidgetId::Actions),
@@ -336,7 +397,7 @@ pub fn spawn_hud(
     // Spawn Army Overview widget
     spawn_widget_frame(
         &mut commands,
-        root,
+        hud_root,
         WidgetId::ArmyOverview,
         registry.slots.get(&WidgetId::ArmyOverview).unwrap(),
         registry.is_visible(WidgetId::ArmyOverview),
@@ -346,7 +407,7 @@ pub fn spawn_hud(
     // Spawn Production Queue widget
     spawn_widget_frame(
         &mut commands,
-        root,
+        hud_root,
         WidgetId::ProductionQueue,
         registry.slots.get(&WidgetId::ProductionQueue).unwrap(),
         registry.is_visible(WidgetId::ProductionQueue),
@@ -356,7 +417,7 @@ pub fn spawn_hud(
     // Spawn Tech Tree widget (overlay, closed by default)
     spawn_widget_frame(
         &mut commands,
-        root,
+        hud_root,
         WidgetId::TechTree,
         registry.slots.get(&WidgetId::TechTree).unwrap(),
         registry.is_visible(WidgetId::TechTree),
@@ -366,7 +427,7 @@ pub fn spawn_hud(
     // Spawn Group Hotkeys widget
     spawn_widget_frame(
         &mut commands,
-        root,
+        hud_root,
         WidgetId::GroupHotkeys,
         registry.slots.get(&WidgetId::GroupHotkeys).unwrap(),
         registry.is_visible(WidgetId::GroupHotkeys),
@@ -376,7 +437,7 @@ pub fn spawn_hud(
     // Spawn Event Log widget
     spawn_widget_frame(
         &mut commands,
-        root,
+        hud_root,
         WidgetId::EventLog,
         registry.slots.get(&WidgetId::EventLog).unwrap(),
         registry.is_visible(WidgetId::EventLog),
@@ -386,7 +447,7 @@ pub fn spawn_hud(
     // Spawn Minimap widget (content populated by MinimapPlugin in PostStartup)
     let minimap_content = spawn_widget_frame(
         &mut commands,
-        root,
+        hud_root,
         WidgetId::Minimap,
         registry.slots.get(&WidgetId::Minimap).unwrap(),
         registry.is_visible(WidgetId::Minimap),
@@ -399,7 +460,7 @@ pub fn spawn_hud(
     // Spawn Debug widget
     let debug_content = spawn_widget_frame(
         &mut commands,
-        root,
+        hud_root,
         WidgetId::Debug,
         registry.slots.get(&WidgetId::Debug).unwrap(),
         registry.is_visible(WidgetId::Debug),
@@ -408,11 +469,13 @@ pub fn spawn_hud(
     crate::debug::spawn_debug_content(&mut commands, debug_content);
 
     // Spawn notification container
-    notifications::spawn_notification_container(&mut commands, root);
+    notifications::spawn_notification_container(&mut commands, hud_root);
 
     // Spawn placement hint label (hidden by default)
-    commands.spawn((
+    let placement_hint = commands
+        .spawn((
         PlacementHintLabel,
+        WorldOverlayFrontItem,
         Text::new(""),
         TextFont {
             font_size: theme::FONT_BODY,
@@ -434,7 +497,9 @@ pub fn spawn_hud(
         GlobalZIndex(90),
         Visibility::Hidden,
         Pickable::IGNORE,
-    ));
+        ))
+        .id();
+    commands.entity(front_overlay_root).add_child(placement_hint);
 }
 
 fn update_placement_hint(
@@ -506,5 +571,31 @@ fn compute_ui_mode(
 
     if *ui_mode != new_mode {
         *ui_mode = new_mode;
+    }
+}
+
+fn adopt_back_overlay_items(
+    root_q: Query<Entity, With<WorldOverlayBackRoot>>,
+    items: Query<Entity, (With<WorldOverlayBackItem>, Without<ChildOf>)>,
+    mut commands: Commands,
+) {
+    let Ok(root) = root_q.single() else {
+        return;
+    };
+    for entity in &items {
+        commands.entity(root).add_child(entity);
+    }
+}
+
+fn adopt_front_overlay_items(
+    root_q: Query<Entity, With<WorldOverlayFrontRoot>>,
+    items: Query<Entity, (With<WorldOverlayFrontItem>, Without<ChildOf>)>,
+    mut commands: Commands,
+) {
+    let Ok(root) = root_q.single() else {
+        return;
+    };
+    for entity in &items {
+        commands.entity(root).add_child(entity);
     }
 }

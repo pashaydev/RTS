@@ -99,7 +99,7 @@ pub(crate) fn spawn_new_game_page(
     let name_row = spawn_name_input_row(commands, &config.player_name);
     commands.entity(container).add_child(name_row);
 
-    let color_row = spawn_color_picker(commands, config.player_color_index);
+    let color_row = spawn_color_picker(commands, config.player_color_index, SelectorField::PlayerColor);
     commands.entity(container).add_child(color_row);
 
     spawn_animated_section_divider(commands, container, "OPPONENTS", fonts);
@@ -399,12 +399,7 @@ pub(crate) fn spawn_ai_card(
     } else {
         Display::None
     };
-    let faction_idx = ai_index + 1;
-    let faction_color = match faction_idx {
-        1 => Faction::Player2.color(),
-        2 => Faction::Player3.color(),
-        _ => Faction::Player4.color(),
-    };
+    let faction_idx = config.ai_faction_indices[ai_index];
     let is_ally = config.player_teams[faction_idx] == config.player_teams[0];
     let diff_idx = match config.ai_difficulties[ai_index] {
         AiDifficulty::Easy => 0,
@@ -449,6 +444,8 @@ pub(crate) fn spawn_ai_card(
                     },
                 ));
 
+                // Faction color dot (auto-assigned)
+                let faction_color = Faction::PLAYERS[config.ai_faction_indices[ai_index]].color();
                 row.spawn((
                     Node {
                         width: Val::Px(16.0),
