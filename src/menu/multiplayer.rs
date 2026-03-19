@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use game_state::codec;
 use game_state::message::ClientMessage;
 use std::sync::atomic::Ordering;
 
@@ -47,7 +48,7 @@ pub(crate) fn cleanup_network_on_enter_menu(
             seq,
             timestamp: 0.0,
         };
-        if let Ok(json) = serde_json::to_vec(&leave_msg) {
+        if let Ok(json) = codec::encode(&leave_msg) {
             match client.outgoing.send(json) {
                 Ok(_) => debug_tap::record_info(
                     "menu_cleanup",
@@ -723,7 +724,7 @@ pub(crate) fn stop_client(
             seq,
             timestamp: 0.0,
         };
-        if let Ok(json) = serde_json::to_vec(&leave_msg) {
+        if let Ok(json) = codec::encode(&leave_msg) {
             let _ = client.outgoing.send(json);
         }
         client.shutdown.store(true, Ordering::Relaxed);
@@ -822,7 +823,7 @@ pub(crate) fn connect_to_host_system(
                         player_name: "Client".to_string(),
                         preferred_faction_index: None,
                     };
-                    if let Ok(json) = serde_json::to_vec(&join_msg) {
+                    if let Ok(json) = codec::encode(&join_msg) {
                         let _ = outgoing_tx.send(json);
                     }
 
@@ -835,6 +836,7 @@ pub(crate) fn connect_to_host_system(
                         my_faction: Faction::Player2,
                         color_index: 0,
                         seq: std::sync::Mutex::new(0),
+                        session_token: 0,
                     });
                     commands.insert_resource(NetRole::Client);
 
@@ -886,6 +888,7 @@ pub(crate) fn connect_to_host_system(
                         my_faction: Faction::Player2,
                         color_index: 0,
                         seq: std::sync::Mutex::new(0),
+                        session_token: 0,
                     });
                     commands.insert_resource(NetRole::Client);
 
@@ -946,6 +949,7 @@ pub(crate) fn update_lobby_ui(
     mut child_bgs: Query<&mut BackgroundColor, Without<LobbyPlayerSlot>>,
     mut config: ResMut<GameSetupConfig>,
     ip_list_q: Query<Entity, (With<HostIpList>, Without<HostIpListPopulated>)>,
+    mut session_tokens: ResMut<multiplayer::SessionTokens>,
 ) {
     // Update session code display
     if *page == MenuPage::HostLobby {
@@ -1116,6 +1120,7 @@ pub(crate) fn update_lobby_ui(
                             *s += 1;
                             *s
                         };
+                        let token = session_tokens.generate(player_id);
                         let msg = game_state::message::ServerMessage::Event {
                             seq,
                             timestamp: 0.0,
@@ -1124,9 +1129,10 @@ pub(crate) fn update_lobby_ui(
                                 seat_index,
                                 faction_index,
                                 color_index,
+                                session_token: token,
                             }],
                         };
-                        if let Ok(json) = serde_json::to_vec(&msg) {
+                        if let Ok(json) = codec::encode(&msg) {
                             let senders = host.client_senders.lock().unwrap();
                             if let Some((_, sender)) =
                                 senders.iter().find(|(id, _)| *id == player_id)
@@ -1150,6 +1156,9 @@ pub(crate) fn update_lobby_ui(
                 }
                 Ok((_player_id, game_state::message::ClientMessage::Input { .. })) => {}
                 Ok((_player_id, game_state::message::ClientMessage::Ping { .. })) => {}
+                Ok((_player_id, game_state::message::ClientMessage::Reconnect { .. })) => {
+                    // Reconnection during lobby phase — not yet supported, treat as new join
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break,
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
@@ -1222,7 +1231,7 @@ pub(crate) fn update_lobby_ui(
                 timestamp: 0.0,
                 events: vec![game_state::message::GameEvent::GameStart { config_json }],
             };
-            if let Ok(json) = serde_json::to_vec(&start_event) {
+            if let Ok(json) = codec::encode(&start_event) {
                 let senders = host.client_senders.lock().unwrap();
                 for (_id, sender) in senders.iter() {
                     let _ = sender.send(json.clone());
@@ -1258,6 +1267,7 @@ pub(crate) fn update_lobby_ui(
                                 seat_index,
                                 faction_index,
                                 color_index,
+                                session_token,
                             } => {
                                 client.player_id = *player_id;
                                 client.seat_index = *seat_index;
@@ -1266,12 +1276,14 @@ pub(crate) fn update_lobby_ui(
                                     .copied()
                                     .unwrap_or(Faction::Player2);
                                 client.color_index = *color_index;
+                                client.session_token = *session_token;
                                 info!(
-                                    "Join accepted: player_id={}, seat={}, faction={:?}, color={}",
+                                    "Join accepted: player_id={}, seat={}, faction={:?}, color={}, token={}",
                                     client.player_id,
                                     client.seat_index,
                                     client.my_faction,
-                                    client.color_index
+                                    client.color_index,
+                                    client.session_token,
                                 );
                             }
                             game_state::message::GameEvent::LobbyUpdate { players } => {
@@ -1410,7 +1422,7 @@ pub(crate) fn broadcast_lobby_update(lobby: &LobbyState, host: &HostNetState) {
         events: vec![GameEvent::LobbyUpdate { players }],
     };
 
-    if let Ok(json) = serde_json::to_vec(&msg) {
+    if let Ok(json) = codec::encode(&msg) {
         let senders = host.client_senders.lock().unwrap();
         for (_id, sender) in senders.iter() {
             let _ = sender.send(json.clone());

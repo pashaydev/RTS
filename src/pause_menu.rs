@@ -488,10 +488,10 @@ fn broadcast_host_shutdown(host: &HostNetState, time: &Time) {
             reason: "Host ended the match".to_string(),
         }],
     };
-    if let Ok(json) = serde_json::to_vec(&msg) {
+    if let Ok(bytes) = game_state::codec::encode(&msg) {
         let senders = host.client_senders.lock().unwrap();
         for (_id, sender) in senders.iter() {
-            let _ = sender.send(json.clone());
+            let _ = sender.send(bytes.clone());
         }
     }
 }

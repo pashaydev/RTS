@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::TryRecvError;
 
+use game_state::codec;
 use game_state::message::{EntitySpawnData, NetUnitState, ServerMessage};
 
 use crate::blueprints::{spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache};
@@ -137,6 +138,13 @@ fn net_to_ecs_unit_state(net: &NetUnitState, net_map: &EntityNetMap) -> Option<U
     }
 }
 
+/// Pending neutral world updates from the host, processed by a separate system.
+#[derive(Resource, Default)]
+pub struct PendingNeutralUpdates {
+    pub deltas: Vec<game_state::message::NeutralWorldSnapshot>,
+    pub despawns: Vec<u32>,
+}
+
 /// Bundled system params for building/resource sync to stay under Bevy's 16-param limit.
 #[derive(SystemParam)]
 pub struct BuildingSyncParams<'w, 's> {
@@ -147,6 +155,7 @@ pub struct BuildingSyncParams<'w, 's> {
     all_resources: ResMut<'w, AllPlayerResources>,
     day_cycle: ResMut<'w, DayCycle>,
     pub net_stats: ResMut<'w, NetStats>,
+    pub pending_neutral: ResMut<'w, PendingNeutralUpdates>,
 }
 
 /// Bundled system params for extended unit state sync.
@@ -371,8 +380,8 @@ pub fn client_receive_commands(
                     }
                 }
                 ServerMessage::ResourceSync { factions: faction_data, .. } => {
-                    for (faction_name, amounts) in faction_data {
-                        if let Some(faction) = parse_faction(faction_name) {
+                    for (faction_idx, amounts) in faction_data {
+                        if let Some(faction) = Faction::from_net_index(*faction_idx) {
                             let pr = building_sync.all_resources.get_mut(&faction);
                             pr.amounts = *amounts;
                         }
@@ -391,7 +400,7 @@ pub fn client_receive_commands(
                     );
                     for s in spawns.iter() {
                         debug!(
-                            "  spawn net_id={} kind='{}' faction='{}' pos=({:.1},{:.1},{:.1})",
+                            "  spawn net_id={} kind={} faction={} pos=({:.1},{:.1},{:.1})",
                             s.net_id, s.kind, s.faction, s.pos[0], s.pos[1], s.pos[2],
                         );
                     }
@@ -410,17 +419,11 @@ pub fn client_receive_commands(
                         "received world baseline (handler not wired yet)",
                     );
                 }
-                ServerMessage::NeutralWorldDelta { .. } => {
-                    debug_tap::record_info(
-                        "client_world_sync",
-                        "received neutral world delta (handler not wired yet)",
-                    );
+                ServerMessage::NeutralWorldDelta { objects, .. } => {
+                    building_sync.pending_neutral.deltas.extend(objects.iter().cloned());
                 }
-                ServerMessage::NeutralWorldDespawn { .. } => {
-                    debug_tap::record_info(
-                        "client_world_sync",
-                        "received neutral world despawn (handler not wired yet)",
-                    );
+                ServerMessage::NeutralWorldDespawn { net_ids, .. } => {
+                    building_sync.pending_neutral.despawns.extend(net_ids.iter().copied());
                 }
                 ServerMessage::Pong { .. } => {
                     let now = time.elapsed_secs_f64();
@@ -507,6 +510,10 @@ pub fn client_interpolate_remote_units(
 
 /// Processes pending entity spawns/despawns from the host.
 /// Runs as a separate system because it needs access to blueprint/visual resources.
+///
+/// Deterministic: always trusts host EntitySpawn as authoritative.
+/// No distance-based adoption heuristic — if an entity with the same NetworkId
+/// already exists, skip it; otherwise spawn fresh from blueprint.
 pub fn client_apply_entity_sync(
     mut commands: Commands,
     mut pending: ResMut<PendingNetSpawns>,
@@ -516,18 +523,12 @@ pub fn client_apply_entity_sync(
     height_map: Res<HeightMap>,
     building_models: Option<Res<BuildingModelAssets>>,
     unit_models: Option<Res<UnitModelAssets>>,
-    // Query existing NetworkId entities to avoid duplicate spawns
     existing_with_id: Query<(Entity, &NetworkId)>,
-    // Query ALL entities with EntityKind+Faction+Transform (may or may not have NetworkId yet)
-    all_entities: Query<(Entity, &EntityKind, &Faction, &Transform, Option<&NetworkId>)>,
 ) {
     // ── Handle spawns (batched: max 8 per frame to avoid WASM stalls) ──
     if !pending.spawns.is_empty() {
-        // Build set of already-known net IDs (from local spawns or prior sync)
         let mut known_ids: std::collections::HashSet<u32> =
             existing_with_id.iter().map(|(_, nid)| nid.0).collect();
-        let mut claimed_local_entities: std::collections::HashSet<Entity> =
-            std::collections::HashSet::new();
 
         let batch_size = 8;
         let remaining = if pending.spawns.len() > batch_size {
@@ -537,7 +538,6 @@ pub fn client_apply_entity_sync(
         };
         let spawns = std::mem::replace(&mut pending.spawns, remaining);
         let mut spawned = 0u32;
-        let mut adopted = 0u32;
         let mut skipped_known = 0u32;
         let mut skipped_parse = 0u32;
         for spawn_data in &spawns {
@@ -546,75 +546,39 @@ pub fn client_apply_entity_sync(
                 continue;
             }
 
-            let Some(kind) = parse_entity_kind(&spawn_data.kind) else {
-                warn!("Unknown EntityKind from host: '{}'", spawn_data.kind);
+            let Some(kind) = EntityKind::from_index(spawn_data.kind) else {
+                warn!("Unknown EntityKind index from host: {}", spawn_data.kind);
                 skipped_parse += 1;
                 continue;
             };
-            let Some(faction) = parse_faction(&spawn_data.faction) else {
-                warn!("Unknown Faction from host: '{}'", spawn_data.faction);
+            let Some(faction) = Faction::from_net_index(spawn_data.faction) else {
+                warn!("Unknown Faction index from host: {}", spawn_data.faction);
                 skipped_parse += 1;
                 continue;
             };
 
             let pos = Vec3::new(spawn_data.pos[0], spawn_data.pos[1], spawn_data.pos[2]);
 
-            // Check for a matching local entity that doesn't have a NetworkId yet.
-            // Two-pass: first try entities without NetworkId (prefer adoption over re-matching).
-            // Increased threshold to 15.0 units to account for height map differences.
-            let mut matched_local = None;
-            let mut best_dist = f32::MAX;
-            for (entity, ek, ef, etf, opt_nid) in &all_entities {
-                if claimed_local_entities.contains(&entity) {
-                    continue;
-                }
-                if *ek != kind || *ef != faction {
-                    continue;
-                }
-                if let Some(nid) = opt_nid {
-                    if nid.0 != spawn_data.net_id {
-                        continue;
-                    }
-                }
-                let dist = etf.translation.distance(pos);
-                if dist < 15.0 && dist < best_dist {
-                    best_dist = dist;
-                    matched_local = Some(entity);
-                }
-            }
-
-            if let Some(local_entity) = matched_local {
-                commands.entity(local_entity).insert(NetworkId(spawn_data.net_id));
-                claimed_local_entities.insert(local_entity);
-                known_ids.insert(spawn_data.net_id);
-                adopted += 1;
-            } else {
-                // No local match — spawn a new entity from blueprint
-                let entity = spawn_from_blueprint_with_faction(
-                    &mut commands,
-                    &cache,
-                    kind,
-                    pos,
-                    &registry,
-                    building_models.as_deref(),
-                    unit_models.as_deref(),
-                    &height_map,
-                    faction,
-                );
-                commands.entity(entity).insert(NetworkId(spawn_data.net_id));
-                claimed_local_entities.insert(entity);
-                known_ids.insert(spawn_data.net_id);
-                spawned += 1;
-                info!(
-                    "EntitySync: no local match for net_id={} {:?}/{:?} at ({:.1},{:.1},{:.1}), spawned new",
-                    spawn_data.net_id, kind, faction, pos.x, pos.y, pos.z,
-                );
-            }
+            // Deterministic: always spawn fresh from blueprint, no distance heuristic
+            let entity = spawn_from_blueprint_with_faction(
+                &mut commands,
+                &cache,
+                kind,
+                pos,
+                &registry,
+                building_models.as_deref(),
+                unit_models.as_deref(),
+                &height_map,
+                faction,
+            );
+            commands.entity(entity).insert(NetworkId(spawn_data.net_id));
+            known_ids.insert(spawn_data.net_id);
+            spawned += 1;
         }
-        if spawned > 0 || adopted > 0 || skipped_known > 0 || skipped_parse > 0 {
+        if spawned > 0 || skipped_known > 0 || skipped_parse > 0 {
             info!(
-                "Client entity sync: {} spawned, {} adopted, {} already known, {} parse failures (pending remaining: {})",
-                spawned, adopted, skipped_known, skipped_parse, pending.spawns.len(),
+                "Client entity sync: {} spawned, {} already known, {} parse failures (pending remaining: {})",
+                spawned, skipped_known, skipped_parse, pending.spawns.len(),
             );
         }
     }
@@ -635,13 +599,81 @@ pub fn client_apply_entity_sync(
     }
 }
 
-/// Parse an EntityKind from its Debug name (e.g. "Worker", "Base").
-fn parse_entity_kind(s: &str) -> Option<EntityKind> {
-    serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
+
+/// Applies neutral world delta updates (resource node amounts) from the host.
+/// Matches by NetworkId if available, otherwise by position (both sides share world gen).
+pub fn client_apply_neutral_sync(
+    mut commands: Commands,
+    mut pending: ResMut<PendingNeutralUpdates>,
+    net_map: Res<EntityNetMap>,
+    mut resource_nodes: Query<(Entity, &mut ResourceNode, &GlobalTransform, Option<&NetworkId>)>,
+) {
+    if pending.deltas.is_empty() && pending.despawns.is_empty() {
+        return;
+    }
+
+    let deltas = std::mem::take(&mut pending.deltas);
+    let mut matched = 0u32;
+    let mut unmatched = 0u32;
+
+    for snap in &deltas {
+        let amount = snap.amount_remaining.unwrap_or(0);
+
+        // Try direct net_id lookup first
+        if let Some(&ecs_entity) = net_map.to_ecs.get(&snap.net_id) {
+            if let Ok((_, mut node, _, _)) = resource_nodes.get_mut(ecs_entity) {
+                node.amount_remaining = amount;
+                matched += 1;
+                continue;
+            }
+        }
+
+        // Fallback: match by position (both sides share the same world gen seed)
+        let snap_pos = Vec3::new(snap.pos[0], snap.pos[1], snap.pos[2]);
+        let mut found = false;
+        for (entity, mut node, gt, existing_nid) in &mut resource_nodes {
+            if existing_nid.is_some() {
+                // Already has a NetworkId that didn't match — skip
+                if existing_nid.unwrap().0 != snap.net_id {
+                    continue;
+                }
+            }
+            let dist = gt.translation().distance(snap_pos);
+            if dist < 1.0 {
+                node.amount_remaining = amount;
+                // Assign the host's NetworkId so future lookups are O(1)
+                if existing_nid.is_none() {
+                    commands.entity(entity).insert(NetworkId(snap.net_id));
+                }
+                matched += 1;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            unmatched += 1;
+        }
+    }
+
+    // Handle despawns
+    let despawns = std::mem::take(&mut pending.despawns);
+    for net_id in &despawns {
+        if let Some(&ecs_entity) = net_map.to_ecs.get(net_id) {
+            commands.entity(ecs_entity).despawn();
+        }
+    }
+
+    if matched > 0 || unmatched > 0 {
+        debug!(
+            "Neutral world sync: {} matched, {} unmatched",
+            matched, unmatched,
+        );
+    }
 }
 
-/// Parse a Faction from its Debug name (e.g. "Player1", "Neutral").
-fn parse_faction(s: &str) -> Option<Faction> {
+/// Parse an EntityKind from its Debug name (e.g. "Worker", "Base").
+/// Still needed for BuildingSync training queue which uses string names.
+fn parse_entity_kind(s: &str) -> Option<EntityKind> {
     serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
 }
 
@@ -690,7 +722,180 @@ pub fn client_send_ping(
         seq,
         timestamp: time.elapsed_secs_f64(),
     };
-    if let Ok(json) = serde_json::to_vec(&ping) {
-        let _ = client.outgoing.send(json);
+    if let Ok(bytes) = codec::encode(&ping) {
+        let _ = client.outgoing.send(bytes);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_state::message::{ClientMessage, NetUnitState};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::Duration;
+
+    use crate::components::{AppState, AssignedPhase};
+    use crate::net_bridge::EntityNetMap;
+    use crate::ui::event_log_widget::GameEventLog;
+
+    #[test]
+    fn u8_to_stance_maps_expected_values() {
+        assert_eq!(u8_to_stance(0), UnitStance::Passive);
+        assert_eq!(u8_to_stance(1), UnitStance::Defensive);
+        assert_eq!(u8_to_stance(2), UnitStance::Aggressive);
+        assert_eq!(u8_to_stance(9), UnitStance::Defensive);
+    }
+
+    #[test]
+    fn net_to_ecs_unit_state_resolves_entity_references() {
+        let building = Entity::from_bits(11);
+        let target = Entity::from_bits(22);
+        let mut net_map = EntityNetMap::default();
+        net_map.to_ecs.insert(7, target);
+        net_map.to_ecs.insert(9, building);
+
+        assert_eq!(
+            net_to_ecs_unit_state(&NetUnitState::Moving { target: [1.0, 2.0, 3.0] }, &net_map),
+            Some(UnitState::Moving(Vec3::new(1.0, 2.0, 3.0)))
+        );
+        assert_eq!(
+            net_to_ecs_unit_state(&NetUnitState::Attacking { target_id: 7 }, &net_map),
+            Some(UnitState::Attacking(target))
+        );
+        assert_eq!(
+            net_to_ecs_unit_state(
+                &NetUnitState::AssignedGathering {
+                    building_id: 9,
+                    phase: 2,
+                },
+                &net_map
+            ),
+            Some(UnitState::AssignedGathering {
+                building,
+                phase: AssignedPhase::Harvesting {
+                    node: building,
+                    timer_secs: 0.0,
+                },
+            })
+        );
+        assert_eq!(
+            net_to_ecs_unit_state(&NetUnitState::MovingToBuild { target_id: 77 }, &net_map),
+            None
+        );
+    }
+
+    #[test]
+    fn parse_entity_kind_accepts_debug_names() {
+        assert_eq!(parse_entity_kind("Worker"), Some(EntityKind::Worker));
+        assert_eq!(parse_entity_kind("Base"), Some(EntityKind::Base));
+        assert_eq!(parse_entity_kind("NotARealKind"), None);
+    }
+
+    #[test]
+    fn client_interpolate_remote_units_blends_transform() {
+        let mut app = App::new();
+        app.insert_resource(Time::<()>::default());
+        let entity = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                NetInterpolation {
+                    prev_pos: Vec3::ZERO,
+                    target_pos: Vec3::new(10.0, 0.0, 0.0),
+                    prev_rot: 0.0,
+                    target_rot: std::f32::consts::FRAC_PI_2,
+                    blend: 0.0,
+                    rate: 2.0,
+                },
+            ))
+            .id();
+        app.add_systems(Update, client_interpolate_remote_units);
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(0.25));
+        app.update();
+
+        let transform = app.world().entity(entity).get::<Transform>().unwrap();
+        let interp = app.world().entity(entity).get::<NetInterpolation>().unwrap();
+        assert!((transform.translation.x - 5.0).abs() < 0.001);
+        assert!((interp.blend - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn client_handle_disconnect_returns_to_menu_and_clears_role() {
+        let (_incoming_tx, incoming_rx) = mpsc::channel();
+        let (outgoing_tx, _outgoing_rx) = mpsc::channel();
+        let shutdown = Arc::new(AtomicBool::new(true));
+
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.init_state::<AppState>();
+        app.insert_resource(ClientNetState {
+            incoming: Mutex::new(incoming_rx),
+            outgoing: outgoing_tx,
+            shutdown,
+            player_id: 1,
+            seat_index: 0,
+            my_faction: Faction::Player2,
+            color_index: 1,
+            seq: Mutex::new(0),
+            session_token: 0,
+        });
+        app.insert_resource(NetRole::Client);
+        app.insert_resource(GameEventLog::default());
+        app.insert_resource(Time::<()>::default());
+        app.add_systems(Update, client_handle_disconnect);
+
+        app.update();
+
+        assert_eq!(*app.world().resource::<NetRole>(), NetRole::Offline);
+        assert_eq!(
+            app.world().resource::<State<AppState>>().get(),
+            &AppState::MainMenu
+        );
+        assert_eq!(app.world().resource::<GameEventLog>().entries.len(), 1);
+    }
+
+    #[test]
+    fn client_send_ping_emits_encoded_message_and_updates_seq() {
+        let (_incoming_tx, incoming_rx) = mpsc::channel();
+        let (outgoing_tx, outgoing_rx) = mpsc::channel();
+
+        let mut app = App::new();
+        app.insert_resource(ClientNetState {
+            incoming: Mutex::new(incoming_rx),
+            outgoing: outgoing_tx,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            player_id: 3,
+            seat_index: 1,
+            my_faction: Faction::Player3,
+            color_index: 2,
+            seq: Mutex::new(0),
+            session_token: 0,
+        });
+        app.insert_resource(ClientPingTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
+        app.insert_resource(NetStats::default());
+        app.insert_resource(Time::<()>::default());
+        app.add_systems(Update, client_send_ping);
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(0.1));
+        app.update();
+
+        let encoded = outgoing_rx.try_recv().unwrap();
+        let decoded: ClientMessage = codec::decode(&encoded).unwrap();
+        match decoded {
+            ClientMessage::Ping { seq, timestamp } => {
+                assert_eq!(seq, 1);
+                assert!(timestamp >= 0.1);
+            }
+            other => panic!("expected ping, got {other:?}"),
+        }
+
+        assert_eq!(*app.world().resource::<ClientNetState>().seq.lock().unwrap(), 1);
+        assert!(app.world().resource::<NetStats>().last_ping_sent_at >= 0.1);
     }
 }

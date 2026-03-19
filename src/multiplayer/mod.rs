@@ -169,6 +169,10 @@ impl Default for NetTrafficCounters {
 pub static NET_TRAFFIC: std::sync::LazyLock<NetTrafficCounters> =
     std::sync::LazyLock::new(NetTrafficCounters::default);
 
+#[cfg(test)]
+pub(crate) static NET_TRAFFIC_TEST_LOCK: std::sync::LazyLock<std::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(()));
+
 /// Drains atomic traffic counters into the `NetStats` resource each frame,
 /// and computes per-second byte rates.
 fn update_net_stats(time: Res<Time>, mut stats: ResMut<NetStats>) {
@@ -238,6 +242,44 @@ pub struct LobbyState {
     pub all_ips: Vec<(String, String, bool)>, // (ip, iface_name, is_vpn)
 }
 
+// ── Reconnection ────────────────────────────────────────────────────────────
+
+/// Tracks a disconnected player during the reconnection grace period.
+#[derive(Debug, Clone)]
+pub struct DisconnectedPlayer {
+    pub session_token: u64,
+    pub player_id: u8,
+    pub faction: Faction,
+    pub seat_index: u8,
+    pub color_index: u8,
+    pub name: String,
+    /// Game-time when disconnection occurred.
+    pub disconnect_time: f32,
+}
+
+/// Grace period (seconds) before a disconnected player's faction is converted to AI.
+pub const RECONNECT_GRACE_PERIOD: f32 = 30.0;
+
+/// Tracks session tokens for reconnection.
+#[derive(Resource, Default)]
+pub struct SessionTokens {
+    /// Maps session_token → player_id for active sessions.
+    pub tokens: std::collections::HashMap<u64, u8>,
+    /// Players in the reconnection grace period.
+    pub disconnected: Vec<DisconnectedPlayer>,
+    /// Counter for generating unique tokens.
+    counter: u64,
+}
+
+impl SessionTokens {
+    pub fn generate(&mut self, player_id: u8) -> u64 {
+        self.counter += 1;
+        let token = self.counter ^ 0x5A3C_F7E1_9B2D_4A6E; // simple obfuscation
+        self.tokens.insert(token, player_id);
+        token
+    }
+}
+
 // ── Host Net State ──────────────────────────────────────────────────────────
 
 #[derive(Resource)]
@@ -264,6 +306,8 @@ pub struct ClientNetState {
     pub my_faction: Faction,
     pub color_index: u8,
     pub seq: Mutex<u32>,
+    /// Session token for reconnection (assigned by host via JoinAccepted).
+    pub session_token: u64,
 }
 
 // ── WASM WebSocket client resource ──────────────────────────────────────────
@@ -277,7 +321,7 @@ pub struct WasmClientSocket {
     pub outgoing_rx: Mutex<Receiver<Vec<u8>>>,
 }
 
-/// Drains queued outgoing messages and sends them via the browser WebSocket.
+/// Drains queued outgoing messages and sends them via the browser WebSocket (binary frames).
 #[cfg(target_arch = "wasm32")]
 pub fn wasm_flush_outgoing(socket: Option<Res<WasmClientSocket>>) {
     let Some(socket) = socket else { return };
@@ -288,8 +332,8 @@ pub fn wasm_flush_outgoing(socket: Option<Res<WasmClientSocket>>) {
     for _ in 0..256 {
         match rx.try_recv() {
             Ok(data) => {
-                let text = String::from_utf8_lossy(&data).to_string();
-                let _ = socket.ws.send_with_str(&text);
+                let arr = js_sys::Uint8Array::from(data.as_slice());
+                let _ = socket.ws.send_with_array_buffer(&arr.buffer());
             }
             Err(_) => break,
         }
@@ -299,9 +343,16 @@ pub fn wasm_flush_outgoing(socket: Option<Res<WasmClientSocket>>) {
 // ── System sets ─────────────────────────────────────────────────────────────
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum MultiplayerSet {
-    ClientReceive,
+pub enum NetSet {
+    /// Host: process incoming client commands.
+    /// Client: receive and apply server messages.
+    Receive,
+    /// Host: broadcast state/entity/building/resource/day-cycle sync.
+    Broadcast,
 }
+
+// Keep old name as alias for backwards compat within the crate
+pub type MultiplayerSet = NetSet;
 
 // ── Run conditions ──────────────────────────────────────────────────────────
 
@@ -391,14 +442,23 @@ pub fn configure_multiplayer_ai(
 fn reset_multiplayer_sync(
     mut synced: ResMut<host_systems::SyncedEntitySet>,
     mut pending: ResMut<client_systems::PendingNetSpawns>,
+    mut pending_neutral: ResMut<client_systems::PendingNeutralUpdates>,
     mut prev_snapshots: ResMut<host_systems::PreviousSnapshots>,
+    mut prev_buildings: ResMut<host_systems::PreviousBuildingSnapshots>,
+    mut prev_neutral: ResMut<host_systems::PreviousNeutralSnapshots>,
+    mut pending_frame: ResMut<host_systems::PendingServerFrame>,
 ) {
     synced.known.clear();
     synced.full_resync_counter = 0;
     pending.spawns.clear();
     pending.despawns.clear();
+    pending_neutral.deltas.clear();
+    pending_neutral.despawns.clear();
     prev_snapshots.snapshots.clear();
     prev_snapshots.full_sync_counter = 0;
+    prev_buildings.snapshots.clear();
+    prev_neutral.amounts.clear();
+    pending_frame.messages.clear();
 }
 
 pub struct MultiplayerPlugin;
@@ -406,49 +466,79 @@ pub struct MultiplayerPlugin;
 impl Plugin for MultiplayerPlugin {
     fn build(&self, app: &mut App) {
         debug_tap::ensure_started();
+
+        // Configure system set ordering: Receive runs before Broadcast
+        app.configure_sets(
+            Update,
+            (
+                NetSet::Receive,
+                NetSet::Broadcast.after(NetSet::Receive),
+            ),
+        );
+
         app.init_resource::<NetRole>()
             .init_resource::<LobbyState>()
             .init_resource::<NetStats>()
+            .init_resource::<SessionTokens>()
             .init_resource::<host_systems::StateSyncTimer>()
             .init_resource::<host_systems::SyncedEntitySet>()
             .init_resource::<host_systems::PreviousSnapshots>()
+            .init_resource::<host_systems::PendingServerFrame>()
+            .init_resource::<host_systems::PreviousBuildingSnapshots>()
             .init_resource::<host_systems::BuildingSyncTimer>()
             .init_resource::<host_systems::ResourceSyncTimer>()
             .init_resource::<host_systems::DayCycleSyncTimer>()
+            .init_resource::<host_systems::NeutralWorldSyncTimer>()
+            .init_resource::<host_systems::PreviousNeutralSnapshots>()
             .init_resource::<client_systems::PendingNetSpawns>()
+            .init_resource::<client_systems::PendingNeutralUpdates>()
             .init_resource::<client_systems::ClientPingTimer>()
+            // Host: receive commands
             .add_systems(
                 Update,
                 (
                     host_systems::host_process_client_commands,
                     host_systems::host_handle_disconnects,
+                )
+                    .in_set(NetSet::Receive)
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(is_host),
+            )
+            // Host: broadcast sync data
+            .add_systems(
+                Update,
+                (
                     host_systems::host_broadcast_state_sync,
                     host_systems::host_broadcast_entity_spawns
                         .after(host_systems::host_broadcast_state_sync),
                     host_systems::host_broadcast_building_sync,
                     host_systems::host_broadcast_resource_sync,
                     host_systems::host_broadcast_day_cycle_sync,
+                    host_systems::host_broadcast_neutral_world_sync,
                 )
+                    .in_set(NetSet::Broadcast)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_host),
             )
+            // Client: receive and apply server messages
             .add_systems(
                 Update,
                 client_systems::client_receive_commands
-                    .in_set(MultiplayerSet::ClientReceive)
+                    .in_set(NetSet::Receive)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_client),
             )
+            // Client: post-receive processing
             .add_systems(
                 Update,
                 (
-                    client_systems::client_apply_entity_sync
-                        .after(MultiplayerSet::ClientReceive),
-                    client_systems::client_interpolate_remote_units
-                        .after(MultiplayerSet::ClientReceive),
+                    client_systems::client_apply_entity_sync,
+                    client_systems::client_apply_neutral_sync,
+                    client_systems::client_interpolate_remote_units,
                     client_systems::client_handle_disconnect,
                     client_systems::client_send_ping,
                 )
+                    .in_set(NetSet::Broadcast)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_client),
             )
@@ -475,5 +565,215 @@ impl Plugin for MultiplayerPlugin {
                 .run_if(in_state(AppState::InGame))
                 .run_if(is_client),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn lobby_player(
+        player_id: u8,
+        name: &str,
+        faction: Faction,
+        color_index: u8,
+        is_host: bool,
+        connected: bool,
+    ) -> LobbyPlayer {
+        LobbyPlayer {
+            player_id,
+            name: name.to_string(),
+            seat_index: player_id,
+            faction,
+            color_index,
+            is_host,
+            connected,
+        }
+    }
+
+    #[test]
+    fn display_value_formats_expected_fields() {
+        let stats = NetStats {
+            rtt_ms: 12.34,
+            rtt_smoothed_ms: 8.76,
+            total_bytes_sent: 1_536,
+            total_bytes_received: 2_097_152,
+            total_msgs_sent: 7,
+            total_msgs_received: 9,
+            bytes_sent_last_sec: 512,
+            bytes_received_last_sec: 3_072,
+            connected_clients: 2,
+            last_sync_entity_count: 42,
+            net_map_size: 77,
+            pending_spawns: 3,
+            ..Default::default()
+        };
+
+        assert_eq!(stats.display_value("Role", &NetRole::Host), Some("Host".to_string()));
+        assert_eq!(stats.display_value("Ping", &NetRole::Client), Some("12.3 ms".to_string()));
+        assert_eq!(
+            stats.display_value("Smoothed RTT", &NetRole::Client),
+            Some("8.8 ms".to_string())
+        );
+        assert_eq!(stats.display_value("Clients", &NetRole::Host), Some("2".to_string()));
+        assert_eq!(stats.display_value("Sent/s", &NetRole::Host), Some("512 B/s".to_string()));
+        assert_eq!(
+            stats.display_value("Received/s", &NetRole::Host),
+            Some("3.0 KB/s".to_string())
+        );
+        assert_eq!(stats.display_value("Total Sent", &NetRole::Host), Some("1.5 KB".to_string()));
+        assert_eq!(
+            stats.display_value("Total Received", &NetRole::Host),
+            Some("2.0 MB".to_string())
+        );
+        assert_eq!(stats.display_value("Msgs Sent", &NetRole::Host), Some("7".to_string()));
+        assert_eq!(stats.display_value("Msgs Received", &NetRole::Host), Some("9".to_string()));
+        assert_eq!(stats.display_value("Sync Entities", &NetRole::Host), Some("42".to_string()));
+        assert_eq!(stats.display_value("Net Map Size", &NetRole::Host), Some("77".to_string()));
+        assert_eq!(stats.display_value("Pending Spawns", &NetRole::Host), Some("3".to_string()));
+        assert_eq!(stats.display_value("Status", &NetRole::Host), None);
+    }
+
+    #[test]
+    fn display_value_uses_placeholders_for_zero_rtt() {
+        let stats = NetStats::default();
+        assert_eq!(stats.display_value("Ping", &NetRole::Client), Some("--".to_string()));
+        assert_eq!(
+            stats.display_value("Smoothed RTT", &NetRole::Client),
+            Some("--".to_string())
+        );
+    }
+
+    #[test]
+    fn session_tokens_generate_unique_obfuscated_tokens() {
+        let mut tokens = SessionTokens::default();
+
+        let first = tokens.generate(3);
+        let second = tokens.generate(5);
+
+        assert_ne!(first, second);
+        assert_eq!(tokens.tokens.get(&first), Some(&3));
+        assert_eq!(tokens.tokens.get(&second), Some(&5));
+    }
+
+    #[test]
+    fn configure_multiplayer_ai_sets_host_player_and_removes_human_ai() {
+        let mut world = World::new();
+        world.insert_resource(LobbyState {
+            players: vec![
+                lobby_player(0, "Host", Faction::Player3, 1, true, true),
+                lobby_player(1, "Guest", Faction::Player2, 0, false, true),
+            ],
+            ..Default::default()
+        });
+        world.insert_resource(NetRole::Host);
+        world.insert_resource(AiControlledFactions::default());
+        world.insert_resource(ActivePlayer::default());
+        world.insert_resource(FactionColors::default());
+
+        let mut system = IntoSystem::into_system(configure_multiplayer_ai);
+        system.initialize(&mut world);
+        let _ = system.run((), &mut world);
+
+        let active_player = world.resource::<ActivePlayer>();
+        let ai = world.resource::<AiControlledFactions>();
+        let colors = world.resource::<FactionColors>();
+        assert_eq!(active_player.0, Faction::Player3);
+        assert!(!ai.factions.contains(&Faction::Player3));
+        assert!(!ai.factions.contains(&Faction::Player2));
+        assert_eq!(colors.get(&Faction::Player3), FactionColors::from_index(1));
+        assert_eq!(colors.get(&Faction::Player2), FactionColors::from_index(0));
+    }
+
+    #[test]
+    fn configure_multiplayer_ai_for_client_disables_all_ai_and_uses_client_faction() {
+        let mut world = World::new();
+        let (_server_tx, server_rx) = std::sync::mpsc::channel();
+        let (outgoing_tx, _outgoing_rx) = std::sync::mpsc::channel();
+        world.insert_resource(LobbyState {
+            players: vec![lobby_player(0, "Host", Faction::Player1, 0, true, true)],
+            ..Default::default()
+        });
+        world.insert_resource(NetRole::Client);
+        world.insert_resource(ClientNetState {
+            incoming: std::sync::Mutex::new(server_rx),
+            outgoing: outgoing_tx,
+            shutdown: Arc::new(AtomicBool::new(false)),
+            player_id: 2,
+            seat_index: 1,
+            my_faction: Faction::Player4,
+            color_index: 3,
+            seq: std::sync::Mutex::new(0),
+            session_token: 0,
+        });
+        world.insert_resource(AiControlledFactions::default());
+        world.insert_resource(ActivePlayer::default());
+        world.insert_resource(FactionColors::default());
+
+        let mut system = IntoSystem::into_system(configure_multiplayer_ai);
+        system.initialize(&mut world);
+        let _ = system.run((), &mut world);
+
+        let active_player = world.resource::<ActivePlayer>();
+        let ai = world.resource::<AiControlledFactions>();
+        assert_eq!(active_player.0, Faction::Player4);
+        assert!(ai.factions.is_empty());
+    }
+
+    #[test]
+    fn update_net_stats_drains_counters_and_rolls_rate_snapshot() {
+        let _guard = NET_TRAFFIC_TEST_LOCK.lock().unwrap();
+        NET_TRAFFIC.bytes_sent.store(0, Ordering::Relaxed);
+        NET_TRAFFIC.bytes_received.store(0, Ordering::Relaxed);
+        NET_TRAFFIC.msgs_sent.store(0, Ordering::Relaxed);
+        NET_TRAFFIC.msgs_received.store(0, Ordering::Relaxed);
+        NET_TRAFFIC.bytes_sent.store(256, Ordering::Relaxed);
+        NET_TRAFFIC.bytes_received.store(128, Ordering::Relaxed);
+        NET_TRAFFIC.msgs_sent.store(3, Ordering::Relaxed);
+        NET_TRAFFIC.msgs_received.store(2, Ordering::Relaxed);
+
+        let mut app = App::new();
+        app.insert_resource(Time::<()>::default());
+        app.insert_resource(NetStats::default());
+        app.add_systems(Update, update_net_stats);
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(0.4));
+        app.update();
+
+        {
+            let stats = app.world().resource::<NetStats>();
+            assert_eq!(stats.total_bytes_sent, 256);
+            assert_eq!(stats.total_bytes_received, 128);
+            assert_eq!(stats.total_msgs_sent, 3);
+            assert_eq!(stats.total_msgs_received, 2);
+            assert_eq!(stats.bytes_sent_last_sec, 0);
+            assert_eq!(stats.bytes_received_last_sec, 0);
+            assert_eq!(stats.bytes_sent_accum, 256);
+            assert_eq!(stats.bytes_recv_accum, 128);
+        }
+
+        NET_TRAFFIC.bytes_sent.store(64, Ordering::Relaxed);
+        NET_TRAFFIC.bytes_received.store(32, Ordering::Relaxed);
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(0.7));
+        app.update();
+
+        let stats = app.world().resource::<NetStats>();
+        assert_eq!(stats.total_bytes_sent, 320);
+        assert_eq!(stats.total_bytes_received, 160);
+        assert_eq!(stats.bytes_sent_last_sec, 320);
+        assert_eq!(stats.bytes_received_last_sec, 160);
+        assert_eq!(stats.bytes_sent_accum, 0);
+        assert_eq!(stats.bytes_recv_accum, 0);
+        assert_eq!(stats.rate_timer, 0.0);
+
+        NET_TRAFFIC.bytes_sent.store(0, Ordering::Relaxed);
+        NET_TRAFFIC.bytes_received.store(0, Ordering::Relaxed);
+        NET_TRAFFIC.msgs_sent.store(0, Ordering::Relaxed);
+        NET_TRAFFIC.msgs_received.store(0, Ordering::Relaxed);
     }
 }

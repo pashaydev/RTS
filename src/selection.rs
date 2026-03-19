@@ -1194,8 +1194,8 @@ fn handle_right_click_move(
                     timestamp: time.elapsed_secs_f64(),
                     input,
                 };
-                if let Ok(json) = serde_json::to_vec(&msg) {
-                    let _ = client.outgoing.send(json);
+                if let Ok(bytes) = game_state::codec::encode(&msg) {
+                    let _ = client.outgoing.send(bytes);
                 }
             }
         }
@@ -1217,10 +1217,10 @@ fn handle_right_click_move(
                     player_id: 0,
                     input: input.clone(),
                 };
-                if let Ok(json) = serde_json::to_vec(&relay) {
+                if let Ok(bytes) = game_state::codec::encode(&relay) {
                     let senders = host.client_senders.lock().unwrap();
                     for (_id, sender) in senders.iter() {
-                        let _ = sender.send(json.clone());
+                        let _ = sender.send(bytes.clone());
                     }
                 }
 

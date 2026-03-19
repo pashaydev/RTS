@@ -75,6 +75,14 @@ fn assign_network_ids(
             Without<NetworkId>,
         ),
     >,
+    neutral_query: Query<
+        (Entity, Option<&Transform>),
+        (
+            Without<EntityKind>,
+            With<ReplicatedNetEntity>,
+            Without<NetworkId>,
+        ),
+    >,
 ) {
     // Client: don't assign IDs locally — all NetworkIds come from the host
     // via EntitySpawn messages. This prevents ID mismatches between host and client.
@@ -103,9 +111,28 @@ fn assign_network_ids(
         })
         .collect();
 
+    // Also assign NetworkIds to neutral replicated entities (ResourceNode, Sapling, etc.)
+    let mut neutral_pending: Vec<_> = neutral_query
+        .iter()
+        .map(|(entity, transform)| {
+            let transform_key = transform
+                .map(|t| (
+                    ordered_f32_bits(t.translation.x),
+                    ordered_f32_bits(t.translation.y),
+                    ordered_f32_bits(t.translation.z),
+                ))
+                .unwrap_or((u32::MAX, u32::MAX, u32::MAX));
+            (entity, usize::MAX, u8::MAX, transform_key)
+        })
+        .collect();
+    neutral_pending.sort_by_key(|(_, _, _, transform_key)| *transform_key);
+
     pending.sort_by_key(|(_, kind_key, faction_key, transform_key)| {
         (*kind_key, *faction_key, *transform_key)
     });
+
+    // Assign EntityKind entities first, then neutrals (deterministic order)
+    pending.extend(neutral_pending);
 
     if !pending.is_empty() {
         info!(

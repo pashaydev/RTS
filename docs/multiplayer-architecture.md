@@ -1,7 +1,8 @@
 # Multiplayer Architecture
 
 > Host-authoritative LAN multiplayer with TCP (native) and WebSocket (WASM) transport.
-> JSON wire protocol with 4-byte length-prefixed framing. Delta-compressed state sync at ~10Hz.
+> **MessagePack binary wire protocol** with 4-byte length-prefixed framing. Delta-compressed state sync at ~10Hz.
+> JSON fallback for legacy clients. Numeric entity/faction discriminants. Reconnection with 30s grace period.
 
 ---
 
@@ -11,7 +12,7 @@
 flowchart TB
     subgraph Host["HOST (Full Simulation)"]
         ECS["Bevy ECS\n(authoritative world)"]
-        HS["Host Systems\n- process_client_commands\n- broadcast_state_sync\n- broadcast_entity_spawns\n- broadcast_building_sync\n- broadcast_resource_sync\n- broadcast_day_cycle_sync"]
+        HS["Host Systems\n- process_client_commands\n- broadcast_state_sync\n- broadcast_entity_spawns\n- broadcast_building_sync\n- broadcast_resource_sync\n- broadcast_day_cycle_sync\n- broadcast_neutral_world_sync"]
         NB["Net Bridge\n- assign_network_ids\n- rebuild_entity_net_map"]
         HNS["HostNetState\n- incoming_commands\n- client_senders\n- disconnect_rx"]
 
@@ -23,13 +24,13 @@ flowchart TB
     subgraph Transport["TRANSPORT LAYER"]
         TCP["TCP Listener\n:7878"]
         WS["WebSocket Listener\n:7879"]
-        TCP --- FRAME["4-byte length prefix\n+ JSON payload"]
+        TCP --- FRAME["4-byte length prefix\n+ MessagePack payload"]
         WS --- FRAME
     end
 
     subgraph Client1["CLIENT (Native)"]
         CECS1["Bevy ECS\n(mirrored state)"]
-        CS1["Client Systems\n- client_receive_commands\n- client_apply_entity_sync\n- client_interpolate_remote_units\n- client_send_ping"]
+        CS1["Client Systems\n- client_receive_commands\n- client_apply_entity_sync\n- client_apply_neutral_sync\n- client_interpolate_remote_units\n- client_send_ping"]
         CNS1["ClientNetState\n- incoming\n- outgoing\n- my_faction"]
         CECS1 <--> CS1
         CS1 <--> CNS1
@@ -144,6 +145,7 @@ sequenceDiagram
 
     loop Every 500ms
         Host->>Client: BuildingSync
+        Host->>Client: NeutralWorldDelta (resource node amounts)
     end
 
     loop Every 1s
@@ -165,8 +167,18 @@ sequenceDiagram
 
     Note over Host,Client: === DISCONNECT ===
     Client->>Host: LeaveNotice (or connection drop)
-    Host->>Host: Convert faction to AI
-    Host-->>Client: Announcement "Player disconnected"
+    Host->>Host: Start 30s reconnect grace period
+    Host-->>Client: Announcement "Player disconnected — waiting for reconnection"
+
+    Note over Host,Client: === RECONNECTION (within 30s) ===
+    Client->>Transport: TcpStream::connect (or WS)
+    Client->>Host: Reconnect { session_token }
+    Host->>Host: Validate token, restore faction from AI
+    Host->>Client: JoinAccepted + full state resync
+
+    Note over Host,Client: === GRACE PERIOD EXPIRED ===
+    Host->>Host: Convert faction to AI permanently
+    Host-->>Client: Announcement "AI taking over"
 ```
 
 ---
@@ -178,13 +190,15 @@ sequenceDiagram
 ```
 ┌──────────────────┬──────────────────────────┐
 │  4 bytes (BE)    │  N bytes                 │
-│  payload length  │  JSON payload            │
+│  payload length  │  MessagePack payload     │
 └──────────────────┴──────────────────────────┘
 ```
 
+- **Codec**: MessagePack (rmp-serde) — ~2-4x smaller than JSON, self-describing binary format
+- **Fallback**: Reader threads try MessagePack first, then JSON for legacy clients
+- **WebSocket**: Binary frames (MessagePack), with Text frame fallback (JSON)
 - TCP keepalive: 15s interval, 10s timeout
 - Read timeout: 2s per recv attempt
-- Legacy fallback: detects unframed JSON payloads
 
 ### Client → Server Messages
 
@@ -254,7 +268,7 @@ classDiagram
         +buildings: Vec~BuildingSnapshot~
     }
     class ResourceSync {
-        +factions: Vec~(String, u32[10])~
+        +factions: Vec~(u8, u32[10])~
     }
     class DayCycleSync {
         +cycle: DayCycleSnapshot
@@ -267,6 +281,9 @@ classDiagram
         +timestamp: f64
         +events: Vec~GameEvent~
     }
+    class NeutralWorldDelta {
+        +objects: Vec~NeutralWorldSnapshot~
+    }
     class Pong {
         +timestamp: f64
     }
@@ -277,6 +294,7 @@ classDiagram
     ServerMessage <|-- BuildingSync
     ServerMessage <|-- ResourceSync
     ServerMessage <|-- DayCycleSync
+    ServerMessage <|-- NeutralWorldDelta
     ServerMessage <|-- RelayedInput
     ServerMessage <|-- Event
     ServerMessage <|-- Pong
@@ -384,11 +402,11 @@ flowchart TD
         DIFF -->|"Removed from ECS"| DESPAWN["Send EntityDespawn\n{net_ids}"]
     end
 
-    subgraph ClientSide["Client: Entity Adoption"]
+    subgraph ClientSide["Client: Deterministic Entity Sync"]
         RECEIVE["Receive EntitySpawn"]
-        RECEIVE --> SEARCH{"Local entity exists?\nSame Kind + Faction\nwithin 15m radius"}
-        SEARCH -->|Yes| ADOPT["ADOPT: Add NetworkId\nto existing entity"]
-        SEARCH -->|No| CREATE["SPAWN: Create from\nblueprint + NetworkId"]
+        RECEIVE --> KNOWN{"NetworkId\nalready exists?"}
+        KNOWN -->|Yes| SKIP["SKIP (already synced)"]
+        KNOWN -->|No| CREATE["SPAWN: Create fresh from\nblueprint + NetworkId\n(no distance heuristic)"]
 
         RECEIVE2["Receive EntityDespawn"]
         RECEIVE2 --> LOOKUP["EntityNetMap lookup"]
@@ -441,7 +459,8 @@ sequenceDiagram
 |-----------|----------|--------|-----------------|
 | Entity positions, health, state | 100ms (~10Hz) | `host_broadcast_state_sync` | Yes (Δ pos>0.05, rot>0.02) |
 | Entity spawns/despawns | 100ms | `host_broadcast_entity_spawns` | Yes (new/removed only) |
-| Building state | 500ms | `host_broadcast_building_sync` | No (full) |
+| Building state | 500ms | `host_broadcast_building_sync` | Yes (level/progress/queue Δ) |
+| Resource node amounts | 500ms (~2Hz) | `host_broadcast_neutral_world_sync` | Yes (amount_remaining Δ) |
 | Player resources | 1000ms | `host_broadcast_resource_sync` | No (full) |
 | Day/night cycle | 250ms | `host_broadcast_day_cycle_sync` | No (full) |
 | Full resync (all data) | ~5s (tick%50) | Same systems | No (forced full) |
@@ -537,9 +556,10 @@ stateDiagram-v2
 |---------------|------|--------|
 | World simulation (physics, AI, combat) | Authoritative | Read-only mirror |
 | Entity spawn/despawn | Creates + broadcasts | Receives + spawns locally |
-| NetworkId assignment | Assigns (sorted, monotonic) | Receives via EntitySpawn |
+| NetworkId assignment | Assigns (sorted, monotonic) to entities + neutral objects | Receives via EntitySpawn / NeutralWorldDelta |
 | Player commands | Validates + executes + relays | Sends input, applies relayed |
-| Resource tracking | Authoritative | Synced every 1s |
+| Resource tracking (player totals) | Authoritative | Synced every 1s |
+| Resource node amounts (world) | Authoritative | Synced every 500ms (NeutralWorldDelta) |
 | Building construction/training | Runs timers + logic | Synced every 500ms |
 | Day/night cycle | Runs timer | Synced every 250ms |
 | AI opponents | Runs all AI logic | No AI systems (cleared) |
@@ -547,15 +567,23 @@ stateDiagram-v2
 
 ---
 
-## Known Limitations & Future Work
+## Known Limitations
 
 - **No rollback/prediction:** Client commands are fire-and-forget; no reconciliation if host rejects
-- **JSON serialization:** Higher bandwidth than binary; acceptable for LAN
-- **WorldBaseline / NeutralWorldDelta:** Message types defined but not yet wired
+- **WorldBaseline:** Message type defined but not yet wired (needed for late joiners / reconnect full resync)
 - **No NAT traversal:** LAN/VPN only (no STUN/TURN)
 - **Max 4 players** (hardcoded faction count)
-- **No reconnection:** Disconnected players become AI permanently
-- **Building sync is full:** No delta compression for building state
+- **Reconnection is partial:** Grace period and session tokens work host-side, but the client-side reconnect UI flow (auto-retry + `Reconnect` message) is not yet wired
+
+---
+
+## Known Remaining Work
+
+- **Message batching**: Wire `PendingServerFrame` to batch all host broadcast systems into a single `ServerFrame` per tick (`ServerFrame` type and `PendingServerFrame` resource exist but aren't used yet)
+- **Client prediction**: Prediction buffer + server seq stamping + reconciliation loop (currently fire-and-forget, 1 RTT visual delay)
+- **Reconnect UI**: Client-side auto-retry flow (detect disconnect → reconnect with `Reconnect { session_token }`) — host-side grace period + tokens are done
+- **WorldBaseline wiring**: Send full entity + neutral world state to newly connected/reconnected clients
+- **Optional**: LZ4 compression for large frames, `crossbeam-channel` migration, Bevy observers for connect/disconnect events
 
 ---
 
@@ -563,10 +591,13 @@ stateDiagram-v2
 
 | File | Purpose | Lines |
 |------|---------|-------|
-| `src/multiplayer/mod.rs` | Plugin, resources, system registration | ~800 |
-| `src/multiplayer/transport.rs` | TCP/WS framing, threads, IP detection | ~700 |
-| `src/multiplayer/host_systems.rs` | Host broadcast, command execution | ~900 |
-| `src/multiplayer/client_systems.rs` | Client receive, interpolation, sync | ~600 |
-| `src/net_bridge.rs` | NetworkId assignment, EntityNetMap | ~200 |
-| `src/menu/multiplayer.rs` | Lobby UI, connection flow | ~1200 |
-| `game_state/src/message.rs` | All network message types | ~400 |
+| `src/multiplayer/mod.rs` | Plugin, resources, system sets, NetStats, SessionTokens | ~780 |
+| `src/multiplayer/transport.rs` | TCP/WS framing, threads, IP detection, msgpack codec | ~780 |
+| `src/multiplayer/host_systems.rs` | Host broadcast, command execution, delta sync, neutral world sync, reconnect grace | ~1590 |
+| `src/multiplayer/client_systems.rs` | Client receive, interpolation, deterministic entity sync, neutral world apply | ~900 |
+| `src/multiplayer/debug_tap.rs` | HTTP debug server, TX/RX event recording | ~300 |
+| `src/multiplayer/ggrs_matchbox.rs` | GGRS rollback scaffolding (unused) | ~50 |
+| `src/net_bridge.rs` | NetworkId assignment (entities + neutral objects), EntityNetMap | ~220 |
+| `src/menu/multiplayer.rs` | Lobby UI, connection flow, config serialization | ~1250 |
+| `game_state/src/message.rs` | All network message types + ServerFrame | ~520 |
+| `game_state/src/codec.rs` | MessagePack encode/decode helpers | ~25 |

@@ -4,9 +4,11 @@ use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::TryRecvError;
 
+use game_state::codec;
 use game_state::message::{
     BuildingSnapshot, ClientMessage, DayCycleSnapshot, EntitySnapshot, EntitySpawnData, GameEvent,
-    InputCommand, NetCarrying, NetUnitState, PlayerInput, ServerMessage,
+    InputCommand, NetCarrying, NetUnitState, NeutralKind, NeutralWorldSnapshot, PlayerInput,
+    ServerFrame, ServerMessage,
 };
 
 use crate::components::*;
@@ -17,6 +19,55 @@ use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
 
 use super::debug_tap;
 use super::{HostNetState, NetStats};
+
+// ── Pending frame buffer for message batching ───────────────────────────────
+
+/// Accumulates server messages during a tick, flushed as a single ServerFrame.
+#[derive(Resource, Default)]
+pub struct PendingServerFrame {
+    pub messages: Vec<ServerMessage>,
+}
+
+/// Serialize a ServerFrame and broadcast to all connected clients.
+fn broadcast_frame(host: &HostNetState, frame: &ServerFrame) {
+    let senders = host.client_senders.lock().unwrap();
+    if senders.is_empty() {
+        return;
+    }
+    let Ok(bytes) = codec::encode(frame) else {
+        bevy::log::error!("Failed to encode ServerFrame");
+        return;
+    };
+    for (_id, sender) in senders.iter() {
+        let _ = sender.send(bytes.clone());
+    }
+}
+
+/// Serialize a single ServerMessage and broadcast to all connected clients.
+fn broadcast_msg(host: &HostNetState, msg: &ServerMessage) {
+    let senders = host.client_senders.lock().unwrap();
+    if senders.is_empty() {
+        return;
+    }
+    let Ok(bytes) = codec::encode(msg) else {
+        bevy::log::error!("Failed to encode ServerMessage");
+        return;
+    };
+    for (_id, sender) in senders.iter() {
+        let _ = sender.send(bytes.clone());
+    }
+}
+
+/// Serialize a ServerMessage and send to a specific client.
+fn send_to_player(host: &HostNetState, player_id: u8, msg: &ServerMessage) {
+    let senders = host.client_senders.lock().unwrap();
+    let Ok(bytes) = codec::encode(msg) else { return };
+    for (id, sender) in senders.iter() {
+        if *id == player_id {
+            let _ = sender.send(bytes.clone());
+        }
+    }
+}
 
 // ── Shared command execution ────────────────────────────────────────────────
 
@@ -289,12 +340,7 @@ pub fn host_process_client_commands(
                             player_id,
                             input: sanitized_input,
                         };
-                        if let Ok(json) = serde_json::to_vec(&relay) {
-                            let senders = host.client_senders.lock().unwrap();
-                            for (_id, sender) in senders.iter() {
-                                let _ = sender.send(json.clone());
-                            }
-                        }
+                        broadcast_msg(&host, &relay);
                     }
                     ClientMessage::JoinRequest { player_name, .. } => {
                         info!("Player {} joined: {}", player_id, player_name);
@@ -343,14 +389,16 @@ pub fn host_process_client_commands(
                             seq,
                             timestamp: *timestamp,
                         };
-                        if let Ok(json) = serde_json::to_vec(&pong) {
-                            let senders = host.client_senders.lock().unwrap();
-                            for (id, sender) in senders.iter() {
-                                if *id == player_id {
-                                    let _ = sender.send(json.clone());
-                                }
-                            }
-                        }
+                        send_to_player(&host, player_id, &pong);
+                    }
+                    ClientMessage::Reconnect { session_token, .. } => {
+                        info!("Reconnect request from player {} with token {}", player_id, session_token);
+                        debug_tap::record_info(
+                            "host_commands",
+                            format!("player {} reconnect request token={}", player_id, session_token),
+                        );
+                        // Reconnection is handled in the lobby system (menu/multiplayer.rs)
+                        // Here we just log it — the actual reconnection logic requires lobby access
                     }
                 }
             }
@@ -360,28 +408,29 @@ pub fn host_process_client_commands(
     }
 }
 
-/// Detect disconnected clients and convert their factions to AI control.
+/// Detect disconnected clients — start grace period for reconnection.
+/// After RECONNECT_GRACE_PERIOD seconds, convert their factions to AI.
 pub fn host_handle_disconnects(
     host: Res<HostNetState>,
     mut lobby: ResMut<super::LobbyState>,
     mut ai_factions: ResMut<AiControlledFactions>,
+    mut session_tokens: ResMut<super::SessionTokens>,
     time: Res<Time>,
     mut event_log: ResMut<GameEventLog>,
 ) {
     let dc_rx = host.disconnect_rx.lock().unwrap();
     let mut senders = host.client_senders.lock().unwrap();
 
+    // Process new disconnections — enter grace period
     loop {
         match dc_rx.try_recv() {
             Ok(player_id) => {
-                info!("Player {} disconnected", player_id);
+                info!("Player {} disconnected — starting {}s reconnection grace period",
+                    player_id, super::RECONNECT_GRACE_PERIOD);
                 debug_tap::record_info("host_disconnects", format!("player {} disconnected", player_id));
 
-                let player_name = lobby
-                    .players
-                    .iter()
-                    .find(|p| p.player_id == player_id)
-                    .map(|p| p.name.clone())
+                let player_info = lobby.players.iter().find(|p| p.player_id == player_id);
+                let player_name = player_info.map(|p| p.name.clone())
                     .unwrap_or_else(|| format!("Player {}", player_id));
 
                 if let Some(player) = lobby
@@ -390,12 +439,28 @@ pub fn host_handle_disconnects(
                     .find(|p| p.player_id == player_id && p.connected)
                 {
                     player.connected = false;
-                    ai_factions.factions.insert(player.faction);
+
+                    // Find existing session token for this player
+                    let token = session_tokens.tokens.iter()
+                        .find(|(_, &pid)| pid == player_id)
+                        .map(|(&t, _)| t)
+                        .unwrap_or_else(|| session_tokens.generate(player_id));
+
+                    // Add to grace period list instead of immediately converting to AI
+                    session_tokens.disconnected.push(super::DisconnectedPlayer {
+                        session_token: token,
+                        player_id,
+                        faction: player.faction,
+                        seat_index: player.seat_index,
+                        color_index: player.color_index,
+                        name: player_name.clone(),
+                        disconnect_time: time.elapsed_secs(),
+                    });
                 }
 
                 event_log.push_with_level(
                     time.elapsed_secs(),
-                    format!("{} disconnected — AI taking over", player_name),
+                    format!("{} disconnected — waiting for reconnection ({}s)", player_name, super::RECONNECT_GRACE_PERIOD as u32),
                     EventCategory::Network,
                     LogLevel::Warning,
                     None,
@@ -413,17 +478,55 @@ pub fn host_handle_disconnects(
                     seq,
                     timestamp: time.elapsed_secs_f64(),
                     events: vec![GameEvent::Announcement {
-                        text: format!("Player {} disconnected — AI taking over", player_id),
+                        text: format!("{} disconnected — waiting for reconnection", player_name),
                     }],
                 };
-                if let Ok(json) = serde_json::to_vec(&announce) {
+                if let Ok(bytes) = codec::encode(&announce) {
                     for (_id, sender) in senders.iter() {
-                        let _ = sender.send(json.clone());
+                        let _ = sender.send(bytes.clone());
                     }
                 }
             }
             Err(TryRecvError::Empty) => break,
             Err(TryRecvError::Disconnected) => break,
+        }
+    }
+
+    // Check grace period expiry — convert to AI after timeout
+    let now = time.elapsed_secs();
+    let expired: Vec<super::DisconnectedPlayer> = session_tokens.disconnected
+        .extract_if(.., |dc| now - dc.disconnect_time >= super::RECONNECT_GRACE_PERIOD)
+        .collect();
+
+    for dc in expired {
+        info!("Reconnection grace period expired for {} — converting to AI", dc.name);
+        ai_factions.factions.insert(dc.faction);
+        session_tokens.tokens.retain(|_, pid| *pid != dc.player_id);
+        event_log.push_with_level(
+            time.elapsed_secs(),
+            format!("{} — reconnection timed out, AI taking over", dc.name),
+            EventCategory::Network,
+            LogLevel::Warning,
+            None,
+            None,
+        );
+
+        let seq = {
+            let mut s = host.seq.lock().unwrap();
+            *s += 1;
+            *s
+        };
+        let announce = ServerMessage::Event {
+            seq,
+            timestamp: time.elapsed_secs_f64(),
+            events: vec![GameEvent::Announcement {
+                text: format!("{} — AI taking over", dc.name),
+            }],
+        };
+        if let Ok(bytes) = codec::encode(&announce) {
+            for (_id, sender) in senders.iter() {
+                let _ = sender.send(bytes.clone());
+            }
         }
     }
 }
@@ -656,9 +759,9 @@ pub fn host_broadcast_state_sync(
         seq,
         entities: snapshots,
     };
-    if let Ok(json) = serde_json::to_vec(&msg) {
+    if let Ok(bytes) = codec::encode(&msg) {
         for (_id, sender) in senders.iter() {
-            let _ = sender.send(json.clone());
+            let _ = sender.send(bytes.clone());
         }
     }
 }
@@ -674,11 +777,19 @@ impl Default for BuildingSyncTimer {
     }
 }
 
+/// Tracks previous building snapshots for delta compression.
+#[derive(Resource, Default)]
+pub struct PreviousBuildingSnapshots {
+    pub snapshots: HashMap<u32, BuildingSnapshot>,
+}
+
 /// Broadcasts building state (construction, training, production) at lower frequency.
+/// Now delta-compressed: only sends buildings whose state changed since last broadcast.
 pub fn host_broadcast_building_sync(
     host: Res<HostNetState>,
     time: Res<Time>,
     mut timer: ResMut<BuildingSyncTimer>,
+    mut prev_buildings: ResMut<PreviousBuildingSnapshots>,
     buildings: Query<(
         &NetworkId,
         Option<&BuildingLevel>,
@@ -698,6 +809,7 @@ pub fn host_broadcast_building_sync(
     }
 
     let mut building_snaps: Vec<BuildingSnapshot> = Vec::new();
+    let mut new_prev = HashMap::new();
 
     for (net_id, opt_level, opt_construction, opt_training, opt_production) in &buildings {
         let has_construction = opt_construction.is_some();
@@ -709,7 +821,7 @@ pub fn host_broadcast_building_sync(
             continue;
         }
 
-        building_snaps.push(BuildingSnapshot {
+        let snap = BuildingSnapshot {
             net_id: net_id.0,
             level: opt_level.map(|l| l.0),
             construction_progress: opt_construction.map(|cp| cp.timer.fraction()),
@@ -725,8 +837,30 @@ pub fn host_broadcast_building_sync(
             }),
             active_recipe: opt_production.and_then(|ps| ps.active_recipe.map(|r| r as u8)),
             production_progress: opt_production.map(|ps| ps.progress_timer.fraction()),
-        });
+        };
+
+        // Delta compression: skip unchanged buildings
+        let changed = if let Some(prev) = prev_buildings.snapshots.get(&net_id.0) {
+            snap.level != prev.level
+                || snap.training_queue != prev.training_queue
+                || snap.active_recipe != prev.active_recipe
+                || snap.construction_progress.map(|p| (p * 100.0) as u32)
+                    != prev.construction_progress.map(|p| (p * 100.0) as u32)
+                || snap.training_progress.map(|p| (p * 100.0) as u32)
+                    != prev.training_progress.map(|p| (p * 100.0) as u32)
+                || snap.production_progress.map(|p| (p * 100.0) as u32)
+                    != prev.production_progress.map(|p| (p * 100.0) as u32)
+        } else {
+            true // New building, always send
+        };
+
+        new_prev.insert(net_id.0, snap.clone());
+        if changed {
+            building_snaps.push(snap);
+        }
     }
+
+    prev_buildings.snapshots = new_prev;
 
     if building_snaps.is_empty() {
         return;
@@ -742,9 +876,9 @@ pub fn host_broadcast_building_sync(
         seq,
         buildings: building_snaps,
     };
-    if let Ok(json) = serde_json::to_vec(&msg) {
+    if let Ok(bytes) = codec::encode(&msg) {
         for (_id, sender) in senders.iter() {
-            let _ = sender.send(json.clone());
+            let _ = sender.send(bytes.clone());
         }
     }
 }
@@ -777,10 +911,10 @@ pub fn host_broadcast_resource_sync(
         return;
     }
 
-    let factions: Vec<(String, [u32; 10])> = all_resources
+    let factions: Vec<(u8, [u32; 10])> = all_resources
         .resources
         .iter()
-        .map(|(faction, pr)| (format!("{:?}", faction), pr.amounts))
+        .map(|(faction, pr)| (faction.to_net_index(), pr.amounts))
         .collect();
 
     let seq = {
@@ -790,9 +924,9 @@ pub fn host_broadcast_resource_sync(
     };
 
     let msg = ServerMessage::ResourceSync { seq, factions };
-    if let Ok(json) = serde_json::to_vec(&msg) {
+    if let Ok(bytes) = codec::encode(&msg) {
         for (_id, sender) in senders.iter() {
-            let _ = sender.send(json.clone());
+            let _ = sender.send(bytes.clone());
         }
     }
 }
@@ -838,9 +972,9 @@ pub fn host_broadcast_day_cycle_sync(
             paused: cycle.paused,
         },
     };
-    if let Ok(json) = serde_json::to_vec(&msg) {
+    if let Ok(bytes) = codec::encode(&msg) {
         for (_id, sender) in senders.iter() {
-            let _ = sender.send(json.clone());
+            let _ = sender.send(bytes.clone());
         }
     }
 }
@@ -897,8 +1031,8 @@ pub fn host_broadcast_entity_spawns(
             let (_, rot, _) = gt.to_scale_rotation_translation();
             new_spawns.push(EntitySpawnData {
                 net_id: net_id.0,
-                kind: format!("{:?}", kind),
-                faction: format!("{:?}", faction),
+                kind: kind.to_index(),
+                faction: faction.to_net_index(),
                 pos: [pos.x, pos.y, pos.z],
                 rot_y: rot.to_euler(bevy::math::EulerRot::YXZ).0,
             });
@@ -937,9 +1071,9 @@ pub fn host_broadcast_entity_spawns(
             seq,
             spawns: new_spawns,
         };
-        if let Ok(json) = serde_json::to_vec(&msg) {
+        if let Ok(bytes) = codec::encode(&msg) {
             for (_id, sender) in senders.iter() {
-                let _ = sender.send(json.clone());
+                let _ = sender.send(bytes.clone());
             }
         }
     }
@@ -959,9 +1093,9 @@ pub fn host_broadcast_entity_spawns(
             seq,
             net_ids: despawned.clone(),
         };
-        if let Ok(json) = serde_json::to_vec(&msg) {
+        if let Ok(bytes) = codec::encode(&msg) {
             for (_id, sender) in senders.iter() {
-                let _ = sender.send(json.clone());
+                let _ = sender.send(bytes.clone());
             }
         }
     }
@@ -971,4 +1105,486 @@ pub fn host_broadcast_entity_spawns(
         synced.known.remove(id);
     }
     synced.known.extend(current_ids);
+}
+
+// ── Neutral world sync: host → clients (2Hz) ───────────────────────────────
+
+#[derive(Resource)]
+pub struct NeutralWorldSyncTimer(pub Timer);
+
+impl Default for NeutralWorldSyncTimer {
+    fn default() -> Self {
+        Self(Timer::from_seconds(0.5, TimerMode::Repeating))
+    }
+}
+
+/// Tracks previous resource node amounts for delta compression.
+#[derive(Resource, Default)]
+pub struct PreviousNeutralSnapshots {
+    pub amounts: HashMap<u32, u32>,
+}
+
+/// Broadcasts resource node amount changes to clients at ~2Hz.
+/// Uses delta compression: only sends nodes whose amount_remaining changed.
+pub fn host_broadcast_neutral_world_sync(
+    host: Res<HostNetState>,
+    time: Res<Time>,
+    mut timer: ResMut<NeutralWorldSyncTimer>,
+    mut prev_neutral: ResMut<PreviousNeutralSnapshots>,
+    resource_nodes: Query<(
+        &NetworkId,
+        &crate::components::ResourceNode,
+        &GlobalTransform,
+    )>,
+) {
+    timer.0.tick(time.delta());
+    if !timer.0.just_finished() {
+        return;
+    }
+
+    let senders = host.client_senders.lock().unwrap();
+    if senders.is_empty() {
+        return;
+    }
+
+    let mut changed: Vec<NeutralWorldSnapshot> = Vec::new();
+    let mut new_prev = HashMap::new();
+
+    for (net_id, node, gt) in &resource_nodes {
+        let prev_amount = prev_neutral.amounts.get(&net_id.0).copied();
+        new_prev.insert(net_id.0, node.amount_remaining);
+
+        // Delta: skip if unchanged
+        if prev_amount == Some(node.amount_remaining) {
+            continue;
+        }
+
+        let pos = gt.translation();
+        changed.push(NeutralWorldSnapshot {
+            net_id: net_id.0,
+            kind: NeutralKind::ResourceNode,
+            pos: [pos.x, pos.y, pos.z],
+            rot_y: 0.0,
+            scale: 1.0,
+            resource_type: Some(node.resource_type.index() as u8),
+            amount_remaining: Some(node.amount_remaining),
+            stage: None,
+            health: None,
+            variant: None,
+        });
+    }
+
+    prev_neutral.amounts = new_prev;
+
+    if changed.is_empty() {
+        return;
+    }
+
+    let seq = {
+        let mut s = host.seq.lock().unwrap();
+        *s += 1;
+        *s
+    };
+
+    let msg = ServerMessage::NeutralWorldDelta {
+        seq,
+        objects: changed,
+    };
+    if let Ok(bytes) = codec::encode(&msg) {
+        for (_id, sender) in senders.iter() {
+            let _ = sender.send(bytes.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::Duration;
+
+    use crate::blueprints::EntityKind;
+    use crate::components::{
+        AiControlledFactions, Faction, Health, NextTaskId, TaskQueue, Unit, UnitStance,
+        UnitState,
+    };
+
+    fn host_state_with_clients(client_ids: &[u8]) -> (HostNetState, Vec<mpsc::Receiver<Vec<u8>>>) {
+        let (_incoming_tx, incoming_rx) = mpsc::channel();
+        let (_new_client_tx, new_client_rx) = mpsc::channel();
+        let (_new_ws_tx, new_ws_rx) = mpsc::channel();
+        let (_disconnect_tx, disconnect_rx) = mpsc::channel();
+        let mut senders = Vec::new();
+        let mut receivers = Vec::new();
+        for id in client_ids {
+            let (tx, rx) = mpsc::channel();
+            senders.push((*id, tx));
+            receivers.push(rx);
+        }
+        (
+            HostNetState {
+                incoming_commands: Mutex::new(incoming_rx),
+                client_senders: Mutex::new(senders),
+                new_clients: Mutex::new(new_client_rx),
+                new_ws_clients: Mutex::new(new_ws_rx),
+                disconnect_rx: Mutex::new(disconnect_rx),
+                shutdown: Arc::new(AtomicBool::new(false)),
+                seq: Mutex::new(0),
+            },
+            receivers,
+        )
+    }
+
+    #[test]
+    fn ecs_to_net_unit_state_converts_and_falls_back_for_missing_links() {
+        let attack_entity = Entity::from_bits(10);
+        let depot_entity = Entity::from_bits(11);
+        let build_entity = Entity::from_bits(12);
+        let mut net_map = EntityNetMap::default();
+        net_map.to_net.insert(attack_entity, 50);
+        net_map.to_net.insert(depot_entity, 60);
+        net_map.to_net.insert(build_entity, 70);
+
+        assert_eq!(
+            ecs_to_net_unit_state(&UnitState::Moving(Vec3::new(1.0, 2.0, 3.0)), &net_map),
+            NetUnitState::Moving {
+                target: [1.0, 2.0, 3.0]
+            }
+        );
+        assert_eq!(
+            ecs_to_net_unit_state(&UnitState::Attacking(attack_entity), &net_map),
+            NetUnitState::Attacking { target_id: 50 }
+        );
+        assert_eq!(
+            ecs_to_net_unit_state(
+                &UnitState::ReturningToDeposit {
+                    depot: depot_entity,
+                    gather_node: None,
+                },
+                &net_map
+            ),
+            NetUnitState::Returning { depot_id: 60 }
+        );
+        assert_eq!(
+            ecs_to_net_unit_state(&UnitState::Building(build_entity), &net_map),
+            NetUnitState::Building { target_id: 70 }
+        );
+        assert_eq!(
+            ecs_to_net_unit_state(&UnitState::Attacking(Entity::from_bits(999)), &net_map),
+            NetUnitState::Idle
+        );
+    }
+
+    #[test]
+    fn stance_to_u8_matches_wire_encoding() {
+        assert_eq!(stance_to_u8(&UnitStance::Passive), 0);
+        assert_eq!(stance_to_u8(&UnitStance::Defensive), 1);
+        assert_eq!(stance_to_u8(&UnitStance::Aggressive), 2);
+    }
+
+    #[test]
+    fn host_handle_disconnects_starts_grace_period_and_then_assigns_ai() {
+        let (_incoming_tx, incoming_rx) = mpsc::channel();
+        let (_new_client_tx, new_client_rx) = mpsc::channel();
+        let (_new_ws_tx, new_ws_rx) = mpsc::channel();
+        let (disconnect_tx, disconnect_rx) = mpsc::channel();
+        let (disconnected_tx, _disconnected_rx) = mpsc::channel();
+        let (remaining_tx, remaining_rx) = mpsc::channel();
+        let shutdown = Arc::new(AtomicBool::new(false));
+
+        let host = HostNetState {
+            incoming_commands: Mutex::new(incoming_rx),
+            client_senders: Mutex::new(vec![(1, disconnected_tx.clone()), (2, remaining_tx.clone())]),
+            new_clients: Mutex::new(new_client_rx),
+            new_ws_clients: Mutex::new(new_ws_rx),
+            disconnect_rx: Mutex::new(disconnect_rx),
+            shutdown,
+            seq: Mutex::new(0),
+        };
+
+        let mut app = App::new();
+        app.insert_resource(host);
+        app.insert_resource(super::super::LobbyState {
+            players: vec![super::super::LobbyPlayer {
+                player_id: 1,
+                name: "Guest".to_string(),
+                seat_index: 1,
+                faction: Faction::Player2,
+                color_index: 1,
+                is_host: false,
+                connected: true,
+            }],
+            ..Default::default()
+        });
+        app.insert_resource(AiControlledFactions {
+            factions: std::collections::HashSet::new(),
+        });
+        app.insert_resource(super::super::SessionTokens::default());
+        app.insert_resource(GameEventLog::default());
+        app.insert_resource(Time::<()>::default());
+        app.add_systems(Update, host_handle_disconnects);
+
+        disconnect_tx.send(1).unwrap();
+        app.update();
+
+        {
+            let lobby = app.world().resource::<super::super::LobbyState>();
+            let tokens = app.world().resource::<super::super::SessionTokens>();
+            assert!(!lobby.players[0].connected);
+            assert_eq!(tokens.disconnected.len(), 1);
+            assert_eq!(tokens.disconnected[0].player_id, 1);
+            assert!(tokens.tokens.values().any(|pid| *pid == 1));
+        }
+
+        let bytes = remaining_rx.try_recv().unwrap();
+        let msg: ServerMessage = codec::decode(&bytes).unwrap();
+        match msg {
+            ServerMessage::Event { events, .. } => {
+                assert!(matches!(
+                    events.first(),
+                    Some(GameEvent::Announcement { text }) if text.contains("waiting for reconnection")
+                ));
+            }
+            other => panic!("expected announcement, got {other:?}"),
+        }
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(super::super::RECONNECT_GRACE_PERIOD + 0.1));
+        app.update();
+
+        let ai = app.world().resource::<AiControlledFactions>();
+        let tokens = app.world().resource::<super::super::SessionTokens>();
+        assert!(ai.factions.contains(&Faction::Player2));
+        assert!(tokens.disconnected.is_empty());
+        assert!(tokens.tokens.is_empty());
+    }
+
+    #[test]
+    fn host_process_client_commands_filters_to_owned_entities_and_relays_input() {
+        let (incoming_tx, incoming_rx) = mpsc::channel();
+        let (_new_client_tx, new_client_rx) = mpsc::channel();
+        let (_new_ws_tx, new_ws_rx) = mpsc::channel();
+        let (_disconnect_tx, disconnect_rx) = mpsc::channel();
+        let (client_tx, client_rx) = mpsc::channel();
+
+        let mut app = App::new();
+        app.insert_resource(HostNetState {
+            incoming_commands: Mutex::new(incoming_rx),
+            client_senders: Mutex::new(vec![(1, client_tx)]),
+            new_clients: Mutex::new(new_client_rx),
+            new_ws_clients: Mutex::new(new_ws_rx),
+            disconnect_rx: Mutex::new(disconnect_rx),
+            shutdown: Arc::new(AtomicBool::new(false)),
+            seq: Mutex::new(0),
+        });
+        app.insert_resource(super::super::LobbyState {
+            players: vec![super::super::LobbyPlayer {
+                player_id: 1,
+                name: "Guest".to_string(),
+                seat_index: 1,
+                faction: Faction::Player2,
+                color_index: 1,
+                is_host: false,
+                connected: true,
+            }],
+            ..Default::default()
+        });
+        app.insert_resource(EntityNetMap::default());
+        app.insert_resource(NextTaskId::default());
+        app.insert_resource(GameEventLog::default());
+        app.insert_resource(Time::<()>::default());
+
+        let owned = app
+            .world_mut()
+            .spawn((
+                Unit,
+                Faction::Player2,
+                UnitState::Idle,
+                TaskQueue::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+        let foreign = app
+            .world_mut()
+            .spawn((
+                Unit,
+                Faction::Player3,
+                UnitState::Idle,
+                TaskQueue::default(),
+                Transform::default(),
+                GlobalTransform::default(),
+            ))
+            .id();
+
+        {
+            let mut net_map = app.world_mut().resource_mut::<EntityNetMap>();
+            net_map.to_ecs.insert(10, owned);
+            net_map.to_net.insert(owned, 10);
+            net_map.to_ecs.insert(20, foreign);
+            net_map.to_net.insert(foreign, 20);
+        }
+
+        app.add_systems(Update, host_process_client_commands);
+
+        incoming_tx
+            .send((
+                1,
+                ClientMessage::Input {
+                    seq: 1,
+                    timestamp: 0.0,
+                    input: PlayerInput {
+                        player_id: 99,
+                        tick: 5,
+                        entity_ids: vec![10, 20],
+                        commands: vec![InputCommand::HoldPosition],
+                    },
+                },
+            ))
+            .unwrap();
+
+        app.update();
+
+        assert_eq!(
+            *app.world().entity(owned).get::<UnitState>().unwrap(),
+            UnitState::HoldPosition
+        );
+        assert_eq!(
+            *app.world().entity(foreign).get::<UnitState>().unwrap(),
+            UnitState::Idle
+        );
+
+        let relay_bytes = client_rx.try_recv().unwrap();
+        let relay: ServerMessage = codec::decode(&relay_bytes).unwrap();
+        match relay {
+            ServerMessage::RelayedInput { player_id, input, .. } => {
+                assert_eq!(player_id, 1);
+                assert_eq!(input.player_id, 1);
+                assert_eq!(input.entity_ids, vec![10]);
+            }
+            other => panic!("expected relayed input, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn host_broadcast_state_sync_sends_delta_then_suppresses_unchanged_entities() {
+        let (host, receivers) = host_state_with_clients(&[1]);
+
+        let mut app = App::new();
+        app.insert_resource(host);
+        app.insert_resource(StateSyncTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
+        app.insert_resource(PreviousSnapshots::default());
+        app.insert_resource(EntityNetMap::default());
+        app.insert_resource(GameEventLog::default());
+        app.insert_resource(NetStats::default());
+        app.insert_resource(Time::<()>::default());
+        app.add_systems(Update, host_broadcast_state_sync);
+
+        let target = app.world_mut().spawn_empty().id();
+        let unit = app
+            .world_mut()
+            .spawn((
+                NetworkId(7),
+                EntityKind::Worker,
+                Transform::from_xyz(1.0, 0.0, 2.0),
+                GlobalTransform::from(Transform::from_xyz(1.0, 0.0, 2.0)),
+                Health {
+                    current: 15.0,
+                    max: 20.0,
+                },
+                UnitState::Attacking(target),
+                MoveTarget(Vec3::new(4.0, 0.0, 5.0)),
+                AttackTarget(target),
+                Carrying {
+                    amount: 3,
+                    weight: 1.0,
+                    resource_type: Some(ResourceType::Wood),
+                },
+                UnitStance::Aggressive,
+            ))
+            .id();
+        {
+            let mut net_map = app.world_mut().resource_mut::<EntityNetMap>();
+            net_map.to_net.insert(target, 99);
+            net_map.to_ecs.insert(99, target);
+            net_map.to_net.insert(unit, 7);
+            net_map.to_ecs.insert(7, unit);
+        }
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(0.1));
+        app.update();
+
+        let first_bytes = receivers[0].try_recv().unwrap();
+        let first_msg: ServerMessage = codec::decode(&first_bytes).unwrap();
+        match first_msg {
+            ServerMessage::StateSync { entities, .. } => {
+                assert_eq!(entities.len(), 1);
+                assert_eq!(entities[0].net_id, 7);
+                assert_eq!(entities[0].attack_target, Some(99));
+                assert_eq!(entities[0].stance, Some(2));
+            }
+            other => panic!("expected state sync, got {other:?}"),
+        }
+
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_secs_f32(0.1));
+        app.update();
+        assert!(receivers[0].try_recv().is_err());
+        assert_eq!(app.world().resource::<NetStats>().connected_clients, 1);
+        assert_eq!(app.world().resource::<NetStats>().last_sync_entity_count, 0);
+    }
+
+    #[test]
+    fn host_broadcast_entity_spawns_sends_spawns_and_despawns() {
+        let (host, receivers) = host_state_with_clients(&[1]);
+
+        let mut app = App::new();
+        app.insert_resource(host);
+        let mut timer = StateSyncTimer::default();
+        timer.0.tick(Duration::from_secs_f32(0.1));
+        app.insert_resource(timer);
+        app.insert_resource(SyncedEntitySet::default());
+        app.add_systems(Update, host_broadcast_entity_spawns);
+
+        let entity = app
+            .world_mut()
+            .spawn((
+                NetworkId(55),
+                EntityKind::Base,
+                Faction::Player1,
+                Transform::from_xyz(3.0, 0.0, 4.0),
+                GlobalTransform::from(Transform::from_xyz(3.0, 0.0, 4.0)),
+            ))
+            .id();
+
+        app.update();
+
+        let spawn_bytes = receivers[0].try_recv().unwrap();
+        let spawn_msg: ServerMessage = codec::decode(&spawn_bytes).unwrap();
+        match spawn_msg {
+            ServerMessage::EntitySpawn { spawns, .. } => {
+                assert_eq!(spawns.len(), 1);
+                assert_eq!(spawns[0].net_id, 55);
+            }
+            other => panic!("expected entity spawn, got {other:?}"),
+        }
+
+        app.world_mut().entity_mut(entity).despawn();
+        let mut timer = app.world_mut().resource_mut::<StateSyncTimer>();
+        timer.0.tick(Duration::from_secs_f32(0.1));
+        drop(timer);
+        app.update();
+
+        let despawn_bytes = receivers[0].try_recv().unwrap();
+        let despawn_msg: ServerMessage = codec::decode(&despawn_bytes).unwrap();
+        match despawn_msg {
+            ServerMessage::EntityDespawn { net_ids, .. } => assert_eq!(net_ids, vec![55]),
+            other => panic!("expected entity despawn, got {other:?}"),
+        }
+    }
 }

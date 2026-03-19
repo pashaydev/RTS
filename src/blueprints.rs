@@ -204,6 +204,19 @@ impl EntityKind {
         EntityKind::FireElemental,
     ];
 
+    /// Convert to numeric index (position in ALL array). Used for network serialization.
+    pub fn to_index(self) -> u16 {
+        Self::ALL
+            .iter()
+            .position(|k| *k == self)
+            .unwrap_or(u16::MAX as usize) as u16
+    }
+
+    /// Convert from numeric index back to EntityKind. Returns None if out of range.
+    pub fn from_index(idx: u16) -> Option<EntityKind> {
+        Self::ALL.get(idx as usize).copied()
+    }
+
     pub fn description(self) -> &'static str {
         match self {
             Self::Worker => "Basic worker unit. Gathers resources and constructs buildings.",

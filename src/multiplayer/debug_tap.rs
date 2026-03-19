@@ -119,12 +119,18 @@ pub fn record_error(lane: &str, detail: impl Into<String>) {
 }
 
 pub fn payload_preview(raw: &[u8]) -> String {
-    let mut text = String::from_utf8_lossy(raw).to_string();
+    let text = String::from_utf8_lossy(raw);
     if text.len() > MAX_PAYLOAD_PREVIEW {
-        text.truncate(MAX_PAYLOAD_PREVIEW);
-        text.push_str("…");
+        // Find a safe char boundary to truncate at (from_utf8_lossy may insert
+        // multi-byte replacement chars, so we can't truncate at arbitrary offsets)
+        let mut end = MAX_PAYLOAD_PREVIEW;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &text[..end])
+    } else {
+        text.into_owned()
     }
-    text
 }
 
 fn record(direction: &str, lane: &str, detail: String, bytes: usize, payload: Option<String>) {

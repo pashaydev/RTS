@@ -1274,6 +1274,30 @@ impl Faction {
         Faction::Player4,
     ];
 
+    /// Convert to numeric index for network serialization.
+    /// Player1=0, Player2=1, Player3=2, Player4=3, Neutral=4.
+    pub fn to_net_index(&self) -> u8 {
+        match self {
+            Faction::Player1 => 0,
+            Faction::Player2 => 1,
+            Faction::Player3 => 2,
+            Faction::Player4 => 3,
+            Faction::Neutral => 4,
+        }
+    }
+
+    /// Convert from numeric index back to Faction. Returns None if out of range.
+    pub fn from_net_index(idx: u8) -> Option<Faction> {
+        match idx {
+            0 => Some(Faction::Player1),
+            1 => Some(Faction::Player2),
+            2 => Some(Faction::Player3),
+            3 => Some(Faction::Player4),
+            4 => Some(Faction::Neutral),
+            _ => None,
+        }
+    }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             Faction::Player1 => "Player 1",

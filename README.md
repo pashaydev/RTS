@@ -42,6 +42,43 @@ cargo build --release --target aarch64-apple-darwin
 
 The dev profile uses dependency optimization (`opt-level = 2`) for better iteration-time performance.
 
+## Testing
+
+### Native
+
+Run the full native test suite:
+
+```sh
+cargo test
+```
+
+Run only the multiplayer-focused native tests:
+
+```sh
+cargo test multiplayer -- --nocapture
+```
+
+### WASM
+
+Compile the wasm-targeted tests:
+
+```sh
+cargo test --target wasm32-unknown-unknown --no-run multiplayer
+```
+
+Run the wasm-specific multiplayer tests under the wasm bindgen runner:
+
+```sh
+CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+  cargo test --target wasm32-unknown-unknown wasm_tests -- --nocapture
+```
+
+### Notes
+
+- The wasm test flow requires the `wasm32-unknown-unknown` Rust target.
+- `wasm-bindgen-test-runner` is used to execute the generated `.wasm` test binary instead of trying to run it directly as a native executable.
+- The current multiplayer test coverage includes native host/client transport and systems plus wasm-side WebSocket payload encoding and decoding paths.
+
 ### Fly.io
 
 The Fly.io deployment is a static web build served by nginx from the generated `dist/` output.

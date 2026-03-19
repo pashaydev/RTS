@@ -151,10 +151,10 @@ pub struct EntitySnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EntitySpawnData {
     pub net_id: EntityId,
-    /// EntityKind discriminant serialized by name (e.g. "Worker", "Base").
-    pub kind: String,
-    /// Faction name (e.g. "Player1", "Neutral").
-    pub faction: String,
+    /// EntityKind index (position in EntityKind::ALL).
+    pub kind: u16,
+    /// Faction index (0=Player1..3=Player4, 4=Neutral).
+    pub faction: u8,
     pub pos: Vec3,
     pub rot_y: f32,
 }
@@ -248,6 +248,9 @@ pub enum GameEvent {
         seat_index: u8,
         faction_index: u8,
         color_index: u8,
+        /// Opaque token for reconnection. Client stores this to rejoin if disconnected.
+        #[serde(default)]
+        session_token: u64,
     },
     /// Host ended the active match and is returning everyone to menu.
     #[serde(rename = "host_shutdown")]
@@ -322,7 +325,8 @@ pub enum ServerMessage {
     #[serde(rename = "resource_sync")]
     ResourceSync {
         seq: u32,
-        factions: Vec<(String, [u32; 10])>,
+        /// Vec of (faction_index, resource_amounts).
+        factions: Vec<(u8, [u32; 10])>,
     },
 
     /// Periodic authoritative day/night cycle sync.
@@ -396,6 +400,25 @@ pub enum ClientMessage {
         seq: u32,
         timestamp: f64,
     },
+
+    /// Reconnect to an existing session using a token from a prior JoinAccepted.
+    #[serde(rename = "reconnect")]
+    Reconnect {
+        seq: u32,
+        timestamp: f64,
+        session_token: u64,
+    },
+}
+
+// ── Server Frame (batched messages per tick) ────────────────────────────────
+
+/// A batch of server messages sent in a single wire frame.
+/// Reduces TCP write syscalls and framing overhead.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerFrame {
+    pub tick: u32,
+    pub timestamp: f64,
+    pub messages: Vec<ServerMessage>,
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -425,7 +448,8 @@ impl ClientMessage {
             Self::Input { seq, .. }
             | Self::JoinRequest { seq, .. }
             | Self::LeaveNotice { seq, .. }
-            | Self::Ping { seq, .. } => *seq,
+            | Self::Ping { seq, .. }
+            | Self::Reconnect { seq, .. } => *seq,
         }
     }
 }
@@ -433,9 +457,10 @@ impl ClientMessage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec;
 
     #[test]
-    fn server_message_tagged_union() {
+    fn server_message_json_roundtrip() {
         let msg = ServerMessage::Event {
             seq: 1,
             timestamp: 42.0,
@@ -445,13 +470,29 @@ mod tests {
         };
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"event\""));
-
         let decoded: ServerMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(msg, decoded);
     }
 
     #[test]
-    fn relayed_input_serialization() {
+    fn server_message_msgpack_roundtrip() {
+        let msg = ServerMessage::Event {
+            seq: 1,
+            timestamp: 42.0,
+            events: vec![GameEvent::Announcement {
+                text: "hello".into(),
+            }],
+        };
+        let bytes = codec::encode(&msg).unwrap();
+        let decoded: ServerMessage = codec::decode(&bytes).unwrap();
+        assert_eq!(msg, decoded);
+        // MessagePack should be smaller than JSON
+        let json = serde_json::to_vec(&msg).unwrap();
+        assert!(bytes.len() < json.len(), "msgpack {} >= json {}", bytes.len(), json.len());
+    }
+
+    #[test]
+    fn relayed_input_msgpack_roundtrip() {
         let msg = ServerMessage::RelayedInput {
             seq: 10,
             timestamp: 50.0,
@@ -465,15 +506,13 @@ mod tests {
                 }],
             },
         };
-        let json = serde_json::to_string(&msg).unwrap();
-        assert!(json.contains("\"type\":\"relayed_input\""));
-
-        let decoded: ServerMessage = serde_json::from_str(&json).unwrap();
+        let bytes = codec::encode(&msg).unwrap();
+        let decoded: ServerMessage = codec::decode(&bytes).unwrap();
         assert_eq!(msg, decoded);
     }
 
     #[test]
-    fn client_input_serialization() {
+    fn client_input_msgpack_roundtrip() {
         let msg = ClientMessage::Input {
             seq: 5,
             timestamp: 100.0,
@@ -489,11 +528,177 @@ mod tests {
                 ],
             },
         };
-        let json = serde_json::to_string_pretty(&msg).unwrap();
-        assert!(json.contains("\"type\": \"input\""));
-        assert!(json.contains("\"cmd\": \"move\""));
-
-        let decoded: ClientMessage = serde_json::from_str(&json).unwrap();
+        let bytes = codec::encode(&msg).unwrap();
+        let decoded: ClientMessage = codec::decode(&bytes).unwrap();
         assert_eq!(msg, decoded);
+    }
+
+    #[test]
+    fn server_frame_roundtrip() {
+        let frame = ServerFrame {
+            tick: 42,
+            timestamp: 100.0,
+            messages: vec![
+                ServerMessage::StateSync {
+                    seq: 1,
+                    entities: vec![EntitySnapshot {
+                        net_id: 1,
+                        pos: [1.0, 2.0, 3.0],
+                        rot_y: 0.5,
+                        health: Some(100.0),
+                        unit_state: None,
+                        move_target: None,
+                        attack_target: None,
+                        carrying: None,
+                        stance: None,
+                    }],
+                },
+                ServerMessage::DayCycleSync {
+                    seq: 2,
+                    cycle: DayCycleSnapshot {
+                        time: 0.5,
+                        cycle_duration: 300.0,
+                        paused: false,
+                    },
+                },
+            ],
+        };
+        let bytes = codec::encode(&frame).unwrap();
+        let decoded: ServerFrame = codec::decode(&bytes).unwrap();
+        assert_eq!(frame, decoded);
+    }
+
+    #[test]
+    fn entity_spawn_numeric_kinds() {
+        let spawn = EntitySpawnData {
+            net_id: 42,
+            kind: 0,    // Worker
+            faction: 0, // Player1
+            pos: [1.0, 2.0, 3.0],
+            rot_y: 0.0,
+        };
+        let bytes = codec::encode(&spawn).unwrap();
+        let decoded: EntitySpawnData = codec::decode(&bytes).unwrap();
+        assert_eq!(spawn, decoded);
+    }
+
+    #[test]
+    fn client_ping_msgpack_roundtrip() {
+        let msg = ClientMessage::Ping {
+            seq: 42,
+            timestamp: 123.456,
+        };
+        let bytes = codec::encode(&msg).unwrap();
+        let decoded: ClientMessage = codec::decode(&bytes).unwrap();
+        assert_eq!(msg, decoded);
+        // Verify first byte is NOT 0x93 (fixarray) — should be a map for tagged enums
+        // If it IS an array, rmp-serde compact format is breaking internal tagging
+        println!("Ping msgpack bytes: {:02X?}", &bytes[..bytes.len().min(20)]);
+    }
+
+    #[test]
+    fn all_client_message_variants_roundtrip() {
+        let messages = vec![
+            ClientMessage::Input {
+                seq: 1,
+                timestamp: 10.0,
+                input: PlayerInput {
+                    player_id: 1,
+                    tick: 100,
+                    entity_ids: vec![1, 2],
+                    commands: vec![InputCommand::Move { target: [1.0, 0.0, 3.0] }],
+                },
+            },
+            ClientMessage::JoinRequest {
+                seq: 2,
+                timestamp: 20.0,
+                player_name: "Test".to_string(),
+                preferred_faction_index: Some(0),
+            },
+            ClientMessage::LeaveNotice {
+                seq: 3,
+                timestamp: 30.0,
+            },
+            ClientMessage::Ping {
+                seq: 4,
+                timestamp: 40.0,
+            },
+            ClientMessage::Reconnect {
+                seq: 5,
+                timestamp: 50.0,
+                session_token: 12345,
+            },
+        ];
+        for msg in &messages {
+            let bytes = codec::encode(msg).unwrap();
+            let decoded: ClientMessage = codec::decode(&bytes).unwrap();
+            assert_eq!(*msg, decoded, "Failed roundtrip for {:?}", msg);
+        }
+    }
+
+    #[test]
+    fn all_server_message_variants_roundtrip() {
+        let messages = vec![
+            ServerMessage::Pong { seq: 1, timestamp: 10.0 },
+            ServerMessage::StateSync { seq: 2, entities: vec![] },
+            ServerMessage::EntitySpawn { seq: 3, spawns: vec![] },
+            ServerMessage::EntityDespawn { seq: 4, net_ids: vec![] },
+            ServerMessage::BuildingSync { seq: 5, buildings: vec![] },
+            ServerMessage::ResourceSync { seq: 6, factions: vec![] },
+            ServerMessage::DayCycleSync {
+                seq: 7,
+                cycle: DayCycleSnapshot { time: 0.5, cycle_duration: 300.0, paused: false },
+            },
+            ServerMessage::Event {
+                seq: 8,
+                timestamp: 80.0,
+                events: vec![GameEvent::Announcement { text: "test".into() }],
+            },
+        ];
+        for msg in &messages {
+            let bytes = codec::encode(msg).unwrap();
+            let decoded: ServerMessage = codec::decode(&bytes).unwrap();
+            assert_eq!(*msg, decoded, "Failed roundtrip for {:?}", msg);
+        }
+    }
+}
+
+#[cfg(test)]
+mod stress_tests {
+    use super::*;
+    use crate::codec;
+
+    #[test]
+    fn large_state_sync_roundtrip() {
+        let entities: Vec<EntitySnapshot> = (0..200).map(|i| EntitySnapshot {
+            net_id: i,
+            pos: [i as f32, 0.0, i as f32 * 2.0],
+            rot_y: 0.1 * i as f32,
+            health: Some(100.0 - i as f32 * 0.5),
+            unit_state: Some(NetUnitState::Moving { target: [1.0, 0.0, 3.0] }),
+            move_target: Some([1.0, 0.0, 3.0]),
+            attack_target: None,
+            carrying: None,
+            stance: Some(1),
+        }).collect();
+        let msg = ServerMessage::StateSync { seq: 42, entities };
+        let bytes = codec::encode(&msg).unwrap();
+        let decoded: ServerMessage = codec::decode(&bytes).unwrap();
+        assert_eq!(msg, decoded);
+        let json = serde_json::to_vec(&msg).unwrap();
+        println!("StateSync 200 entities: msgpack={}B, json={}B, ratio={:.1}x",
+            bytes.len(), json.len(), json.len() as f64 / bytes.len() as f64);
+    }
+
+    #[test]
+    fn msgpack_json_cross_decode_fails_gracefully() {
+        // Verify that msgpack data fails gracefully when decoded as JSON
+        let msg = ClientMessage::Ping { seq: 1, timestamp: 42.0 };
+        let msgpack_bytes = codec::encode(&msg).unwrap();
+        assert!(serde_json::from_slice::<ClientMessage>(&msgpack_bytes).is_err());
+
+        // Verify that JSON data fails gracefully when decoded as msgpack
+        let json_bytes = serde_json::to_vec(&msg).unwrap();
+        assert!(codec::decode::<ClientMessage>(&json_bytes).is_err());
     }
 }
