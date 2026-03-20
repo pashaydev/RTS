@@ -1,11 +1,13 @@
 use bevy::prelude::*;
+use bevy_matchbox::prelude::*;
 use game_state::codec;
 use game_state::message::ClientMessage;
 use std::sync::atomic::Ordering;
 
 use crate::components::*;
 use crate::multiplayer::{
-    self, ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole, debug_tap,
+    self, ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole,
+    matchbox_transport::{self, MatchboxInbox, PeerMap, SIGNALING_PORT},
 };
 use crate::theme;
 use crate::ui::fonts::{self, UiFonts};
@@ -13,6 +15,12 @@ use crate::ui::menu_helpers::*;
 
 use super::*;
 use super::pages;
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Resource)]
+pub(crate) struct JoinDiscoveryScan {
+    rx: std::sync::Mutex<std::sync::mpsc::Receiver<Vec<multiplayer::DiscoveredHost>>>,
+}
 
 /// Pick the first available faction not already taken by any lobby player.
 fn next_available_faction(lobby: &LobbyState) -> (Faction, u8) {
@@ -27,6 +35,7 @@ fn next_available_faction(lobby: &LobbyState) -> (Faction, u8) {
     (Faction::Player2, 1)
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum JoinTarget {
     Tcp { host: String, port: u16 },
@@ -37,14 +46,11 @@ enum JoinTarget {
 
 pub(crate) fn cleanup_network_on_enter_menu(
     mut commands: Commands,
-    host_state: Option<Res<HostNetState>>,
     client_state: Option<Res<ClientNetState>>,
-    #[cfg(not(target_arch = "wasm32"))] host_factory: Option<Res<HostConnectionFactory>>,
+    mut socket: Option<ResMut<MatchboxSocket>>,
 ) {
-    if let Some(host) = host_state {
-        host.shutdown.store(true, Ordering::Relaxed);
-    }
-    if let Some(client) = client_state {
+    // Send leave notice before closing
+    if let (Some(client), Some(ref mut socket)) = (client_state.as_ref(), socket.as_mut()) {
         let seq = {
             let mut s = client.seq.lock().unwrap();
             *s += 1;
@@ -54,34 +60,21 @@ pub(crate) fn cleanup_network_on_enter_menu(
             seq,
             timestamp: 0.0,
         };
-        if let Ok(json) = codec::encode(&leave_msg) {
-            match client.outgoing.send(json) {
-                Ok(_) => debug_tap::record_info(
-                    "menu_cleanup",
-                    format!("queued client leave notice seq={}", seq),
-                ),
-                Err(e) => debug_tap::record_error(
-                    "menu_cleanup",
-                    format!("failed to queue leave notice seq={}: {}", seq, e),
-                ),
-            }
-        }
-        client.shutdown.store(true, Ordering::Relaxed);
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Some(factory) = host_factory {
-        factory.shutdown.store(true, Ordering::Relaxed);
+        matchbox_transport::send_to_host(socket, &leave_msg);
     }
 
+    commands.close_socket();
+    #[cfg(not(target_arch = "wasm32"))]
+    commands.stop_server();
     commands.remove_resource::<HostNetState>();
     commands.remove_resource::<ClientNetState>();
-    #[cfg(not(target_arch = "wasm32"))]
-    commands.remove_resource::<HostConnectionFactory>();
-    #[cfg(target_arch = "wasm32")]
-    commands.remove_resource::<multiplayer::WasmClientSocket>();
     commands.remove_resource::<PendingGameStart>();
+    #[cfg(not(target_arch = "wasm32"))]
+    commands.remove_resource::<JoinDiscoveryScan>();
     commands.insert_resource(NetRole::Offline);
     commands.insert_resource(LobbyState::default());
+    commands.insert_resource(PeerMap::default());
+    commands.insert_resource(MatchboxInbox::default());
 }
 
 // ── Multiplayer Page ──
@@ -376,7 +369,14 @@ pub(crate) fn spawn_join_lobby_page(
     container: Entity,
     config: &GameSetupConfig,
     fonts: &UiFonts,
+    lobby: &LobbyState,
+    role: NetRole,
+    my_faction: Option<Faction>,
 ) {
+    let is_connected = matches!(lobby.status, LobbyStatus::Connected) || role == NetRole::Client;
+    let is_connecting = matches!(lobby.status, LobbyStatus::Connecting);
+    let is_failed = matches!(lobby.status, LobbyStatus::Failed(_));
+
     spawn_page_header(
         commands,
         container,
@@ -385,101 +385,363 @@ pub(crate) fn spawn_join_lobby_page(
         fonts,
     );
 
-    spawn_animated_section_divider(commands, container, "SESSION CODE", fonts);
+    // ── Connection state banner ──
+    let (banner_dot_color, banner_text, banner_text_color, banner_bg) = if is_connected {
+        (
+            theme::SUCCESS,
+            "CONNECTED".to_string(),
+            theme::SUCCESS,
+            Color::srgba(0.15, 0.35, 0.15, 0.4),
+        )
+    } else if is_connecting {
+        (
+            theme::WARNING,
+            "CONNECTING...".to_string(),
+            theme::WARNING,
+            Color::srgba(0.35, 0.25, 0.1, 0.4),
+        )
+    } else if is_failed {
+        (
+            theme::DESTRUCTIVE,
+            "DISCONNECTED".to_string(),
+            theme::DESTRUCTIVE,
+            Color::srgba(0.35, 0.15, 0.15, 0.4),
+        )
+    } else {
+        (
+            theme::TEXT_SECONDARY,
+            "NOT CONNECTED".to_string(),
+            theme::TEXT_SECONDARY,
+            Color::srgba(0.2, 0.2, 0.2, 0.4),
+        )
+    };
 
-    let input_row = commands
-        .spawn(Node {
-            width: Val::Percent(100.0),
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            margin: UiRect::vertical(Val::Px(6.0)),
-            ..default()
-        })
+    let banner = commands
+        .spawn((
+            ConnectionStateBanner,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                column_gap: Val::Px(8.0),
+                padding: UiRect::axes(Val::Px(16.0), Val::Px(10.0)),
+                margin: UiRect::vertical(Val::Px(6.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
+                ..default()
+            },
+            BackgroundColor(banner_bg),
+            BorderColor::all(banner_dot_color.with_alpha(0.3)),
+        ))
         .with_children(|parent| {
+            // Colored dot
             parent.spawn((
-                Text::new("Code:"),
+                Node {
+                    width: Val::Px(10.0),
+                    height: Val::Px(10.0),
+                    border_radius: BorderRadius::all(Val::Px(5.0)),
+                    ..default()
+                },
+                BackgroundColor(banner_dot_color),
+            ));
+            parent.spawn((
+                Text::new(banner_text),
                 TextFont {
                     font_size: theme::FONT_MEDIUM,
-
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
-                Node {
-                    width: Val::Px(80.0),
-                    ..default()
-                },
+                TextColor(banner_text_color),
+                Pickable::IGNORE,
             ));
+        })
+        .id();
+    commands.entity(container).add_child(banner);
 
-            parent
-                .spawn((
-                    SessionCodeInput,
-                    TextInputField {
-                        value: String::new(),
-                        cursor_pos: 0,
-                        max_len: 45,
-                    },
-                    Button,
-                    Node {
-                        width: Val::Px(280.0),
-                        height: Val::Px(32.0),
-                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-                        border: UiRect::all(Val::Px(1.0)),
-                        align_items: AlignItems::Center,
-                        overflow: Overflow::clip(),
+    spawn_animated_section_divider(commands, container, "SESSION CODE", fonts);
+
+    // ── Conditional input vs read-only display ──
+    if is_connected || is_connecting {
+        // Read-only display of session code
+        let code_display = if !lobby.client_session_code.is_empty() {
+            lobby.client_session_code.clone()
+        } else {
+            lobby.session_code.clone()
+        };
+        let display_row = commands
+            .spawn(Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                margin: UiRect::vertical(Val::Px(6.0)),
+                ..default()
+            })
+            .with_children(|parent| {
+                parent.spawn((
+                    Text::new("Session:"),
+                    TextFont {
+                        font_size: theme::FONT_MEDIUM,
                         ..default()
                     },
-                    BackgroundColor(theme::INPUT_BG),
-                    BorderColor::all(theme::INPUT_BORDER),
-                ))
-                .with_children(|input| {
-                    input.spawn((
-                        Text::new(""),
-                        TextFont {
-                            font_size: theme::FONT_MEDIUM,
+                    TextColor(theme::TEXT_SECONDARY),
+                ));
+                parent.spawn((
+                    Text::new(code_display),
+                    TextFont {
+                        font_size: theme::FONT_MEDIUM,
+                        ..default()
+                    },
+                    TextColor(theme::ACCENT),
+                ));
+            })
+            .id();
+        commands.entity(container).add_child(display_row);
+    } else {
+        // Full editable input row
+        let input_row = commands
+            .spawn(Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(6.0),
+                margin: UiRect::vertical(Val::Px(6.0)),
+                ..default()
+            })
+            .with_children(|parent| {
+                parent.spawn((
+                    Text::new("Code:"),
+                    TextFont {
+                        font_size: theme::FONT_MEDIUM,
+                        ..default()
+                    },
+                    TextColor(theme::TEXT_SECONDARY),
+                    Node {
+                        width: Val::Px(80.0),
+                        ..default()
+                    },
+                ));
+
+                parent
+                    .spawn((
+                        SessionCodeInput,
+                        TextInputField {
+                            value: String::new(),
+                            cursor_pos: 0,
+                            max_len: 45,
+                        },
+                        Button,
+                        Node {
+                            width: Val::Px(240.0),
+                            height: Val::Px(32.0),
+                            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            align_items: AlignItems::Center,
+                            overflow: Overflow::clip(),
                             ..default()
                         },
+                        BackgroundColor(theme::INPUT_BG),
+                        BorderColor::all(theme::INPUT_BORDER),
+                    ))
+                    .with_children(|input| {
+                        input.spawn((
+                            Text::new(""),
+                            TextFont {
+                                font_size: theme::FONT_MEDIUM,
+                                ..default()
+                            },
+                            TextColor(theme::TEXT_PRIMARY),
+                            Pickable::IGNORE,
+                        ));
+                        input.spawn((
+                            TextInputCursor,
+                            Text::new("|"),
+                            TextFont {
+                                font_size: theme::FONT_MEDIUM,
+                                ..default()
+                            },
+                            TextColor(Color::NONE),
+                            Pickable::IGNORE,
+                        ));
+                    });
+
+                // Paste button
+                parent
+                    .spawn((
+                        PasteCodeButton,
+                        Button,
+                        ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
+                        ButtonStyle::Filled,
+                        Node {
+                            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                            ..default()
+                        },
+                        BackgroundColor(theme::BTN_PRIMARY),
+                    ))
+                    .with_children(|btn| {
+                        btn.spawn((
+                            Text::new("PASTE"),
+                            TextFont {
+                                font_size: theme::FONT_SMALL,
+                                ..default()
+                            },
+                            TextColor(theme::TEXT_PRIMARY),
+                            Pickable::IGNORE,
+                        ));
+                    });
+
+                // Clear button
+                parent
+                    .spawn((
+                        ClearCodeButton,
+                        Button,
+                        ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
+                        ButtonStyle::Ghost,
+                        Node {
+                            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_children(|btn| {
+                        btn.spawn((
+                            Text::new("CLEAR"),
+                            TextFont {
+                                font_size: theme::FONT_SMALL,
+                                ..default()
+                            },
+                            TextColor(theme::TEXT_SECONDARY),
+                            Pickable::IGNORE,
+                        ));
+                    });
+            })
+            .id();
+        commands.entity(container).add_child(input_row);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let discover_btn = commands
+                .spawn((
+                    DiscoverLanHostsButton,
+                    MenuButton(MenuAction::RefreshLanHosts),
+                    Button,
+                    ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
+                    ButtonStyle::Ghost,
+                    Node {
+                        width: Val::Px(120.0),
+                        align_content: AlignContent::Center,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::all(Val::Px(8.0)),
+                        margin: UiRect::bottom(Val::Px(6.0)),
+                        ..default()
+                    },
+                    BackgroundColor(theme::BTN_PRIMARY),
+                ))
+                .with_children(|parent| {
+                    parent.spawn((
+                        Text::new("FIND LAN HOSTS"),
+                        fonts::heading(fonts, theme::FONT_MEDIUM),
                         TextColor(theme::TEXT_PRIMARY),
                         Pickable::IGNORE,
                     ));
-                    input.spawn((
-                        TextInputCursor,
-                        Text::new("|"),
-                        TextFont {
-                            font_size: theme::FONT_MEDIUM,
-                            ..default()
-                        },
-                        TextColor(Color::NONE),
-                        Pickable::IGNORE,
-                    ));
-                });
-        })
-        .id();
-    commands.entity(container).add_child(input_row);
+                })
+                .id();
+            commands.entity(container).add_child(discover_btn);
 
-    let connect_btn = spawn_styled_button(
-        commands,
-        "CONNECT",
-        MenuButton(MenuAction::ConnectToHost),
-        true,
-        fonts,
-    );
-    commands.entity(container).add_child(connect_btn);
+            let discovered_list = commands
+                .spawn((
+                    DiscoveredHostsList,
+                    Node {
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Stretch,
+                        row_gap: Val::Px(6.0),
+                        margin: UiRect::bottom(Val::Px(8.0)),
+                        ..default()
+                    },
+                ))
+                .id();
+            commands.entity(container).add_child(discovered_list);
+        }
+    }
+
+    // ── Conditional CONNECT vs DISCONNECT ──
+    if is_connected {
+        // Show DISCONNECT button with destructive styling
+        let dc_btn = commands
+            .spawn((
+                MenuButton(MenuAction::Disconnect),
+                Button,
+                ButtonAnimState::new(theme::DESTRUCTIVE.to_srgba().to_f32_array()),
+                ButtonStyle::Filled,
+                Node {
+                    width: Val::Px(220.0),
+                    height: Val::Px(44.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    margin: UiRect::vertical(Val::Px(6.0)),
+                    ..default()
+                },
+                BackgroundColor(theme::DESTRUCTIVE),
+            ))
+            .with_children(|parent| {
+                parent.spawn((
+                    Text::new("DISCONNECT"),
+                    fonts::heading(fonts, theme::FONT_BUTTON),
+                    TextColor(Color::WHITE),
+                    Pickable::IGNORE,
+                ));
+            })
+            .id();
+        commands.entity(container).add_child(dc_btn);
+    } else if !is_connecting {
+        // Show CONNECT button
+        let connect_btn = spawn_styled_button(
+            commands,
+            "CONNECT",
+            MenuButton(MenuAction::ConnectToHost),
+            true,
+            fonts,
+        );
+        commands.entity(container).add_child(connect_btn);
+    }
+    // When connecting: show neither button
 
     spawn_animated_section_divider(commands, container, "STATUS", fonts);
+
+    // ── Color-coded status text ──
+    let (status_text, status_color) = match &lobby.status {
+        LobbyStatus::Connected => (
+            "Connected! Waiting for host to start...".to_string(),
+            theme::SUCCESS,
+        ),
+        LobbyStatus::Connecting => (
+            "Connecting...".to_string(),
+            theme::WARNING,
+        ),
+        LobbyStatus::Failed(e) => (
+            format!("Failed: {}", e),
+            theme::DESTRUCTIVE,
+        ),
+        LobbyStatus::Waiting => (
+            if cfg!(target_arch = "wasm32") {
+                "Enter a hosted session code and press CONNECT".to_string()
+            } else {
+                "Enter the host's session code or scan your LAN and press CONNECT".to_string()
+            },
+            theme::TEXT_SECONDARY,
+        ),
+    };
 
     let status = commands
         .spawn((
             LobbyStatusText,
-            Text::new(if cfg!(target_arch = "wasm32") {
-                "Enter a hosted session code and press CONNECT"
-            } else {
-                "Enter the host's session code and press CONNECT"
-            }),
+            Text::new(status_text),
             TextFont {
                 font_size: theme::FONT_MEDIUM,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(status_color),
             Node {
                 margin: UiRect::vertical(Val::Px(8.0)),
                 ..default()
@@ -491,17 +753,8 @@ pub(crate) fn spawn_join_lobby_page(
     spawn_animated_section_divider(commands, container, "FACTIONS", fonts);
 
     for i in 0..4 {
-        spawn_client_slot_card(commands, container, i, config);
+        spawn_client_slot_card(commands, container, i, config, lobby, my_faction);
     }
-
-    let dc_btn = spawn_styled_button(
-        commands,
-        "DISCONNECT",
-        MenuButton(MenuAction::Disconnect),
-        false,
-        fonts,
-    );
-    commands.entity(container).add_child(dc_btn);
 }
 
 /// Read-only slot card for the client join lobby — shows faction config from host.
@@ -510,10 +763,17 @@ fn spawn_client_slot_card(
     container: Entity,
     slot_index: usize,
     config: &GameSetupConfig,
+    lobby: &LobbyState,
+    my_faction: Option<Faction>,
 ) {
     let slot = config.slots[slot_index];
-    let faction_color = Faction::PLAYERS[slot_index].color();
+    let faction = Faction::PLAYERS[slot_index];
+    let faction_color = faction.color();
     let team = config.player_teams[slot_index];
+
+    // Find matching lobby player for this slot
+    let lobby_player = lobby.players.iter().find(|p| p.faction == faction);
+    let is_me = my_faction.map_or(false, |f| f == faction);
 
     let type_label = match slot {
         SlotOccupant::Human => "Human",
@@ -524,6 +784,19 @@ fn spawn_client_slot_card(
         SlotOccupant::Open => "Open",
     };
 
+    // Use player name from lobby data if available
+    let display_name = if let Some(player) = lobby_player {
+        if is_me {
+            format!("{} (YOU)", player.name)
+        } else {
+            player.name.clone()
+        }
+    } else if is_me {
+        format!("Player {} (YOU)", slot_index + 1)
+    } else {
+        format!("Player {}", slot_index + 1)
+    };
+
     let team_colors = [
         Color::srgb(0.9, 0.75, 0.2),
         Color::srgb(0.2, 0.75, 0.85),
@@ -531,6 +804,13 @@ fn spawn_client_slot_card(
         Color::srgb(0.95, 0.5, 0.15),
     ];
     let team_color = team_colors.get(team as usize).copied().unwrap_or(team_colors[0]);
+
+    // Highlight border for "your" slot
+    let border_color = if is_me {
+        theme::ACCENT
+    } else {
+        theme::SEPARATOR
+    };
 
     let card = commands
         .spawn((
@@ -541,14 +821,31 @@ fn spawn_client_slot_card(
                 align_items: AlignItems::Center,
                 padding: UiRect::all(Val::Px(10.0)),
                 margin: UiRect::vertical(Val::Px(3.0)),
-                border: UiRect::all(Val::Px(1.0)),
+                border: UiRect::all(Val::Px(if is_me { 2.0 } else { 1.0 })),
                 column_gap: Val::Px(8.0),
                 ..default()
             },
             BackgroundColor(theme::BG_SURFACE),
-            BorderColor::all(theme::SEPARATOR),
+            BorderColor::all(border_color),
         ))
         .with_children(|card| {
+            // Connection indicator dot (for human players with lobby data)
+            if let Some(player) = lobby_player {
+                let dot_color = if player.connected {
+                    theme::SUCCESS
+                } else {
+                    theme::DESTRUCTIVE
+                };
+                card.spawn((
+                    Node {
+                        width: Val::Px(8.0),
+                        height: Val::Px(8.0),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(dot_color),
+                ));
+            }
             // Faction color dot
             card.spawn((
                 Node {
@@ -559,11 +856,11 @@ fn spawn_client_slot_card(
                 },
                 BackgroundColor(faction_color),
             ));
-            // Faction label
+            // Player name / faction label
             card.spawn((
-                Text::new(format!("Player {}", slot_index + 1)),
+                Text::new(display_name),
                 TextFont { font_size: theme::FONT_MEDIUM, ..default() },
-                TextColor(faction_color),
+                TextColor(if is_me { theme::ACCENT } else { faction_color }),
             ));
             // Type label
             card.spawn((
@@ -627,11 +924,16 @@ fn parse_direct_host_port(code: &str, default_port: u16) -> Result<(String, u16)
         (trimmed.to_string(), default_port)
     };
 
-    // Validate that the host looks like a valid IPv4 address or hostname
+    // If the host is numeric-dot notation, treat it as IPv4 and validate it.
+    // Otherwise allow standard hostnames such as ngrok TCP endpoints.
     if host.contains('.') {
-        // Looks like an IPv4 address — must be exactly 4 numeric octets
         let octets: Vec<&str> = host.split('.').collect();
-        if octets.len() != 4 || !octets.iter().all(|o| o.parse::<u8>().is_ok()) {
+        let all_numeric = octets
+            .iter()
+            .all(|octet| !octet.is_empty() && octet.chars().all(|ch| ch.is_ascii_digit()));
+        if all_numeric
+            && (octets.len() != 4 || !octets.iter().all(|octet| octet.parse::<u8>().is_ok()))
+        {
             return Err(format!(
                 "Invalid IP address '{}'. Expected format: 1.2.3.4:port",
                 host
@@ -725,10 +1027,7 @@ fn current_browser_origin() -> Result<(String, String), String> {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
     use crate::multiplayer::transport;
-    use std::net::TcpListener;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::mpsc;
-    use std::sync::Arc;
+    use std::net::Ipv4Addr;
 
     let all_ips = transport::detect_all_ips();
     let primary_ip = if let Some(vpn) = all_ips.iter().find(|ip| ip.is_likely_vpn) {
@@ -736,17 +1035,25 @@ pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
     } else {
         transport::detect_lan_ip().unwrap_or_else(|| "127.0.0.1".to_string())
     };
-    let addr = format!("0.0.0.0:{}", DEFAULT_PORT);
-    let listener = match TcpListener::bind(&addr) {
-        Ok(l) => l,
-        Err(e) => {
-            warn!("Failed to bind TCP listener on {}: {}", addr, e);
-            return;
-        }
+
+    let host_name = if config.player_name.trim().is_empty() {
+        "Host".to_string()
+    } else {
+        config.player_name.trim().to_string()
     };
 
-    let session_code = format!("{}:{}", primary_ip, DEFAULT_PORT);
-    info!("Hosting on {}", session_code);
+    // Start embedded signaling server (ClientServer topology: first peer = host)
+    let signaling_builder = MatchboxServer::client_server_builder(
+        (Ipv4Addr::UNSPECIFIED, SIGNALING_PORT),
+    );
+    commands.start_server(signaling_builder);
+
+    // Open the host's own socket connecting to the local signaling server
+    let room_url = format!("ws://127.0.0.1:{}/rts_room", SIGNALING_PORT);
+    commands.open_socket(matchbox_transport::build_socket(&room_url));
+
+    let session_code = format!("ws://{}:{}/rts_room", primary_ip, SIGNALING_PORT);
+    info!("Hosting on {} (signaling port {})", session_code, SIGNALING_PORT);
     for detected in &all_ips {
         let vpn_tag = if detected.is_likely_vpn { " [VPN]" } else { "" };
         info!(
@@ -755,84 +1062,52 @@ pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
         );
     }
 
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let (new_client_tx, new_client_rx) = mpsc::channel();
-    let (cmd_tx, cmd_rx) = mpsc::channel();
-    let (dc_tx, dc_rx) = mpsc::channel();
-
-    let cmd_tx_clone = cmd_tx.clone();
-    let dc_tx_clone = dc_tx.clone();
-    let shutdown_clone = shutdown.clone();
-
-    let shutdown_listener = shutdown.clone();
-    std::thread::spawn(move || {
-        transport::host_listener_thread(listener, new_client_tx, shutdown_listener);
-    });
-
-    // ── WebSocket listener for WASM browser clients ──
-    let (ws_client_tx, ws_rx) = mpsc::channel();
-    let ws_addr = format!("0.0.0.0:{}", DEFAULT_PORT + transport::WS_PORT_OFFSET);
-    match TcpListener::bind(&ws_addr) {
-        Ok(ws_listener) => {
-            info!("WebSocket listener on {}", ws_addr);
-            let ws_cmd_tx = cmd_tx.clone();
-            let ws_dc_tx = dc_tx.clone();
-            let ws_shutdown = shutdown.clone();
-            std::thread::spawn(move || {
-                transport::ws_host_listener_thread(
-                    ws_listener,
-                    ws_cmd_tx,
-                    ws_dc_tx,
-                    ws_client_tx,
-                    ws_shutdown,
-                );
-            });
-        }
-        Err(e) => {
-            warn!("Failed to bind WebSocket listener on {}: {} — WASM clients won't be able to connect", ws_addr, e);
-        }
-    }
-
-    // ── HTTP file server for direct LAN web clients ──
-    let http_port = DEFAULT_PORT + transport::HTTP_PORT_OFFSET;
-    let http_addr = format!("0.0.0.0:{}", http_port);
-    let dist_dir = std::env::var("DIST_DIR").unwrap_or_else(|_| "dist".to_string());
-    if std::path::Path::new(&dist_dir).is_dir() {
-        match TcpListener::bind(&http_addr) {
-            Ok(http_listener) => {
-                info!(
-                    "Serving WASM client at http://{}:{}/",
-                    primary_ip, http_port
-                );
-                let http_shutdown = shutdown.clone();
+    // ── LAN discovery (UDP broadcast) ──
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let discovery_addr = format!("0.0.0.0:{}", transport::DISCOVERY_PORT);
+        match std::net::UdpSocket::bind(&discovery_addr) {
+            Ok(discovery_socket) => {
+                let discovery_session_code = session_code.clone();
+                let discovery_shutdown = shutdown.clone();
                 std::thread::spawn(move || {
-                    transport::host_file_server_thread(http_listener, dist_dir, http_shutdown);
+                    transport::discovery_listener_thread(
+                        discovery_socket,
+                        host_name,
+                        discovery_session_code,
+                        discovery_shutdown,
+                    );
                 });
             }
             Err(e) => {
-                warn!(
-                    "Failed to bind HTTP file server on {}: {} — web clients must load the page elsewhere",
-                    http_addr, e
-                );
+                warn!("Failed to bind LAN discovery socket on {}: {}", discovery_addr, e);
+            }
+        }
+
+        // ── HTTP file server for direct LAN web clients ──
+        let http_port = DEFAULT_PORT + transport::HTTP_PORT_OFFSET;
+        let http_addr = format!("0.0.0.0:{}", http_port);
+        let dist_dir = std::env::var("DIST_DIR").unwrap_or_else(|_| "dist".to_string());
+        if std::path::Path::new(&dist_dir).is_dir() {
+            match std::net::TcpListener::bind(&http_addr) {
+                Ok(http_listener) => {
+                    info!("Serving WASM client at http://{}:{}/", primary_ip, http_port);
+                    let http_shutdown = shutdown.clone();
+                    std::thread::spawn(move || {
+                        transport::host_file_server_thread(http_listener, dist_dir, http_shutdown);
+                    });
+                }
+                Err(e) => {
+                    warn!("Failed to bind HTTP file server on {}: {}", http_addr, e);
+                }
             }
         }
     }
 
-    commands.insert_resource(HostNetState {
-        incoming_commands: std::sync::Mutex::new(cmd_rx),
-        client_senders: std::sync::Mutex::new(Vec::new()),
-        new_clients: std::sync::Mutex::new(new_client_rx),
-        new_ws_clients: std::sync::Mutex::new(ws_rx),
-        disconnect_rx: std::sync::Mutex::new(dc_rx),
-        shutdown: shutdown.clone(),
-        seq: std::sync::Mutex::new(0),
-    });
-
-    commands.insert_resource(HostConnectionFactory {
-        cmd_tx: cmd_tx_clone,
-        dc_tx: dc_tx_clone,
-        shutdown: shutdown_clone,
-    });
+    commands.insert_resource(HostNetState::default());
+    commands.insert_resource(PeerMap::default());
+    commands.insert_resource(MatchboxInbox::default());
 
     commands.insert_resource(NetRole::Host);
     let all_ips_data: Vec<(String, String, bool)> = all_ips
@@ -852,57 +1127,30 @@ pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
         session_code,
         status: LobbyStatus::Waiting,
         all_ips: all_ips_data,
+        discovered_hosts: Vec::new(),
+        discovery_status: String::new(),
+        client_session_code: String::new(),
     });
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-#[derive(Resource)]
-pub(crate) struct HostConnectionFactory {
-    cmd_tx: std::sync::mpsc::Sender<(u8, game_state::message::ClientMessage)>,
-    dc_tx: std::sync::mpsc::Sender<u8>,
-    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn stop_hosting(
     commands: &mut Commands,
-    host_state: &Option<Res<HostNetState>>,
-    host_factory: &Option<Res<HostConnectionFactory>>,
+    _host_state: &Option<Res<HostNetState>>,
 ) {
-    if let Some(host) = host_state {
-        host.shutdown.store(true, Ordering::Relaxed);
-    }
-    if let Some(factory) = host_factory {
-        factory.shutdown.store(true, Ordering::Relaxed);
-    }
+    commands.close_socket();
+    commands.stop_server();
     commands.remove_resource::<HostNetState>();
-    commands.remove_resource::<HostConnectionFactory>();
     commands.insert_resource(NetRole::Offline);
     commands.insert_resource(LobbyState::default());
 }
 
 pub(crate) fn stop_client(
     commands: &mut Commands,
-    client_state: &Option<Res<ClientNetState>>,
+    _client_state: &Option<Res<ClientNetState>>,
 ) {
-    if let Some(client) = client_state {
-        let seq = {
-            let mut s = client.seq.lock().unwrap();
-            *s += 1;
-            *s
-        };
-        let leave_msg = ClientMessage::LeaveNotice {
-            seq,
-            timestamp: 0.0,
-        };
-        if let Ok(json) = codec::encode(&leave_msg) {
-            let _ = client.outgoing.send(json);
-        }
-        client.shutdown.store(true, Ordering::Relaxed);
-    }
+    commands.close_socket();
     commands.remove_resource::<ClientNetState>();
-    #[cfg(target_arch = "wasm32")]
-    commands.remove_resource::<multiplayer::WasmClientSocket>();
     commands.insert_resource(NetRole::Offline);
     commands.insert_resource(LobbyState::default());
 }
@@ -937,170 +1185,142 @@ pub(crate) fn connect_to_host_system(
             continue;
         };
 
-        // ── Native: connect via TCP ──
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let (host, port) = match resolve_native_join_target(&code) {
-                Ok(JoinTarget::Tcp { host, port }) => (host, port),
-                Ok(JoinTarget::WebSocket { .. }) => unreachable!(),
-                Err(e) => {
-                    lobby.status = LobbyStatus::Failed(e.clone());
-                    for mut text in &mut status_texts {
-                        **text = e.clone();
-                    }
-                    continue;
-                }
-            };
+        // Store session code for display after page rebuilds
+        lobby.client_session_code = code.clone();
 
-            let addr = format!("{}:{}", host, port);
-            for mut text in &mut status_texts {
-                **text = format!("Connecting to {}...", addr);
-            }
+        // Resolve session code to a signaling URL
+        let signaling_url = resolve_signaling_url(&code);
 
-            match std::net::TcpStream::connect_timeout(
-                &addr.parse().unwrap_or_else(|_| {
-                    std::net::SocketAddr::from(([127, 0, 0, 1], DEFAULT_PORT))
-                }),
-                std::time::Duration::from_secs(10),
-            ) {
-                Ok(stream) => {
-                    stream.set_nodelay(true).ok();
-                    multiplayer::transport::configure_keepalive(&stream);
-
-                    let shutdown =
-                        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-                    let (incoming_tx, incoming_rx) = std::sync::mpsc::channel();
-                    let (outgoing_tx, outgoing_rx) = std::sync::mpsc::channel();
-
-                    let read_stream =
-                        stream.try_clone().expect("Failed to clone TCP stream");
-                    let write_stream = stream;
-
-                    let shutdown_r = shutdown.clone();
-                    std::thread::spawn(move || {
-                        multiplayer::transport::client_reader_thread(
-                            read_stream,
-                            incoming_tx,
-                            shutdown_r,
-                        );
-                    });
-
-                    let shutdown_w = shutdown.clone();
-                    std::thread::spawn(move || {
-                        multiplayer::transport::client_writer_thread_fn(
-                            write_stream,
-                            outgoing_rx,
-                            shutdown_w,
-                        );
-                    });
-
-                    let join_msg = game_state::message::ClientMessage::JoinRequest {
-                        seq: 0,
-                        timestamp: 0.0,
-                        player_name: "Client".to_string(),
-                        preferred_faction_index: None,
-                    };
-                    if let Ok(json) = codec::encode(&join_msg) {
-                        let _ = outgoing_tx.send(json);
-                    }
-
-                    commands.insert_resource(ClientNetState {
-                        incoming: std::sync::Mutex::new(incoming_rx),
-                        outgoing: outgoing_tx,
-                        shutdown,
-                        player_id: 0,
-                        seat_index: 0,
-                        my_faction: Faction::Player2,
-                        color_index: 0,
-                        seq: std::sync::Mutex::new(0),
-                        session_token: 0,
-                    });
-                    commands.insert_resource(NetRole::Client);
-
-                    lobby.status = LobbyStatus::Connected;
-                    for mut text in &mut status_texts {
-                        **text = "Connected! Waiting for host to start...".to_string();
-                    }
-                }
-                Err(e) => {
-                    lobby.status = LobbyStatus::Failed(e.to_string());
-                    for mut text in &mut status_texts {
-                        **text = format!("Failed: {}", e);
-                    }
-                }
-            }
+        for mut text in &mut status_texts {
+            **text = format!("Connecting to {}...", signaling_url);
         }
 
-        // ── WASM: connect via WebSocket ──
-        #[cfg(target_arch = "wasm32")]
-        {
-            let (page_protocol, page_host) = match current_browser_origin() {
-                Ok(parts) => parts,
-                Err(e) => {
-                    lobby.status = LobbyStatus::Failed(e.clone());
-                    for mut text in &mut status_texts {
-                        **text = e.clone();
-                    }
-                    continue;
-                }
-            };
+        // Unified: works for both native and WASM via Matchbox WebRTC
+        commands.open_socket(matchbox_transport::build_socket(&signaling_url));
+        commands.insert_resource(ClientNetState::default());
+        commands.insert_resource(PeerMap::default());
+        commands.insert_resource(MatchboxInbox::default());
+        commands.insert_resource(NetRole::Client);
 
-            let ws_url = match resolve_web_join_target(&code, &page_protocol, &page_host) {
-                Ok(JoinTarget::WebSocket { url }) => url,
-                Ok(JoinTarget::Tcp { .. }) => unreachable!(),
-                Err(e) => {
-                    lobby.status = LobbyStatus::Failed(e.clone());
-                    for mut text in &mut status_texts {
-                        **text = e.clone();
-                    }
-                    continue;
-                }
-            };
+        lobby.status = LobbyStatus::Connecting;
+        for mut text in &mut status_texts {
+            **text = "Connecting via WebRTC...".to_string();
+        }
+    }
+}
 
-            for mut text in &mut status_texts {
-                **text = format!("Connecting via WebSocket to {}...", ws_url);
+/// Resolve a session code to a Matchbox signaling URL.
+/// - If it starts with `ws://` or `wss://`, use as-is.
+/// - If it's an IP:PORT or IP, build `ws://IP:3536/rts_room`.
+fn resolve_signaling_url(code: &str) -> String {
+    let trimmed = code.trim();
+    if trimmed.starts_with("ws://") || trimmed.starts_with("wss://") {
+        return trimmed.to_string();
+    }
+    // Parse as host:port or just host
+    if let Some((host, _port_str)) = trimmed.split_once(':') {
+        format!("ws://{}:{}/rts_room", host, SIGNALING_PORT)
+    } else {
+        format!("ws://{}:{}/rts_room", trimmed, SIGNALING_PORT)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn refresh_lan_hosts_system(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<DiscoverLanHostsButton>)>,
+    mut commands: Commands,
+    mut lobby: ResMut<LobbyState>,
+    roots: Query<Entity, With<MenuRoot>>,
+) {
+    let mut pressed = false;
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed {
+            pressed = true;
+        }
+    }
+    if !pressed {
+        return;
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let hosts = multiplayer::transport::discover_lan_hosts(std::time::Duration::from_millis(900))
+            .into_iter()
+            .map(|(name, session_code)| multiplayer::DiscoveredHost { name, session_code })
+            .collect();
+        let _ = tx.send(hosts);
+    });
+
+    lobby.discovered_hosts.clear();
+    lobby.discovery_status = "Scanning LAN for hosts...".to_string();
+    commands.insert_resource(JoinDiscoveryScan {
+        rx: std::sync::Mutex::new(rx),
+    });
+    for e in &roots {
+        commands.entity(e).try_despawn();
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn refresh_lan_hosts_system() {}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn poll_lan_discovery_results_system(
+    scan: Option<Res<JoinDiscoveryScan>>,
+    mut commands: Commands,
+    mut lobby: ResMut<LobbyState>,
+    roots: Query<Entity, With<MenuRoot>>,
+) {
+    let Some(scan) = scan else { return };
+    let rx = scan.rx.lock().unwrap();
+    match rx.try_recv() {
+        Ok(hosts) => {
+            lobby.discovered_hosts = hosts;
+            lobby.discovery_status = if lobby.discovered_hosts.is_empty() {
+                "No LAN hosts found. Use direct IP:port for VPN or manual join.".to_string()
+            } else {
+                format!("Found {} LAN host(s). Select one to autofill the code.", lobby.discovered_hosts.len())
+            };
+            commands.remove_resource::<JoinDiscoveryScan>();
+            for e in &roots {
+                commands.entity(e).try_despawn();
             }
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            lobby.discovery_status = "LAN scan failed.".to_string();
+            commands.remove_resource::<JoinDiscoveryScan>();
+            for e in &roots {
+                commands.entity(e).try_despawn();
+            }
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+    }
+}
 
-            let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            let (incoming_tx, incoming_rx) = std::sync::mpsc::channel();
-            let (outgoing_tx, outgoing_rx) = std::sync::mpsc::channel();
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn poll_lan_discovery_results_system() {}
 
-            match multiplayer::transport::wasm_ws_connect(
-                &ws_url,
-                incoming_tx,
-                shutdown.clone(),
-                "WebClient".to_string(),
-            ) {
-                Ok(ws) => {
-                    commands.insert_resource(multiplayer::WasmClientSocket {
-                        ws,
-                        outgoing_rx: std::sync::Mutex::new(outgoing_rx),
-                    });
-
-                    commands.insert_resource(ClientNetState {
-                        incoming: std::sync::Mutex::new(incoming_rx),
-                        outgoing: outgoing_tx,
-                        shutdown,
-                        player_id: 0,
-                        seat_index: 0,
-                        my_faction: Faction::Player2,
-                        color_index: 0,
-                        seq: std::sync::Mutex::new(0),
-                        session_token: 0,
-                    });
-                    commands.insert_resource(NetRole::Client);
-
-                    lobby.status = LobbyStatus::Connecting;
-                    for mut text in &mut status_texts {
-                        **text = "Connecting via WebSocket...".to_string();
-                    }
-                }
-                Err(e) => {
-                    lobby.status = LobbyStatus::Failed(e.clone());
-                    for mut text in &mut status_texts {
-                        **text = format!("WebSocket failed: {}", e);
-                    }
-                }
+pub(crate) fn select_discovered_host_system(
+    interactions: Query<(&Interaction, &DiscoveredHostButton), Changed<Interaction>>,
+    lobby: Res<LobbyState>,
+    mut inputs: Query<(&mut TextInputField, &Children), With<SessionCodeInput>>,
+    mut text_query: Query<&mut Text, Without<TextInputCursor>>,
+) {
+    for (interaction, button) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let Some(host) = lobby.discovered_hosts.get(button.0) else {
+            continue;
+        };
+        let Ok((mut field, children)) = inputs.single_mut() else {
+            continue;
+        };
+        field.value = host.session_code.clone();
+        field.cursor_pos = field.value.len();
+        for child in children.iter() {
+            if let Ok(mut text) = text_query.get_mut(child) {
+                **text = field.value.clone();
             }
         }
     }
@@ -1176,6 +1396,14 @@ mod tests {
     }
 
     #[test]
+    fn parse_direct_host_port_accepts_dotted_hostname() {
+        assert_eq!(
+            parse_direct_host_port("0.tcp.eu.ngrok.io:17167", DEFAULT_PORT),
+            Ok(("0.tcp.eu.ngrok.io".to_string(), 17167))
+        );
+    }
+
+    #[test]
     fn resolve_web_join_target_rejects_invalid_hosted_code_characters() {
         assert_eq!(
             resolve_web_join_target("bad/code", "https:", "rts-game.fly.dev"),
@@ -1206,7 +1434,11 @@ pub(crate) fn update_lobby_ui(
     page: Res<MenuPage>,
     mut lobby: ResMut<LobbyState>,
     host_state: Option<Res<HostNetState>>,
-    #[cfg(not(target_arch = "wasm32"))] host_factory: Option<Res<HostConnectionFactory>>,
+    matchbox: (
+        Option<ResMut<MatchboxSocket>>,
+        Option<ResMut<PeerMap>>,
+        Option<ResMut<MatchboxInbox>>,
+    ),
     client_state: Option<ResMut<ClientNetState>>,
     pending_start: Option<Res<PendingGameStart>>,
     mut commands: Commands,
@@ -1218,9 +1450,12 @@ pub(crate) fn update_lobby_ui(
     >,
     mut config: ResMut<GameSetupConfig>,
     ip_list_q: Query<Entity, (With<HostIpList>, Without<HostIpListPopulated>)>,
+    discovered_list_q: Query<Entity, (With<DiscoveredHostsList>, Without<DiscoveredHostsListPopulated>)>,
     mut session_tokens: ResMut<multiplayer::SessionTokens>,
     roots: Query<Entity, With<MenuRoot>>,
 ) {
+    let (mut socket, mut peer_map, mut inbox) = matchbox;
+
     // Update session code display
     if *page == MenuPage::HostLobby {
         for mut text in &mut session_code_texts {
@@ -1260,117 +1495,137 @@ pub(crate) fn update_lobby_ui(
         }
     }
 
-    // ── Host: check for new clients (native only — WASM can't host) ──
-    #[cfg(not(target_arch = "wasm32"))]
-    if let (Some(host), Some(factory)) = (host_state.as_ref(), host_factory.as_ref()) {
-        let new_clients_rx = host.new_clients.lock().unwrap();
+    if *page == MenuPage::JoinLobby {
+        for list_entity in &discovered_list_q {
+            commands
+                .entity(list_entity)
+                .insert(DiscoveredHostsListPopulated);
+
+            if !lobby.discovery_status.is_empty() {
+                let status = commands
+                    .spawn((
+                        Text::new(lobby.discovery_status.clone()),
+                        TextFont {
+                            font_size: theme::FONT_SMALL,
+                            ..default()
+                        },
+                        TextColor(theme::TEXT_SECONDARY),
+                    ))
+                    .id();
+                commands.entity(list_entity).add_child(status);
+            }
+
+            for (index, host) in lobby.discovered_hosts.iter().enumerate() {
+                let button = commands
+                    .spawn((
+                        DiscoveredHostButton(index),
+                        Button,
+                        Node {
+                            width: Val::Percent(100.0),
+                            justify_content: JustifyContent::SpaceBetween,
+                            align_items: AlignItems::Center,
+                            padding: UiRect::axes(Val::Px(12.0), Val::Px(8.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BackgroundColor(theme::BG_SURFACE),
+                        BorderColor::all(theme::SEPARATOR),
+                    ))
+                    .with_children(|parent| {
+                        parent.spawn((
+                            Text::new(host.name.clone()),
+                            TextFont {
+                                font_size: theme::FONT_MEDIUM,
+                                ..default()
+                            },
+                            TextColor(theme::TEXT_PRIMARY),
+                            Pickable::IGNORE,
+                        ));
+                        parent.spawn((
+                            Text::new(host.session_code.clone()),
+                            TextFont {
+                                font_size: theme::FONT_SMALL,
+                                ..default()
+                            },
+                            TextColor(theme::ACCENT),
+                            Pickable::IGNORE,
+                        ));
+                    })
+                    .id();
+                commands.entity(list_entity).add_child(button);
+            }
+        }
+    }
+
+    // ── Host: poll matchbox for new peer connections and lobby messages ──
+    if let (Some(host), Some(ref mut socket), Some(ref mut peer_map), Some(ref mut inbox)) =
+        (host_state.as_ref(), socket.as_mut(), peer_map.as_mut(), inbox.as_mut())
+    {
+        // Update peers
+        if let Ok(changes) = socket.try_update_peers() {
+            for (peer, state) in &changes {
+                match state {
+                    PeerState::Connected => inbox.connected.push(*peer),
+                    PeerState::Disconnected => inbox.disconnected.push(*peer),
+                }
+            }
+        }
+
+        // Drain reliable channel for lobby messages
+        if let Ok(channel) = socket.get_channel_mut(matchbox_transport::RELIABLE_CH) {
+            for (peer, packet) in channel.receive() {
+                if let Ok(msg) = codec::decode::<game_state::message::ClientMessage>(&packet) {
+                    let player_id = peer_map.player_id(&peer).unwrap_or(0);
+                    inbox.client_commands.push((player_id, msg));
+                }
+            }
+        }
+
         let mut lobby_changed = false;
-        loop {
-            match new_clients_rx.try_recv() {
-                Ok(event) => {
-                    let player_id = event.player_id;
-                    info!("New client {} in lobby", player_id);
 
-                    let seat_index = lobby.players.len().min(3) as u8;
-                    let (faction, faction_idx) = next_available_faction(&lobby);
-                    let color_index = faction_idx;
+        // Process new peer connections
+        let connected = std::mem::take(&mut inbox.connected);
+        for peer in connected {
+            let player_id = peer_map.assign(peer);
+            info!("New peer {:?} assigned player_id {} in lobby", peer, player_id);
 
-                    lobby.players.push(LobbyPlayer {
-                        player_id,
-                        name: format!("Player {}", player_id),
-                        seat_index,
-                        faction,
-                        color_index,
-                        is_host: false,
-                        connected: true,
-                    });
+            let seat_index = lobby.players.len().min(3) as u8;
+            let (faction, faction_idx) = next_available_faction(&lobby);
+            let color_index = faction_idx;
 
-                    let read_stream = event
-                        .stream
-                        .try_clone()
-                        .expect("Failed to clone client stream");
-                    let write_stream = event.stream;
+            lobby.players.push(LobbyPlayer {
+                player_id,
+                name: format!("Player {}", player_id),
+                seat_index,
+                faction,
+                color_index,
+                is_host: false,
+                connected: true,
+            });
+            lobby_changed = true;
+        }
 
-                    let (writer_tx, writer_rx) = std::sync::mpsc::channel();
-
-                    let cmd_tx = factory.cmd_tx.clone();
-                    let dc_tx = factory.dc_tx.clone();
-                    let shutdown = factory.shutdown.clone();
-
-                    std::thread::spawn(move || {
-                        multiplayer::transport::host_client_reader_thread(
-                            read_stream,
-                            cmd_tx,
-                            dc_tx,
-                            player_id,
-                            shutdown,
-                        );
-                    });
-
-                    let shutdown_w = factory.shutdown.clone();
-                    std::thread::spawn(move || {
-                        multiplayer::transport::client_writer_thread(
-                            write_stream,
-                            writer_rx,
-                            shutdown_w,
-                        );
-                    });
-
-                    host.client_senders
-                        .lock()
-                        .unwrap()
-                        .push((player_id, writer_tx));
+        // Process peer disconnections
+        let disconnected = std::mem::take(&mut inbox.disconnected);
+        for peer in disconnected {
+            if let Some(player_id) = peer_map.remove_peer(&peer) {
+                info!("Player {} disconnected from lobby", player_id);
+                if let Some(player) =
+                    lobby.players.iter_mut().find(|p| p.player_id == player_id)
+                {
+                    player.connected = false;
                     lobby_changed = true;
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
         }
 
-        // ── Check for new WebSocket clients (WASM browser clients) ──
-        let new_ws_rx = host.new_ws_clients.lock().unwrap();
-        loop {
-            match new_ws_rx.try_recv() {
-                Ok(event) => {
-                    let player_id = event.player_id;
-                    info!("New WebSocket client {} in lobby", player_id);
-
-                    let seat_index = lobby.players.len().min(3) as u8;
-                    let (faction, faction_idx) = next_available_faction(&lobby);
-                    let color_index = faction_idx;
-
-                    lobby.players.push(LobbyPlayer {
-                        player_id,
-                        name: format!("Player {}", player_id),
-                        seat_index,
-                        faction,
-                        color_index,
-                        is_host: false,
-                        connected: true,
-                    });
-
-                    // WS client handler already spawned read/write threads —
-                    // just register the writer channel
-                    host.client_senders
-                        .lock()
-                        .unwrap()
-                        .push((player_id, event.writer_tx));
-                    lobby_changed = true;
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
-            }
-        }
-
-        let incoming_commands = host.incoming_commands.lock().unwrap();
-        loop {
-            match incoming_commands.try_recv() {
-                Ok((
-                    player_id,
-                    game_state::message::ClientMessage::JoinRequest {
-                        player_name, ..
-                    },
-                )) => {
+        // Process lobby messages
+        let client_commands = std::mem::take(&mut inbox.client_commands);
+        for (player_id, msg) in client_commands {
+            match msg {
+                game_state::message::ClientMessage::JoinRequest {
+                    player_name, ..
+                } => {
                     if let Some(player) =
                         lobby.players.iter_mut().find(|p| p.player_id == player_id)
                     {
@@ -1402,21 +1657,11 @@ pub(crate) fn update_lobby_ui(
                                 session_token: token,
                             }],
                         };
-                        if let Ok(json) = codec::encode(&msg) {
-                            let senders = host.client_senders.lock().unwrap();
-                            if let Some((_, sender)) =
-                                senders.iter().find(|(id, _)| *id == player_id)
-                            {
-                                let _ = sender.send(json);
-                            }
-                        }
+                        matchbox_transport::send_to_player(socket, peer_map, player_id, &msg);
                         lobby_changed = true;
                     }
                 }
-                Ok((
-                    player_id,
-                    game_state::message::ClientMessage::LeaveNotice { .. },
-                )) => {
+                game_state::message::ClientMessage::LeaveNotice { .. } => {
                     if let Some(player) =
                         lobby.players.iter_mut().find(|p| p.player_id == player_id)
                     {
@@ -1424,30 +1669,36 @@ pub(crate) fn update_lobby_ui(
                         lobby_changed = true;
                     }
                 }
-                Ok((_player_id, game_state::message::ClientMessage::Input { .. })) => {}
-                Ok((_player_id, game_state::message::ClientMessage::Ping { .. })) => {}
-                Ok((_player_id, game_state::message::ClientMessage::Reconnect { .. })) => {
-                    // Reconnection during lobby phase — not yet supported, treat as new join
+                game_state::message::ClientMessage::Input { .. } => {}
+                game_state::message::ClientMessage::Ping { .. } => {}
+                game_state::message::ClientMessage::Reconnect { .. } => {
+                    // Reconnection during lobby phase — not yet supported
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
             }
         }
 
         if lobby_changed {
-            // Auto-close AI/Open slots that conflict with new human players
+            // Revert slots for disconnected players back to Open
             for player in &lobby.players {
+                let idx = Faction::PLAYERS
+                    .iter()
+                    .position(|f| *f == player.faction)
+                    .unwrap_or(0);
                 if player.connected {
-                    let idx = Faction::PLAYERS
-                        .iter()
-                        .position(|f| *f == player.faction)
-                        .unwrap_or(0);
                     if !matches!(config.slots[idx], SlotOccupant::Human) {
                         config.slots[idx] = SlotOccupant::Human;
                     }
+                } else if matches!(config.slots[idx], SlotOccupant::Human) {
+                    config.slots[idx] = SlotOccupant::Open;
                 }
             }
-            broadcast_lobby_update(&lobby, host, &config);
+            // Remove fully disconnected players from lobby
+            lobby.players.retain(|p| p.connected);
+            broadcast_lobby_update_matchbox(&lobby, socket, &config);
+            // Rebuild the page to reflect updated slot cards
+            for e in &roots {
+                commands.entity(e).try_despawn();
+            }
         }
 
         if *page == MenuPage::HostLobby {
@@ -1499,48 +1750,63 @@ pub(crate) fn update_lobby_ui(
                 timestamp: 0.0,
                 events: vec![game_state::message::GameEvent::GameStart { config_json }],
             };
-            if let Ok(json) = codec::encode(&start_event) {
-                let senders = host.client_senders.lock().unwrap();
-                for (_id, sender) in senders.iter() {
-                    let _ = sender.send(json.clone());
-                }
-            }
+            matchbox_transport::broadcast_reliable(socket, &start_event);
 
             commands.remove_resource::<PendingGameStart>();
             next_state.set(AppState::InGame);
         }
     }
 
-    // ── Client: detect dead connection (async WebSocket failure) ──
+    // ── Client: detect dead connection ──
     if let Some(ref client) = client_state {
         if client
-            .shutdown
+            .disconnected
             .load(std::sync::atomic::Ordering::Relaxed)
             && !matches!(lobby.status, LobbyStatus::Connected)
         {
             lobby.status =
-                LobbyStatus::Failed("Connection lost — WebSocket closed".to_string());
+                LobbyStatus::Failed("Connection lost".to_string());
             for mut text in &mut status_texts {
                 **text = "Connection failed — host unreachable".to_string();
             }
+            commands.close_socket();
             commands.remove_resource::<ClientNetState>();
-            commands.remove_resource::<NetRole>();
-            #[cfg(target_arch = "wasm32")]
-            commands.remove_resource::<multiplayer::WasmClientSocket>();
+            commands.insert_resource(NetRole::Offline);
             return;
         }
     }
 
-    // ── Client: poll incoming for lobby updates and game start ──
-    if let Some(mut client) = client_state {
+    // ── Client: poll matchbox for lobby updates and game start ──
+    if let (Some(mut client), Some(ref mut socket)) = (client_state, socket.as_mut()) {
+        // Update peers to detect connection/disconnection
+        if let Ok(changes) = socket.try_update_peers() {
+            for (peer, state) in &changes {
+                match state {
+                    PeerState::Connected => {
+                        info!("Client connected to host peer {:?}", peer);
+                        lobby.status = LobbyStatus::Connected;
+                        // Send JoinRequest
+                        let join_msg = game_state::message::ClientMessage::JoinRequest {
+                            seq: 0,
+                            timestamp: 0.0,
+                            player_name: "Client".to_string(),
+                            preferred_faction_index: None,
+                        };
+                        matchbox_transport::send_to_host(socket, &join_msg);
+                    }
+                    PeerState::Disconnected => {
+                        client.disconnected.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+
+        // Drain reliable channel for lobby messages
         let mut incoming = Vec::new();
-        {
-            let rx = client.incoming.lock().unwrap();
-            loop {
-                match rx.try_recv() {
-                    Ok(msg) => incoming.push(msg),
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+        if let Ok(channel) = socket.get_channel_mut(matchbox_transport::RELIABLE_CH) {
+            for (_peer, packet) in channel.receive() {
+                if let Ok(msg) = codec::decode::<game_state::message::ServerMessage>(&packet) {
+                    incoming.push(msg);
                 }
             }
         }
@@ -1606,6 +1872,8 @@ pub(crate) fn update_lobby_ui(
                                 config.player_teams = *player_teams;
                                 config.team_mode = TeamMode::Custom;
                                 lobby.status = LobbyStatus::Connected;
+                                lobby.discovery_status.clear();
+                                lobby.discovered_hosts.clear();
                                 // Rebuild page to show updated slot cards
                                 for e in &roots {
                                     commands.entity(e).try_despawn();
@@ -1691,12 +1959,52 @@ pub(crate) fn broadcast_lobby_update(
         }],
     };
 
-    if let Ok(json) = codec::encode(&msg) {
-        let senders = host.client_senders.lock().unwrap();
-        for (_id, sender) in senders.iter() {
-            let _ = sender.send(json.clone());
-        }
-    }
+    // Legacy: kept for reference but no longer called
+    let _ = (host, &msg);
+}
+
+/// Broadcast lobby update to all connected peers via Matchbox.
+fn broadcast_lobby_update_matchbox(
+    lobby: &LobbyState,
+    socket: &mut MatchboxSocket,
+    config: &GameSetupConfig,
+) {
+    use game_state::message::{GameEvent, LobbyPlayerInfo, ServerMessage};
+
+    let players: Vec<LobbyPlayerInfo> = lobby
+        .players
+        .iter()
+        .map(|p| LobbyPlayerInfo {
+            player_id: p.player_id,
+            name: p.name.clone(),
+            seat_index: p.seat_index,
+            faction_index: Faction::PLAYERS
+                .iter()
+                .position(|f| *f == p.faction)
+                .unwrap_or(0) as u8,
+            color_index: p.color_index,
+            is_host: p.is_host,
+            connected: p.connected,
+        })
+        .collect();
+
+    let msg = ServerMessage::Event {
+        seq: 0,
+        timestamp: 0.0,
+        events: vec![GameEvent::LobbyUpdate {
+            players,
+            slots: config.slots.map(|s| match s {
+                SlotOccupant::Human => 0,
+                SlotOccupant::Ai(AiDifficulty::Easy) => 1,
+                SlotOccupant::Ai(AiDifficulty::Medium) => 2,
+                SlotOccupant::Ai(AiDifficulty::Hard) => 3,
+                SlotOccupant::Closed => 4,
+                SlotOccupant::Open => 5,
+            }),
+            player_teams: config.player_teams,
+        }],
+    };
+    matchbox_transport::broadcast_reliable(socket, &msg);
 }
 
 pub(crate) fn update_web_client_url(
@@ -1726,6 +2034,57 @@ pub(crate) fn update_web_client_url(
     for mut text in &mut texts {
         if **text != display {
             **text = display.clone();
+        }
+    }
+}
+
+pub(crate) fn paste_code_system(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<PasteCodeButton>)>,
+    mut inputs: Query<(&mut TextInputField, &Children), With<SessionCodeInput>>,
+    mut text_query: Query<&mut Text, Without<TextInputCursor>>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let Some(clip) = clipboard_read() else {
+            continue;
+        };
+        let clip = clip.trim().to_string();
+        if clip.is_empty() {
+            continue;
+        }
+        let Ok((mut field, children)) = inputs.single_mut() else {
+            continue;
+        };
+        field.value = clip[..clip.len().min(field.max_len)].to_string();
+        field.cursor_pos = field.value.len();
+        for child in children.iter() {
+            if let Ok(mut text) = text_query.get_mut(child) {
+                **text = field.value.clone();
+            }
+        }
+    }
+}
+
+pub(crate) fn clear_code_system(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<ClearCodeButton>)>,
+    mut inputs: Query<(&mut TextInputField, &Children), With<SessionCodeInput>>,
+    mut text_query: Query<&mut Text, Without<TextInputCursor>>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let Ok((mut field, children)) = inputs.single_mut() else {
+            continue;
+        };
+        field.value.clear();
+        field.cursor_pos = 0;
+        for child in children.iter() {
+            if let Ok(mut text) = text_query.get_mut(child) {
+                **text = String::new();
+            }
         }
     }
 }

@@ -962,6 +962,7 @@ fn handle_right_click_move(
         Res<Time>,
         Query<&mut UnitState>,
         Query<&GlobalTransform>,
+        Option<ResMut<bevy_matchbox::prelude::MatchboxSocket>>,
     ),
 ) {
     let (camera_q, windows) = viewport;
@@ -969,7 +970,7 @@ fn handle_right_click_move(
         target_queries;
     let (other_units, other_buildings) = enemy_detect;
     let (minimap_interaction, ui_clicked, ui_press) = ui_flags;
-    let (net_role, client_net, host_net, net_map, time, mut unit_states_q, all_transforms) = net_params;
+    let (net_role, client_net, host_net, net_map, time, mut unit_states_q, all_transforms, mut matchbox_socket) = net_params;
 
     if !mouse.just_pressed(MouseButton::Right) {
         return;
@@ -1182,7 +1183,7 @@ fn handle_right_click_move(
     };
 
     if *net_role == NetRole::Client {
-        if let Some(client) = client_net.as_ref() {
+        if let (Some(client), Some(ref mut socket)) = (client_net.as_ref(), matchbox_socket.as_mut()) {
             if let Some(input) = make_network_input() {
                 let seq = {
                     let mut s = client.seq.lock().unwrap();
@@ -1194,9 +1195,7 @@ fn handle_right_click_move(
                     timestamp: time.elapsed_secs_f64(),
                     input,
                 };
-                if let Ok(bytes) = game_state::codec::encode(&msg) {
-                    let _ = client.outgoing.send(bytes);
-                }
+                crate::multiplayer::matchbox_transport::send_to_host(socket, &msg);
             }
         }
         // Client no longer mutates local gameplay state directly; host relays supported inputs.
@@ -1217,11 +1216,8 @@ fn handle_right_click_move(
                     player_id: 0,
                     input: input.clone(),
                 };
-                if let Ok(bytes) = game_state::codec::encode(&relay) {
-                    let senders = host.client_senders.lock().unwrap();
-                    for (_id, sender) in senders.iter() {
-                        let _ = sender.send(bytes.clone());
-                    }
+                if let Some(ref mut socket) = matchbox_socket {
+                    crate::multiplayer::matchbox_transport::broadcast_reliable(socket, &relay);
                 }
 
                 // Execute locally through the same code path as client commands,

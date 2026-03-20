@@ -167,7 +167,7 @@ impl Default for WidgetRegistry {
         slots.insert(WidgetId::Minimap, GridSlot::new(9, 7, 3, 5));
         slots.insert(WidgetId::EventLog, GridSlot::new(10, 0, 2, 2));
         slots.insert(WidgetId::TechTree, GridSlot::new(3, 4, 6, 4));
-        slots.insert(WidgetId::Debug, GridSlot::new(10, 0, 2, 12));
+        slots.insert(WidgetId::Debug, GridSlot::new(10, 0, 4, 6));
 
         let mut visibility = HashMap::new();
         visibility.insert(WidgetId::Resources, true);

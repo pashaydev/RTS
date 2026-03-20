@@ -168,7 +168,6 @@ fn setup_minimap(
         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
     );
     image.sampler = ImageSampler::nearest();
-    image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST;
     let handle = images.add(image);
 
     commands.insert_resource(MinimapTexture {
@@ -179,7 +178,11 @@ fn setup_minimap(
     });
 
     // Spawn minimap image inside the widget content area
+    if content_q.is_empty() {
+        warn!("Minimap: MinimapWidgetContent entity not found — HUD may not have spawned yet");
+    }
     if let Ok((content_entity, mut content_node)) = content_q.single_mut() {
+        info!("Minimap: spawning image node inside widget content entity {:?}", content_entity);
         content_node.padding = UiRect::ZERO;
         content_node.overflow = Overflow::clip();
 
@@ -219,9 +222,11 @@ fn update_minimap_texture(
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let Some(image) = images.get_mut(&minimap_tex.handle) else {
+        warn_once!("Minimap: image handle not found in assets");
         return;
     };
     let Some(ref mut data) = image.data else {
+        warn_once!("Minimap: image.data is None — texture may have been moved to GPU only");
         return;
     };
 

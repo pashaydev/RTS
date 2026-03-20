@@ -1,22 +1,19 @@
-//! LAN Multiplayer — host-as-server model with TCP transport (native) and WebSocket (WASM).
+//! Multiplayer — host-authoritative model with Matchbox WebRTC transport.
 //!
 //! Host runs full simulation, clients receive state updates and send commands.
+//! Uses WebRTC data channels via `bevy_matchbox` for both native and WASM.
 
 pub mod client_systems;
 pub mod debug_tap;
-pub mod ggrs_matchbox;
 pub mod host_systems;
+pub mod matchbox_transport;
 pub mod transport;
 
 use bevy::prelude::*;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
-
-use game_state::message::{ClientMessage, ServerMessage};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use crate::components::{ActivePlayer, AiControlledFactions, AppState, Faction, FactionColors};
-use transport::NewClientEvent;
 
 // ── Net Stats ───────────────────────────────────────────────────────────────
 
@@ -233,6 +230,12 @@ pub struct LobbyPlayer {
     pub connected: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredHost {
+    pub name: String,
+    pub session_code: String,
+}
+
 #[derive(Resource, Default)]
 pub struct LobbyState {
     pub players: Vec<LobbyPlayer>,
@@ -240,6 +243,10 @@ pub struct LobbyState {
     pub status: LobbyStatus,
     /// All detected IPs (LAN + VPN/Hamachi) for display in host lobby.
     pub all_ips: Vec<(String, String, bool)>, // (ip, iface_name, is_vpn)
+    pub discovered_hosts: Vec<DiscoveredHost>,
+    pub discovery_status: String,
+    /// The session code the client used to connect (persisted for display after page rebuilds).
+    pub client_session_code: String,
 }
 
 // ── Reconnection ────────────────────────────────────────────────────────────
@@ -282,25 +289,25 @@ impl SessionTokens {
 
 // ── Host Net State ──────────────────────────────────────────────────────────
 
+/// Lightweight host state — transport is handled by MatchboxSocket + PeerMap.
 #[derive(Resource)]
 pub struct HostNetState {
-    pub incoming_commands: Mutex<Receiver<(u8, ClientMessage)>>,
-    pub client_senders: Mutex<Vec<(u8, Sender<Vec<u8>>)>>,
-    pub new_clients: Mutex<Receiver<NewClientEvent>>,
-    /// Receiver for WebSocket new client events (reader/writer already spawned).
-    pub new_ws_clients: Mutex<Receiver<transport::WsNewClientEvent>>,
-    pub disconnect_rx: Mutex<Receiver<u8>>,
-    pub shutdown: Arc<AtomicBool>,
     pub seq: Mutex<u32>,
+}
+
+impl Default for HostNetState {
+    fn default() -> Self {
+        Self {
+            seq: Mutex::new(0),
+        }
+    }
 }
 
 // ── Client Net State ────────────────────────────────────────────────────────
 
+/// Client-side state — transport is handled by MatchboxSocket.
 #[derive(Resource)]
 pub struct ClientNetState {
-    pub incoming: Mutex<Receiver<ServerMessage>>,
-    pub outgoing: Sender<Vec<u8>>,
-    pub shutdown: Arc<AtomicBool>,
     pub player_id: u8,
     pub seat_index: u8,
     pub my_faction: Faction,
@@ -308,34 +315,20 @@ pub struct ClientNetState {
     pub seq: Mutex<u32>,
     /// Session token for reconnection (assigned by host via JoinAccepted).
     pub session_token: u64,
+    /// Set to true when the host disconnects (triggers return to menu).
+    pub disconnected: std::sync::atomic::AtomicBool,
 }
 
-// ── WASM WebSocket client resource ──────────────────────────────────────────
-
-/// Holds the browser WebSocket and outgoing message receiver for WASM clients.
-/// A Bevy system drains `outgoing_rx` and sends via the WebSocket.
-#[cfg(target_arch = "wasm32")]
-#[derive(Resource)]
-pub struct WasmClientSocket {
-    pub ws: web_sys::WebSocket,
-    pub outgoing_rx: Mutex<Receiver<Vec<u8>>>,
-}
-
-/// Drains queued outgoing messages and sends them via the browser WebSocket (binary frames).
-#[cfg(target_arch = "wasm32")]
-pub fn wasm_flush_outgoing(socket: Option<Res<WasmClientSocket>>) {
-    let Some(socket) = socket else { return };
-    if socket.ws.ready_state() != 1 {
-        return; // Not OPEN yet
-    }
-    let rx = socket.outgoing_rx.lock().unwrap();
-    for _ in 0..256 {
-        match rx.try_recv() {
-            Ok(data) => {
-                let arr = js_sys::Uint8Array::from(data.as_slice());
-                let _ = socket.ws.send_with_array_buffer(&arr.buffer());
-            }
-            Err(_) => break,
+impl Default for ClientNetState {
+    fn default() -> Self {
+        Self {
+            player_id: 0,
+            seat_index: 0,
+            my_faction: Faction::Player2,
+            color_index: 0,
+            seq: Mutex::new(0),
+            session_token: 0,
+            disconnected: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -352,6 +345,7 @@ pub enum NetSet {
 }
 
 // Keep old name as alias for backwards compat within the crate
+#[allow(dead_code)]
 pub type MultiplayerSet = NetSet;
 
 // ── Run conditions ──────────────────────────────────────────────────────────
@@ -480,6 +474,8 @@ impl Plugin for MultiplayerPlugin {
             .init_resource::<LobbyState>()
             .init_resource::<NetStats>()
             .init_resource::<SessionTokens>()
+            .init_resource::<matchbox_transport::PeerMap>()
+            .init_resource::<matchbox_transport::MatchboxInbox>()
             .init_resource::<host_systems::StateSyncTimer>()
             .init_resource::<host_systems::SyncedEntitySet>()
             .init_resource::<host_systems::PreviousSnapshots>()
@@ -493,6 +489,15 @@ impl Plugin for MultiplayerPlugin {
             .init_resource::<client_systems::PendingNetSpawns>()
             .init_resource::<client_systems::PendingNeutralUpdates>()
             .init_resource::<client_systems::ClientPingTimer>()
+            // Poll matchbox socket each frame (before game systems)
+            .add_systems(
+                Update,
+                matchbox_transport::poll_matchbox
+                    .run_if(resource_exists::<bevy_matchbox::prelude::MatchboxSocket>)
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(is_online)
+                    .before(NetSet::Receive),
+            )
             // Host: receive commands
             .add_systems(
                 Update,
@@ -554,17 +559,7 @@ impl Plugin for MultiplayerPlugin {
                         .run_if(is_online),
                     reset_multiplayer_sync,
                 ),
-            )
-            .add_plugins(ggrs_matchbox::GgrsMatchboxPlugin);
-
-        // WASM: flush outgoing WebSocket messages each frame
-        #[cfg(target_arch = "wasm32")]
-        app.add_systems(
-            Update,
-            wasm_flush_outgoing
-                .run_if(in_state(AppState::InGame))
-                .run_if(is_client),
-        );
+            );
     }
 }
 
@@ -689,23 +684,17 @@ mod tests {
     #[test]
     fn configure_multiplayer_ai_for_client_disables_all_ai_and_uses_client_faction() {
         let mut world = World::new();
-        let (_server_tx, server_rx) = std::sync::mpsc::channel();
-        let (outgoing_tx, _outgoing_rx) = std::sync::mpsc::channel();
         world.insert_resource(LobbyState {
             players: vec![lobby_player(0, "Host", Faction::Player1, 0, true, true)],
             ..Default::default()
         });
         world.insert_resource(NetRole::Client);
         world.insert_resource(ClientNetState {
-            incoming: std::sync::Mutex::new(server_rx),
-            outgoing: outgoing_tx,
-            shutdown: Arc::new(AtomicBool::new(false)),
             player_id: 2,
             seat_index: 1,
             my_faction: Faction::Player4,
             color_index: 3,
-            seq: std::sync::Mutex::new(0),
-            session_token: 0,
+            ..Default::default()
         });
         world.insert_resource(AiControlledFactions::default());
         world.insert_resource(ActivePlayer::default());

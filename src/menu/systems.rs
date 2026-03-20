@@ -8,7 +8,7 @@ use crate::ui::fonts::UiFonts;
 use crate::ui::menu_helpers::*;
 
 use super::*;
-use crate::multiplayer::{ClientNetState, HostNetState, LobbyState};
+use crate::multiplayer::{ClientNetState, HostNetState, LobbyState, NetRole};
 #[cfg(not(target_arch = "wasm32"))]
 use super::multiplayer::start_hosting;
 use super::multiplayer;
@@ -23,6 +23,9 @@ pub(crate) fn spawn_menu(
     fonts: Res<UiFonts>,
     restart: Option<Res<RestartRequested>>,
     mut next_state: ResMut<NextState<AppState>>,
+    lobby: Res<LobbyState>,
+    net_role: Option<Res<NetRole>>,
+    client_state: Option<Res<ClientNetState>>,
 ) {
     if restart.is_some() {
         commands.remove_resource::<RestartRequested>();
@@ -56,7 +59,7 @@ pub(crate) fn spawn_menu(
 
     let container = spawn_menu_panel(&mut commands);
     commands.entity(root).add_child(container);
-    dispatch_page(&mut commands, container, &page, &config, &graphics, &fonts);
+    dispatch_page(&mut commands, container, &page, &config, &graphics, &fonts, &lobby, &net_role, &client_state);
 }
 
 pub(crate) fn cleanup_menu(
@@ -79,6 +82,9 @@ fn dispatch_page(
     config: &GameSetupConfig,
     graphics: &GraphicsSettings,
     fonts: &UiFonts,
+    lobby: &LobbyState,
+    net_role: &Option<Res<NetRole>>,
+    client_state: &Option<Res<ClientNetState>>,
 ) {
     match *page {
         MenuPage::Title => pages::spawn_title_page(commands, container, fonts),
@@ -91,7 +97,9 @@ fn dispatch_page(
             multiplayer::spawn_host_lobby_page(commands, container, config, fonts)
         }
         MenuPage::JoinLobby => {
-            multiplayer::spawn_join_lobby_page(commands, container, config, fonts)
+            let role = net_role.as_ref().map(|r| **r).unwrap_or(NetRole::Offline);
+            let my_faction = client_state.as_ref().map(|c| c.my_faction);
+            multiplayer::spawn_join_lobby_page(commands, container, config, fonts, lobby, role, my_faction)
         }
     }
 }
@@ -105,6 +113,9 @@ pub(crate) fn page_transition_system(
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
     fonts: Res<UiFonts>,
+    lobby: Res<LobbyState>,
+    net_role: Option<Res<NetRole>>,
+    client_state: Option<Res<ClientNetState>>,
 ) {
     if roots.iter().next().is_none() {
         let root = commands
@@ -124,7 +135,7 @@ pub(crate) fn page_transition_system(
 
         let container = spawn_menu_panel(&mut commands);
         commands.entity(root).add_child(container);
-        dispatch_page(&mut commands, container, &page, &config, &graphics, &fonts);
+        dispatch_page(&mut commands, container, &page, &config, &graphics, &fonts, &lobby, &net_role, &client_state);
     }
 }
 
@@ -142,7 +153,6 @@ pub(crate) fn handle_menu_buttons(
     mut windows: Query<&mut Window>,
     host_state: Option<Res<HostNetState>>,
     client_state: Option<Res<ClientNetState>>,
-    #[cfg(not(target_arch = "wasm32"))] host_factory: Option<Res<multiplayer::HostConnectionFactory>>,
 ) {
     for (interaction, btn) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -201,6 +211,9 @@ pub(crate) fn handle_menu_buttons(
             MenuAction::ConnectToHost => {
                 // Handled by connect_to_host_system
             }
+            MenuAction::RefreshLanHosts => {
+                // Handled by refresh_lan_hosts_system
+            }
             MenuAction::StartMultiplayer => {
                 commands.insert_resource(multiplayer::PendingGameStart);
             }
@@ -213,13 +226,13 @@ pub(crate) fn handle_menu_buttons(
             }
             MenuAction::CancelHost => {
                 #[cfg(not(target_arch = "wasm32"))]
-                multiplayer::stop_hosting(&mut commands, &host_state, &host_factory);
+                multiplayer::stop_hosting(&mut commands, &host_state);
                 *page = MenuPage::Multiplayer;
                 rebuild_menu(&mut commands, &roots);
             }
             MenuAction::Disconnect => {
                 multiplayer::stop_client(&mut commands, &client_state);
-                *page = MenuPage::Multiplayer;
+                *page = MenuPage::JoinLobby;
                 rebuild_menu(&mut commands, &roots);
             }
         }
@@ -240,6 +253,7 @@ pub(crate) fn handle_selector_clicks(
     mut graphics: ResMut<GraphicsSettings>,
     mut lobby: Option<ResMut<LobbyState>>,
     host_state: Option<Res<HostNetState>>,
+    page: Res<MenuPage>,
     mut commands: Commands,
     roots: Query<Entity, With<MenuRoot>>,
 ) {
@@ -258,7 +272,7 @@ pub(crate) fn handle_selector_clicks(
                     };
 
                     // If setting to Human in single-player, move the previous human to AI
-                    if matches!(new_occupant, SlotOccupant::Human) && !lobby.is_some() {
+                    if matches!(new_occupant, SlotOccupant::Human) && *page == MenuPage::NewGame {
                         let old_local = config.local_player_slot;
                         if old_local != slot_idx {
                             config.slots[old_local] = SlotOccupant::Ai(AiDifficulty::Medium);
@@ -633,4 +647,3 @@ pub(crate) fn random_name_system(
         }
     }
 }
-

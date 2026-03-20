@@ -1,9 +1,10 @@
 # Multiplayer Architecture
 
-> Host-authoritative LAN multiplayer with TCP (native) and WebSocket (WASM) transport.
-> The native host serves the WASM client over HTTP for direct LAN browser play — no external server needed.
-> **MessagePack binary wire protocol** with 4-byte length-prefixed framing. Delta-compressed state sync at ~10Hz.
-> JSON fallback for legacy clients. Numeric entity/faction discriminants. Reconnection with 30s grace period.
+> Host-authoritative multiplayer with **Matchbox WebRTC** transport (native + WASM).
+> Embedded signaling server on the host — no external infrastructure needed for LAN play.
+> WebRTC NAT traversal enables internet play without VPN.
+> **MessagePack binary wire protocol** over reliable + unreliable WebRTC data channels. Delta-compressed state sync at ~10Hz.
+> Reconnection with 30s grace period.
 
 ---
 
@@ -15,25 +16,23 @@ flowchart TB
         ECS["Bevy ECS\n(authoritative world)"]
         HS["Host Systems\n- process_client_commands\n- broadcast_state_sync\n- broadcast_entity_spawns\n- broadcast_building_sync\n- broadcast_resource_sync\n- broadcast_day_cycle_sync\n- broadcast_neutral_world_sync"]
         NB["Net Bridge\n- assign_network_ids\n- rebuild_entity_net_map"]
-        HNS["HostNetState\n- incoming_commands\n- client_senders\n- disconnect_rx"]
+        MBX["MatchboxSocket\n+ PeerMap\n+ MatchboxInbox"]
+        SIG["Embedded Signaling\nServer :3536\n(ClientServer topology)"]
 
         ECS <--> HS
         ECS <--> NB
-        HS <--> HNS
+        HS <--> MBX
     end
 
     subgraph Transport["TRANSPORT LAYER"]
-        TCP["TCP Listener\n:7878"]
-        WS["WebSocket Listener\n:7879"]
+        WEBRTC["WebRTC Data Channels\n(reliable + unreliable)"]
         HTTP["HTTP File Server\n:7880\n(serves dist/ for browsers)"]
-        TCP --- FRAME["4-byte length prefix\n+ MessagePack payload"]
-        WS --- FRAME
     end
 
     subgraph Client1["CLIENT (Native)"]
         CECS1["Bevy ECS\n(mirrored state)"]
         CS1["Client Systems\n- client_receive_commands\n- client_apply_entity_sync\n- client_apply_neutral_sync\n- client_interpolate_remote_units\n- client_send_ping"]
-        CNS1["ClientNetState\n- incoming\n- outgoing\n- my_faction"]
+        CNS1["ClientNetState\n+ MatchboxSocket"]
         CECS1 <--> CS1
         CS1 <--> CNS1
     end
@@ -41,19 +40,18 @@ flowchart TB
     subgraph Client2["CLIENT (WASM/Browser)"]
         CECS2["Bevy ECS\n(mirrored state)"]
         CS2["Client Systems\n(same as native)"]
-        CNS2["ClientNetState\n+ WasmClientSocket"]
+        CNS2["ClientNetState\n+ MatchboxSocket"]
         CECS2 <--> CS2
         CS2 <--> CNS2
     end
 
-    HNS -->|ServerMessages| TCP
-    HNS -->|ServerMessages| WS
-    TCP -->|ClientMessages| HNS
-    WS -->|ClientMessages| HNS
-    Router -->|same-origin hosted session path| WS
+    MBX -->|ServerMessages| WEBRTC
+    WEBRTC -->|ClientMessages| MBX
 
-    TCP ---|"TCP stream\n(reader + writer threads)"| CNS1
-    WS ---|"WebSocket\n(browser API)"| CNS2
+    WEBRTC ---|"WebRTC P2P\n(via signaling)"| CNS1
+    WEBRTC ---|"WebRTC P2P\n(via signaling)"| CNS2
+
+    SIG -.->|"signaling handshake"| WEBRTC
 
     style Host fill:#1a3a1a,stroke:#4a8a4a,color:#fff
     style Client1 fill:#1a2a3a,stroke:#4a7a9a,color:#fff
@@ -63,49 +61,44 @@ flowchart TB
 
 ---
 
-## Thread Architecture (Host)
+## Transport Architecture
 
 ```mermaid
 flowchart LR
     subgraph MainThread["MAIN THREAD (Bevy)"]
-        Systems["Host Systems\n(ECS)"]
+        Poll["poll_matchbox system\n(each frame)"]
+        HS["Host/Client Systems"]
+        Poll --> HS
     end
 
-    subgraph TCPThreads["TCP THREAD POOL"]
-        Listener["host_listener_thread\n(accept loop)"]
-        R1["client_reader_thread\nPlayer 1"]
-        W1["client_writer_thread\nPlayer 1"]
-        R2["client_reader_thread\nPlayer 2"]
-        W2["client_writer_thread\nPlayer 2"]
+    subgraph MatchboxSocket["MatchboxSocket (Resource)"]
+        CH0["Channel 0\n(reliable, ordered)"]
+        CH1["Channel 1\n(unreliable, unordered)"]
     end
 
-    subgraph WSThreads["WEBSOCKET THREAD POOL"]
-        WSListener["ws_host_listener_thread\n(accept loop)"]
-        WS1["ws_client_handler\nPlayer 100+"]
+    subgraph Signaling["Embedded Signaling Server"]
+        SIG["MatchboxServer\n:3536\nClientServer topology"]
     end
 
-    subgraph HTTPThread["HTTP FILE SERVER"]
-        HTTPServe["host_file_server_thread\n:7880 serves dist/"]
+    subgraph Optional["OPTIONAL (LAN)"]
+        HTTP["HTTP File Server\n:7880 serves dist/"]
+        UDP["UDP LAN Discovery\n:7877 broadcast"]
     end
 
-    Listener -->|"new_client_tx"| Systems
-    WSListener -->|"new_ws_clients_tx"| Systems
-
-    R1 -->|"cmd_tx\n(player_id, ClientMsg)"| Systems
-    R2 -->|"cmd_tx"| Systems
-    WS1 -->|"cmd_tx"| Systems
-
-    Systems -->|"client_senders\n[player_id → tx]"| W1
-    Systems -->|"client_senders"| W2
-    Systems -->|"ws writer_tx"| WS1
-
-    R1 -.->|"dc_tx (on error)"| Systems
-    R2 -.->|"dc_tx"| Systems
+    Poll -->|"update_peers()\nchannel.receive()"| MatchboxSocket
+    HS -->|"channel.send()"| MatchboxSocket
+    MatchboxSocket ---|"WebRTC signaling"| SIG
 
     style MainThread fill:#1a3a1a,stroke:#4a8a4a,color:#fff
-    style TCPThreads fill:#1a2a3a,stroke:#4a7a9a,color:#fff
-    style WSThreads fill:#2a1a3a,stroke:#7a4a9a,color:#fff
+    style MatchboxSocket fill:#1a2a3a,stroke:#4a7a9a,color:#fff
+    style Signaling fill:#2a1a3a,stroke:#7a4a9a,color:#fff
 ```
+
+**Key differences from the old TCP/WS architecture:**
+- No background reader/writer threads — all I/O is polled from the main Bevy thread via `poll_matchbox` system
+- Unified transport for native and WASM — no `#[cfg(target_arch)]` branching in connection code
+- WebRTC NAT traversal via ICE/STUN — internet play without VPN
+- Two channels: reliable (commands, events, spawns) and unreliable (high-frequency state sync)
 
 ---
 
@@ -115,30 +108,27 @@ flowchart LR
 sequenceDiagram
     participant UI as Menu UI
     participant Host as Host
-    participant Transport as Transport Layer
+    participant Signaling as Signaling Server
     participant Client as Client
 
     Note over UI: HOST GAME clicked
     UI->>Host: start_hosting()
-    Host->>Transport: Bind TCP :7878
-    Host->>Transport: Bind WS :7879
-    Host->>Transport: Bind HTTP :7880 (serve dist/)
-    Host->>Host: Insert HostNetState, NetRole::Host
-    Host->>UI: Show HostLobby (session code + web URL)
+    Host->>Signaling: Start embedded signaling (:3536)
+    Host->>Host: Open MatchboxSocket (ws://127.0.0.1:3536/rts_room)
+    Host->>Host: Insert HostNetState, PeerMap, NetRole::Host
+    Host->>UI: Show HostLobby (signaling URL + web URL)
 
     Note over UI: CLIENT: JOIN GAME
     UI->>Client: User enters session code
-    alt Native LAN/VPN join
-        Client->>Transport: TcpStream::connect
-    else Web browser on LAN
-        Note over Client: Opens http://host:7880
-        Client->>Transport: WebSocket to ws://host:7879
-    end
-    Transport->>Host: new_client_tx (NewClientEvent)
-    Host->>Host: Spawn reader + writer threads
+    Client->>Client: Open MatchboxSocket (ws://host:3536/rts_room)
+    Client->>Signaling: WebRTC signaling handshake
+    Signaling->>Host: Peer connection established
+    Signaling->>Client: Peer connection established
+
+    Note over Host,Client: WebRTC data channels open
 
     Client->>Host: JoinRequest { player_name }
-    Host->>Host: Assign seat_index, faction, color
+    Host->>Host: Assign seat_index, faction, color via PeerMap
     Host->>Client: Event::JoinAccepted { player_id, seat, faction, color }
     Host-->>Client: Event::LobbyUpdate { players[] }
 
@@ -152,42 +142,36 @@ sequenceDiagram
     Note over Host,Client: === IN-GAME SYNC LOOP ===
 
     loop Every 100ms
-        Host->>Client: StateSync (positions, health, states)
-        Host->>Client: EntitySpawn / EntityDespawn
+        Host->>Client: StateSync (unreliable channel)
+        Host->>Client: EntitySpawn / EntityDespawn (reliable channel)
     end
 
     loop Every 500ms
-        Host->>Client: BuildingSync
-        Host->>Client: NeutralWorldDelta (resource node amounts)
+        Host->>Client: BuildingSync (reliable)
+        Host->>Client: NeutralWorldDelta (reliable)
     end
 
     loop Every 1s
-        Host->>Client: ResourceSync
+        Host->>Client: ResourceSync (reliable)
     end
 
     loop Every 250ms
-        Host->>Client: DayCycleSync
+        Host->>Client: DayCycleSync (reliable)
     end
 
-    Client->>Host: Input { PlayerInput (move/attack/...) }
+    Client->>Host: Input { PlayerInput } (reliable)
     Host->>Host: Validate & execute command
-    Host->>Client: RelayedInput (to all other clients)
+    Host->>Client: RelayedInput (reliable, to all other clients)
 
     loop Every 5s
-        Client->>Host: Ping
+        Client->>Host: Ping (reliable)
         Host->>Client: Pong (RTT measurement)
     end
 
     Note over Host,Client: === DISCONNECT ===
-    Client->>Host: LeaveNotice (or connection drop)
+    Note over Host: PeerState::Disconnected detected
     Host->>Host: Start 30s reconnect grace period
     Host-->>Client: Announcement "Player disconnected — waiting for reconnection"
-
-    Note over Host,Client: === RECONNECTION (within 30s) ===
-    Client->>Transport: TcpStream::connect (or WS)
-    Client->>Host: Reconnect { session_token }
-    Host->>Host: Validate token, restore faction from AI
-    Host->>Client: JoinAccepted + full state resync
 
     Note over Host,Client: === GRACE PERIOD EXPIRED ===
     Host->>Host: Convert faction to AI permanently
@@ -200,18 +184,11 @@ sequenceDiagram
 
 ### Wire Format
 
-```
-┌──────────────────┬──────────────────────────┐
-│  4 bytes (BE)    │  N bytes                 │
-│  payload length  │  MessagePack payload     │
-└──────────────────┴──────────────────────────┘
-```
+Messages are sent as MessagePack-encoded bytes directly over WebRTC data channels (no length-prefix framing needed — WebRTC is message-oriented).
 
-- **Codec**: MessagePack (rmp-serde) — ~2-4x smaller than JSON, self-describing binary format
-- **Fallback**: Reader threads try MessagePack first, then JSON for legacy clients
-- **WebSocket**: Binary frames (MessagePack), with Text frame fallback (JSON)
-- TCP keepalive: 15s interval, 10s timeout
-- Read timeout: 2s per recv attempt
+- **Channel 0 (reliable, ordered):** Commands, events, entity spawns/despawns, building sync, resource sync, day cycle sync
+- **Channel 1 (unreliable, unordered):** High-frequency `StateSync` with entity positions (falls back to reliable if payload > 16KB)
+- **Codec:** MessagePack (`rmp-serde`) — ~2-4x smaller than JSON, self-describing binary format
 
 ### Client → Server Messages
 
@@ -392,7 +369,7 @@ flowchart TD
         INTERP --> LERP["client_interpolate_remote_units\nlerp rate = 10.0\n~0.1s to reach target"]
     end
 
-    SEND -->|"100ms timer"| RECV
+    SEND -->|"100ms timer\n(unreliable channel)"| RECV
 
     style Host fill:#1a3a1a,stroke:#4a8a4a,color:#fff
     style Client fill:#1a2a3a,stroke:#4a7a9a,color:#fff
@@ -451,7 +428,7 @@ sequenceDiagram
     CLocal->>CLocal: Apply command locally (prediction)
     CLocal->>CNet: Queue ClientMessage::Input
 
-    CNet->>HNet: Send Input { PlayerInput }
+    CNet->>HNet: Send Input { PlayerInput } (reliable channel)
 
     HNet->>HNet: Validate ownership\n(entity faction == sender faction)
     HNet->>HExec: execute_input_command()
@@ -459,7 +436,7 @@ sequenceDiagram
     Note over HExec: Set UnitState::Moving\nInsert MoveTarget\nCircular formation for groups
 
     HExec->>HNet: Command applied on host ECS
-    HNet->>Other: RelayedInput { player_id, input }
+    HNet->>Other: RelayedInput { player_id, input } (reliable channel)
 
     Other->>Other: execute_input_command()\n(same logic as host)
 ```
@@ -468,16 +445,16 @@ sequenceDiagram
 
 ## Sync Cadence Table
 
-| Data Type | Interval | System | Delta Compressed |
-|-----------|----------|--------|-----------------|
-| Entity positions, health, state | 100ms (~10Hz) | `host_broadcast_state_sync` | Yes (Δ pos>0.05, rot>0.02) |
-| Entity spawns/despawns | 100ms | `host_broadcast_entity_spawns` | Yes (new/removed only) |
-| Building state | 500ms | `host_broadcast_building_sync` | Yes (level/progress/queue Δ) |
-| Resource node amounts | 500ms (~2Hz) | `host_broadcast_neutral_world_sync` | Yes (amount_remaining Δ) |
-| Player resources | 1000ms | `host_broadcast_resource_sync` | No (full) |
-| Day/night cycle | 250ms | `host_broadcast_day_cycle_sync` | No (full) |
-| Full resync (all data) | ~5s (tick%50) | Same systems | No (forced full) |
-| Ping/Pong (keepalive) | 5s | `client_send_ping` | N/A |
+| Data Type | Interval | System | Channel | Delta Compressed |
+|-----------|----------|--------|---------|-----------------|
+| Entity positions, health, state | 100ms (~10Hz) | `host_broadcast_state_sync` | Unreliable | Yes (Δ pos>0.05, rot>0.02) |
+| Entity spawns/despawns | 100ms | `host_broadcast_entity_spawns` | Reliable | Yes (new/removed only) |
+| Building state | 500ms | `host_broadcast_building_sync` | Reliable | Yes (level/progress/queue Δ) |
+| Resource node amounts | 500ms (~2Hz) | `host_broadcast_neutral_world_sync` | Reliable | Yes (amount_remaining Δ) |
+| Player resources | 1000ms | `host_broadcast_resource_sync` | Reliable | No (full) |
+| Day/night cycle | 250ms | `host_broadcast_day_cycle_sync` | Reliable | No (full) |
+| Full resync (all data) | ~5s (tick%50) | Same systems | Both | No (forced full) |
+| Ping/Pong (keepalive) | 5s | `client_send_ping` | Reliable | N/A |
 
 ---
 
@@ -485,9 +462,8 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    subgraph Threads["I/O Threads"]
-        RT["Reader threads"]
-        WT["Writer threads"]
+    subgraph MainThread["MAIN THREAD (poll_matchbox)"]
+        Poll["poll_matchbox\n+ send helpers"]
     end
 
     subgraph Atomics["NET_TRAFFIC (LazyLock)"]
@@ -501,13 +477,13 @@ flowchart LR
         NS["NetStats resource\n- rtt_ms / rtt_smoothed_ms\n- bytes_sent_total / per_sec\n- bytes_recv_total / per_sec\n- msgs_sent_total / per_sec\n- last_sync_entity_count\n- net_map_size\n- pending_spawns\n- connected_clients"]
     end
 
-    RT -->|"fetch_add"| BR
-    RT -->|"fetch_add"| MR
-    WT -->|"fetch_add"| BS
-    WT -->|"fetch_add"| MS
+    Poll -->|"fetch_add on send"| BS
+    Poll -->|"fetch_add on send"| MS
+    Poll -->|"fetch_add on receive"| BR
+    Poll -->|"fetch_add on receive"| MR
     Atomics -->|"swap(0) drain"| ECS
 
-    style Threads fill:#1a2a3a,stroke:#4a7a9a,color:#fff
+    style MainThread fill:#1a2a3a,stroke:#4a7a9a,color:#fff
     style Atomics fill:#3a2a1a,stroke:#9a7a4a,color:#fff
     style ECS fill:#1a3a1a,stroke:#4a8a4a,color:#fff
 ```
@@ -532,7 +508,7 @@ stateDiagram-v2
 
     state HostLobby {
         [*] --> Listening
-        Listening --> PlayerJoined: new_client_tx
+        Listening --> PlayerJoined: PeerState::Connected
         PlayerJoined --> Listening: LobbyUpdate broadcast
         Listening --> PendingStart: START GAME clicked
         PendingStart --> ConfigSent: Send GameStart event
@@ -554,14 +530,13 @@ stateDiagram-v2
     InGame --> MainMenu: Disconnect / Leave
 ```
 
-**Session code format:** `IP:PORT` (e.g. `192.168.1.5:7878`)
+**Session code format:** Signaling URL (e.g., `ws://192.168.1.5:3536/rts_room`) or just the host IP (auto-expanded to `ws://IP:3536/rts_room`)
 
-**Web client access:** The host serves the WASM build at `http://<host-ip>:7880` when a `dist/` directory is present. Browser players open that URL, then enter the same session code to join.
+**Web client access:** The host serves the WASM build at `http://<host-ip>:7880` when a `dist/` directory is present. Browser players open that URL, then enter the session code to join.
 
 **Player ID assignment:**
 - Host: `player_id = 0`
-- TCP clients: `1, 2, 3, ...`
-- WebSocket clients (including browser): `100, 101, 102, ...` (avoids collision)
+- Clients: assigned incrementally (1, 2, 3, ...) via `PeerMap` when peers connect
 
 ---
 
@@ -579,6 +554,7 @@ stateDiagram-v2
 | Day/night cycle | Runs timer | Synced every 250ms |
 | AI opponents | Runs all AI logic | No AI systems (cleared) |
 | Lobby management | Accept/reject, assign seats | Display only |
+| Signaling server | Runs embedded on :3536 | Connects to host's signaling |
 
 ---
 
@@ -586,19 +562,20 @@ stateDiagram-v2
 
 - **No rollback/prediction:** Client commands are fire-and-forget; no reconciliation if host rejects
 - **WorldBaseline:** Message type defined but not yet wired (needed for late joiners / reconnect full resync)
-- **No NAT traversal:** LAN/VPN only (no internet play without VPN)
 - **Max 4 players** (hardcoded faction count)
 - **Reconnection is partial:** Grace period and session tokens work host-side, but the client-side reconnect UI flow (auto-retry + `Reconnect` message) is not yet wired
+- **No TURN relay:** WebRTC STUN works for most NATs, but symmetric NAT requires a TURN server (not yet configured)
 
 ---
 
 ## Known Remaining Work
 
+- **TURN relay**: Configure a TURN server for symmetric NAT traversal (currently STUN-only)
 - **Message batching**: Wire `PendingServerFrame` to batch all host broadcast systems into a single `ServerFrame` per tick (`ServerFrame` type and `PendingServerFrame` resource exist but aren't used yet)
 - **Client prediction**: Prediction buffer + server seq stamping + reconciliation loop (currently fire-and-forget, 1 RTT visual delay)
 - **Reconnect UI**: Client-side auto-retry flow (detect disconnect → reconnect with `Reconnect { session_token }`) — host-side grace period + tokens are done
 - **WorldBaseline wiring**: Send full entity + neutral world state to newly connected/reconnected clients
-- **Optional**: LZ4 compression for large frames, `crossbeam-channel` migration, Bevy observers for connect/disconnect events
+- **Standalone signaling server**: For production internet play, extract signaling into a deployable binary
 
 ---
 
@@ -606,13 +583,13 @@ stateDiagram-v2
 
 | File | Purpose |
 |------|---------|
-| `src/multiplayer/mod.rs` | Plugin, resources, system sets, NetStats, SessionTokens |
-| `src/multiplayer/transport.rs` | TCP/WS framing, threads, IP detection, HTTP file server, msgpack codec |
+| `src/multiplayer/mod.rs` | Plugin, resources (HostNetState, ClientNetState, PeerMap, MatchboxInbox), system sets, NetStats, SessionTokens |
+| `src/multiplayer/matchbox_transport.rs` | Matchbox WebRTC transport: PeerMap, MatchboxInbox, poll_matchbox system, send helpers (broadcast_reliable, broadcast_unreliable, send_to_player, send_to_host) |
+| `src/multiplayer/transport.rs` | Legacy TCP/WS code (unused), LAN discovery (UDP :7877), HTTP file server (:7880), IP detection |
 | `src/multiplayer/host_systems.rs` | Host broadcast, command execution, delta sync, neutral world sync, reconnect grace |
 | `src/multiplayer/client_systems.rs` | Client receive, interpolation, deterministic entity sync, neutral world apply |
 | `src/multiplayer/debug_tap.rs` | HTTP debug server, TX/RX event recording |
-| `src/multiplayer/ggrs_matchbox.rs` | GGRS rollback scaffolding (unused) |
 | `src/net_bridge.rs` | NetworkId assignment (entities + neutral objects), EntityNetMap |
-| `src/menu/multiplayer.rs` | Lobby UI, connection flow, config serialization |
+| `src/menu/multiplayer.rs` | Lobby UI, connection flow (start_hosting, connect_to_host_system, update_lobby_ui), config serialization |
 | `game_state/src/message.rs` | All network message types + ServerFrame |
 | `game_state/src/codec.rs` | MessagePack encode/decode helpers |

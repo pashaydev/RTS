@@ -7,7 +7,6 @@ edition = "2021"
 default = ["client"]
 client = [
     "dep:bevy",
-    "dep:bevy_ggrs",
     "dep:bevy_matchbox",
     "dep:bevy_mod_outline",
     "dep:getrandom",
@@ -23,8 +22,7 @@ required-features = ["client"]
 [dependencies]
 bevy = { version = "0.18", features = ["webgpu", "webgl2"], optional = true }
 bevy_mod_outline = { version = "0.12", optional = true }
-bevy_ggrs = { version = "0.20", optional = true }
-bevy_matchbox = { version = "0.14", features = ["ggrs"], optional = true }
+bevy_matchbox = { version = "0.14", features = ["signaling"], optional = true }
 noise = { version = "0.9", optional = true }
 rand = { version = "0.9", optional = true }
 getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
@@ -42,6 +40,9 @@ tungstenite = { version = "0.26", features = ["native-tls"] }
 web-sys = { version = "0.3.91", features = ["WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType", "Document", "HtmlDocument", "DataTransfer", "ClipboardEvent", "Clipboard", "Navigator", "Window", "Location"] }
 wasm-bindgen = "0.2.114"
 js-sys = "0.3.91"
+
+[dev-dependencies]
+uuid = "1"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.41"

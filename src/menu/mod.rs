@@ -41,6 +41,7 @@ pub(crate) enum MenuAction {
     HostGame,
     JoinGame,
     ConnectToHost,
+    RefreshLanHosts,
     StartMultiplayer,
     BackToMultiplayer,
     CopySessionCode,
@@ -64,6 +65,18 @@ pub(crate) struct SessionCodeText;
 pub struct SessionCodeInput;
 
 #[derive(Component)]
+pub(crate) struct DiscoverLanHostsButton;
+
+#[derive(Component)]
+pub(crate) struct DiscoveredHostsList;
+
+#[derive(Component)]
+pub(crate) struct DiscoveredHostsListPopulated;
+
+#[derive(Component)]
+pub(crate) struct DiscoveredHostButton(pub(crate) usize);
+
+#[derive(Component)]
 pub(crate) struct CopyCodeButton;
 
 #[derive(Component)]
@@ -77,6 +90,15 @@ pub(crate) struct HostIpListPopulated;
 
 #[derive(Component)]
 pub(crate) struct WebClientUrlText;
+
+#[derive(Component)]
+pub(crate) struct PasteCodeButton;
+
+#[derive(Component)]
+pub(crate) struct ClearCodeButton;
+
+#[derive(Component)]
+pub(crate) struct ConnectionStateBanner;
 
 // ── Constants ──
 
@@ -165,11 +187,26 @@ impl Plugin for MenuPlugin {
             )
             .add_systems(
                 Update,
+                multiplayer::update_lobby_ui
+                    .run_if(in_state(AppState::MainMenu)),
+            )
+            .add_systems(
+                Update,
                 (
-                    multiplayer::update_lobby_ui,
                     multiplayer::connect_to_host_system,
+                    multiplayer::refresh_lan_hosts_system,
+                    multiplayer::poll_lan_discovery_results_system,
+                    multiplayer::select_discovered_host_system,
                     multiplayer::copy_session_code_system,
+                )
+                    .run_if(in_state(AppState::MainMenu)),
+            )
+            .add_systems(
+                Update,
+                (
                     multiplayer::update_web_client_url,
+                    multiplayer::paste_code_system,
+                    multiplayer::clear_code_system,
                 )
                     .run_if(in_state(AppState::MainMenu)),
             );

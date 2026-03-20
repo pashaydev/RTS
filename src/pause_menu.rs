@@ -17,9 +17,13 @@ impl Plugin for PauseMenuPlugin {
             .init_resource::<StatsTimer>()
             .add_systems(
                 Update,
+                handle_pause_buttons
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
                 (
                     handle_escape_key,
-                    handle_pause_buttons,
                     update_spectator_stats_display,
                 )
                     .run_if(in_state(AppState::InGame)),
@@ -364,10 +368,14 @@ fn handle_pause_buttons(
     mut fog_map: Option<ResMut<FogOfWarMap>>,
     faction_stats: Res<FactionStats>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
-    net_role: Res<NetRole>,
-    host_state: Option<Res<HostNetState>>,
-    time: Res<Time>,
+    net: (
+        Res<NetRole>,
+        Option<Res<HostNetState>>,
+        Option<ResMut<bevy_matchbox::prelude::MatchboxSocket>>,
+        Res<Time>,
+    ),
 ) {
+    let (net_role, host_state, mut matchbox_socket, time) = net;
     for (interaction, btn) in &interactions {
         if *interaction != Interaction::Pressed {
             continue;
@@ -436,8 +444,8 @@ fn handle_pause_buttons(
             }
             PauseAction::ConfirmHostEnd => {
                 if *net_role == NetRole::Host {
-                    if let Some(host) = host_state.as_ref() {
-                        broadcast_host_shutdown(host, &time);
+                    if let (Some(host), Some(ref mut socket)) = (host_state.as_ref(), matchbox_socket.as_mut()) {
+                        broadcast_host_shutdown(host, socket, &time);
                     }
                 }
                 next_state.set(AppState::MainMenu);
@@ -474,7 +482,7 @@ fn handle_pause_buttons(
     }
 }
 
-fn broadcast_host_shutdown(host: &HostNetState, time: &Time) {
+fn broadcast_host_shutdown(host: &HostNetState, socket: &mut bevy_matchbox::prelude::MatchboxSocket, time: &Time) {
     use game_state::message::{GameEvent, ServerMessage};
 
     let seq = {
@@ -489,12 +497,7 @@ fn broadcast_host_shutdown(host: &HostNetState, time: &Time) {
             reason: "Host ended the match".to_string(),
         }],
     };
-    if let Ok(bytes) = game_state::codec::encode(&msg) {
-        let senders = host.client_senders.lock().unwrap();
-        for (_id, sender) in senders.iter() {
-            let _ = sender.send(bytes.clone());
-        }
-    }
+    crate::multiplayer::matchbox_transport::broadcast_reliable(socket, &msg);
 }
 
 // ── Death Screen ──

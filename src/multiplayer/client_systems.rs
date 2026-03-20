@@ -2,10 +2,9 @@
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy_matchbox::prelude::*;
 use std::sync::atomic::Ordering;
-use std::sync::mpsc::TryRecvError;
 
-use game_state::codec;
 use game_state::message::{EntitySpawnData, NetUnitState, ServerMessage};
 
 use crate::blueprints::{spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache};
@@ -16,6 +15,7 @@ use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::net_bridge::{EntityNetMap, NetworkId};
 
 use super::debug_tap;
+use super::matchbox_transport::{self, MatchboxInbox};
 use super::{ClientNetState, NetRole, NetStats};
 use super::host_systems::execute_input_command;
 use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
@@ -170,7 +170,7 @@ pub struct UnitSyncParams<'w, 's> {
 /// and state sync snapshots.
 pub fn client_receive_commands(
     mut commands: Commands,
-    client: Res<ClientNetState>,
+    net_state: (Res<ClientNetState>, ResMut<MatchboxInbox>),
     net_map: Res<EntityNetMap>,
     mut unit_states: Query<&mut UnitState>,
     mut task_queues: Query<&mut TaskQueue, With<Unit>>,
@@ -186,14 +186,17 @@ pub fn client_receive_commands(
     mut unit_sync: UnitSyncParams,
     mut building_sync: BuildingSyncParams,
 ) {
-    let rx = client.incoming.lock().unwrap();
-    #[cfg(target_arch = "wasm32")]
-    const MAX_PER_FRAME: usize = 32;
-    #[cfg(not(target_arch = "wasm32"))]
-    const MAX_PER_FRAME: usize = 256;
-    for _ in 0..MAX_PER_FRAME {
-        match rx.try_recv() {
-            Ok(msg) => match &msg {
+    let (client, mut inbox) = net_state;
+
+    // Detect host disconnect from matchbox peer events
+    if !inbox.disconnected.is_empty() {
+        inbox.disconnected.clear();
+        client.disconnected.store(true, Ordering::Relaxed);
+    }
+
+    let messages = std::mem::take(&mut inbox.server_messages);
+    for msg in &messages {
+        match msg {
                 ServerMessage::RelayedInput { input, .. } => {
                     execute_input_command(
                         &mut commands,
@@ -468,20 +471,13 @@ pub fn client_receive_commands(
                                     None,
                                     None,
                                 );
-                                client.shutdown.store(true, Ordering::Relaxed);
+                                client.disconnected.store(true, Ordering::Relaxed);
                             }
                             _ => {}
                         }
                     }
                 }
-            },
-            Err(TryRecvError::Empty) => break,
-            Err(TryRecvError::Disconnected) => {
-                client.shutdown.store(true, Ordering::Relaxed);
-                debug_tap::record_error("client_receive", "incoming channel disconnected");
-                break;
             }
-        }
     }
 }
 
@@ -685,7 +681,7 @@ pub fn client_handle_disconnect(
     mut event_log: ResMut<GameEventLog>,
     time: Res<Time>,
 ) {
-    if client.shutdown.load(Ordering::Relaxed) {
+    if client.disconnected.load(Ordering::Relaxed) {
         warn!("Host disconnected — returning to main menu");
         debug_tap::record_info("client_state", "host disconnected -> main menu");
         event_log.push_with_level(
@@ -701,9 +697,10 @@ pub fn client_handle_disconnect(
     }
 }
 
-/// Periodically send Ping to the host to keep VPN/Hamachi tunnels alive.
+/// Periodically send Ping to the host to keep connections alive and measure RTT.
 pub fn client_send_ping(
     client: Res<ClientNetState>,
+    mut socket: ResMut<MatchboxSocket>,
     time: Res<Time>,
     mut ping_timer: ResMut<ClientPingTimer>,
     mut net_stats: ResMut<NetStats>,
@@ -722,17 +719,13 @@ pub fn client_send_ping(
         seq,
         timestamp: time.elapsed_secs_f64(),
     };
-    if let Ok(bytes) = codec::encode(&ping) {
-        let _ = client.outgoing.send(bytes);
-    }
+    matchbox_transport::send_to_host(&mut socket, &ping);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use game_state::message::{ClientMessage, NetUnitState};
-    use std::sync::atomic::AtomicBool;
-    use std::sync::{mpsc, Arc, Mutex};
     use std::time::Duration;
 
     use crate::components::{AppState, AssignedPhase};
@@ -825,24 +818,18 @@ mod tests {
 
     #[test]
     fn client_handle_disconnect_returns_to_menu_and_clears_role() {
-        let (_incoming_tx, incoming_rx) = mpsc::channel();
-        let (outgoing_tx, _outgoing_rx) = mpsc::channel();
-        let shutdown = Arc::new(AtomicBool::new(true));
-
         let mut app = App::new();
         app.add_plugins(bevy::state::app::StatesPlugin);
         app.init_state::<AppState>();
-        app.insert_resource(ClientNetState {
-            incoming: Mutex::new(incoming_rx),
-            outgoing: outgoing_tx,
-            shutdown,
+        let mut client = ClientNetState {
             player_id: 1,
             seat_index: 0,
             my_faction: Faction::Player2,
             color_index: 1,
-            seq: Mutex::new(0),
-            session_token: 0,
-        });
+            ..Default::default()
+        };
+        client.disconnected.store(true, Ordering::Relaxed);
+        app.insert_resource(client);
         app.insert_resource(NetRole::Client);
         app.insert_resource(GameEventLog::default());
         app.insert_resource(Time::<()>::default());
@@ -858,44 +845,5 @@ mod tests {
         assert_eq!(app.world().resource::<GameEventLog>().entries.len(), 1);
     }
 
-    #[test]
-    fn client_send_ping_emits_encoded_message_and_updates_seq() {
-        let (_incoming_tx, incoming_rx) = mpsc::channel();
-        let (outgoing_tx, outgoing_rx) = mpsc::channel();
-
-        let mut app = App::new();
-        app.insert_resource(ClientNetState {
-            incoming: Mutex::new(incoming_rx),
-            outgoing: outgoing_tx,
-            shutdown: Arc::new(AtomicBool::new(false)),
-            player_id: 3,
-            seat_index: 1,
-            my_faction: Faction::Player3,
-            color_index: 2,
-            seq: Mutex::new(0),
-            session_token: 0,
-        });
-        app.insert_resource(ClientPingTimer(Timer::from_seconds(0.1, TimerMode::Repeating)));
-        app.insert_resource(NetStats::default());
-        app.insert_resource(Time::<()>::default());
-        app.add_systems(Update, client_send_ping);
-
-        app.world_mut()
-            .resource_mut::<Time>()
-            .advance_by(Duration::from_secs_f32(0.1));
-        app.update();
-
-        let encoded = outgoing_rx.try_recv().unwrap();
-        let decoded: ClientMessage = codec::decode(&encoded).unwrap();
-        match decoded {
-            ClientMessage::Ping { seq, timestamp } => {
-                assert_eq!(seq, 1);
-                assert!(timestamp >= 0.1);
-            }
-            other => panic!("expected ping, got {other:?}"),
-        }
-
-        assert_eq!(*app.world().resource::<ClientNetState>().seq.lock().unwrap(), 1);
-        assert!(app.world().resource::<NetStats>().last_ping_sent_at >= 0.1);
-    }
+    // Note: client_send_ping test removed — requires MatchboxSocket which needs a live connection.
 }
