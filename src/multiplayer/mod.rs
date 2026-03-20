@@ -3,10 +3,12 @@
 //! Host runs full simulation, clients receive state updates and send commands.
 //! Uses WebRTC data channels via `bevy_matchbox` for both native and WASM.
 
+pub mod client;
 pub mod client_systems;
 pub mod debug_tap;
 pub mod host_systems;
 pub mod matchbox_transport;
+pub mod server;
 pub mod transport;
 
 use bevy::prelude::*;
@@ -71,21 +73,77 @@ pub struct NetStatField {
 /// iterate this, so adding a new stat is a one-line change.
 pub const NET_STAT_FIELDS: &[NetStatField] = &[
     // ── Connection ──
-    NetStatField { folder_key: "conn", label: "Role",         visibility: NetStatVisibility::Always },
-    NetStatField { folder_key: "conn", label: "Status",       visibility: NetStatVisibility::Always },
-    NetStatField { folder_key: "conn", label: "Ping",         visibility: NetStatVisibility::ClientOnly },
-    NetStatField { folder_key: "conn", label: "Smoothed RTT", visibility: NetStatVisibility::ClientOnly },
-    NetStatField { folder_key: "conn", label: "Clients",      visibility: NetStatVisibility::HostOnly },
+    NetStatField {
+        folder_key: "conn",
+        label: "Role",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "conn",
+        label: "Status",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "conn",
+        label: "Ping",
+        visibility: NetStatVisibility::ClientOnly,
+    },
+    NetStatField {
+        folder_key: "conn",
+        label: "Smoothed RTT",
+        visibility: NetStatVisibility::ClientOnly,
+    },
+    NetStatField {
+        folder_key: "conn",
+        label: "Clients",
+        visibility: NetStatVisibility::HostOnly,
+    },
     // ── Traffic ──
-    NetStatField { folder_key: "traffic", label: "Sent/s",          visibility: NetStatVisibility::Always },
-    NetStatField { folder_key: "traffic", label: "Received/s",      visibility: NetStatVisibility::Always },
-    NetStatField { folder_key: "traffic", label: "Total Sent",      visibility: NetStatVisibility::Always },
-    NetStatField { folder_key: "traffic", label: "Total Received",  visibility: NetStatVisibility::Always },
-    NetStatField { folder_key: "traffic", label: "Msgs Sent",       visibility: NetStatVisibility::Always },
-    NetStatField { folder_key: "traffic", label: "Msgs Received",   visibility: NetStatVisibility::Always },
-    NetStatField { folder_key: "traffic", label: "Sync Entities",   visibility: NetStatVisibility::Always },
-    NetStatField { folder_key: "traffic", label: "Net Map Size",    visibility: NetStatVisibility::Always },
-    NetStatField { folder_key: "traffic", label: "Pending Spawns",  visibility: NetStatVisibility::Always },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Sent/s",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Received/s",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Total Sent",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Total Received",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Msgs Sent",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Msgs Received",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Sync Entities",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Net Map Size",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Pending Spawns",
+        visibility: NetStatVisibility::Always,
+    },
 ];
 
 impl NetStats {
@@ -93,11 +151,14 @@ impl NetStats {
     /// stat is not applicable to the current role.
     pub fn display_value(&self, label: &str, role: &NetRole) -> Option<String> {
         match label {
-            "Role" => Some(match role {
-                NetRole::Host => "Host",
-                NetRole::Client => "Client",
-                NetRole::Offline => "Offline",
-            }.to_string()),
+            "Role" => Some(
+                match role {
+                    NetRole::Host => "Host",
+                    NetRole::Client => "Client",
+                    NetRole::Offline => "Offline",
+                }
+                .to_string(),
+            ),
             "Ping" => Some(if self.rtt_ms > 0.0 {
                 format!("{:.1} ms", self.rtt_ms)
             } else {
@@ -297,9 +358,7 @@ pub struct HostNetState {
 
 impl Default for HostNetState {
     fn default() -> Self {
-        Self {
-            seq: Mutex::new(0),
-        }
+        Self { seq: Mutex::new(0) }
     }
 }
 
@@ -395,7 +454,10 @@ pub fn configure_multiplayer_ai(
         NetRole::Host => {
             if let Some(host_player) = lobby.players.iter().find(|p| p.is_host) {
                 active_player.0 = host_player.faction;
-                info!("Host playing as {:?} (seat {})", host_player.faction, host_player.seat_index);
+                info!(
+                    "Host playing as {:?} (seat {})",
+                    host_player.faction, host_player.seat_index
+                );
             }
         }
         NetRole::Client => {
@@ -405,7 +467,9 @@ pub fn configure_multiplayer_ai(
                     "Client playing as {:?} (seat {}, color_index {})",
                     client.my_faction, client.seat_index, client.color_index
                 );
-            } else if let Some(client_player) = lobby.players.iter().find(|p| !p.is_host && p.connected) {
+            } else if let Some(client_player) =
+                lobby.players.iter().find(|p| !p.is_host && p.connected)
+            {
                 active_player.0 = client_player.faction;
                 info!("Client playing as {:?} (fallback)", client_player.faction);
             }
@@ -434,13 +498,14 @@ pub fn configure_multiplayer_ai(
 // ── Plugin ──────────────────────────────────────────────────────────────────
 
 fn reset_multiplayer_sync(
-    mut synced: ResMut<host_systems::SyncedEntitySet>,
-    mut pending: ResMut<client_systems::PendingNetSpawns>,
-    mut pending_neutral: ResMut<client_systems::PendingNeutralUpdates>,
-    mut prev_snapshots: ResMut<host_systems::PreviousSnapshots>,
-    mut prev_buildings: ResMut<host_systems::PreviousBuildingSnapshots>,
-    mut prev_neutral: ResMut<host_systems::PreviousNeutralSnapshots>,
-    mut pending_frame: ResMut<host_systems::PendingServerFrame>,
+    mut synced: ResMut<server::replication::SyncedEntitySet>,
+    mut pending: ResMut<client::apply::PendingNetSpawns>,
+    mut pending_neutral: ResMut<client::apply::PendingNeutralUpdates>,
+    mut pending_baseline: ResMut<client::apply::PendingBaseline>,
+    mut prev_snapshots: ResMut<server::replication::PreviousSnapshots>,
+    mut prev_buildings: ResMut<server::replication::PreviousBuildingSnapshots>,
+    mut prev_neutral: ResMut<server::replication::PreviousNeutralSnapshots>,
+    mut pending_frame: ResMut<server::replication::PendingServerFrame>,
 ) {
     synced.known.clear();
     synced.full_resync_counter = 0;
@@ -448,6 +513,7 @@ fn reset_multiplayer_sync(
     pending.despawns.clear();
     pending_neutral.deltas.clear();
     pending_neutral.despawns.clear();
+    pending_baseline.baseline = None;
     prev_snapshots.snapshots.clear();
     prev_snapshots.full_sync_counter = 0;
     prev_buildings.snapshots.clear();
@@ -464,35 +530,39 @@ impl Plugin for MultiplayerPlugin {
         // Configure system set ordering: Receive runs before Broadcast
         app.configure_sets(
             Update,
-            (
-                NetSet::Receive,
-                NetSet::Broadcast.after(NetSet::Receive),
-            ),
+            (NetSet::Receive, NetSet::Broadcast.after(NetSet::Receive)),
         );
 
         app.init_resource::<NetRole>()
             .init_resource::<LobbyState>()
             .init_resource::<NetStats>()
             .init_resource::<SessionTokens>()
-            .init_resource::<matchbox_transport::PeerMap>()
-            .init_resource::<matchbox_transport::MatchboxInbox>()
-            .init_resource::<host_systems::StateSyncTimer>()
-            .init_resource::<host_systems::SyncedEntitySet>()
-            .init_resource::<host_systems::PreviousSnapshots>()
-            .init_resource::<host_systems::PendingServerFrame>()
-            .init_resource::<host_systems::PreviousBuildingSnapshots>()
-            .init_resource::<host_systems::BuildingSyncTimer>()
-            .init_resource::<host_systems::ResourceSyncTimer>()
-            .init_resource::<host_systems::DayCycleSyncTimer>()
-            .init_resource::<host_systems::NeutralWorldSyncTimer>()
-            .init_resource::<host_systems::PreviousNeutralSnapshots>()
-            .init_resource::<client_systems::PendingNetSpawns>()
-            .init_resource::<client_systems::PendingNeutralUpdates>()
-            .init_resource::<client_systems::ClientPingTimer>()
+            .init_resource::<transport::PeerMap>()
+            .init_resource::<transport::MatchboxInbox>()
+            .init_resource::<server::replication::StateSyncTimer>()
+            .init_resource::<server::replication::SyncedEntitySet>()
+            .init_resource::<server::replication::PreviousSnapshots>()
+            .init_resource::<server::replication::PendingServerFrame>()
+            .init_resource::<server::replication::PreviousBuildingSnapshots>()
+            .init_resource::<server::replication::BuildingSyncTimer>()
+            .init_resource::<server::replication::ResourceSyncTimer>()
+            .init_resource::<server::replication::DayCycleSyncTimer>()
+            .init_resource::<server::replication::NeutralWorldSyncTimer>()
+            .init_resource::<server::replication::PreviousNeutralSnapshots>()
+            .init_resource::<client::apply::PendingRelayedInputs>()
+            .init_resource::<client::apply::PendingStateSync>()
+            .init_resource::<client::apply::PendingBuildingSync>()
+            .init_resource::<client::apply::PendingResourceSync>()
+            .init_resource::<client::apply::PendingDayCycleSync>()
+            .init_resource::<client::apply::PendingNetEvents>()
+            .init_resource::<client::apply::PendingBaseline>()
+            .init_resource::<client::apply::PendingNetSpawns>()
+            .init_resource::<client::apply::PendingNeutralUpdates>()
+            .init_resource::<client::receive::ClientPingTimer>()
             // Poll matchbox socket each frame (before game systems)
             .add_systems(
                 Update,
-                matchbox_transport::poll_matchbox
+                transport::poll_matchbox
                     .run_if(resource_exists::<bevy_matchbox::prelude::MatchboxSocket>)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_online)
@@ -502,8 +572,8 @@ impl Plugin for MultiplayerPlugin {
             .add_systems(
                 Update,
                 (
-                    host_systems::host_process_client_commands,
-                    host_systems::host_handle_disconnects,
+                    server::input::host_process_client_commands,
+                    server::input::host_handle_disconnects,
                 )
                     .in_set(NetSet::Receive)
                     .run_if(in_state(AppState::InGame))
@@ -513,13 +583,13 @@ impl Plugin for MultiplayerPlugin {
             .add_systems(
                 Update,
                 (
-                    host_systems::host_broadcast_state_sync,
-                    host_systems::host_broadcast_entity_spawns
-                        .after(host_systems::host_broadcast_state_sync),
-                    host_systems::host_broadcast_building_sync,
-                    host_systems::host_broadcast_resource_sync,
-                    host_systems::host_broadcast_day_cycle_sync,
-                    host_systems::host_broadcast_neutral_world_sync,
+                    server::replication::host_broadcast_state_sync,
+                    server::replication::host_broadcast_entity_spawns
+                        .after(server::replication::host_broadcast_state_sync),
+                    server::replication::host_broadcast_building_sync,
+                    server::replication::host_broadcast_resource_sync,
+                    server::replication::host_broadcast_day_cycle_sync,
+                    server::replication::host_broadcast_neutral_world_sync,
                 )
                     .in_set(NetSet::Broadcast)
                     .run_if(in_state(AppState::InGame))
@@ -528,7 +598,7 @@ impl Plugin for MultiplayerPlugin {
             // Client: receive and apply server messages
             .add_systems(
                 Update,
-                client_systems::client_receive_commands
+                client::receive::client_receive_commands
                     .in_set(NetSet::Receive)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_client),
@@ -537,20 +607,24 @@ impl Plugin for MultiplayerPlugin {
             .add_systems(
                 Update,
                 (
-                    client_systems::client_apply_entity_sync,
-                    client_systems::client_apply_neutral_sync,
-                    client_systems::client_interpolate_remote_units,
-                    client_systems::client_handle_disconnect,
-                    client_systems::client_send_ping,
+                    client::apply::client_apply_world_baseline,
+                    client::apply::client_apply_relayed_inputs,
+                    client::apply::client_apply_state_sync,
+                    client::apply::client_apply_building_sync,
+                    client::apply::client_apply_resource_sync,
+                    client::apply::client_apply_day_cycle_sync,
+                    client::apply::client_apply_server_events,
+                    client::apply::client_apply_entity_sync,
+                    client::apply::client_apply_neutral_sync,
+                    client::interpolation::client_interpolate_remote_units,
+                    client::receive::client_handle_disconnect,
+                    client::receive::client_send_ping,
                 )
                     .in_set(NetSet::Broadcast)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_client),
             )
-            .add_systems(
-                Update,
-                update_net_stats.run_if(in_state(AppState::InGame)),
-            )
+            .add_systems(Update, update_net_stats.run_if(in_state(AppState::InGame)))
             .add_systems(
                 OnEnter(AppState::InGame),
                 (
@@ -605,35 +679,68 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(stats.display_value("Role", &NetRole::Host), Some("Host".to_string()));
-        assert_eq!(stats.display_value("Ping", &NetRole::Client), Some("12.3 ms".to_string()));
+        assert_eq!(
+            stats.display_value("Role", &NetRole::Host),
+            Some("Host".to_string())
+        );
+        assert_eq!(
+            stats.display_value("Ping", &NetRole::Client),
+            Some("12.3 ms".to_string())
+        );
         assert_eq!(
             stats.display_value("Smoothed RTT", &NetRole::Client),
             Some("8.8 ms".to_string())
         );
-        assert_eq!(stats.display_value("Clients", &NetRole::Host), Some("2".to_string()));
-        assert_eq!(stats.display_value("Sent/s", &NetRole::Host), Some("512 B/s".to_string()));
+        assert_eq!(
+            stats.display_value("Clients", &NetRole::Host),
+            Some("2".to_string())
+        );
+        assert_eq!(
+            stats.display_value("Sent/s", &NetRole::Host),
+            Some("512 B/s".to_string())
+        );
         assert_eq!(
             stats.display_value("Received/s", &NetRole::Host),
             Some("3.0 KB/s".to_string())
         );
-        assert_eq!(stats.display_value("Total Sent", &NetRole::Host), Some("1.5 KB".to_string()));
+        assert_eq!(
+            stats.display_value("Total Sent", &NetRole::Host),
+            Some("1.5 KB".to_string())
+        );
         assert_eq!(
             stats.display_value("Total Received", &NetRole::Host),
             Some("2.0 MB".to_string())
         );
-        assert_eq!(stats.display_value("Msgs Sent", &NetRole::Host), Some("7".to_string()));
-        assert_eq!(stats.display_value("Msgs Received", &NetRole::Host), Some("9".to_string()));
-        assert_eq!(stats.display_value("Sync Entities", &NetRole::Host), Some("42".to_string()));
-        assert_eq!(stats.display_value("Net Map Size", &NetRole::Host), Some("77".to_string()));
-        assert_eq!(stats.display_value("Pending Spawns", &NetRole::Host), Some("3".to_string()));
+        assert_eq!(
+            stats.display_value("Msgs Sent", &NetRole::Host),
+            Some("7".to_string())
+        );
+        assert_eq!(
+            stats.display_value("Msgs Received", &NetRole::Host),
+            Some("9".to_string())
+        );
+        assert_eq!(
+            stats.display_value("Sync Entities", &NetRole::Host),
+            Some("42".to_string())
+        );
+        assert_eq!(
+            stats.display_value("Net Map Size", &NetRole::Host),
+            Some("77".to_string())
+        );
+        assert_eq!(
+            stats.display_value("Pending Spawns", &NetRole::Host),
+            Some("3".to_string())
+        );
         assert_eq!(stats.display_value("Status", &NetRole::Host), None);
     }
 
     #[test]
     fn display_value_uses_placeholders_for_zero_rtt() {
         let stats = NetStats::default();
-        assert_eq!(stats.display_value("Ping", &NetRole::Client), Some("--".to_string()));
+        assert_eq!(
+            stats.display_value("Ping", &NetRole::Client),
+            Some("--".to_string())
+        );
         assert_eq!(
             stats.display_value("Smoothed RTT", &NetRole::Client),
             Some("--".to_string())

@@ -1,6 +1,8 @@
 //! Transport layer — legacy TCP/WS code (mostly unused) + LAN discovery + HTTP file server.
 #![allow(dead_code)]
 
+pub use super::matchbox_transport::*;
+
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::{self, Read, Write};
 #[cfg(not(target_arch = "wasm32"))]
@@ -136,13 +138,19 @@ pub fn recv_framed(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
             return Ok(recovered);
         }
         // Msgpack fallback: detect unframed msgpack payloads (fixmap 0x80-0x8F, fixarray 0x90-0x9F)
-        if (len_buf[0] & 0xE0 == 0x80) || len_buf[0] == 0xDE || len_buf[0] == 0xDF
-            || len_buf[0] == 0xDC || len_buf[0] == 0xDD
+        if (len_buf[0] & 0xE0 == 0x80)
+            || len_buf[0] == 0xDE
+            || len_buf[0] == 0xDF
+            || len_buf[0] == 0xDC
+            || len_buf[0] == 0xDD
         {
             bevy::log::warn!(
                 "Detected unframed msgpack payload on framed socket; recovering \
                 (prefix=0x{:02X}{:02X}{:02X}{:02X})",
-                len_buf[0], len_buf[1], len_buf[2], len_buf[3]
+                len_buf[0],
+                len_buf[1],
+                len_buf[2],
+                len_buf[3]
             );
             let recovered = recv_unframed_msgpack_payload(stream, len_buf)?;
             return Ok(recovered);
@@ -197,10 +205,7 @@ fn recv_unframed_msgpack_payload(stream: &mut TcpStream, first4: [u8; 4]) -> io:
 
         // Check if we have a complete msgpack value
         if rmp_serde::from_slice::<serde::de::IgnoredAny>(&data).is_ok() {
-            bevy::log::info!(
-                "Recovered unframed msgpack payload: {} bytes",
-                data.len()
-            );
+            bevy::log::info!("Recovered unframed msgpack payload: {} bytes", data.len());
             return Ok(data);
         }
 
@@ -208,8 +213,7 @@ fn recv_unframed_msgpack_payload(stream: &mut TcpStream, first4: [u8; 4]) -> io:
             Ok(0) => break,
             Ok(n) => data.extend_from_slice(&chunk[..n]),
             Err(ref e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
                 break;
             }
@@ -337,7 +341,11 @@ pub fn detect_all_ips() -> Vec<DetectedIp> {
             });
         }
     }
-    results.sort_by(|a, b| b.is_likely_vpn.cmp(&a.is_likely_vpn).then(a.name.cmp(&b.name)));
+    results.sort_by(|a, b| {
+        b.is_likely_vpn
+            .cmp(&a.is_likely_vpn)
+            .then(a.name.cmp(&b.name))
+    });
     results
 }
 
@@ -373,7 +381,9 @@ const DISCOVERY_MAGIC: &str = "rts-lan-discovery-v1";
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 enum DiscoveryMessage {
-    Query { magic: String },
+    Query {
+        magic: String,
+    },
     Announce {
         magic: String,
         name: String,
@@ -415,7 +425,9 @@ pub fn discovery_listener_thread(
             Err(ref e)
                 if matches!(
                     e.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
                 ) => {}
             Err(e) => {
                 bevy::log::warn!("LAN discovery listener stopped: {}", e);
@@ -428,7 +440,10 @@ pub fn discovery_listener_thread(
 #[cfg(not(target_arch = "wasm32"))]
 fn detect_broadcast_targets() -> Vec<std::net::SocketAddr> {
     let mut targets = std::collections::BTreeSet::new();
-    targets.insert(std::net::SocketAddr::from(([255, 255, 255, 255], DISCOVERY_PORT)));
+    targets.insert(std::net::SocketAddr::from((
+        [255, 255, 255, 255],
+        DISCOVERY_PORT,
+    )));
 
     if let Ok(ifaces) = if_addrs::get_if_addrs() {
         for iface in ifaces {
@@ -502,7 +517,9 @@ pub fn discover_lan_hosts(timeout: Duration) -> Vec<(String, String)> {
             Err(ref e)
                 if matches!(
                     e.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut | io::ErrorKind::Interrupted
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
                 ) => {}
             Err(_) => break,
         }
@@ -690,7 +707,8 @@ mod tests {
         let shutdown = Arc::new(AtomicBool::new(false));
         let thread_shutdown = shutdown.clone();
 
-        let handle = thread::spawn(move || client_writer_thread(stream_tx, outgoing_rx, thread_shutdown));
+        let handle =
+            thread::spawn(move || client_writer_thread(stream_tx, outgoing_rx, thread_shutdown));
 
         outgoing_tx.send(vec![1, 2, 3, 4]).unwrap();
         let actual = recv_framed(&mut stream_rx).unwrap();
@@ -782,8 +800,12 @@ pub fn client_writer_thread(
                     );
                     break;
                 }
-                NET_TRAFFIC.bytes_sent.fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
-                NET_TRAFFIC.msgs_sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .bytes_sent
+                    .fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .msgs_sent
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 debug_tap::record_tx("host_client_writer", detail, data.len(), payload);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -800,31 +822,28 @@ pub fn host_client_reader_thread(
     player_id: u8,
     shutdown: Arc<AtomicBool>,
 ) {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
 
     while !shutdown.load(Ordering::Relaxed) {
         match recv_framed(&mut stream) {
             Ok(data) => {
-                NET_TRAFFIC.bytes_received.fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
-                NET_TRAFFIC.msgs_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .bytes_received
+                    .fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .msgs_received
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 // Try MessagePack first, fall back to JSON for legacy clients
-                let parsed = codec::decode::<ClientMessage>(&data)
-                    .or_else(|_| serde_json::from_slice::<ClientMessage>(&data).map_err(|e| {
-                        rmp_serde::decode::Error::Uncategorized(e.to_string())
-                    }));
+                let parsed = codec::decode::<ClientMessage>(&data).or_else(|_| {
+                    serde_json::from_slice::<ClientMessage>(&data)
+                        .map_err(|e| rmp_serde::decode::Error::Uncategorized(e.to_string()))
+                });
                 match parsed {
                     Ok(msg) => {
                         let detail =
                             format!("player {} -> host {}", player_id, client_msg_kind(&msg));
                         let payload = Some(codec::to_debug_json(&msg));
-                        debug_tap::record_rx(
-                            "host_client_reader",
-                            detail,
-                            data.len(),
-                            payload,
-                        );
+                        debug_tap::record_rx("host_client_reader", detail, data.len(), payload);
                         if incoming_tx.send((player_id, msg)).is_err() {
                             debug_tap::record_error(
                                 "host_client_reader",
@@ -836,10 +855,7 @@ pub fn host_client_reader_thread(
                     Err(e) => {
                         debug_tap::record_error(
                             "host_client_reader",
-                            format!(
-                                "invalid client message from player {}: {}",
-                                player_id, e
-                            ),
+                            format!("invalid client message from player {}: {}", player_id, e),
                         );
                         debug_tap::record_rx(
                             "host_client_reader",
@@ -851,8 +867,7 @@ pub fn host_client_reader_thread(
                 }
             }
             Err(ref e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
                 continue;
             }
@@ -867,7 +882,10 @@ pub fn host_client_reader_thread(
         }
     }
 
-    debug_tap::record_info("host_client_reader", format!("player {} disconnected", player_id));
+    debug_tap::record_info(
+        "host_client_reader",
+        format!("player {} disconnected", player_id),
+    );
     let _ = disconnect_tx.send(player_id);
 }
 
@@ -879,15 +897,17 @@ pub fn client_reader_thread(
     incoming_tx: Sender<ServerMessage>,
     shutdown: Arc<AtomicBool>,
 ) {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
 
     while !shutdown.load(Ordering::Relaxed) {
         match recv_framed(&mut stream) {
             Ok(data) => {
-                NET_TRAFFIC.bytes_received.fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
-                NET_TRAFFIC.msgs_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .bytes_received
+                    .fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .msgs_received
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 match decode_server_messages_bytes(&data) {
                     Ok(messages) => {
                         for msg in messages {
@@ -918,8 +938,7 @@ pub fn client_reader_thread(
                 }
             }
             Err(ref e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
                 continue;
             }
@@ -959,8 +978,12 @@ pub fn client_writer_thread_fn(
                     );
                     break;
                 }
-                NET_TRAFFIC.bytes_sent.fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
-                NET_TRAFFIC.msgs_sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .bytes_sent
+                    .fetch_add(data.len() as u64 + 4, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .msgs_sent
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 debug_tap::record_tx("client_writer", detail, data.len(), payload);
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
@@ -978,11 +1001,7 @@ pub const HTTP_PORT_OFFSET: u16 = 2;
 /// client directly from the host without a separate web server or session router.
 /// Players open `http://<host-ip>:<port>` in their browser.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn host_file_server_thread(
-    listener: TcpListener,
-    dist_dir: String,
-    shutdown: Arc<AtomicBool>,
-) {
+pub fn host_file_server_thread(listener: TcpListener, dist_dir: String, shutdown: Arc<AtomicBool>) {
     listener
         .set_nonblocking(true)
         .expect("Failed to set HTTP listener non-blocking");
@@ -1008,9 +1027,7 @@ pub fn host_file_server_thread(
 
 #[cfg(not(target_arch = "wasm32"))]
 fn serve_http_request(mut stream: TcpStream, dist_dir: &str) {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
 
     // Read the HTTP request (only need the first line)
     let mut buf = [0u8; 4096];
@@ -1022,15 +1039,10 @@ fn serve_http_request(mut stream: TcpStream, dist_dir: &str) {
     let first_line = request.lines().next().unwrap_or("");
 
     // Parse "GET /path HTTP/1.x"
-    let path = first_line
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or("/");
+    let path = first_line.split_whitespace().nth(1).unwrap_or("/");
 
     // Sanitize: resolve to a safe relative path within dist_dir
-    let clean_path = path
-        .trim_start_matches('/')
-        .replace("..", "");
+    let clean_path = path.trim_start_matches('/').replace("..", "");
     let clean_path = if clean_path.is_empty() {
         "index.html"
     } else {
@@ -1169,9 +1181,7 @@ fn ws_client_handler(
     let mut outgoing_encoding = WsClientEncoding::Unknown;
 
     // Blocking handshake (stream is not yet non-blocking at this point)
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .ok();
+    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
 
     let mut ws = match tungstenite::accept(stream) {
         Ok(ws) => {
@@ -1210,8 +1220,12 @@ fn ws_client_handler(
         match ws.read() {
             Ok(tungstenite::Message::Binary(data)) => {
                 outgoing_encoding = WsClientEncoding::BinaryMsgpack;
-                NET_TRAFFIC.bytes_received.fetch_add(data.len() as u64, std::sync::atomic::Ordering::Relaxed);
-                NET_TRAFFIC.msgs_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .bytes_received
+                    .fetch_add(data.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .msgs_received
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 match codec::decode::<ClientMessage>(&data) {
                     Ok(msg) => {
                         debug_tap::record_rx(
@@ -1235,13 +1249,21 @@ fn ws_client_handler(
             Ok(tungstenite::Message::Text(text)) => {
                 outgoing_encoding = WsClientEncoding::TextJson;
                 // Legacy JSON fallback for older WASM clients
-                NET_TRAFFIC.bytes_received.fetch_add(text.len() as u64, std::sync::atomic::Ordering::Relaxed);
-                NET_TRAFFIC.msgs_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .bytes_received
+                    .fetch_add(text.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                NET_TRAFFIC
+                    .msgs_received
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 match serde_json::from_str::<ClientMessage>(&text) {
                     Ok(msg) => {
                         debug_tap::record_rx(
                             "ws_reader",
-                            format!("player {} -> host ws(json) {}", player_id, client_msg_kind(&msg)),
+                            format!(
+                                "player {} -> host ws(json) {}",
+                                player_id,
+                                client_msg_kind(&msg)
+                            ),
                             text.len(),
                             Some(text.to_string()),
                         );
@@ -1266,14 +1288,11 @@ fn ws_client_handler(
             }
             Ok(_) => {} // Pong, Frame — ignore
             Err(tungstenite::Error::Io(ref e))
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
                 // No data available — fall through to write
             }
-            Err(
-                tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed,
-            ) => {
+            Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
                 break;
             }
             Err(e) => {
@@ -1321,13 +1340,20 @@ fn ws_client_handler(
                 );
                 break;
             }
-            NET_TRAFFIC.bytes_sent.fetch_add(data_len, std::sync::atomic::Ordering::Relaxed);
-            NET_TRAFFIC.msgs_sent.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            NET_TRAFFIC
+                .bytes_sent
+                .fetch_add(data_len, std::sync::atomic::Ordering::Relaxed);
+            NET_TRAFFIC
+                .msgs_sent
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             debug_tap::record_tx("ws_writer", detail, data_len as usize, payload);
         }
     }
 
-    debug_tap::record_info("ws_handler", format!("player {} WS disconnected", player_id));
+    debug_tap::record_info(
+        "ws_handler",
+        format!("player {} WS disconnected", player_id),
+    );
     let _ = dc_tx.send(player_id);
 }
 

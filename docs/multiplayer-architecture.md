@@ -3,7 +3,7 @@
 > Host-authoritative multiplayer with **Matchbox WebRTC** transport (native + WASM).
 > Embedded signaling server on the host — no external infrastructure needed for LAN play.
 > WebRTC NAT traversal enables internet play without VPN.
-> **MessagePack binary wire protocol** over reliable + unreliable WebRTC data channels. Delta-compressed state sync at ~10Hz.
+> **MessagePack binary wire protocol** over reliable + unreliable WebRTC data channels. Delta-compressed state sync at ~10Hz with staged client application.
 > Reconnection with 30s grace period.
 
 ---
@@ -14,32 +14,37 @@
 flowchart TB
     subgraph Host["HOST (Full Simulation)"]
         ECS["Bevy ECS\n(authoritative world)"]
-        HS["Host Systems\n- process_client_commands\n- broadcast_state_sync\n- broadcast_entity_spawns\n- broadcast_building_sync\n- broadcast_resource_sync\n- broadcast_day_cycle_sync\n- broadcast_neutral_world_sync"]
+        SRV["server module\n- input\n- replication"]
         NB["Net Bridge\n- assign_network_ids\n- rebuild_entity_net_map"]
-        MBX["MatchboxSocket\n+ PeerMap\n+ MatchboxInbox"]
+        MBX["transport module\n- MatchboxSocket\n- PeerMap\n- MatchboxInbox"]
         SIG["Embedded Signaling\nServer :3536\n(ClientServer topology)"]
 
-        ECS <--> HS
+        ECS <--> SRV
         ECS <--> NB
-        HS <--> MBX
+        SRV <--> MBX
     end
 
     subgraph Transport["TRANSPORT LAYER"]
         WEBRTC["WebRTC Data Channels\n(reliable + unreliable)"]
         HTTP["HTTP File Server\n:7880\n(serves dist/ for browsers)"]
+        LAN["LAN Discovery + host helpers\n(still lives in transport.rs)"]
     end
 
     subgraph Client1["CLIENT (Native)"]
         CECS1["Bevy ECS\n(mirrored state)"]
-        CS1["Client Systems\n- client_receive_commands\n- client_apply_entity_sync\n- client_apply_neutral_sync\n- client_interpolate_remote_units\n- client_send_ping"]
+        CR1["client::receive\n- client_receive_commands\n- client_send_ping"]
+        CA1["client::apply\n- apply_world_baseline\n- apply_state_sync\n- apply_entity_sync\n- apply_neutral_sync"]
+        CI1["client::interpolation\n- client_interpolate_remote_units"]
         CNS1["ClientNetState\n+ MatchboxSocket"]
-        CECS1 <--> CS1
-        CS1 <--> CNS1
+        CECS1 <--> CR1
+        CECS1 <--> CA1
+        CECS1 <--> CI1
+        CR1 <--> CNS1
     end
 
     subgraph Client2["CLIENT (WASM/Browser)"]
         CECS2["Bevy ECS\n(mirrored state)"]
-        CS2["Client Systems\n(same as native)"]
+        CS2["Same client module split\nas native"]
         CNS2["ClientNetState\n+ MatchboxSocket"]
         CECS2 <--> CS2
         CS2 <--> CNS2
@@ -59,6 +64,15 @@ flowchart TB
     style Transport fill:#3a2a1a,stroke:#9a7a4a,color:#fff
 ```
 
+### Current module split
+
+- `transport`: Matchbox send/receive path, peer tracking, LAN discovery, and HTTP hosting helpers.
+- `server::input`: host-side command validation/execution and disconnect handling.
+- `server::replication`: host-side snapshot building and broadcast systems.
+- `client::receive`: drains inbox and stages server messages into pending resources.
+- `client::apply`: mutates ECS from staged baseline/delta data.
+- `client::interpolation`: visual smoothing only.
+
 ---
 
 ## Transport Architecture
@@ -67,7 +81,7 @@ flowchart TB
 flowchart LR
     subgraph MainThread["MAIN THREAD (Bevy)"]
         Poll["poll_matchbox system\n(each frame)"]
-        HS["Host/Client Systems"]
+        HS["server/client module systems"]
         Poll --> HS
     end
 
@@ -99,6 +113,7 @@ flowchart LR
 - Unified transport for native and WASM — no `#[cfg(target_arch)]` branching in connection code
 - WebRTC NAT traversal via ICE/STUN — internet play without VPN
 - Two channels: reliable (commands, events, spawns) and unreliable (high-frequency state sync)
+- `transport.rs` still contains legacy LAN discovery / HTTP host helpers, so the file is broader than just Matchbox runtime transport
 
 ---
 
@@ -147,6 +162,7 @@ sequenceDiagram
     end
 
     loop Every 500ms
+        Host->>Client: WorldBaseline (reliable, periodic neutral-world baseline)
         Host->>Client: BuildingSync (reliable)
         Host->>Client: NeutralWorldDelta (reliable)
     end
@@ -177,6 +193,23 @@ sequenceDiagram
     Host->>Host: Convert faction to AI permanently
     Host-->>Client: Announcement "AI taking over"
 ```
+
+### Client apply pipeline
+
+The in-game client path is now two-stage:
+
+1. `client_receive_commands` drains `MatchboxInbox` and stores incoming data in pending resources.
+2. Follow-up apply systems mutate ECS in deterministic order:
+   - `client_apply_world_baseline`
+   - `client_apply_relayed_inputs`
+   - `client_apply_state_sync`
+   - `client_apply_building_sync`
+   - `client_apply_resource_sync`
+   - `client_apply_day_cycle_sync`
+   - `client_apply_server_events`
+   - `client_apply_entity_sync`
+   - `client_apply_neutral_sync`
+3. `client_interpolate_remote_units` performs visual smoothing after authoritative state is staged.
 
 ---
 
@@ -274,6 +307,10 @@ classDiagram
     class NeutralWorldDelta {
         +objects: Vec~NeutralWorldSnapshot~
     }
+    class WorldBaseline {
+        +terrain: TerrainDescriptor
+        +neutral_objects: Vec~NeutralWorldSnapshot~
+    }
     class Pong {
         +timestamp: f64
     }
@@ -285,6 +322,7 @@ classDiagram
     ServerMessage <|-- ResourceSync
     ServerMessage <|-- DayCycleSync
     ServerMessage <|-- NeutralWorldDelta
+    ServerMessage <|-- WorldBaseline
     ServerMessage <|-- RelayedInput
     ServerMessage <|-- Event
     ServerMessage <|-- Pong
@@ -375,6 +413,15 @@ flowchart TD
     style Client fill:#1a2a3a,stroke:#4a7a9a,color:#fff
 ```
 
+### Baseline vs delta
+
+- `StateSync`, `EntitySpawn`, `EntityDespawn`, `BuildingSync`, `ResourceSync`, `DayCycleSync`, and `NeutralWorldDelta` remain the main runtime delta path.
+- `WorldBaseline` is now actively emitted by the host and applied by clients, but it currently covers:
+  - terrain metadata (`TerrainDescriptor`)
+  - neutral world objects
+- `WorldBaseline` does **not** yet replace entity bootstrap. Faction/unit/building entity bootstrap still depends on `EntitySpawn` plus periodic full resync behavior.
+- Practically, the baseline path is now a neutral-world bootstrap/resync path, not a full-world snapshot path.
+
 ---
 
 ## Entity Replication
@@ -450,6 +497,7 @@ sequenceDiagram
 | Entity positions, health, state | 100ms (~10Hz) | `host_broadcast_state_sync` | Unreliable | Yes (Δ pos>0.05, rot>0.02) |
 | Entity spawns/despawns | 100ms | `host_broadcast_entity_spawns` | Reliable | Yes (new/removed only) |
 | Building state | 500ms | `host_broadcast_building_sync` | Reliable | Yes (level/progress/queue Δ) |
+| Neutral-world baseline | first tick, then periodic (~5s via 500ms timer * 10) | `host_broadcast_neutral_world_sync` | Reliable | No (full neutral snapshot) |
 | Resource node amounts | 500ms (~2Hz) | `host_broadcast_neutral_world_sync` | Reliable | Yes (amount_remaining Δ) |
 | Player resources | 1000ms | `host_broadcast_resource_sync` | Reliable | No (full) |
 | Day/night cycle | 250ms | `host_broadcast_day_cycle_sync` | Reliable | No (full) |

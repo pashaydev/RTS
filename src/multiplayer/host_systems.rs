@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use game_state::message::{
     BuildingSnapshot, ClientMessage, DayCycleSnapshot, EntitySnapshot, EntitySpawnData, GameEvent,
     InputCommand, NetCarrying, NetUnitState, NeutralKind, NeutralWorldSnapshot, PlayerInput,
-    ServerFrame, ServerMessage,
+    ServerFrame, ServerMessage, TerrainDescriptor, WorldBaseline,
 };
 
 use crate::components::*;
@@ -17,7 +17,7 @@ use crate::orders;
 use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
 
 use super::debug_tap;
-use super::matchbox_transport::{self, MatchboxInbox, PeerMap};
+use super::transport::{self, MatchboxInbox, PeerMap};
 use super::{HostNetState, NetStats};
 
 // ── Pending frame buffer for message batching ───────────────────────────────
@@ -30,17 +30,22 @@ pub struct PendingServerFrame {
 
 /// Broadcast a ServerFrame to all connected peers (unreliable channel for state sync).
 fn broadcast_frame(socket: &mut MatchboxSocket, frame: &ServerFrame) {
-    matchbox_transport::broadcast_unreliable(socket, frame);
+    transport::broadcast_unreliable(socket, frame);
 }
 
 /// Broadcast a single ServerMessage to all connected peers (reliable channel).
 fn broadcast_msg(socket: &mut MatchboxSocket, msg: &ServerMessage) {
-    matchbox_transport::broadcast_reliable(socket, msg);
+    transport::broadcast_reliable(socket, msg);
 }
 
 /// Send a ServerMessage to a specific client by player_id.
-fn send_to_player(socket: &mut MatchboxSocket, peer_map: &PeerMap, player_id: u8, msg: &ServerMessage) {
-    matchbox_transport::send_to_player(socket, peer_map, player_id, msg);
+fn send_to_player(
+    socket: &mut MatchboxSocket,
+    peer_map: &PeerMap,
+    player_id: u8,
+    msg: &ServerMessage,
+) {
+    transport::send_to_player(socket, peer_map, player_id, msg);
 }
 
 // ── Shared command execution ────────────────────────────────────────────────
@@ -72,8 +77,7 @@ pub fn execute_input_command(
                     if let Some(&ecs_entity) = net_map.to_ecs.get(&eid) {
                         let dest = if n > 1 {
                             let angle = i as f32 / n as f32 * std::f32::consts::TAU;
-                            let offset =
-                                Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
+                            let offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
                             pos + offset
                         } else {
                             pos
@@ -245,139 +249,148 @@ pub fn host_process_client_commands(
     let client_commands = std::mem::take(&mut inbox.client_commands);
     for (player_id, msg) in client_commands {
         {
-                match &msg {
-                    ClientMessage::Input { input, .. } => {
-                        let Some(player) = lobby
-                            .players
-                            .iter()
-                            .find(|p| p.player_id == player_id && p.connected)
-                        else {
-                            debug_tap::record_error(
-                                "host_commands",
-                                format!("dropping input from unknown/disconnected player {}", player_id),
-                            );
-                            continue;
-                        };
-
-                        let owned_entity_ids: Vec<_> = input
-                            .entity_ids
-                            .iter()
-                            .copied()
-                            .filter(|entity_id| {
-                                net_map
-                                    .to_ecs
-                                    .get(entity_id)
-                                    .and_then(|entity| unit_factions.get(*entity).ok())
-                                    .is_some_and(|faction| *faction == player.faction)
-                            })
-                            .collect();
-
-                        if owned_entity_ids.is_empty() {
-                            debug_tap::record_error(
-                                "host_commands",
-                                format!("player {} attempted to command no owned units", player_id),
-                            );
-                            continue;
-                        }
-
-                        let mut sanitized_input = input.clone();
-                        sanitized_input.player_id = player_id as u32;
-                        sanitized_input.entity_ids = owned_entity_ids;
-
-                        // Execute on host ECS
-                        execute_input_command(
-                            &mut commands,
-                            &sanitized_input,
-                            &net_map,
-                            &mut unit_states,
-                            &mut task_queues,
-                            &mut next_task_id,
-                            &transforms,
-                        );
-                        debug_tap::record_info(
+            match &msg {
+                ClientMessage::Input { input, .. } => {
+                    let Some(player) = lobby
+                        .players
+                        .iter()
+                        .find(|p| p.player_id == player_id && p.connected)
+                    else {
+                        debug_tap::record_error(
                             "host_commands",
                             format!(
-                                "player {} input: {} entities / {} cmds",
-                                player_id,
-                                sanitized_input.entity_ids.len(),
-                                sanitized_input.commands.len()
+                                "dropping input from unknown/disconnected player {}",
+                                player_id
                             ),
                         );
+                        continue;
+                    };
 
-                        // Relay to all other clients
-                        let seq = {
-                            let mut s = host.seq.lock().unwrap();
-                            *s += 1;
-                            *s
-                        };
-                        let relay = ServerMessage::RelayedInput {
-                            seq,
-                            timestamp: time.elapsed_secs_f64(),
+                    let owned_entity_ids: Vec<_> = input
+                        .entity_ids
+                        .iter()
+                        .copied()
+                        .filter(|entity_id| {
+                            net_map
+                                .to_ecs
+                                .get(entity_id)
+                                .and_then(|entity| unit_factions.get(*entity).ok())
+                                .is_some_and(|faction| *faction == player.faction)
+                        })
+                        .collect();
+
+                    if owned_entity_ids.is_empty() {
+                        debug_tap::record_error(
+                            "host_commands",
+                            format!("player {} attempted to command no owned units", player_id),
+                        );
+                        continue;
+                    }
+
+                    let mut sanitized_input = input.clone();
+                    sanitized_input.player_id = player_id as u32;
+                    sanitized_input.entity_ids = owned_entity_ids;
+
+                    // Execute on host ECS
+                    execute_input_command(
+                        &mut commands,
+                        &sanitized_input,
+                        &net_map,
+                        &mut unit_states,
+                        &mut task_queues,
+                        &mut next_task_id,
+                        &transforms,
+                    );
+                    debug_tap::record_info(
+                        "host_commands",
+                        format!(
+                            "player {} input: {} entities / {} cmds",
                             player_id,
-                            input: sanitized_input,
-                        };
-                        broadcast_msg(&mut socket, &relay);
-                    }
-                    ClientMessage::JoinRequest { player_name, .. } => {
-                        info!("Player {} joined: {}", player_id, player_name);
-                        debug_tap::record_info(
-                            "host_commands",
-                            format!("player {} join request: {}", player_id, player_name),
-                        );
-                        event_log.push_with_level(
-                            time.elapsed_secs(),
-                            format!("{} joined the game", player_name),
-                            EventCategory::Network,
-                            LogLevel::Info,
-                            None,
-                            None,
-                        );
-                    }
-                    ClientMessage::LeaveNotice { .. } => {
-                        info!("Player {} left gracefully", player_id);
-                        debug_tap::record_info(
-                            "host_commands",
-                            format!("player {} leave notice", player_id),
-                        );
-                        let name = lobby
-                            .players
-                            .iter()
-                            .find(|p| p.player_id == player_id)
-                            .map(|p| p.name.clone())
-                            .unwrap_or_else(|| format!("Player {}", player_id));
-                        event_log.push_with_level(
-                            time.elapsed_secs(),
-                            format!("{} left the game", name),
-                            EventCategory::Network,
-                            LogLevel::Warning,
-                            None,
-                            None,
-                        );
-                    }
-                    ClientMessage::Ping { timestamp, .. } => {
-                        // Reply with Pong to keep VPN/Hamachi tunnels alive
-                        let seq = {
-                            let mut s = host.seq.lock().unwrap();
-                            *s += 1;
-                            *s
-                        };
-                        let pong = ServerMessage::Pong {
-                            seq,
-                            timestamp: *timestamp,
-                        };
-                        send_to_player(&mut socket, &peer_map, player_id, &pong);
-                    }
-                    ClientMessage::Reconnect { session_token, .. } => {
-                        info!("Reconnect request from player {} with token {}", player_id, session_token);
-                        debug_tap::record_info(
-                            "host_commands",
-                            format!("player {} reconnect request token={}", player_id, session_token),
-                        );
-                        // Reconnection is handled in the lobby system (menu/multiplayer.rs)
-                        // Here we just log it — the actual reconnection logic requires lobby access
-                    }
+                            sanitized_input.entity_ids.len(),
+                            sanitized_input.commands.len()
+                        ),
+                    );
+
+                    // Relay to all other clients
+                    let seq = {
+                        let mut s = host.seq.lock().unwrap();
+                        *s += 1;
+                        *s
+                    };
+                    let relay = ServerMessage::RelayedInput {
+                        seq,
+                        timestamp: time.elapsed_secs_f64(),
+                        player_id,
+                        input: sanitized_input,
+                    };
+                    broadcast_msg(&mut socket, &relay);
+                }
+                ClientMessage::JoinRequest { player_name, .. } => {
+                    info!("Player {} joined: {}", player_id, player_name);
+                    debug_tap::record_info(
+                        "host_commands",
+                        format!("player {} join request: {}", player_id, player_name),
+                    );
+                    event_log.push_with_level(
+                        time.elapsed_secs(),
+                        format!("{} joined the game", player_name),
+                        EventCategory::Network,
+                        LogLevel::Info,
+                        None,
+                        None,
+                    );
+                }
+                ClientMessage::LeaveNotice { .. } => {
+                    info!("Player {} left gracefully", player_id);
+                    debug_tap::record_info(
+                        "host_commands",
+                        format!("player {} leave notice", player_id),
+                    );
+                    let name = lobby
+                        .players
+                        .iter()
+                        .find(|p| p.player_id == player_id)
+                        .map(|p| p.name.clone())
+                        .unwrap_or_else(|| format!("Player {}", player_id));
+                    event_log.push_with_level(
+                        time.elapsed_secs(),
+                        format!("{} left the game", name),
+                        EventCategory::Network,
+                        LogLevel::Warning,
+                        None,
+                        None,
+                    );
+                }
+                ClientMessage::Ping { timestamp, .. } => {
+                    // Reply with Pong to keep VPN/Hamachi tunnels alive
+                    let seq = {
+                        let mut s = host.seq.lock().unwrap();
+                        *s += 1;
+                        *s
+                    };
+                    let pong = ServerMessage::Pong {
+                        seq,
+                        timestamp: *timestamp,
+                    };
+                    send_to_player(&mut socket, &peer_map, player_id, &pong);
+                }
+                ClientMessage::Reconnect { session_token, .. } => {
+                    info!(
+                        "Reconnect request from player {} with token {}",
+                        player_id, session_token
+                    );
+                    debug_tap::record_info(
+                        "host_commands",
+                        format!(
+                            "player {} reconnect request token={}",
+                            player_id, session_token
+                        ),
+                    );
+                    // Reconnection is handled in the lobby system (menu/multiplayer.rs)
+                    // Here we just log it — the actual reconnection logic requires lobby access
                 }
             }
+        }
     }
 }
 
@@ -401,12 +414,19 @@ pub fn host_handle_disconnects(
             continue;
         };
 
-        info!("Player {} disconnected — starting {}s reconnection grace period",
-            player_id, super::RECONNECT_GRACE_PERIOD);
-        debug_tap::record_info("host_disconnects", format!("player {} disconnected", player_id));
+        info!(
+            "Player {} disconnected — starting {}s reconnection grace period",
+            player_id,
+            super::RECONNECT_GRACE_PERIOD
+        );
+        debug_tap::record_info(
+            "host_disconnects",
+            format!("player {} disconnected", player_id),
+        );
 
         let player_info = lobby.players.iter().find(|p| p.player_id == player_id);
-        let player_name = player_info.map(|p| p.name.clone())
+        let player_name = player_info
+            .map(|p| p.name.clone())
             .unwrap_or_else(|| format!("Player {}", player_id));
 
         if let Some(player) = lobby
@@ -416,7 +436,9 @@ pub fn host_handle_disconnects(
         {
             player.connected = false;
 
-            let token = session_tokens.tokens.iter()
+            let token = session_tokens
+                .tokens
+                .iter()
                 .find(|(_, &pid)| pid == player_id)
                 .map(|(&t, _)| t)
                 .unwrap_or_else(|| session_tokens.generate(player_id));
@@ -434,7 +456,11 @@ pub fn host_handle_disconnects(
 
         event_log.push_with_level(
             time.elapsed_secs(),
-            format!("{} disconnected — waiting for reconnection ({}s)", player_name, super::RECONNECT_GRACE_PERIOD as u32),
+            format!(
+                "{} disconnected — waiting for reconnection ({}s)",
+                player_name,
+                super::RECONNECT_GRACE_PERIOD as u32
+            ),
             EventCategory::Network,
             LogLevel::Warning,
             None,
@@ -458,12 +484,18 @@ pub fn host_handle_disconnects(
 
     // Check grace period expiry — convert to AI after timeout
     let now = time.elapsed_secs();
-    let expired: Vec<super::DisconnectedPlayer> = session_tokens.disconnected
-        .extract_if(.., |dc| now - dc.disconnect_time >= super::RECONNECT_GRACE_PERIOD)
+    let expired: Vec<super::DisconnectedPlayer> = session_tokens
+        .disconnected
+        .extract_if(.., |dc| {
+            now - dc.disconnect_time >= super::RECONNECT_GRACE_PERIOD
+        })
         .collect();
 
     for dc in expired {
-        info!("Reconnection grace period expired for {} — converting to AI", dc.name);
+        info!(
+            "Reconnection grace period expired for {} — converting to AI",
+            dc.name
+        );
         ai_factions.factions.insert(dc.faction);
         session_tokens.tokens.retain(|_, pid| *pid != dc.player_id);
         event_log.push_with_level(
@@ -607,16 +639,19 @@ pub fn host_broadcast_state_sync(
     mut sync_timer: ResMut<StateSyncTimer>,
     net_map: Res<EntityNetMap>,
     mut prev_snapshots: ResMut<PreviousSnapshots>,
-    entities: Query<(
-        &NetworkId,
-        &GlobalTransform,
-        Option<&Health>,
-        Option<&UnitState>,
-        Option<&MoveTarget>,
-        Option<&AttackTarget>,
-        Option<&Carrying>,
-        Option<&UnitStance>,
-    ), With<crate::blueprints::EntityKind>>,
+    entities: Query<
+        (
+            &NetworkId,
+            &GlobalTransform,
+            Option<&Health>,
+            Option<&UnitState>,
+            Option<&MoveTarget>,
+            Option<&AttackTarget>,
+            Option<&Carrying>,
+            Option<&UnitStance>,
+        ),
+        With<crate::blueprints::EntityKind>,
+    >,
     mut event_log: ResMut<GameEventLog>,
     mut net_stats: ResMut<NetStats>,
 ) {
@@ -638,7 +673,9 @@ pub fn host_broadcast_state_sync(
     let mut new_prev = HashMap::new();
     let mut snapshots: Vec<EntitySnapshot> = Vec::new();
 
-    for (net_id, gt, opt_health, opt_state, opt_move, opt_attack, opt_carry, opt_stance) in &entities {
+    for (net_id, gt, opt_health, opt_state, opt_move, opt_attack, opt_carry, opt_stance) in
+        &entities
+    {
         let pos = gt.translation();
         let (_, rot, _) = gt.to_scale_rotation_translation();
         let snap = EntitySnapshot {
@@ -753,13 +790,16 @@ pub fn host_broadcast_building_sync(
     time: Res<Time>,
     mut timer: ResMut<BuildingSyncTimer>,
     mut prev_buildings: ResMut<PreviousBuildingSnapshots>,
-    buildings: Query<(
-        &NetworkId,
-        Option<&BuildingLevel>,
-        Option<&ConstructionProgress>,
-        Option<&TrainingQueue>,
-        Option<&ProductionState>,
-    ), With<crate::blueprints::EntityKind>>,
+    buildings: Query<
+        (
+            &NetworkId,
+            Option<&BuildingLevel>,
+            Option<&ConstructionProgress>,
+            Option<&TrainingQueue>,
+            Option<&ProductionState>,
+        ),
+        With<crate::blueprints::EntityKind>,
+    >,
 ) {
     timer.0.tick(time.delta());
     if !timer.0.just_finished() {
@@ -794,9 +834,7 @@ pub fn host_broadcast_building_sync(
                     Some(tq.queue.iter().map(|k| format!("{:?}", k)).collect())
                 }
             }),
-            training_progress: opt_training.and_then(|tq| {
-                tq.timer.as_ref().map(|t| t.fraction())
-            }),
+            training_progress: opt_training.and_then(|tq| tq.timer.as_ref().map(|t| t.fraction())),
             active_recipe: opt_production.and_then(|ps| ps.active_recipe.map(|r| r as u8)),
             production_progress: opt_production.map(|ps| ps.progress_timer.fraction()),
         };
@@ -948,14 +986,12 @@ pub fn host_broadcast_entity_spawns(
     host: Res<HostNetState>,
     sync_timer: Res<StateSyncTimer>,
     mut synced: ResMut<SyncedEntitySet>,
-    entities: Query<
-        (
-            &NetworkId,
-            &crate::blueprints::EntityKind,
-            &crate::components::Faction,
-            &GlobalTransform,
-        ),
-    >,
+    entities: Query<(
+        &NetworkId,
+        &crate::blueprints::EntityKind,
+        &crate::components::Faction,
+        &GlobalTransform,
+    )>,
 ) {
     // Piggyback on the same timer as state sync
     if !sync_timer.0.just_finished() {
@@ -1065,6 +1101,23 @@ impl Default for NeutralWorldSyncTimer {
 #[derive(Resource, Default)]
 pub struct PreviousNeutralSnapshots {
     pub amounts: HashMap<u32, u32>,
+    pub baseline_counter: u32,
+}
+
+fn map_size_to_net(map_size: MapSize) -> u8 {
+    match map_size {
+        MapSize::Small => 0,
+        MapSize::Medium => 1,
+        MapSize::Large => 2,
+    }
+}
+
+fn resource_density_to_net(density: ResourceDensity) -> u8 {
+    match density {
+        ResourceDensity::Sparse => 0,
+        ResourceDensity::Normal => 1,
+        ResourceDensity::Dense => 2,
+    }
 }
 
 /// Broadcasts resource node amount changes to clients at ~2Hz.
@@ -1075,6 +1128,9 @@ pub fn host_broadcast_neutral_world_sync(
     time: Res<Time>,
     mut timer: ResMut<NeutralWorldSyncTimer>,
     mut prev_neutral: ResMut<PreviousNeutralSnapshots>,
+    config: Res<GameSetupConfig>,
+    map_seed: Option<Res<MapSeed>>,
+    cycle: Res<DayCycle>,
     resource_nodes: Query<(
         &NetworkId,
         &crate::components::ResourceNode,
@@ -1088,6 +1144,49 @@ pub fn host_broadcast_neutral_world_sync(
 
     if socket.connected_peers().count() == 0 {
         return;
+    }
+
+    prev_neutral.baseline_counter += 1;
+    let should_send_baseline =
+        prev_neutral.baseline_counter == 1 || prev_neutral.baseline_counter % 10 == 0;
+
+    if should_send_baseline {
+        let neutral_objects = resource_nodes
+            .iter()
+            .map(|(net_id, node, gt)| {
+                let pos = gt.translation();
+                NeutralWorldSnapshot {
+                    net_id: net_id.0,
+                    kind: NeutralKind::ResourceNode,
+                    pos: [pos.x, pos.y, pos.z],
+                    rot_y: 0.0,
+                    scale: 1.0,
+                    resource_type: Some(node.resource_type.index() as u8),
+                    amount_remaining: Some(node.amount_remaining),
+                    stage: None,
+                    health: None,
+                    variant: None,
+                }
+            })
+            .collect();
+        let seq = {
+            let mut s = host.seq.lock().unwrap();
+            *s += 1;
+            *s
+        };
+        let baseline = WorldBaseline {
+            terrain: TerrainDescriptor {
+                world_gen_version: 1,
+                map_seed: map_seed.as_ref().map_or(config.map_seed, |seed| seed.0),
+                map_size: map_size_to_net(config.map_size),
+                resource_density: resource_density_to_net(config.resource_density),
+                day_cycle_secs: cycle.cycle_duration,
+            },
+            terrain_hash: 0,
+            biome_hash: 0,
+            neutral_objects,
+        };
+        broadcast_msg(&mut socket, &ServerMessage::WorldBaseline { seq, baseline });
     }
 
     let mut changed: Vec<NeutralWorldSnapshot> = Vec::new();
@@ -1143,8 +1242,7 @@ mod tests {
 
     use crate::blueprints::EntityKind;
     use crate::components::{
-        AiControlledFactions, Faction, Health, NextTaskId, TaskQueue, Unit, UnitStance,
-        UnitState,
+        AiControlledFactions, Faction, Health, NextTaskId, TaskQueue, Unit, UnitStance, UnitState,
     };
 
     #[test]
