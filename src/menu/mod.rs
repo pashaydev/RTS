@@ -49,7 +49,7 @@ pub(crate) enum MenuAction {
 }
 
 #[derive(Component)]
-pub(crate) struct AiCardContainer(pub(crate) usize);
+pub(crate) struct SlotCardContainer(pub(crate) usize);
 
 #[derive(Component)]
 pub(crate) struct LobbyStatusText;
@@ -139,7 +139,6 @@ impl Plugin for MenuPlugin {
                 Update,
                 (
                     systems::update_selector_visuals,
-                    systems::update_ai_card_visibility,
                     systems::page_transition_system,
                 )
                     .run_if(in_state(AppState::MainMenu)),
@@ -156,8 +155,6 @@ impl Plugin for MenuPlugin {
             .add_systems(
                 Update,
                 (
-                    systems::ally_toggle_system,
-                    systems::update_ally_toggle_visuals,
                     menu_helpers::menu_scroll_system,
                     systems::randomize_seed_system,
                 )

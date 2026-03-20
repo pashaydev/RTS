@@ -99,23 +99,10 @@ pub(crate) fn spawn_new_game_page(
     let name_row = spawn_name_input_row(commands, &config.player_name);
     commands.entity(container).add_child(name_row);
 
-    let color_row = spawn_color_picker(commands, config.player_color_index, SelectorField::PlayerColor);
-    commands.entity(container).add_child(color_row);
+    spawn_animated_section_divider(commands, container, "FACTIONS", fonts);
 
-    spawn_animated_section_divider(commands, container, "OPPONENTS", fonts);
-
-    spawn_selector_row(
-        commands,
-        container,
-        "Count:",
-        &["1", "2", "3"],
-        (config.num_ai_opponents - 1) as usize,
-        SelectorField::AiCount,
-    );
-
-    for i in 0..3 {
-        let visible = i < config.num_ai_opponents as usize;
-        spawn_ai_card(commands, container, i, config, visible);
+    for i in 0..4 {
+        spawn_slot_card(commands, container, i, config, false);
     }
 
     let team_idx = match config.team_mode {
@@ -385,73 +372,71 @@ pub(crate) fn spawn_options_page(
     commands.entity(container).add_child(apply_btn);
 }
 
-// ── AI Player Card ──
+// ── Unified Slot Card ──
 
-pub(crate) fn spawn_ai_card(
+/// Spawn a faction slot card (used in both NewGame and HostLobby).
+/// `is_multiplayer` controls whether "Open" is offered as a slot type.
+pub(crate) fn spawn_slot_card(
     commands: &mut Commands,
     container: Entity,
-    ai_index: usize,
+    slot_index: usize,
     config: &GameSetupConfig,
-    visible: bool,
+    is_multiplayer: bool,
 ) {
-    let display = if visible {
-        Display::Flex
+    let slot = config.slots[slot_index];
+    let faction_color = Faction::PLAYERS[slot_index].color();
+    let faction_label = format!("Player {}", slot_index + 1);
+
+    // Determine slot type index for the selector
+    let (type_options, type_idx) = (
+        vec!["Human", "AI", "None"],
+        match slot {
+            SlotOccupant::Human | SlotOccupant::Open => 0,
+            SlotOccupant::Ai(_) => 1,
+            SlotOccupant::Closed => 2,
+        },
+    );
+
+    let is_local = slot_index == config.local_player_slot && matches!(slot, SlotOccupant::Human);
+
+    let border_col = if is_local {
+        theme::ACCENT
     } else {
-        Display::None
-    };
-    let faction_idx = config.ai_faction_indices[ai_index];
-    let is_ally = config.player_teams[faction_idx] == config.player_teams[0];
-    let diff_idx = match config.ai_difficulties[ai_index] {
-        AiDifficulty::Easy => 0,
-        AiDifficulty::Medium => 1,
-        AiDifficulty::Hard => 2,
+        theme::SEPARATOR
     };
 
     let card = commands
         .spawn((
-            AiCardContainer(ai_index),
+            SlotCardContainer(slot_index),
             Node {
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Column,
                 padding: UiRect::all(Val::Px(10.0)),
                 margin: UiRect::vertical(Val::Px(4.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                display,
                 row_gap: Val::Px(8.0),
                 ..default()
             },
             BackgroundColor(theme::BG_SURFACE),
-            BorderColor::all(theme::SEPARATOR),
+            BorderColor::all(border_col),
         ))
         .with_children(|card| {
+            // Row 1: faction dot + label + type selector + team toggle
             card.spawn(Node {
                 width: Val::Percent(100.0),
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
+                column_gap: Val::Px(6.0),
                 ..default()
             })
             .with_children(|row| {
-                row.spawn((
-                    Text::new(format!("AI {}", ai_index + 1)),
-                    TextFont {
-                        font_size: theme::FONT_MEDIUM,
-                        ..default()
-                    },
-                    TextColor(theme::TEXT_PRIMARY),
-                    Node {
-                        margin: UiRect::right(Val::Px(8.0)),
-                        ..default()
-                    },
-                ));
-
-                // Faction color dot (auto-assigned)
-                let faction_color = Faction::PLAYERS[config.ai_faction_indices[ai_index]].color();
+                // Faction color dot
                 row.spawn((
                     Node {
-                        width: Val::Px(16.0),
-                        height: Val::Px(16.0),
-                        border_radius: BorderRadius::all(Val::Px(8.0)),
-                        margin: UiRect::right(Val::Px(12.0)),
+                        width: Val::Px(20.0),
+                        height: Val::Px(20.0),
+                        border_radius: BorderRadius::all(Val::Px(10.0)),
+                        margin: UiRect::right(Val::Px(6.0)),
                         ..default()
                     },
                     BackgroundColor(faction_color),
@@ -467,64 +452,24 @@ pub(crate) fn spawn_ai_card(
                     ),
                 ));
 
-                row.spawn(Node {
-                    flex_grow: 1.0,
-                    ..default()
-                });
-
-                let (toggle_bg, toggle_text) = if is_ally {
-                    (theme::SUCCESS, "ALLY")
-                } else {
-                    (theme::DESTRUCTIVE, "ENEMY")
-                };
+                // Faction label
                 row.spawn((
-                    AllyToggleButton { ai_index },
-                    Button,
-                    ButtonAnimState::new(toggle_bg.to_srgba().to_f32_array()),
-                    ButtonStyle::Filled,
-                    Node {
-                        padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
-                        ..default()
-                    },
-                    BackgroundColor(toggle_bg),
-                ))
-                .with_children(|btn| {
-                    btn.spawn((
-                        Text::new(toggle_text),
-                        TextFont {
-                            font_size: theme::FONT_BODY,
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                        Pickable::IGNORE,
-                    ));
-                });
-            });
-
-            card.spawn(Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                ..default()
-            })
-            .with_children(|row| {
-                row.spawn((
-                    Text::new("Difficulty:"),
+                    Text::new(faction_label),
                     TextFont {
                         font_size: theme::FONT_MEDIUM,
                         ..default()
                     },
-                    TextColor(theme::TEXT_SECONDARY),
+                    TextColor(faction_color),
                     Node {
-                        width: Val::Px(80.0),
-                        margin: UiRect::right(Val::Px(10.0)),
+                        margin: UiRect::right(Val::Px(8.0)),
                         ..default()
                     },
                 ));
 
-                let diff_names = ["Easy", "Medium", "Hard"];
-                for (i, &opt) in diff_names.iter().enumerate() {
-                    let is_selected = i == diff_idx;
+                // Type selector buttons
+                let type_strs: Vec<&str> = type_options.iter().map(|s| *s).collect();
+                for (i, &opt) in type_strs.iter().enumerate() {
+                    let is_selected = i == type_idx;
                     let bg = if is_selected {
                         theme::ACCENT
                     } else {
@@ -538,15 +483,15 @@ pub(crate) fn spawn_ai_card(
 
                     let mut btn = row.spawn((
                         MenuSelector {
-                            field: SelectorField::AiDifficulty(ai_index),
+                            field: SelectorField::SlotType(slot_index),
                             index: i,
                         },
                         Button,
                         ButtonAnimState::new(bg.to_srgba().to_f32_array()),
                         ButtonStyle::Filled,
                         Node {
-                            padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
-                            margin: UiRect::horizontal(Val::Px(2.0)),
+                            padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
+                            margin: UiRect::horizontal(Val::Px(1.0)),
                             border: UiRect::all(Val::Px(1.0)),
                             ..default()
                         },
@@ -564,7 +509,7 @@ pub(crate) fn spawn_ai_card(
                         btn_parent.spawn((
                             Text::new(opt),
                             TextFont {
-                                font_size: theme::FONT_MEDIUM,
+                                font_size: theme::FONT_SMALL,
                                 ..default()
                             },
                             TextColor(text_color),
@@ -572,7 +517,157 @@ pub(crate) fn spawn_ai_card(
                         ));
                     });
                 }
+
+                row.spawn(Node {
+                    flex_grow: 1.0,
+                    ..default()
+                });
+
+                // Team selector (not shown for closed/none slots)
+                if !matches!(slot, SlotOccupant::Closed | SlotOccupant::Open) {
+                    let current_team = config.player_teams[slot_index] as usize;
+                    let team_colors = [
+                        Color::srgb(0.9, 0.75, 0.2),  // T1: Gold
+                        Color::srgb(0.2, 0.75, 0.85),  // T2: Cyan
+                        Color::srgb(0.85, 0.3, 0.65),  // T3: Pink
+                        Color::srgb(0.95, 0.5, 0.15),  // T4: Orange
+                    ];
+                    for ti in 0..4 {
+                        let is_sel = ti == current_team;
+                        let color = team_colors[ti];
+                        let size = if is_sel { 24.0 } else { 20.0 };
+                        let border_color = if is_sel {
+                            Color::WHITE
+                        } else {
+                            Color::NONE
+                        };
+                        let mut dot = row.spawn((
+                            MenuSelector {
+                                field: SelectorField::SlotTeam(slot_index),
+                                index: ti,
+                            },
+                            Button,
+                            Node {
+                                width: Val::Px(size),
+                                height: Val::Px(size),
+                                margin: UiRect::horizontal(Val::Px(2.0)),
+                                border: UiRect::all(Val::Px(if is_sel { 2.0 } else { 1.0 })),
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(if is_sel { color } else { Color::srgba(0.15, 0.15, 0.15, 0.8) }),
+                            BorderColor::all(border_color),
+                        ));
+                        if is_sel {
+                            let c = color.to_srgba();
+                            dot.insert((
+                                BoxShadow::new(
+                                    Color::srgba(c.red, c.green, c.blue, 0.5),
+                                    Val::Px(0.0),
+                                    Val::Px(0.0),
+                                    Val::Px(0.0),
+                                    Val::Px(3.0),
+                                ),
+                                SelectedOption,
+                            ));
+                        }
+                        dot.with_children(|btn| {
+                            btn.spawn((
+                                Text::new(format!("{}", ti + 1)),
+                                TextFont {
+                                    font_size: 10.0,
+                                    ..default()
+                                },
+                                TextColor(if is_sel { Color::WHITE } else { color }),
+                                Pickable::IGNORE,
+                            ));
+                        });
+                    }
+                }
             });
+
+            // Row 2: Difficulty selector (only for AI slots)
+            if let SlotOccupant::Ai(difficulty) = slot {
+                let diff_idx = match difficulty {
+                    AiDifficulty::Easy => 0,
+                    AiDifficulty::Medium => 1,
+                    AiDifficulty::Hard => 2,
+                };
+                card.spawn(Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|row| {
+                    row.spawn((
+                        Text::new("Difficulty:"),
+                        TextFont {
+                            font_size: theme::FONT_MEDIUM,
+                            ..default()
+                        },
+                        TextColor(theme::TEXT_SECONDARY),
+                        Node {
+                            width: Val::Px(80.0),
+                            margin: UiRect::right(Val::Px(10.0)),
+                            ..default()
+                        },
+                    ));
+
+                    let diff_names = ["Easy", "Medium", "Hard"];
+                    for (i, &opt) in diff_names.iter().enumerate() {
+                        let is_selected = i == diff_idx;
+                        let bg = if is_selected {
+                            theme::ACCENT
+                        } else {
+                            theme::BTN_PRIMARY
+                        };
+                        let text_color = if is_selected {
+                            Color::WHITE
+                        } else {
+                            theme::TEXT_SECONDARY
+                        };
+
+                        let mut btn = row.spawn((
+                            MenuSelector {
+                                field: SelectorField::SlotDifficulty(slot_index),
+                                index: i,
+                            },
+                            Button,
+                            ButtonAnimState::new(bg.to_srgba().to_f32_array()),
+                            ButtonStyle::Filled,
+                            Node {
+                                padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
+                                margin: UiRect::horizontal(Val::Px(2.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BackgroundColor(bg),
+                            BorderColor::all(if is_selected {
+                                Color::srgba(0.29, 0.62, 1.0, 0.3)
+                            } else {
+                                Color::NONE
+                            }),
+                        ));
+                        if is_selected {
+                            btn.insert(SelectedOption);
+                        }
+                        btn.with_children(|btn_parent| {
+                            btn_parent.spawn((
+                                Text::new(opt),
+                                TextFont {
+                                    font_size: theme::FONT_MEDIUM,
+                                    ..default()
+                                },
+                                TextColor(text_color),
+                                Pickable::IGNORE,
+                            ));
+                        });
+                    }
+                });
+            }
         })
         .id();
     commands.entity(container).add_child(card);

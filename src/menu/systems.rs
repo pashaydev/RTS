@@ -91,7 +91,7 @@ fn dispatch_page(
             multiplayer::spawn_host_lobby_page(commands, container, config, fonts)
         }
         MenuPage::JoinLobby => {
-            multiplayer::spawn_join_lobby_page(commands, container, fonts)
+            multiplayer::spawn_join_lobby_page(commands, container, config, fonts)
         }
     }
 }
@@ -240,6 +240,8 @@ pub(crate) fn handle_selector_clicks(
     mut graphics: ResMut<GraphicsSettings>,
     mut lobby: Option<ResMut<LobbyState>>,
     host_state: Option<Res<HostNetState>>,
+    mut commands: Commands,
+    roots: Query<Entity, With<MenuRoot>>,
 ) {
     for (interaction, selector) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -247,65 +249,70 @@ pub(crate) fn handle_selector_clicks(
         }
 
         match selector.field {
-            SelectorField::PlayerColor => {
-                config.player_color_index = selector.index;
-                config.recalculate_ai_factions();
-            }
-            SelectorField::HostPlayerColor => {
-                let new_faction = Faction::PLAYERS[selector.index];
-                config.player_color_index = selector.index;
-                config.recalculate_ai_factions();
-                // Update lobby host player's faction + color_index,
-                // swapping any client that already has this faction
-                if let Some(ref mut lobby) = lobby {
-                    // Find current host faction so we can swap it to the conflicting client
-                    let old_host_faction = lobby
-                        .players
-                        .iter()
-                        .find(|p| p.is_host)
-                        .map(|p| (p.faction, p.color_index));
+            SelectorField::SlotType(slot_idx) => {
+                if slot_idx < 4 {
+                    let new_occupant = match selector.index {
+                        0 => SlotOccupant::Human,
+                        1 => SlotOccupant::Ai(AiDifficulty::Medium),
+                        _ => SlotOccupant::Closed,
+                    };
 
-                    // If a non-host client already has this faction, swap them
-                    if let Some((old_faction, old_color)) = old_host_faction {
-                        if let Some(client_player) = lobby
-                            .players
-                            .iter_mut()
-                            .find(|p| !p.is_host && p.faction == new_faction)
-                        {
-                            client_player.faction = old_faction;
-                            client_player.color_index = old_color;
+                    // If setting to Human in single-player, move the previous human to AI
+                    if matches!(new_occupant, SlotOccupant::Human) && !lobby.is_some() {
+                        let old_local = config.local_player_slot;
+                        if old_local != slot_idx {
+                            config.slots[old_local] = SlotOccupant::Ai(AiDifficulty::Medium);
+                        }
+                        config.local_player_slot = slot_idx;
+                    }
+                    // Preserve existing difficulty if switching to AI and slot was already AI
+                    let occupant = if matches!(new_occupant, SlotOccupant::Ai(_)) {
+                        if let SlotOccupant::Ai(d) = config.slots[slot_idx] {
+                            SlotOccupant::Ai(d)
+                        } else {
+                            new_occupant
+                        }
+                    } else {
+                        new_occupant
+                    };
+                    config.slots[slot_idx] = occupant;
+
+                    // For multiplayer: update lobby and broadcast
+                    if let Some(ref mut lobby) = lobby {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some(ref host) = host_state {
+                            multiplayer::broadcast_lobby_update(lobby, host, &config);
                         }
                     }
 
-                    if let Some(host_player) = lobby.players.iter_mut().find(|p| p.is_host) {
-                        host_player.faction = new_faction;
-                        host_player.color_index = selector.index as u8;
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if let Some(ref host) = host_state {
-                        multiplayer::broadcast_lobby_update(lobby, host);
+                    // Rebuild the menu page to reflect structural changes (difficulty row)
+                    rebuild_menu(&mut commands, &roots);
+                }
+            }
+            SelectorField::SlotDifficulty(slot_idx) => {
+                if slot_idx < 4 {
+                    if matches!(config.slots[slot_idx], SlotOccupant::Ai(_)) {
+                        config.slots[slot_idx] = SlotOccupant::Ai(match selector.index {
+                            0 => AiDifficulty::Easy,
+                            1 => AiDifficulty::Medium,
+                            _ => AiDifficulty::Hard,
+                        });
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
+                            multiplayer::broadcast_lobby_update(lobby, host, &config);
+                        }
                     }
                 }
             }
-            SelectorField::AiCount => {
-                config.num_ai_opponents = (selector.index + 1) as u8;
-            }
-            SelectorField::HostAiCount => {
-                // Cap AI count so total factions (humans + AI) don't exceed 4
-                let human_count = lobby
-                    .as_ref()
-                    .map(|l| l.players.iter().filter(|p| p.connected).count() as u8)
-                    .unwrap_or(1);
-                let max_ai = 4u8.saturating_sub(human_count).min(3);
-                config.num_ai_opponents = (selector.index as u8).min(max_ai);
-            }
-            SelectorField::AiDifficulty(ai_idx) => {
-                if ai_idx < 3 {
-                    config.ai_difficulties[ai_idx] = match selector.index {
-                        0 => AiDifficulty::Easy,
-                        1 => AiDifficulty::Medium,
-                        _ => AiDifficulty::Hard,
-                    };
+            SelectorField::SlotTeam(slot_idx) => {
+                if slot_idx < 4 && selector.index < 4 {
+                    config.player_teams[slot_idx] = selector.index as u8;
+                    config.team_mode = TeamMode::Custom;
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
+                        multiplayer::broadcast_lobby_update(lobby, host, &config);
+                    }
+                    rebuild_menu(&mut commands, &roots);
                 }
             }
             SelectorField::TeamMode => {
@@ -320,6 +327,12 @@ pub(crate) fn handle_selector_clicks(
                     }
                     _ => TeamMode::Custom,
                 };
+                #[cfg(not(target_arch = "wasm32"))]
+                if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
+                    multiplayer::broadcast_lobby_update(lobby, host, &config);
+                }
+                // Rebuild to update team buttons
+                rebuild_menu(&mut commands, &roots);
             }
             SelectorField::MapSize => {
                 config.map_size = match selector.index {
@@ -392,26 +405,37 @@ pub(crate) fn update_selector_visuals(
     mut text_colors: Query<&mut TextColor>,
     mut commands: Commands,
 ) {
-    // Compute max AI for host lobby (humans + AI <= 4)
-    let max_ai = lobby
-        .as_ref()
-        .map(|l| {
-            let humans = l.players.iter().filter(|p| p.connected).count() as u8;
-            4u8.saturating_sub(humans).min(3)
-        })
-        .unwrap_or(3);
     for (selector, mut bg, children, entity, was_selected, anim_state) in &mut selectors {
+        let is_multiplayer = lobby.is_some();
         let should_be_selected = match selector.field {
-            SelectorField::PlayerColor => selector.index == config.player_color_index,
-            SelectorField::AiCount => selector.index == (config.num_ai_opponents - 1) as usize,
-            SelectorField::HostAiCount => selector.index == config.num_ai_opponents as usize,
-            SelectorField::AiDifficulty(ai_idx) => {
-                let diff_idx = match config.ai_difficulties[ai_idx] {
-                    AiDifficulty::Easy => 0,
-                    AiDifficulty::Medium => 1,
-                    AiDifficulty::Hard => 2,
-                };
-                selector.index == diff_idx
+            SelectorField::SlotType(slot_idx) => {
+                if slot_idx < 4 {
+                    let slot = config.slots[slot_idx];
+                    let expected_idx = match slot {
+                        SlotOccupant::Human | SlotOccupant::Open => 0,
+                        SlotOccupant::Ai(_) => 1,
+                        SlotOccupant::Closed => 2,
+                    };
+                    selector.index == expected_idx
+                } else {
+                    false
+                }
+            }
+            SelectorField::SlotDifficulty(slot_idx) => {
+                if slot_idx < 4 {
+                    if let SlotOccupant::Ai(d) = config.slots[slot_idx] {
+                        let diff_idx = match d {
+                            AiDifficulty::Easy => 0,
+                            AiDifficulty::Medium => 1,
+                            AiDifficulty::Hard => 2,
+                        };
+                        selector.index == diff_idx
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
             }
             SelectorField::TeamMode => {
                 selector.index
@@ -461,57 +485,47 @@ pub(crate) fn update_selector_visuals(
             SelectorField::UiScale => UI_SCALE_OPTIONS
                 .get(selector.index)
                 .map_or(false, |&(v, _)| (v - graphics.ui_scale).abs() < 0.01),
-            SelectorField::HostPlayerColor => selector.index == config.player_color_index,
+            SelectorField::SlotTeam(slot_idx) => {
+                slot_idx < 4 && selector.index == config.player_teams[slot_idx] as usize
+            }
             SelectorField::MapSeed => false,
         };
 
-        // Color picker dots
-        if matches!(selector.field, SelectorField::PlayerColor | SelectorField::HostPlayerColor) {
-            // Check if this color is taken by a non-host client in the lobby
-            let is_taken_by_client = if matches!(selector.field, SelectorField::HostPlayerColor) {
-                lobby.as_ref().map_or(false, |l| {
-                    let faction = Faction::PLAYERS[selector.index];
-                    l.players
-                        .iter()
-                        .any(|p| !p.is_host && p.connected && p.faction == faction)
-                })
+        // Team buttons use custom colors per team
+        if let SelectorField::SlotTeam(_) = selector.field {
+            let team_colors = [
+                Color::srgb(0.9, 0.75, 0.2),
+                Color::srgb(0.2, 0.75, 0.85),
+                Color::srgb(0.85, 0.3, 0.65),
+                Color::srgb(0.95, 0.5, 0.15),
+            ];
+            let color = team_colors.get(selector.index).copied().unwrap_or(team_colors[0]);
+            let new_bg = if should_be_selected {
+                color
             } else {
-                false
+                Color::srgba(0.15, 0.15, 0.15, 0.8)
             };
-
-            let border = if should_be_selected {
+            *bg = BackgroundColor(new_bg);
+            commands.entity(entity).insert(BorderColor::all(if should_be_selected {
                 Color::WHITE
-            } else if is_taken_by_client {
-                // Dim gold border to indicate this color is used by a client
-                Color::srgba(0.9, 0.75, 0.3, 0.7)
             } else {
                 Color::NONE
-            };
-            commands.entity(entity).insert(BorderColor::all(border));
+            }));
             if should_be_selected {
-                let color = match selector.index {
-                    0 => Faction::Player1.color(),
-                    1 => Faction::Player2.color(),
-                    2 => Faction::Player3.color(),
-                    _ => Faction::Player4.color(),
-                };
-                let srgba = color.to_srgba();
-                commands.entity(entity).insert((
-                    BoxShadow::new(
-                        Color::srgba(srgba.red, srgba.green, srgba.blue, 0.5),
-                        Val::Px(0.0),
-                        Val::Px(0.0),
-                        Val::Px(0.0),
-                        Val::Px(8.0),
-                    ),
-                    UiGlowPulse {
-                        color,
-                        intensity: 0.8,
-                    },
+                let c = color.to_srgba();
+                commands.entity(entity).insert(BoxShadow::new(
+                    Color::srgba(c.red, c.green, c.blue, 0.5),
+                    Val::Px(0.0), Val::Px(0.0), Val::Px(0.0), Val::Px(3.0),
                 ));
             } else {
                 commands.entity(entity).remove::<BoxShadow>();
-                commands.entity(entity).remove::<UiGlowPulse>();
+            }
+            if let Some(children) = children {
+                for child in children.iter() {
+                    if let Ok(mut tc) = text_colors.get_mut(child) {
+                        tc.0 = if should_be_selected { Color::WHITE } else { color };
+                    }
+                }
             }
             if should_be_selected && was_selected.is_none() {
                 commands.entity(entity).insert(SelectedOption);
@@ -521,20 +535,12 @@ pub(crate) fn update_selector_visuals(
             continue;
         }
 
-        // Dim HostAiCount options that exceed the max allowed AI
-        let is_disabled = matches!(selector.field, SelectorField::HostAiCount)
-            && selector.index as u8 > max_ai;
-
-        let new_bg = if is_disabled {
-            Color::srgba(0.1, 0.1, 0.1, 0.5)
-        } else if should_be_selected {
+        let new_bg = if should_be_selected {
             theme::ACCENT
         } else {
             theme::BTN_PRIMARY
         };
-        let text_col = if is_disabled {
-            theme::TEXT_DISABLED
-        } else if should_be_selected {
+        let text_col = if should_be_selected {
             Color::WHITE
         } else {
             theme::TEXT_SECONDARY
@@ -570,21 +576,7 @@ pub(crate) fn update_selector_visuals(
     }
 }
 
-// ── AI Card Visibility ──
-
-pub(crate) fn update_ai_card_visibility(
-    config: Res<GameSetupConfig>,
-    mut cards: Query<(&AiCardContainer, &mut Node)>,
-) {
-    for (card, mut node) in &mut cards {
-        let visible = card.0 < config.num_ai_opponents as usize;
-        node.display = if visible {
-            Display::Flex
-        } else {
-            Display::None
-        };
-    }
-}
+// Slot card rebuild is handled inline in handle_selector_clicks via rebuild_menu.
 
 // ── Randomize Seed ──
 
@@ -642,63 +634,3 @@ pub(crate) fn random_name_system(
     }
 }
 
-// ── Ally Toggle ──
-
-pub(crate) fn ally_toggle_system(
-    interactions: Query<(&Interaction, &AllyToggleButton), Changed<Interaction>>,
-    mut config: ResMut<GameSetupConfig>,
-) {
-    for (interaction, toggle) in &interactions {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        let faction_idx = toggle.ai_index + 1;
-        let player_team = config.player_teams[0];
-
-        if config.player_teams[faction_idx] == player_team {
-            let mut next_team = 0u8;
-            loop {
-                if !config.player_teams.contains(&next_team) || next_team > 10 {
-                    break;
-                }
-                next_team += 1;
-            }
-            config.player_teams[faction_idx] = next_team;
-        } else {
-            config.player_teams[faction_idx] = player_team;
-        }
-
-        config.team_mode = TeamMode::Custom;
-    }
-}
-
-pub(crate) fn update_ally_toggle_visuals(
-    config: Res<GameSetupConfig>,
-    mut toggles: Query<(
-        &AllyToggleButton,
-        &mut BackgroundColor,
-        &mut ButtonAnimState,
-        &Children,
-    )>,
-    mut text_colors: Query<(&mut TextColor, &mut Text), Without<AllyToggleButton>>,
-) {
-    for (toggle, mut bg, mut anim, children) in &mut toggles {
-        let faction_idx = toggle.ai_index + 1;
-        let is_ally = config.player_teams[faction_idx] == config.player_teams[0];
-        let (color, label) = if is_ally {
-            (theme::SUCCESS, "ALLY")
-        } else {
-            (theme::DESTRUCTIVE, "ENEMY")
-        };
-
-        *bg = BackgroundColor(color);
-        anim.bg_current = color.to_srgba().to_f32_array();
-
-        for child in children.iter() {
-            if let Ok((mut tc, mut text)) = text_colors.get_mut(child) {
-                tc.0 = Color::WHITE;
-                **text = label.to_string();
-            }
-        }
-    }
-}

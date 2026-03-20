@@ -67,9 +67,13 @@ impl Plugin for UiPlugin {
             .add_systems(
                 Update,
                 (
+                    ApplyDeferred,
                     adopt_back_overlay_items,
                     adopt_front_overlay_items,
                 )
+                    .chain()
+                    .in_set(OverlayLifecycleSet::Adopt)
+                    .after(OverlayLifecycleSet::Manage)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(

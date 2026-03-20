@@ -21,6 +21,7 @@ impl Plugin for AttentionPlugin {
                 update_worker_overlays,
                 position_worker_overlays,
             )
+                .in_set(OverlayLifecycleSet::Manage)
                 .run_if(in_state(AppState::InGame)),
         );
     }

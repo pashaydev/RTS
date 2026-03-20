@@ -45,28 +45,15 @@ pub fn apply_game_config(
     mut teams: ResMut<TeamConfig>,
     mut ai_controlled: ResMut<AiControlledFactions>,
 ) {
-    let count = (config.human_count as usize + config.num_ai_opponents as usize).min(4);
+    let active = config.active_factions();
+    let factions: Vec<Faction> = active.iter().map(|&i| Faction::PLAYERS[i]).collect();
 
-    // Build the faction list: humans first, then AIs
-    let mut factions = Vec::with_capacity(count);
-    for &idx in &config.human_faction_indices {
-        if factions.len() < count {
-            factions.push(Faction::PLAYERS[idx]);
-        }
-    }
-    for i in 0..config.num_ai_opponents as usize {
-        if factions.len() < count {
-            factions.push(Faction::PLAYERS[config.ai_faction_indices[i]]);
-        }
-    }
-
-    // Setup AI controlled factions (only non-human factions)
-    let human_set: HashSet<usize> = config.human_faction_indices.iter().copied().collect();
+    // Setup AI controlled factions
+    let human_set: HashSet<usize> = config.human_faction_indices().into_iter().collect();
     let mut ai_facs = HashSet::new();
-    for &f in &factions {
-        let idx = Faction::PLAYERS.iter().position(|p| *p == f).unwrap_or(0);
+    for &idx in &active {
         if !human_set.contains(&idx) {
-            ai_facs.insert(f);
+            ai_facs.insert(Faction::PLAYERS[idx]);
         }
     }
     ai_controlled.factions = ai_facs;
@@ -80,22 +67,21 @@ pub fn apply_game_config(
             }
         }
         TeamMode::Teams => {
-            // 2v2: first half team 0, second half team 1
+            let count = factions.len();
             for (i, &faction) in factions.iter().enumerate() {
                 team_map.insert(faction, if i < count / 2 { 0 } else { 1 });
             }
         }
         TeamMode::Custom => {
-            // Use player_teams array directly
-            for (i, &faction) in factions.iter().enumerate() {
-                team_map.insert(faction, config.player_teams[i]);
+            for &idx in &active {
+                team_map.insert(Faction::PLAYERS[idx], config.player_teams[idx]);
             }
         }
     }
     teams.teams = team_map.clone();
     info!(
-        "apply_game_config: mode={:?}, count={}, teams={:?}",
-        config.team_mode, count, team_map
+        "apply_game_config: mode={:?}, factions={:?}, teams={:?}",
+        config.team_mode, active, team_map
     );
 }
 

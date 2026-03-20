@@ -40,6 +40,7 @@ impl Plugin for ResourcesPlugin {
                     deplete_resource_nodes,
                 )
                     .chain()
+                    .in_set(OverlayLifecycleSet::Manage)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
@@ -67,6 +68,7 @@ impl Plugin for ResourcesPlugin {
                     grow_resource_system,
                     update_resource_popups,
                 )
+                    .in_set(OverlayLifecycleSet::Manage)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(

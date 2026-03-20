@@ -47,8 +47,8 @@ ENV RUSTUP_TOOLCHAIN=nightly
 ENV RUSTFLAGS="-Ctarget-feature=-reference-types"
 RUN trunk build --release --config .trunk.toml
 
-# Build the native session router binary.
-RUN cargo build --release --bin session_router
+# Build the native session router binary without client-only Bevy deps.
+RUN cargo build --release --bin session_router --no-default-features
 
 # Stage 2: Serve the built web app and session router API from one process.
 FROM debian:bookworm-slim

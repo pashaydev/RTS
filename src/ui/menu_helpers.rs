@@ -18,9 +18,12 @@ pub struct MenuSelector {
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum SelectorField {
-    AiCount,
-    HostAiCount,
-    AiDifficulty(usize),
+    /// Slot type selector: Human / AI / Closed (slot_index 0-3).
+    SlotType(usize),
+    /// AI difficulty for a slot (slot_index 0-3).
+    SlotDifficulty(usize),
+    /// Team assignment for a slot (slot_index 0-3). Index = team number.
+    SlotTeam(usize),
     TeamMode,
     MapSize,
     ResourceDensity,
@@ -32,8 +35,6 @@ pub enum SelectorField {
     Shadows,
     EntityLights,
     UiScale,
-    PlayerColor,
-    HostPlayerColor,
 }
 
 #[derive(Component)]

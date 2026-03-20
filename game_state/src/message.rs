@@ -3,6 +3,13 @@
 use crate::types::*;
 use serde::{Deserialize, Serialize};
 
+fn default_lobby_slots() -> [u8; 4] {
+    [0, 2, 2, 2] // Human, AiMedium, AiMedium, AiMedium
+}
+fn default_lobby_teams() -> [u8; 4] {
+    [0, 1, 2, 3] // FFA
+}
+
 // ── Input types ─────────────────────────────────────────────────────────────
 
 /// A single player input command.
@@ -235,11 +242,16 @@ pub enum GameEvent {
         /// JSON-encoded game config so client can set up matching world.
         config_json: String,
     },
-    /// Lobby player list update — sent when players join/leave.
+    /// Lobby player list update — sent when players join/leave or host changes config.
     #[serde(rename = "lobby_update")]
     LobbyUpdate {
-        /// List of (name, faction_index, is_host, connected).
         players: Vec<LobbyPlayerInfo>,
+        /// Slot occupants: 0=Human, 1=AiEasy, 2=AiMedium, 3=AiHard, 4=Closed, 5=Open.
+        #[serde(default = "default_lobby_slots")]
+        slots: [u8; 4],
+        /// Team assignment per slot.
+        #[serde(default = "default_lobby_teams")]
+        player_teams: [u8; 4],
     },
     /// Host acknowledged join and assigned network player/faction identity.
     #[serde(rename = "join_accepted")]

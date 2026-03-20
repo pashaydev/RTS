@@ -227,75 +227,10 @@ pub(crate) fn spawn_host_lobby_page(
         .id();
     commands.entity(container).add_child(ip_list);
 
-    spawn_animated_section_divider(commands, container, "PLAYERS", fonts);
-
-    // Host color picker
-    let host_color_row = spawn_color_picker(commands, config.player_color_index, SelectorField::HostPlayerColor);
-    commands.entity(container).add_child(host_color_row);
+    spawn_animated_section_divider(commands, container, "FACTIONS", fonts);
 
     for i in 0..4 {
-        let label = if i == 0 {
-            "Host (You)"
-        } else {
-            "Waiting..."
-        };
-        let color = if i == 0 {
-            Faction::PLAYERS[config.player_color_index].color()
-        } else {
-            theme::TEXT_SECONDARY
-        };
-        let slot = commands
-            .spawn((
-                LobbyPlayerSlot(i),
-                Node {
-                    width: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
-                    margin: UiRect::vertical(Val::Px(2.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.5)),
-            ))
-            .with_children(|parent| {
-                parent.spawn((
-                    Node {
-                        width: Val::Px(8.0),
-                        height: Val::Px(8.0),
-                        margin: UiRect::right(Val::Px(10.0)),
-                        ..default()
-                    },
-                    BackgroundColor(color),
-                ));
-                parent.spawn((
-                    Text::new(label),
-                    TextFont {
-                        font_size: theme::FONT_MEDIUM,
-                        ..default()
-                    },
-                    TextColor(color),
-                ));
-            })
-            .id();
-        commands.entity(container).add_child(slot);
-    }
-
-    // ── AI Opponents ──
-
-    spawn_animated_section_divider(commands, container, "AI OPPONENTS", fonts);
-
-    spawn_selector_row(
-        commands,
-        container,
-        "Count:",
-        &["0", "1", "2", "3"],
-        config.num_ai_opponents as usize,
-        SelectorField::HostAiCount,
-    );
-
-    for i in 0..3 {
-        let visible = i < config.num_ai_opponents as usize;
-        pages::spawn_ai_card(commands, container, i, config, visible);
+        pages::spawn_slot_card(commands, container, i, config, true);
     }
 
     // ── World Settings ──
@@ -421,6 +356,7 @@ pub(crate) fn spawn_host_lobby_page(
 pub(crate) fn spawn_join_lobby_page(
     commands: &mut Commands,
     container: Entity,
+    config: &GameSetupConfig,
     fonts: &UiFonts,
 ) {
     spawn_page_header(
@@ -534,43 +470,10 @@ pub(crate) fn spawn_join_lobby_page(
         .id();
     commands.entity(container).add_child(status);
 
-    spawn_animated_section_divider(commands, container, "PLAYERS", fonts);
+    spawn_animated_section_divider(commands, container, "FACTIONS", fonts);
 
     for i in 0..4 {
-        let slot = commands
-            .spawn((
-                LobbyPlayerSlot(i),
-                Node {
-                    width: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
-                    margin: UiRect::vertical(Val::Px(2.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.5)),
-            ))
-            .with_children(|parent| {
-                parent.spawn((
-                    Node {
-                        width: Val::Px(8.0),
-                        height: Val::Px(8.0),
-                        margin: UiRect::right(Val::Px(10.0)),
-                        ..default()
-                    },
-                    BackgroundColor(theme::TEXT_SECONDARY),
-                ));
-                parent.spawn((
-                    Text::new("—"),
-                    TextFont {
-                        font_size: theme::FONT_MEDIUM,
-                        ..default()
-                    },
-                    TextColor(theme::TEXT_SECONDARY),
-                ));
-            })
-            .id();
-        commands.entity(container).add_child(slot);
+        spawn_client_slot_card(commands, container, i, config);
     }
 
     let dc_btn = spawn_styled_button(
@@ -581,6 +484,101 @@ pub(crate) fn spawn_join_lobby_page(
         fonts,
     );
     commands.entity(container).add_child(dc_btn);
+}
+
+/// Read-only slot card for the client join lobby — shows faction config from host.
+fn spawn_client_slot_card(
+    commands: &mut Commands,
+    container: Entity,
+    slot_index: usize,
+    config: &GameSetupConfig,
+) {
+    let slot = config.slots[slot_index];
+    let faction_color = Faction::PLAYERS[slot_index].color();
+    let team = config.player_teams[slot_index];
+
+    let type_label = match slot {
+        SlotOccupant::Human => "Human",
+        SlotOccupant::Ai(AiDifficulty::Easy) => "AI Easy",
+        SlotOccupant::Ai(AiDifficulty::Medium) => "AI Medium",
+        SlotOccupant::Ai(AiDifficulty::Hard) => "AI Hard",
+        SlotOccupant::Closed => "None",
+        SlotOccupant::Open => "Open",
+    };
+
+    let team_colors = [
+        Color::srgb(0.9, 0.75, 0.2),
+        Color::srgb(0.2, 0.75, 0.85),
+        Color::srgb(0.85, 0.3, 0.65),
+        Color::srgb(0.95, 0.5, 0.15),
+    ];
+    let team_color = team_colors.get(team as usize).copied().unwrap_or(team_colors[0]);
+
+    let card = commands
+        .spawn((
+            SlotCardContainer(slot_index),
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                padding: UiRect::all(Val::Px(10.0)),
+                margin: UiRect::vertical(Val::Px(3.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                column_gap: Val::Px(8.0),
+                ..default()
+            },
+            BackgroundColor(theme::BG_SURFACE),
+            BorderColor::all(theme::SEPARATOR),
+        ))
+        .with_children(|card| {
+            // Faction color dot
+            card.spawn((
+                Node {
+                    width: Val::Px(16.0),
+                    height: Val::Px(16.0),
+                    border_radius: BorderRadius::all(Val::Px(8.0)),
+                    ..default()
+                },
+                BackgroundColor(faction_color),
+            ));
+            // Faction label
+            card.spawn((
+                Text::new(format!("Player {}", slot_index + 1)),
+                TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                TextColor(faction_color),
+            ));
+            // Type label
+            card.spawn((
+                Text::new(type_label),
+                TextFont { font_size: theme::FONT_SMALL, ..default() },
+                TextColor(theme::TEXT_SECONDARY),
+            ));
+            card.spawn(Node { flex_grow: 1.0, ..default() });
+            // Team badge
+            if !matches!(slot, SlotOccupant::Closed | SlotOccupant::Open) {
+                card.spawn((
+                    Node {
+                        width: Val::Px(22.0),
+                        height: Val::Px(22.0),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(team_color),
+                ))
+                .with_children(|badge| {
+                    badge.spawn((
+                        Text::new(format!("{}", team + 1)),
+                        TextFont { font_size: 10.0, ..default() },
+                        TextColor(Color::WHITE),
+                        Pickable::IGNORE,
+                    ));
+                });
+            }
+        })
+        .id();
+    commands.entity(container).add_child(card);
 }
 
 // ── Networking helpers ──
@@ -803,8 +801,8 @@ pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
             player_id: 0,
             name: "Host".to_string(),
             seat_index: 0,
-            faction: Faction::PLAYERS[config.player_color_index],
-            color_index: config.player_color_index as u8,
+            faction: Faction::PLAYERS[config.local_player_slot],
+            color_index: config.local_player_slot as u8,
             is_host: true,
             connected: true,
         }],
@@ -1175,19 +1173,10 @@ pub(crate) fn update_lobby_ui(
         &mut Text,
         (With<LobbyStatusText>, Without<SessionCodeText>),
     >,
-    slot_texts: Query<(&LobbyPlayerSlot, &Children)>,
-    mut child_texts: Query<
-        &mut Text,
-        (
-            Without<LobbyStatusText>,
-            Without<SessionCodeText>,
-            Without<LobbyPlayerSlot>,
-        ),
-    >,
-    mut child_bgs: Query<&mut BackgroundColor, Without<LobbyPlayerSlot>>,
     mut config: ResMut<GameSetupConfig>,
     ip_list_q: Query<Entity, (With<HostIpList>, Without<HostIpListPopulated>)>,
     mut session_tokens: ResMut<multiplayer::SessionTokens>,
+    roots: Query<Entity, With<MenuRoot>>,
 ) {
     // Update session code display
     if *page == MenuPage::HostLobby {
@@ -1403,13 +1392,19 @@ pub(crate) fn update_lobby_ui(
         }
 
         if lobby_changed {
-            // Auto-cap AI count when lobby changes (player join/leave)
-            let human_count = lobby.players.iter().filter(|p| p.connected).count() as u8;
-            let max_ai = 4u8.saturating_sub(human_count).min(3);
-            if config.num_ai_opponents > max_ai {
-                config.num_ai_opponents = max_ai;
+            // Auto-close AI/Open slots that conflict with new human players
+            for player in &lobby.players {
+                if player.connected {
+                    let idx = Faction::PLAYERS
+                        .iter()
+                        .position(|f| *f == player.faction)
+                        .unwrap_or(0);
+                    if !matches!(config.slots[idx], SlotOccupant::Human) {
+                        config.slots[idx] = SlotOccupant::Human;
+                    }
+                }
             }
-            broadcast_lobby_update(&lobby, host);
+            broadcast_lobby_update(&lobby, host, &config);
         }
 
         if *page == MenuPage::HostLobby {
@@ -1434,30 +1429,22 @@ pub(crate) fn update_lobby_ui(
                 info!("Host resolved random map seed: {}", config.map_seed);
             }
 
-            let human_count = lobby.players.iter().filter(|p| p.connected).count() as u8;
-            config.human_count = human_count;
-            // Build human_faction_indices from lobby players
-            config.human_faction_indices = lobby
-                .players
-                .iter()
-                .filter(|p| p.connected)
-                .map(|p| {
-                    Faction::PLAYERS
+            // Sync slots from lobby: connected human players override slot occupants
+            for player in &lobby.players {
+                if player.connected {
+                    let faction_idx = Faction::PLAYERS
                         .iter()
-                        .position(|f| *f == p.faction)
-                        .unwrap_or(0)
-                })
-                .collect();
-            let max_ai = 4u8.saturating_sub(human_count).min(3);
-            if config.num_ai_opponents > max_ai {
-                config.num_ai_opponents = max_ai;
+                        .position(|f| *f == player.faction)
+                        .unwrap_or(0);
+                    config.slots[faction_idx] = SlotOccupant::Human;
+                    if player.is_host {
+                        config.local_player_slot = faction_idx;
+                    }
+                }
             }
-            // Recalculate AI factions to avoid collisions with human factions
-            config.recalculate_ai_factions();
             info!(
-                "Multiplayer: {} humans ({:?}), {} AI opponents ({:?})",
-                human_count, config.human_faction_indices,
-                config.num_ai_opponents, config.ai_faction_indices
+                "Multiplayer start: slots={:?}, local_player_slot={}",
+                config.slots, config.local_player_slot
             );
 
             let config_json =
@@ -1544,7 +1531,11 @@ pub(crate) fn update_lobby_ui(
                                     client.session_token,
                                 );
                             }
-                            game_state::message::GameEvent::LobbyUpdate { players } => {
+                            game_state::message::GameEvent::LobbyUpdate {
+                                players,
+                                slots,
+                                player_teams,
+                            } => {
                                 lobby.players.clear();
                                 for p in players {
                                     lobby.players.push(LobbyPlayer {
@@ -1560,12 +1551,21 @@ pub(crate) fn update_lobby_ui(
                                         connected: p.connected,
                                     });
                                 }
+                                // Apply slot config and teams from host
+                                config.slots = slots.map(|s| match s {
+                                    0 => SlotOccupant::Human,
+                                    1 => SlotOccupant::Ai(AiDifficulty::Easy),
+                                    2 => SlotOccupant::Ai(AiDifficulty::Medium),
+                                    3 => SlotOccupant::Ai(AiDifficulty::Hard),
+                                    4 => SlotOccupant::Closed,
+                                    _ => SlotOccupant::Open,
+                                });
+                                config.player_teams = *player_teams;
+                                config.team_mode = TeamMode::Custom;
                                 lobby.status = LobbyStatus::Connected;
-                                for mut text in &mut status_texts {
-                                    **text = format!(
-                                        "Connected — {} player(s) in lobby",
-                                        lobby.players.len()
-                                    );
+                                // Rebuild page to show updated slot cards
+                                for e in &roots {
+                                    commands.entity(e).try_despawn();
                                 }
                             }
                             game_state::message::GameEvent::GameStart { config_json } => {
@@ -1604,57 +1604,14 @@ pub(crate) fn update_lobby_ui(
         }
     }
 
-    // ── Update player slot UI for both host and client ──
-    update_player_slot_ui(&lobby, &slot_texts, &mut child_texts, &mut child_bgs);
-}
-
-fn update_player_slot_ui(
-    lobby: &LobbyState,
-    slot_texts: &Query<(&LobbyPlayerSlot, &Children)>,
-    child_texts: &mut Query<
-        &mut Text,
-        (
-            Without<LobbyStatusText>,
-            Without<SessionCodeText>,
-            Without<LobbyPlayerSlot>,
-        ),
-    >,
-    child_bgs: &mut Query<&mut BackgroundColor, Without<LobbyPlayerSlot>>,
-) {
-    for (slot, children) in slot_texts {
-        let idx = slot.0;
-        let (label, color) = if let Some(player) = lobby.players.get(idx) {
-            let c = player.faction.color();
-            let suffix = if player.is_host {
-                " (Host)"
-            } else if !player.connected {
-                " (disconnected)"
-            } else {
-                ""
-            };
-            (format!("{}{}", player.name, suffix), c)
-        } else {
-            ("Waiting...".to_string(), theme::TEXT_SECONDARY)
-        };
-
-        let mut child_iter = children.iter();
-        if let Some(dot_entity) = child_iter.next() {
-            if let Ok(mut bg) = child_bgs.get_mut(dot_entity) {
-                *bg = BackgroundColor(color);
-            }
-        }
-        if let Some(text_entity) = child_iter.next() {
-            if let Ok(mut text) = child_texts.get_mut(text_entity) {
-                if **text != label {
-                    **text = label;
-                }
-            }
-        }
-    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn broadcast_lobby_update(lobby: &LobbyState, host: &HostNetState) {
+pub(crate) fn broadcast_lobby_update(
+    lobby: &LobbyState,
+    host: &HostNetState,
+    config: &GameSetupConfig,
+) {
     use game_state::message::{GameEvent, LobbyPlayerInfo, ServerMessage};
 
     let players: Vec<LobbyPlayerInfo> = lobby
@@ -1677,7 +1634,18 @@ pub(crate) fn broadcast_lobby_update(lobby: &LobbyState, host: &HostNetState) {
     let msg = ServerMessage::Event {
         seq: 0,
         timestamp: 0.0,
-        events: vec![GameEvent::LobbyUpdate { players }],
+        events: vec![GameEvent::LobbyUpdate {
+            players,
+            slots: config.slots.map(|s| match s {
+                SlotOccupant::Human => 0,
+                SlotOccupant::Ai(AiDifficulty::Easy) => 1,
+                SlotOccupant::Ai(AiDifficulty::Medium) => 2,
+                SlotOccupant::Ai(AiDifficulty::Hard) => 3,
+                SlotOccupant::Closed => 4,
+                SlotOccupant::Open => 5,
+            }),
+            player_teams: config.player_teams,
+        }],
     };
 
     if let Ok(json) = codec::encode(&msg) {
@@ -1702,8 +1670,9 @@ pub(crate) struct SeatAssignment {
 #[derive(serde::Serialize, serde::Deserialize)]
 pub(crate) struct SerializableGameConfig {
     pub map_seed: u64,
-    pub num_ai_opponents: u8,
-    pub ai_difficulties: [u8; 3],
+    /// Slot occupants encoded: 0=Human, 1=AiEasy, 2=AiMedium, 3=AiHard, 4=Closed, 5=Open
+    pub slots: [u8; 4],
+    pub local_player_slot: usize,
     pub team_mode: u8,
     pub player_teams: [u8; 4],
     pub map_size: u8,
@@ -1711,27 +1680,11 @@ pub(crate) struct SerializableGameConfig {
     pub day_cycle_secs: f32,
     pub starting_resources_mult: f32,
     pub seat_assignments: Vec<SeatAssignment>,
-    #[serde(default)]
-    pub human_factions: Vec<u8>,
-    #[serde(default = "default_ai_faction_indices")]
-    pub ai_faction_indices: [usize; 3],
-    #[serde(default)]
-    pub player_color_index: usize,
-    #[serde(default = "default_human_count")]
-    pub human_count: u8,
-}
-
-fn default_ai_faction_indices() -> [usize; 3] {
-    [1, 2, 3]
-}
-
-fn default_human_count() -> u8 {
-    1
 }
 
 impl SerializableGameConfig {
     pub(crate) fn from_config(config: &GameSetupConfig, lobby: &LobbyState) -> Self {
-        let mut seat_assignments: Vec<SeatAssignment> = lobby
+        let seat_assignments: Vec<SeatAssignment> = lobby
             .players
             .iter()
             .map(|p| {
@@ -1749,33 +1702,19 @@ impl SerializableGameConfig {
             })
             .collect();
 
-        // Add AI seat assignments using config.ai_faction_indices
-        let human_count = seat_assignments.len() as u8;
-        for i in 0..config.num_ai_opponents as usize {
-            let faction_index = config.ai_faction_indices[i] as u8;
-            seat_assignments.push(SeatAssignment {
-                player_id: 100 + i as u8,
-                seat_index: human_count + i as u8,
-                faction_index,
-                color_index: faction_index,
-                is_human: false,
-            });
-        }
-
-        let human_factions: Vec<u8> = seat_assignments
-            .iter()
-            .filter(|s| s.is_human)
-            .map(|s| s.faction_index)
-            .collect();
+        let slots = config.slots.map(|s| match s {
+            SlotOccupant::Human => 0,
+            SlotOccupant::Ai(AiDifficulty::Easy) => 1,
+            SlotOccupant::Ai(AiDifficulty::Medium) => 2,
+            SlotOccupant::Ai(AiDifficulty::Hard) => 3,
+            SlotOccupant::Closed => 4,
+            SlotOccupant::Open => 5,
+        });
 
         Self {
             map_seed: config.map_seed,
-            num_ai_opponents: config.num_ai_opponents,
-            ai_difficulties: config.ai_difficulties.map(|d| match d {
-                AiDifficulty::Easy => 0,
-                AiDifficulty::Medium => 1,
-                AiDifficulty::Hard => 2,
-            }),
+            slots,
+            local_player_slot: config.local_player_slot,
             team_mode: match config.team_mode {
                 TeamMode::FFA => 0,
                 TeamMode::Teams => 1,
@@ -1795,21 +1734,20 @@ impl SerializableGameConfig {
             day_cycle_secs: config.day_cycle_secs,
             starting_resources_mult: config.starting_resources_mult,
             seat_assignments,
-            human_factions,
-            ai_faction_indices: config.ai_faction_indices,
-            player_color_index: config.player_color_index,
-            human_count: config.human_count,
         }
     }
 
     pub(crate) fn apply_to_config(&self, config: &mut GameSetupConfig) {
         config.map_seed = self.map_seed;
-        config.num_ai_opponents = self.num_ai_opponents;
-        config.ai_difficulties = self.ai_difficulties.map(|d| match d {
-            0 => AiDifficulty::Easy,
-            1 => AiDifficulty::Medium,
-            _ => AiDifficulty::Hard,
+        config.slots = self.slots.map(|s| match s {
+            0 => SlotOccupant::Human,
+            1 => SlotOccupant::Ai(AiDifficulty::Easy),
+            2 => SlotOccupant::Ai(AiDifficulty::Medium),
+            3 => SlotOccupant::Ai(AiDifficulty::Hard),
+            4 => SlotOccupant::Closed,
+            _ => SlotOccupant::Open,
         });
+        config.local_player_slot = self.local_player_slot;
         config.team_mode = match self.team_mode {
             0 => TeamMode::FFA,
             1 => TeamMode::Teams,
@@ -1828,10 +1766,6 @@ impl SerializableGameConfig {
         };
         config.day_cycle_secs = self.day_cycle_secs;
         config.starting_resources_mult = self.starting_resources_mult;
-        config.ai_faction_indices = self.ai_faction_indices;
-        config.player_color_index = self.player_color_index;
-        config.human_count = self.human_count;
-        config.human_faction_indices = self.human_factions.iter().map(|&i| i as usize).collect();
     }
 
     pub(crate) fn apply_to_lobby(&self, lobby: &mut LobbyState) {

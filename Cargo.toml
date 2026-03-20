@@ -3,14 +3,35 @@ name = "rts"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["client"]
+client = [
+    "dep:bevy",
+    "dep:bevy_ggrs",
+    "dep:bevy_matchbox",
+    "dep:bevy_mod_outline",
+    "dep:getrandom",
+    "dep:noise",
+    "dep:rand",
+]
+
+[[bin]]
+name = "rts"
+path = "src/main.rs"
+required-features = ["client"]
+
+[[bin]]
+name = "session_router"
+path = "src/bin/session_router.rs"
+
 [dependencies]
-bevy = { version = "0.18", features = ["webgpu", "webgl2"] }
-bevy_mod_outline = "0.12"
-bevy_ggrs = "0.20"
-bevy_matchbox = { version = "0.14", features = ["ggrs"] }
-noise = "0.9"
-rand = "0.9"
-getrandom = { version = "0.3", features = ["wasm_js"] }
+bevy = { version = "0.18", features = ["webgpu", "webgl2"], optional = true }
+bevy_mod_outline = { version = "0.12", optional = true }
+bevy_ggrs = { version = "0.20", optional = true }
+bevy_matchbox = { version = "0.14", features = ["ggrs"], optional = true }
+noise = { version = "0.9", optional = true }
+rand = { version = "0.9", optional = true }
+getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rmp-serde = "1"

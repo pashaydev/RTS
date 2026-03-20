@@ -18,14 +18,34 @@ pub enum AppState {
     InGame,
 }
 
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum OverlayLifecycleSet {
+    Manage,
+    Adopt,
+}
+
 // ── Game Setup Config ──
+
+/// What occupies a faction slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlotOccupant {
+    /// A human player (local or remote).
+    Human,
+    /// An AI player with the given difficulty.
+    Ai(AiDifficulty),
+    /// Slot is not in use.
+    Closed,
+    /// Multiplayer-only: waiting for a client to connect.
+    Open,
+}
 
 #[derive(Resource, Clone, Debug)]
 pub struct GameSetupConfig {
     pub player_name: String,
-    pub player_color_index: usize,
-    pub num_ai_opponents: u8,
-    pub ai_difficulties: [AiDifficulty; 3],
+    /// What occupies each faction slot (indexed 0=Player1, 1=Player2, 2=Player3, 3=Player4).
+    pub slots: [SlotOccupant; 4],
+    /// Which slot is the local human player (for single-player or multiplayer host).
+    pub local_player_slot: usize,
     pub team_mode: TeamMode,
     pub player_teams: [u8; 4],
     pub map_size: MapSize,
@@ -33,20 +53,19 @@ pub struct GameSetupConfig {
     pub day_cycle_secs: f32,
     pub starting_resources_mult: f32,
     pub map_seed: u64, // 0 = random
-    pub ai_faction_indices: [usize; 3],
-    /// Number of human players (1 for single-player, 2+ for multiplayer).
-    pub human_count: u8,
-    /// Faction indices for each human player (e.g. [0] for single-player, [0, 2] for two humans).
-    pub human_faction_indices: Vec<usize>,
 }
 
 impl Default for GameSetupConfig {
     fn default() -> Self {
         Self {
             player_name: "Commander".to_string(),
-            player_color_index: 0,
-            num_ai_opponents: 3,
-            ai_difficulties: [AiDifficulty::Medium; 3],
+            slots: [
+                SlotOccupant::Human,
+                SlotOccupant::Ai(AiDifficulty::Medium),
+                SlotOccupant::Ai(AiDifficulty::Medium),
+                SlotOccupant::Ai(AiDifficulty::Medium),
+            ],
+            local_player_slot: 0,
             team_mode: TeamMode::default(),
             player_teams: [0, 1, 2, 3],
             map_size: MapSize::default(),
@@ -54,56 +73,79 @@ impl Default for GameSetupConfig {
             day_cycle_secs: 600.0,
             starting_resources_mult: 1.0,
             map_seed: 0,
-            ai_faction_indices: [1, 2, 3],
-            human_count: 1,
-            human_faction_indices: vec![0],
         }
     }
 }
 
+#[allow(dead_code)]
 impl GameSetupConfig {
-    /// Recompute ai_faction_indices so AIs fill remaining slots not taken by humans.
-    pub fn recalculate_ai_factions(&mut self) {
-        let human_set: HashSet<usize> = self.human_faction_indices.iter().copied().collect();
-        let mut slot_idx = 0;
-        for i in 0..3 {
-            // Skip faction indices already taken by humans
-            while human_set.contains(&slot_idx) && slot_idx < 4 {
-                slot_idx += 1;
-            }
-            self.ai_faction_indices[i] = slot_idx.min(3);
-            slot_idx += 1;
-        }
+    /// Faction indices occupied by human players.
+    pub fn human_faction_indices(&self) -> Vec<usize> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(s, SlotOccupant::Human))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Number of human players.
+    pub fn human_count(&self) -> u8 {
+        self.slots
+            .iter()
+            .filter(|s| matches!(s, SlotOccupant::Human))
+            .count() as u8
+    }
+
+    /// Number of AI players.
+    pub fn ai_count(&self) -> u8 {
+        self.slots
+            .iter()
+            .filter(|s| matches!(s, SlotOccupant::Ai(_)))
+            .count() as u8
+    }
+
+    /// Active faction indices (Human or AI, in order).
+    pub fn active_factions(&self) -> Vec<usize> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| matches!(s, SlotOccupant::Human | SlotOccupant::Ai(_)))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// AI faction indices with their difficulties.
+    pub fn ai_factions_with_difficulty(&self) -> Vec<(usize, AiDifficulty)> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| match s {
+                SlotOccupant::Ai(d) => Some((i, *d)),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn spawn_positions(&self, seed: u64) -> Vec<(Faction, (f32, f32))> {
-        let total = (self.human_count as usize + self.num_ai_opponents as usize).min(4);
+        let active = self.active_factions();
+        let total = active.len();
+        if total == 0 {
+            return Vec::new();
+        }
         let half_map = self.map_size.world_size() / 2.0;
         let radius = 0.6 * half_map;
         let rotation_offset = (seed % 360) as f32 * std::f32::consts::PI / 180.0;
 
-        // Build ordered faction list: humans first, then AIs
-        let mut factions = Vec::with_capacity(total);
-        for &idx in &self.human_faction_indices {
-            if factions.len() < total {
-                factions.push(Faction::PLAYERS[idx]);
-            }
-        }
-        for i in 0..self.num_ai_opponents as usize {
-            if factions.len() < total {
-                factions.push(Faction::PLAYERS[self.ai_faction_indices[i]]);
-            }
-        }
-
-        factions
+        active
             .iter()
             .enumerate()
-            .map(|(i, &faction)| {
+            .map(|(i, &faction_idx)| {
                 let angle =
                     2.0 * std::f32::consts::PI * i as f32 / total as f32 + rotation_offset;
                 let x = angle.cos() * radius;
                 let z = angle.sin() * radius;
-                (faction, (x, z))
+                (Faction::PLAYERS[faction_idx], (x, z))
             })
             .collect()
     }
@@ -2596,7 +2638,7 @@ pub struct TextInputCursor;
 
 #[derive(Component)]
 pub struct AllyToggleButton {
-    pub ai_index: usize,
+    pub slot_index: usize,
 }
 
 #[derive(Component)]
