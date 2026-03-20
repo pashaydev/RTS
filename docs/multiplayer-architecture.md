@@ -556,26 +556,26 @@ stateDiagram-v2
 
     state HostLobby {
         [*] --> Listening
-        Listening --> PlayerJoined: PeerState::Connected
-        PlayerJoined --> Listening: LobbyUpdate broadcast
-        Listening --> PendingStart: START GAME clicked
-        PendingStart --> ConfigSent: Send GameStart event
+        Listening --> PlayerJoined : peer connected
+        PlayerJoined --> Listening : lobby update broadcast
+        Listening --> PendingStart : start game clicked
+        PendingStart --> ConfigSent : send GameStart event
     }
 
     state JoinLobby {
         [*] --> InputCode
-        InputCode --> Connecting: CONNECT clicked
-        Connecting --> Connected: JoinAccepted
-        Connecting --> Failed: timeout/error
-        Connected --> WaitingForStart: LobbyUpdate
-        WaitingForStart --> ConfigReceived: GameStart event
-        Failed --> InputCode: retry
+        InputCode --> Connecting : connect clicked
+        Connecting --> Connected : join accepted
+        Connecting --> Failed : timeout or error
+        Connected --> WaitingForStart : lobby update
+        WaitingForStart --> ConfigReceived : game start event
+        Failed --> InputCode : retry
     }
 
-    ConfigSent --> InGame: transition to InGame
-    ConfigReceived --> InGame: transition to InGame
+    ConfigSent --> InGame : transition to InGame
+    ConfigReceived --> InGame : transition to InGame
 
-    InGame --> MainMenu: Disconnect / Leave
+    InGame --> MainMenu : disconnect or leave
 ```
 
 **Session code format:** Signaling URL (e.g., `ws://192.168.1.5:3536/rts_room`) or just the host IP (auto-expanded to `ws://IP:3536/rts_room`)
@@ -609,7 +609,7 @@ stateDiagram-v2
 ## Known Limitations
 
 - **No rollback/prediction:** Client commands are fire-and-forget; no reconciliation if host rejects
-- **WorldBaseline:** Message type defined but not yet wired (needed for late joiners / reconnect full resync)
+- **WorldBaseline is partial:** It is now wired, but only for terrain metadata + neutral world objects; full entity/bootstrap state still depends on `EntitySpawn` plus periodic full resync behavior
 - **Max 4 players** (hardcoded faction count)
 - **Reconnection is partial:** Grace period and session tokens work host-side, but the client-side reconnect UI flow (auto-retry + `Reconnect` message) is not yet wired
 - **No TURN relay:** WebRTC STUN works for most NATs, but symmetric NAT requires a TURN server (not yet configured)
@@ -622,7 +622,7 @@ stateDiagram-v2
 - **Message batching**: Wire `PendingServerFrame` to batch all host broadcast systems into a single `ServerFrame` per tick (`ServerFrame` type and `PendingServerFrame` resource exist but aren't used yet)
 - **Client prediction**: Prediction buffer + server seq stamping + reconciliation loop (currently fire-and-forget, 1 RTT visual delay)
 - **Reconnect UI**: Client-side auto-retry flow (detect disconnect → reconnect with `Reconnect { session_token }`) — host-side grace period + tokens are done
-- **WorldBaseline wiring**: Send full entity + neutral world state to newly connected/reconnected clients
+- **Full baseline coverage**: Extend `WorldBaseline` or add a true full-world bootstrap message for entity/unit/building state on late join and reconnect
 - **Standalone signaling server**: For production internet play, extract signaling into a deployable binary
 
 ---
@@ -631,11 +631,15 @@ stateDiagram-v2
 
 | File | Purpose |
 |------|---------|
-| `src/multiplayer/mod.rs` | Plugin, resources (HostNetState, ClientNetState, PeerMap, MatchboxInbox), system sets, NetStats, SessionTokens |
-| `src/multiplayer/matchbox_transport.rs` | Matchbox WebRTC transport: PeerMap, MatchboxInbox, poll_matchbox system, send helpers (broadcast_reliable, broadcast_unreliable, send_to_player, send_to_host) |
-| `src/multiplayer/transport.rs` | Legacy TCP/WS code (unused), LAN discovery (UDP :7877), HTTP file server (:7880), IP detection |
-| `src/multiplayer/host_systems.rs` | Host broadcast, command execution, delta sync, neutral world sync, reconnect grace |
-| `src/multiplayer/client_systems.rs` | Client receive, interpolation, deterministic entity sync, neutral world apply |
+| `src/multiplayer/mod.rs` | Plugin wiring, shared resources, run conditions, NetStats, SessionTokens |
+| `src/multiplayer/transport.rs` | Matchbox transport re-exports plus LAN discovery (UDP :7877), HTTP file server (:7880), IP detection, and legacy transport helpers |
+| `src/multiplayer/server/input.rs` | Server-side input/command handling re-exports |
+| `src/multiplayer/server/replication.rs` | Server-side replication/broadcast re-exports |
+| `src/multiplayer/host_systems.rs` | Host command execution, snapshot building, delta sync, neutral baseline/delta emission, reconnect grace |
+| `src/multiplayer/client/receive.rs` | Client receive/staging re-exports |
+| `src/multiplayer/client/apply.rs` | Client apply-system re-exports |
+| `src/multiplayer/client/interpolation.rs` | Client interpolation re-exports |
+| `src/multiplayer/client_systems.rs` | Staged client receive/apply implementation, interpolation, neutral world apply |
 | `src/multiplayer/debug_tap.rs` | HTTP debug server, TX/RX event recording |
 | `src/net_bridge.rs` | NetworkId assignment (entities + neutral objects), EntityNetMap |
 | `src/menu/multiplayer.rs` | Lobby UI, connection flow (start_hosting, connect_to_host_system, update_lobby_ui), config serialization |
