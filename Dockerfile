@@ -47,22 +47,23 @@ ENV RUSTUP_TOOLCHAIN=nightly
 ENV RUSTFLAGS="-Ctarget-feature=-reference-types"
 RUN trunk build --release --config .trunk.toml
 
-# Build the native session router binary without client-only Bevy deps.
-RUN cargo build --release --bin session_router --no-default-features
+# Stage 2: Serve the built WASM client with nginx.
+FROM nginx:alpine
 
-# Stage 2: Serve the built web app and session router API from one process.
-FROM debian:bookworm-slim
-
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
-
-COPY --from=builder /app/target/release/session_router /app/session_router
-COPY --from=builder /app/dist /app/dist
-
-ENV DIST_DIR=/app/dist
-ENV PORT=8080
+COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 8080
 
-CMD ["/app/session_router"]
+# Nginx config: listen on 8080, serve static files, SPA fallback
+RUN printf 'server {\n\
+    listen 8080;\n\
+    root /usr/share/nginx/html;\n\
+    location / {\n\
+        try_files $uri $uri/ /index.html;\n\
+    }\n\
+    location ~* \\.(wasm)$ {\n\
+        types { application/wasm wasm; }\n\
+    }\n\
+}\n' > /etc/nginx/conf.d/default.conf
+
+CMD ["nginx", "-g", "daemon off;"]

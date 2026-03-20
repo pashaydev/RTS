@@ -199,7 +199,7 @@ pub(crate) fn spawn_host_lobby_page(
 
     let hint = commands
         .spawn((
-            Text::new("Share this code with players on your network\nFor VPN/Hamachi: use the VPN IP shown below"),
+            Text::new("Share this code with native players on your network\nFor VPN/Hamachi: use the VPN IP shown below"),
             TextFont {
                 font_size: theme::FONT_SMALL,
                 ..default()
@@ -212,6 +212,24 @@ pub(crate) fn spawn_host_lobby_page(
         ))
         .id();
     commands.entity(container).add_child(hint);
+
+    // Web client URL (if dist/ is available)
+    let web_hint = commands
+        .spawn((
+            WebClientUrlText,
+            Text::new(""),
+            TextFont {
+                font_size: theme::FONT_MEDIUM,
+                ..default()
+            },
+            TextColor(Color::srgb(0.4, 0.9, 0.4)),
+            Node {
+                margin: UiRect::bottom(Val::Px(4.0)),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(container).add_child(web_hint);
 
     let ip_list = commands
         .spawn((
@@ -772,6 +790,31 @@ pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
         }
         Err(e) => {
             warn!("Failed to bind WebSocket listener on {}: {} — WASM clients won't be able to connect", ws_addr, e);
+        }
+    }
+
+    // ── HTTP file server for direct LAN web clients ──
+    let http_port = DEFAULT_PORT + transport::HTTP_PORT_OFFSET;
+    let http_addr = format!("0.0.0.0:{}", http_port);
+    let dist_dir = std::env::var("DIST_DIR").unwrap_or_else(|_| "dist".to_string());
+    if std::path::Path::new(&dist_dir).is_dir() {
+        match TcpListener::bind(&http_addr) {
+            Ok(http_listener) => {
+                info!(
+                    "Serving WASM client at http://{}:{}/",
+                    primary_ip, http_port
+                );
+                let http_shutdown = shutdown.clone();
+                std::thread::spawn(move || {
+                    transport::host_file_server_thread(http_listener, dist_dir, http_shutdown);
+                });
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to bind HTTP file server on {}: {} — web clients must load the page elsewhere",
+                    http_addr, e
+                );
+            }
         }
     }
 
@@ -1652,6 +1695,37 @@ pub(crate) fn broadcast_lobby_update(
         let senders = host.client_senders.lock().unwrap();
         for (_id, sender) in senders.iter() {
             let _ = sender.send(json.clone());
+        }
+    }
+}
+
+pub(crate) fn update_web_client_url(
+    lobby: Res<LobbyState>,
+    mut texts: Query<&mut Text, With<WebClientUrlText>>,
+) {
+    // Build web URL from the first non-VPN IP (or VPN IP as fallback)
+    let dist_exists = std::path::Path::new(
+        &std::env::var("DIST_DIR").unwrap_or_else(|_| "dist".to_string()),
+    )
+    .is_dir();
+
+    let display = if dist_exists && !lobby.all_ips.is_empty() {
+        let ip = lobby
+            .all_ips
+            .iter()
+            .find(|(_, _, vpn)| !vpn)
+            .or_else(|| lobby.all_ips.first())
+            .map(|(ip, _, _)| ip.as_str())
+            .unwrap_or("127.0.0.1");
+        let http_port = DEFAULT_PORT + crate::multiplayer::transport::HTTP_PORT_OFFSET;
+        format!("Web clients: http://{}:{}", ip, http_port)
+    } else {
+        String::new()
+    };
+
+    for mut text in &mut texts {
+        if **text != display {
+            **text = display.clone();
         }
     }
 }

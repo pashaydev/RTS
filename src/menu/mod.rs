@@ -75,6 +75,9 @@ pub(crate) struct HostIpList;
 #[derive(Component)]
 pub(crate) struct HostIpListPopulated;
 
+#[derive(Component)]
+pub(crate) struct WebClientUrlText;
+
 // ── Constants ──
 
 pub(crate) const RANDOM_NAMES: &[&str] = &[
@@ -166,6 +169,7 @@ impl Plugin for MenuPlugin {
                     multiplayer::update_lobby_ui,
                     multiplayer::connect_to_host_system,
                     multiplayer::copy_session_code_system,
+                    multiplayer::update_web_client_url,
                 )
                     .run_if(in_state(AppState::MainMenu)),
             );

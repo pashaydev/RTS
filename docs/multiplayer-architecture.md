@@ -1,7 +1,7 @@
 # Multiplayer Architecture
 
 > Host-authoritative LAN multiplayer with TCP (native) and WebSocket (WASM) transport.
-> Same-origin hosted-session routing has been added for the deployed web client via a native `session_router`.
+> The native host serves the WASM client over HTTP for direct LAN browser play — no external server needed.
 > **MessagePack binary wire protocol** with 4-byte length-prefixed framing. Delta-compressed state sync at ~10Hz.
 > JSON fallback for legacy clients. Numeric entity/faction discriminants. Reconnection with 30s grace period.
 
@@ -25,14 +25,9 @@ flowchart TB
     subgraph Transport["TRANSPORT LAYER"]
         TCP["TCP Listener\n:7878"]
         WS["WebSocket Listener\n:7879"]
+        HTTP["HTTP File Server\n:7880\n(serves dist/ for browsers)"]
         TCP --- FRAME["4-byte length prefix\n+ MessagePack payload"]
         WS --- FRAME
-    end
-
-    subgraph Router["HOSTED SESSION ROUTER (Fly / Native)"]
-        SR["session_router\n- POST /api/sessions\n- GET /api/sessions/:code\n- GET /session/:code/ws"]
-        FR["Fly replay payload\n(target machine + path rewrite)"]
-        SR --> FR
     end
 
     subgraph Client1["CLIENT (Native)"]
@@ -89,6 +84,10 @@ flowchart LR
         WS1["ws_client_handler\nPlayer 100+"]
     end
 
+    subgraph HTTPThread["HTTP FILE SERVER"]
+        HTTPServe["host_file_server_thread\n:7880 serves dist/"]
+    end
+
     Listener -->|"new_client_tx"| Systems
     WSListener -->|"new_ws_clients_tx"| Systems
 
@@ -123,17 +122,17 @@ sequenceDiagram
     UI->>Host: start_hosting()
     Host->>Transport: Bind TCP :7878
     Host->>Transport: Bind WS :7879
+    Host->>Transport: Bind HTTP :7880 (serve dist/)
     Host->>Host: Insert HostNetState, NetRole::Host
-    Host->>UI: Show HostLobby (session code)
+    Host->>UI: Show HostLobby (session code + web URL)
 
     Note over UI: CLIENT: JOIN GAME
     UI->>Client: User enters session code
     alt Native LAN/VPN join
-        Client->>Transport: TcpStream::connect (or direct WS)
-    else Hosted web join
-        Client->>Transport: GET /session/:code/ws
-        Transport->>Client: Fly replay response
-        Client->>Transport: WebSocket upgrade to target machine
+        Client->>Transport: TcpStream::connect
+    else Web browser on LAN
+        Note over Client: Opens http://host:7880
+        Client->>Transport: WebSocket to ws://host:7879
     end
     Transport->>Host: new_client_tx (NewClientEvent)
     Host->>Host: Spawn reader + writer threads
@@ -555,14 +554,14 @@ stateDiagram-v2
     InGame --> MainMenu: Disconnect / Leave
 ```
 
-**Session code formats:**
-- Native LAN/VPN: `IP:PORT` (e.g. `192.168.1.5:7878`)
-- Hosted web path: opaque session code resolved on the same origin as `/session/<code>/ws`
+**Session code format:** `IP:PORT` (e.g. `192.168.1.5:7878`)
+
+**Web client access:** The host serves the WASM build at `http://<host-ip>:7880` when a `dist/` directory is present. Browser players open that URL, then enter the same session code to join.
 
 **Player ID assignment:**
 - Host: `player_id = 0`
 - TCP clients: `1, 2, 3, ...`
-- WebSocket clients: `100, 101, 102, ...` (avoids collision)
+- WebSocket clients (including browser): `100, 101, 102, ...` (avoids collision)
 
 ---
 
@@ -587,18 +586,14 @@ stateDiagram-v2
 
 - **No rollback/prediction:** Client commands are fire-and-forget; no reconciliation if host rejects
 - **WorldBaseline:** Message type defined but not yet wired (needed for late joiners / reconnect full resync)
-- **No NAT traversal:** LAN/VPN only (no STUN/TURN)
+- **No NAT traversal:** LAN/VPN only (no internet play without VPN)
 - **Max 4 players** (hardcoded faction count)
 - **Reconnection is partial:** Grace period and session tokens work host-side, but the client-side reconnect UI flow (auto-retry + `Reconnect` message) is not yet wired
-- **Hosted-session routing is partial:** The router and same-origin path exist, but session-host registration and replay-to-live-machine bootstrapping are not wired into the host flow yet
 
 ---
 
 ## Known Remaining Work
 
-- **Hosted session registration**: Generate opaque codes and register live host machines with `POST /api/sessions`
-- **Fly machine targeting**: Populate router registrations with real `app`, `machine_id`, `region`, and target WS path metadata
-- **Host bootstrap**: Run a real session host process that exposes the replay target WebSocket endpoint (currently expected to be `/ws`)
 - **Message batching**: Wire `PendingServerFrame` to batch all host broadcast systems into a single `ServerFrame` per tick (`ServerFrame` type and `PendingServerFrame` resource exist but aren't used yet)
 - **Client prediction**: Prediction buffer + server seq stamping + reconciliation loop (currently fire-and-forget, 1 RTT visual delay)
 - **Reconnect UI**: Client-side auto-retry flow (detect disconnect → reconnect with `Reconnect { session_token }`) — host-side grace period + tokens are done
@@ -612,13 +607,11 @@ stateDiagram-v2
 | File | Purpose |
 |------|---------|
 | `src/multiplayer/mod.rs` | Plugin, resources, system sets, NetStats, SessionTokens |
-| `src/multiplayer/transport.rs` | TCP/WS framing, threads, IP detection, msgpack codec |
+| `src/multiplayer/transport.rs` | TCP/WS framing, threads, IP detection, HTTP file server, msgpack codec |
 | `src/multiplayer/host_systems.rs` | Host broadcast, command execution, delta sync, neutral world sync, reconnect grace |
 | `src/multiplayer/client_systems.rs` | Client receive, interpolation, deterministic entity sync, neutral world apply |
 | `src/multiplayer/debug_tap.rs` | HTTP debug server, TX/RX event recording |
 | `src/multiplayer/ggrs_matchbox.rs` | GGRS rollback scaffolding (unused) |
-| `src/session_router.rs` | Hosted-session registry, route shape, Fly replay payload model |
-| `src/bin/session_router.rs` | Native HTTP router serving `dist/` plus hosted-session endpoints |
 | `src/net_bridge.rs` | NetworkId assignment (entities + neutral objects), EntityNetMap |
 | `src/menu/multiplayer.rs` | Lobby UI, connection flow, config serialization |
 | `game_state/src/message.rs` | All network message types + ServerFrame |

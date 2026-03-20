@@ -20,10 +20,6 @@ name = "rts"
 path = "src/main.rs"
 required-features = ["client"]
 
-[[bin]]
-name = "session_router"
-path = "src/bin/session_router.rs"
-
 [dependencies]
 bevy = { version = "0.18", features = ["webgpu", "webgl2"], optional = true }
 bevy_mod_outline = { version = "0.12", optional = true }
@@ -40,11 +36,7 @@ game_state = { path = "game_state" }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 socket2 = "0.5"
 if-addrs = "0.13"
-tungstenite = "0.26"
-axum = "0.8"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
-tower-http = { version = "0.6", features = ["fs", "trace"] }
-tower = { version = "0.5", features = ["util"] }
+tungstenite = { version = "0.26", features = ["native-tls"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3.91", features = ["WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType", "Document", "HtmlDocument", "DataTransfer", "ClipboardEvent", "Clipboard", "Navigator", "Window", "Location"] }

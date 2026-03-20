@@ -817,6 +817,132 @@ pub fn client_writer_thread_fn(
     }
 }
 
+// ── Host static file server for WASM clients (native only) ──────────────────
+
+/// HTTP port offset from the TCP game port (e.g., 7878 + 2 = 7880).
+#[cfg(not(target_arch = "wasm32"))]
+pub const HTTP_PORT_OFFSET: u16 = 2;
+
+/// Serves the WASM `dist/` folder over HTTP so LAN browsers can load the game
+/// client directly from the host without a separate web server or session router.
+/// Players open `http://<host-ip>:<port>` in their browser.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn host_file_server_thread(
+    listener: TcpListener,
+    dist_dir: String,
+    shutdown: Arc<AtomicBool>,
+) {
+    listener
+        .set_nonblocking(true)
+        .expect("Failed to set HTTP listener non-blocking");
+
+    while !shutdown.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let dist = dist_dir.clone();
+                std::thread::spawn(move || serve_http_request(stream, &dist));
+            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => {
+                if !shutdown.load(Ordering::Relaxed) {
+                    bevy::log::warn!("HTTP file server error: {}", e);
+                }
+                break;
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn serve_http_request(mut stream: TcpStream, dist_dir: &str) {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .ok();
+
+    // Read the HTTP request (only need the first line)
+    let mut buf = [0u8; 4096];
+    let n = match stream.read(&mut buf) {
+        Ok(n) if n > 0 => n,
+        _ => return,
+    };
+    let request = String::from_utf8_lossy(&buf[..n]);
+    let first_line = request.lines().next().unwrap_or("");
+
+    // Parse "GET /path HTTP/1.x"
+    let path = first_line
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/");
+
+    // Sanitize: resolve to a safe relative path within dist_dir
+    let clean_path = path
+        .trim_start_matches('/')
+        .replace("..", "");
+    let clean_path = if clean_path.is_empty() {
+        "index.html"
+    } else {
+        &clean_path
+    };
+
+    let file_path = std::path::Path::new(dist_dir).join(clean_path);
+
+    // If path is a directory, try index.html inside it
+    let file_path = if file_path.is_dir() {
+        file_path.join("index.html")
+    } else {
+        file_path
+    };
+
+    match std::fs::read(&file_path) {
+        Ok(body) => {
+            let mime = mime_for_path(&file_path);
+            let header = format!(
+                "HTTP/1.1 200 OK\r\n\
+                 Content-Type: {}\r\n\
+                 Content-Length: {}\r\n\
+                 Access-Control-Allow-Origin: *\r\n\
+                 Cache-Control: no-cache\r\n\
+                 Connection: close\r\n\r\n",
+                mime,
+                body.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(&body);
+        }
+        Err(_) => {
+            let body = b"404 Not Found";
+            let header = format!(
+                "HTTP/1.1 404 Not Found\r\n\
+                 Content-Type: text/plain\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(body);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn mime_for_path(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "application/javascript",
+        Some("wasm") => "application/wasm",
+        Some("css") => "text/css",
+        Some("json") => "application/json",
+        Some("png") => "image/png",
+        Some("jpg" | "jpeg") => "image/jpeg",
+        Some("svg") => "image/svg+xml",
+        Some("ico") => "image/x-icon",
+        Some("txt") => "text/plain",
+        _ => "application/octet-stream",
+    }
+}
+
 // ── Host WebSocket server (native only) ─────────────────────────────────────
 
 /// WebSocket port offset from the TCP port.
