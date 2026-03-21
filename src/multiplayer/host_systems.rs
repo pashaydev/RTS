@@ -389,6 +389,9 @@ pub fn host_process_client_commands(
                     // Reconnection is handled in the lobby system (menu/multiplayer.rs)
                     // Here we just log it — the actual reconnection logic requires lobby access
                 }
+                ClientMessage::Chat { .. } => {
+                    // Chat during gameplay — not handled here, lobby handles it
+                }
             }
         }
     }

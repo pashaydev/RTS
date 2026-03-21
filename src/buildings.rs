@@ -709,10 +709,20 @@ fn confirm_placement(
     windows: Query<&Window, With<PrimaryWindow>>,
     ui_interactions: Query<&Interaction, With<Node>>,
     existing_buildings: Query<
-        (&Transform, &BuildingFootprint),
+        (&Transform, &BuildingFootprint, &Faction, &EntityKind),
         (With<Building>, Without<GhostBuilding>),
     >,
-    workers: Query<(Entity, &Transform, &UnitState, &Faction, &EntityKind), With<Unit>>,
+    workers: Query<
+        (
+            Entity,
+            &Transform,
+            &UnitState,
+            &Faction,
+            &EntityKind,
+            Option<&PendingBuildOrder>,
+        ),
+        With<Unit>,
+    >,
 ) {
     let (all_completed, biome_map) = extras;
     let mode = placement.mode;
@@ -745,9 +755,22 @@ fn confirm_placement(
     let bp = registry.get(kind);
 
     let faction = active_player.0;
-    let is_initial_base_plot = matches!(mode, PlacementMode::PlotBase)
-        && kind == EntityKind::Base
-        && !base_state.is_founded(&faction);
+    let has_base_started = base_state.is_founded(&faction)
+        || existing_buildings.iter().any(|(_, _, building_faction, building_kind)| {
+            *building_faction == faction && *building_kind == EntityKind::Base
+        })
+        || workers.iter().any(|(_, _, _, worker_faction, _, pending_order)| {
+            *worker_faction == faction
+                && pending_order.is_some_and(|order| order.kind == EntityKind::Base)
+        });
+
+    let is_initial_base_plot =
+        matches!(mode, PlacementMode::PlotBase) && kind == EntityKind::Base && !has_base_started;
+
+    if matches!(mode, PlacementMode::PlotBase) && kind == EntityKind::Base && has_base_started {
+        placement.hint_text = Some("Base is already being founded.".to_string());
+        return;
+    }
 
     // Check prerequisite
     let prereq_met = if let Some(ref bd) = bp.building {
@@ -783,7 +806,7 @@ fn confirm_placement(
             return;
         }
     }
-    for (building_tf, existing_fp) in &existing_buildings {
+    for (building_tf, existing_fp, _, _) in &existing_buildings {
         let dx = building_tf.translation.x - world_pos.x;
         let dz = building_tf.translation.z - world_pos.z;
         if (dx * dx + dz * dz).sqrt() < existing_fp.0 + new_footprint {
@@ -798,7 +821,7 @@ fn confirm_placement(
     // Find closest available worker (idle, gathering, returning, depositing, waiting)
     let build_pos = Vec3::new(world_pos.x, 0.0, world_pos.z);
     let mut best_worker: Option<(Entity, f32)> = None;
-    for (w_entity, w_tf, w_state, w_faction, w_kind) in &workers {
+    for (w_entity, w_tf, w_state, w_faction, w_kind, _) in &workers {
         if *w_kind != EntityKind::Worker || *w_faction != faction {
             continue;
         }

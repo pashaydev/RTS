@@ -15,7 +15,9 @@ use bevy::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
-use crate::components::{ActivePlayer, AiControlledFactions, AppState, Faction, FactionColors};
+use crate::components::{
+    ActivePlayer, AiControlledFactions, AppState, Faction, FactionColors, GameSetupConfig,
+};
 
 // ── Net Stats ───────────────────────────────────────────────────────────────
 
@@ -432,6 +434,7 @@ pub fn is_online(role: Res<NetRole>) -> bool {
 /// from authoritative seat/color assignments.
 /// Must run after `apply_game_config` but before `spawn_camera`.
 pub fn configure_multiplayer_ai(
+    config: Res<GameSetupConfig>,
     lobby: Res<LobbyState>,
     role: Res<NetRole>,
     client_state: Option<Res<ClientNetState>>,
@@ -478,11 +481,17 @@ pub fn configure_multiplayer_ai(
     }
 
     // On the client, disable ALL AI — the host runs simulation and syncs state.
-    // On the host, only remove human-controlled factions from AI.
+    // On the host, rebuild AI ownership from the authoritative slot config and
+    // then strip any connected human seats.
     if *role == NetRole::Client {
         info!("Client: disabling all local AI (host is authoritative)");
         ai_factions.factions.clear();
     } else {
+        ai_factions.factions = config
+            .ai_factions_with_difficulty()
+            .into_iter()
+            .map(|(index, _)| Faction::PLAYERS[index])
+            .collect();
         for player in &lobby.players {
             if player.connected {
                 ai_factions.factions.remove(&player.faction);
@@ -762,6 +771,15 @@ mod tests {
     #[test]
     fn configure_multiplayer_ai_sets_host_player_and_removes_human_ai() {
         let mut world = World::new();
+        world.insert_resource(GameSetupConfig {
+            slots: [
+                crate::components::SlotOccupant::Ai(crate::components::AiDifficulty::Medium),
+                crate::components::SlotOccupant::Human,
+                crate::components::SlotOccupant::Human,
+                crate::components::SlotOccupant::Ai(crate::components::AiDifficulty::Medium),
+            ],
+            ..Default::default()
+        });
         world.insert_resource(LobbyState {
             players: vec![
                 lobby_player(0, "Host", Faction::Player3, 1, true, true),
@@ -791,6 +809,7 @@ mod tests {
     #[test]
     fn configure_multiplayer_ai_for_client_disables_all_ai_and_uses_client_faction() {
         let mut world = World::new();
+        world.insert_resource(GameSetupConfig::default());
         world.insert_resource(LobbyState {
             players: vec![lobby_player(0, "Host", Faction::Player1, 0, true, true)],
             ..Default::default()

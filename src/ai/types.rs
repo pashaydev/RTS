@@ -33,6 +33,14 @@ pub const DEFENSE_INTERRUPT_COUNT: u32 = 3;
 /// before actually transitioning (hysteresis).
 pub const HYSTERESIS_TICKS: u8 = 2;
 
+pub fn faction_uses_ai(config: &GameSetupConfig, faction: Faction) -> bool {
+    Faction::PLAYERS
+        .iter()
+        .position(|candidate| *candidate == faction)
+        .and_then(|index| config.slots.get(index))
+        .is_some_and(|slot| matches!(slot, SlotOccupant::Ai(_)))
+}
+
 // ── Enums ──
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]

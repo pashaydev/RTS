@@ -19,6 +19,7 @@ const STAGING_RADIUS: f32 = 25.0;
 pub fn ai_military_system(
     mut commands: Commands,
     time: Res<Time>,
+    config: Res<GameSetupConfig>,
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
     ai_controlled: Res<AiControlledFactions>,
@@ -58,6 +59,9 @@ pub fn ai_military_system(
     let dt = time.delta_secs();
 
     for &faction in &ai_controlled.factions {
+        if !faction_uses_ai(&config, faction) {
+            continue;
+        }
         if faction == active_player.0 {
             continue;
         }

@@ -11,6 +11,7 @@ use std::collections::HashMap;
 use game_state::codec;
 use game_state::message::{ClientMessage, ServerFrame, ServerMessage};
 
+use super::debug_tap;
 use super::NET_TRAFFIC;
 
 /// Channel indices for the dual-channel WebRTC setup.
@@ -87,6 +88,23 @@ enum DecodedServerPayload {
     Frame(ServerFrame),
 }
 
+impl DecodedServerPayload {
+    fn describe(&self) -> String {
+        match self {
+            Self::Message(msg) => format!("host -> client {}", server_msg_kind(msg)),
+            Self::Frame(frame) => format!("host -> client frame({})", frame.messages.len()),
+        }
+    }
+
+    fn to_debug_json(&self) -> String {
+        match self {
+            Self::Message(msg) => codec::to_debug_json(msg),
+            Self::Frame(frame) => serde_json::to_string(frame)
+                .unwrap_or_else(|_| debug_tap::payload_preview(&codec::encode(frame).unwrap_or_default())),
+        }
+    }
+}
+
 /// Polls the Matchbox socket for peer state changes and incoming messages.
 /// Fills `MatchboxInbox` for consumption by host/client game systems.
 pub fn poll_matchbox(
@@ -102,8 +120,17 @@ pub fn poll_matchbox(
         Ok(changes) => {
             for (peer, state) in changes {
                 match state {
-                    PeerState::Connected => inbox.connected.push(peer),
-                    PeerState::Disconnected => inbox.disconnected.push(peer),
+                    PeerState::Connected => {
+                        debug_tap::record_info("matchbox_peer", format!("peer {:?} connected", peer));
+                        inbox.connected.push(peer);
+                    }
+                    PeerState::Disconnected => {
+                        debug_tap::record_info(
+                            "matchbox_peer",
+                            format!("peer {:?} disconnected", peer),
+                        );
+                        inbox.disconnected.push(peer);
+                    }
                 }
             }
         }
@@ -132,13 +159,35 @@ pub fn poll_matchbox(
                 // Host receives ClientMessages
                 if let Ok(msg) = codec::decode::<ClientMessage>(bytes) {
                     let player_id = peer_map.player_id(&peer).unwrap_or(0);
+                    debug_tap::record_rx(
+                        "matchbox_host_rx",
+                        format!("player {} -> host {}", player_id, client_msg_kind(&msg)),
+                        bytes.len(),
+                        Some(codec::to_debug_json(&msg)),
+                    );
                     inbox.client_commands.push((player_id, msg));
                 } else {
+                    debug_tap::record_error(
+                        "matchbox_host_rx",
+                        format!("failed to decode ClientMessage from peer {:?}", peer),
+                    );
+                    debug_tap::record_rx(
+                        "matchbox_host_rx",
+                        format!("peer {:?} -> host raw_invalid", peer),
+                        bytes.len(),
+                        Some(debug_tap::payload_preview(bytes)),
+                    );
                     warn!("Host: failed to decode ClientMessage from peer {:?}", peer);
                 }
             } else {
                 // Client receives ServerMessages or ServerFrames
                 if let Some(payload) = decode_server_payload(bytes) {
+                    debug_tap::record_rx(
+                        "matchbox_client_rx",
+                        payload.describe(),
+                        bytes.len(),
+                        Some(payload.to_debug_json()),
+                    );
                     match payload {
                         DecodedServerPayload::Message(msg) => {
                             inbox.server_messages.push(msg);
@@ -148,6 +197,16 @@ pub fn poll_matchbox(
                         }
                     }
                 } else {
+                    debug_tap::record_error(
+                        "matchbox_client_rx",
+                        format!("failed to decode server payload from peer {:?}", peer),
+                    );
+                    debug_tap::record_rx(
+                        "matchbox_client_rx",
+                        format!("peer {:?} -> client raw_invalid", peer),
+                        bytes.len(),
+                        Some(debug_tap::payload_preview(bytes)),
+                    );
                     warn!("Client: failed to decode server payload from peer {:?}", peer);
                 }
             }
@@ -173,6 +232,34 @@ fn track_send(bytes_len: usize) {
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+fn client_msg_kind(msg: &ClientMessage) -> &'static str {
+    match msg {
+        ClientMessage::Input { .. } => "input",
+        ClientMessage::JoinRequest { .. } => "join",
+        ClientMessage::LeaveNotice { .. } => "leave",
+        ClientMessage::Ping { .. } => "ping",
+        ClientMessage::Reconnect { .. } => "reconnect",
+        ClientMessage::Chat { .. } => "chat",
+    }
+}
+
+fn server_msg_kind(msg: &ServerMessage) -> &'static str {
+    match msg {
+        ServerMessage::Event { .. } => "event",
+        ServerMessage::RelayedInput { .. } => "relayed_input",
+        ServerMessage::StateSync { .. } => "state_sync",
+        ServerMessage::EntitySpawn { .. } => "entity_spawn",
+        ServerMessage::EntityDespawn { .. } => "entity_despawn",
+        ServerMessage::BuildingSync { .. } => "building_sync",
+        ServerMessage::ResourceSync { .. } => "resource_sync",
+        ServerMessage::DayCycleSync { .. } => "day_cycle_sync",
+        ServerMessage::WorldBaseline { .. } => "world_baseline",
+        ServerMessage::NeutralWorldDelta { .. } => "neutral_world_delta",
+        ServerMessage::NeutralWorldDespawn { .. } => "neutral_world_despawn",
+        ServerMessage::Pong { .. } => "pong",
+    }
+}
+
 /// Broadcast a ServerMessage to all connected peers on the reliable channel.
 pub fn broadcast_reliable(socket: &mut MatchboxSocket, msg: &ServerMessage) {
     let Ok(bytes) = codec::encode(msg) else {
@@ -184,9 +271,12 @@ pub fn broadcast_reliable(socket: &mut MatchboxSocket, msg: &ServerMessage) {
     if peers.is_empty() {
         return;
     }
+    let detail = format!("host -> peers reliable {}", server_msg_kind(msg));
+    let payload = Some(codec::to_debug_json(msg));
     for peer in peers {
         track_send(packet.len());
         let _ = socket.channel_mut(RELIABLE_CH).try_send(packet.clone(), peer);
+        debug_tap::record_tx("matchbox_host_tx", detail.clone(), packet.len(), payload.clone());
     }
 }
 
@@ -209,9 +299,28 @@ pub fn broadcast_unreliable(socket: &mut MatchboxSocket, frame: &ServerFrame) {
     } else {
         UNRELIABLE_CH
     };
+    let lane = if ch == RELIABLE_CH {
+        "matchbox_host_tx"
+    } else {
+        "matchbox_host_tx_unreliable"
+    };
+    let detail = format!(
+        "host -> peers {} frame({})",
+        if ch == RELIABLE_CH {
+            "reliable"
+        } else {
+            "unreliable"
+        },
+        frame.messages.len()
+    );
+    let payload = Some(
+        serde_json::to_string(frame)
+            .unwrap_or_else(|_| debug_tap::payload_preview(packet.as_ref())),
+    );
     for peer in peers {
         track_send(packet.len());
         let _ = socket.channel_mut(ch).try_send(packet.clone(), peer);
+        debug_tap::record_tx(lane, detail.clone(), packet.len(), payload.clone());
     }
 }
 
@@ -228,9 +337,16 @@ pub fn send_to_player(
     let Ok(bytes) = codec::encode(msg) else {
         return;
     };
+    let bytes_len = bytes.len();
     let packet: Box<[u8]> = bytes.into();
     track_send(packet.len());
     let _ = socket.channel_mut(RELIABLE_CH).try_send(packet, peer);
+    debug_tap::record_tx(
+        "matchbox_host_tx",
+        format!("host -> player {} {}", player_id, server_msg_kind(msg)),
+        bytes_len,
+        Some(codec::to_debug_json(msg)),
+    );
 }
 
 /// Send a ClientMessage to the host (first connected peer) on the reliable channel.
@@ -238,12 +354,19 @@ pub fn send_to_host(socket: &mut MatchboxSocket, msg: &ClientMessage) {
     let Ok(bytes) = codec::encode(msg) else {
         return;
     };
+    let bytes_len = bytes.len();
     let packet: Box<[u8]> = bytes.into();
     let Some(host_peer) = socket.connected_peers().next() else {
         return;
     };
     track_send(packet.len());
     let _ = socket.channel_mut(RELIABLE_CH).try_send(packet, host_peer);
+    debug_tap::record_tx(
+        "matchbox_client_tx",
+        format!("client -> host {}", client_msg_kind(msg)),
+        bytes_len,
+        Some(codec::to_debug_json(msg)),
+    );
 }
 
 /// Build the standard 2-channel WebRTC socket builder for a given room URL.

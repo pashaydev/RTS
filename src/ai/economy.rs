@@ -17,6 +17,7 @@ pub fn ai_economy_system(
     mut commands: Commands,
     time: Res<Time>,
     context: (
+        Res<GameSetupConfig>,
         Res<ActivePlayer>,
         Res<TeamConfig>,
         Res<AiControlledFactions>,
@@ -56,7 +57,7 @@ pub fn ai_economy_system(
     ),
 ) {
     let dt = time.delta_secs();
-    let (active_player, teams, ai_controlled, base_state) = context;
+    let (config, active_player, teams, ai_controlled, base_state) = context;
     let (
         all_units_q,
         workers_q,
@@ -72,6 +73,9 @@ pub fn ai_economy_system(
     ) = queries;
 
     for &faction in &ai_controlled.factions {
+        if !faction_uses_ai(&config, faction) {
+            continue;
+        }
         if faction == active_player.0 {
             continue;
         }

@@ -236,6 +236,12 @@ pub enum GameEvent {
     Announcement {
         text: String,
     },
+    /// Host is counting down to game start (3-2-1).
+    #[serde(rename = "countdown_start")]
+    CountdownStart,
+    /// Host cancelled the countdown.
+    #[serde(rename = "countdown_cancel")]
+    CountdownCancel,
     /// Host tells clients to start the game.
     #[serde(rename = "game_start")]
     GameStart {
@@ -420,6 +426,14 @@ pub enum ClientMessage {
         timestamp: f64,
         session_token: u64,
     },
+
+    /// Chat message from client to host (host relays to all).
+    #[serde(rename = "chat")]
+    Chat {
+        seq: u32,
+        timestamp: f64,
+        message: String,
+    },
 }
 
 // ── Server Frame (batched messages per tick) ────────────────────────────────
@@ -461,7 +475,8 @@ impl ClientMessage {
             | Self::JoinRequest { seq, .. }
             | Self::LeaveNotice { seq, .. }
             | Self::Ping { seq, .. }
-            | Self::Reconnect { seq, .. } => *seq,
+            | Self::Reconnect { seq, .. }
+            | Self::Chat { seq, .. } => *seq,
         }
     }
 }

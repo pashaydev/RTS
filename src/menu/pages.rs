@@ -385,21 +385,38 @@ pub(crate) fn spawn_slot_card(
 ) {
     let slot = config.slots[slot_index];
     let faction_color = Faction::PLAYERS[slot_index].color();
-    let faction_label = format!("Player {}", slot_index + 1);
+    let is_you = is_multiplayer && slot_index == config.local_player_slot && matches!(slot, SlotOccupant::Human);
+    let faction_label = if is_you {
+        format!("Player {} (YOU)", slot_index + 1)
+    } else {
+        format!("Player {}", slot_index + 1)
+    };
 
     // Determine slot type index for the selector
-    let (type_options, type_idx) = (
-        vec!["Human", "AI", "None"],
-        match slot {
-            SlotOccupant::Human | SlotOccupant::Open => 0,
-            SlotOccupant::Ai(_) => 1,
-            SlotOccupant::Closed => 2,
-        },
-    );
+    let (type_options, type_idx) = if is_multiplayer {
+        (
+            vec!["Human", "Open", "AI", "None"],
+            match slot {
+                SlotOccupant::Human => 0,
+                SlotOccupant::Open => 1,
+                SlotOccupant::Ai(_) => 2,
+                SlotOccupant::Closed => 3,
+            },
+        )
+    } else {
+        (
+            vec!["Human", "AI", "None"],
+            match slot {
+                SlotOccupant::Human => 0,
+                SlotOccupant::Ai(_) => 1,
+                SlotOccupant::Closed | SlotOccupant::Open => 2,
+            },
+        )
+    };
 
     let is_local = slot_index == config.local_player_slot && matches!(slot, SlotOccupant::Human);
 
-    let border_col = if is_local {
+    let border_col = if is_local || is_you {
         theme::ACCENT
     } else {
         theme::SEPARATOR
@@ -585,6 +602,36 @@ pub(crate) fn spawn_slot_card(
                             ));
                         });
                     }
+                }
+
+                // Kick button (multiplayer, non-local human slots)
+                if is_multiplayer && !is_local && matches!(slot, SlotOccupant::Human) {
+                    row.spawn((
+                        super::KickPlayerButton(slot_index),
+                        Button,
+                        ButtonAnimState::new(theme::DESTRUCTIVE.to_srgba().to_f32_array()),
+                        ButtonStyle::Filled,
+                        Node {
+                            width: Val::Px(24.0),
+                            height: Val::Px(24.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            margin: UiRect::left(Val::Px(4.0)),
+                            ..default()
+                        },
+                        BackgroundColor(theme::DESTRUCTIVE),
+                    ))
+                    .with_children(|btn| {
+                        btn.spawn((
+                            Text::new("X"),
+                            TextFont {
+                                font_size: theme::FONT_TINY,
+                                ..default()
+                            },
+                            TextColor(Color::WHITE),
+                            Pickable::IGNORE,
+                        ));
+                    });
                 }
             });
 

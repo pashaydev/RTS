@@ -35,6 +35,7 @@ pub enum SelectorField {
     Shadows,
     EntityLights,
     UiScale,
+    PreferredFaction,
 }
 
 #[derive(Component)]

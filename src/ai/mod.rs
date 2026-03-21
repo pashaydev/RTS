@@ -39,11 +39,15 @@ impl Plugin for AiPlugin {
 // ════════════════════════════════════════════════════════════════════
 
 fn sync_ai_settings(
+    config: Res<GameSetupConfig>,
     mut ai_state: ResMut<AiState>,
     mut settings: ResMut<AiFactionSettings>,
     ai_controlled: Res<AiControlledFactions>,
 ) {
     for &faction in &ai_controlled.factions {
+        if !faction_uses_ai(&config, faction) {
+            continue;
+        }
         // Read settings from public resource (set by debug panel)
         if let Some(config) = settings.settings.get(&faction) {
             if let Some(brain) = ai_state.factions.get_mut(&faction) {

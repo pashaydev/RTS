@@ -47,6 +47,8 @@ pub(crate) enum MenuAction {
     CopySessionCode,
     CancelHost,
     Disconnect,
+    CancelCountdown,
+    KickPlayer,
 }
 
 #[derive(Component)]
@@ -99,6 +101,56 @@ pub(crate) struct ClearCodeButton;
 
 #[derive(Component)]
 pub(crate) struct ConnectionStateBanner;
+
+#[derive(Component)]
+pub(crate) struct ConnectionElapsedText;
+
+#[derive(Component)]
+pub(crate) struct ConnectionDotAnim;
+
+/// Timer tracking how long a connection attempt has been running.
+#[derive(Resource)]
+pub(crate) struct ConnectionTimer {
+    pub started: f64,
+    pub dot_phase: u8,
+    pub dot_timer: f32,
+}
+
+/// Timer to reset COPY button label back to "COPY" after showing "COPIED!".
+#[derive(Resource)]
+pub(crate) struct CopyResetTimer(pub Timer);
+
+/// Marker for the host lobby start button text (for countdown).
+#[derive(Component)]
+pub(crate) struct StartButtonText;
+
+/// Countdown state before game starts (3-2-1-GO).
+#[derive(Resource)]
+pub(crate) struct CountdownState {
+    pub timer: Timer,
+    pub current_digit: u8,
+    pub broadcast_sent: bool,
+}
+
+/// Marker for the countdown overlay text.
+#[derive(Component)]
+pub(crate) struct CountdownOverlay;
+
+/// Kick player button (slot index).
+#[derive(Component)]
+pub(crate) struct KickPlayerButton(pub usize);
+
+/// Preferred faction selection for joining clients.
+#[derive(Resource, Default)]
+pub(crate) struct PreferredFaction(pub Option<u8>);
+
+/// Marker for the lobby ping text.
+#[derive(Component)]
+pub(crate) struct LobbyPingText;
+
+/// Timer for lobby ping polling.
+#[derive(Resource)]
+pub(crate) struct LobbyPingTimer(pub Timer);
 
 // ── Constants ──
 
@@ -207,6 +259,11 @@ impl Plugin for MenuPlugin {
                     multiplayer::update_web_client_url,
                     multiplayer::paste_code_system,
                     multiplayer::clear_code_system,
+                    multiplayer::copy_reset_system,
+                    multiplayer::connection_timer_system,
+                    multiplayer::countdown_system,
+                    multiplayer::kick_player_system,
+                    multiplayer::lobby_ping_system,
                 )
                     .run_if(in_state(AppState::MainMenu)),
             );

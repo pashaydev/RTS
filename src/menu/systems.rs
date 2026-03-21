@@ -94,7 +94,7 @@ fn dispatch_page(
             multiplayer::spawn_multiplayer_page(commands, container, fonts)
         }
         MenuPage::HostLobby => {
-            multiplayer::spawn_host_lobby_page(commands, container, config, fonts)
+            multiplayer::spawn_host_lobby_page(commands, container, config, fonts, lobby)
         }
         MenuPage::JoinLobby => {
             let role = net_role.as_ref().map(|r| **r).unwrap_or(NetRole::Offline);
@@ -145,7 +145,7 @@ pub(crate) fn handle_menu_buttons(
     interactions: Query<(&Interaction, &MenuButton), Changed<Interaction>>,
     mut next_state: ResMut<NextState<AppState>>,
     mut page: ResMut<MenuPage>,
-    config: Res<GameSetupConfig>,
+    mut config: ResMut<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
@@ -199,6 +199,7 @@ pub(crate) fn handle_menu_buttons(
             MenuAction::HostGame => {
                 #[cfg(not(target_arch = "wasm32"))]
                 {
+                    multiplayer::prepare_multiplayer_host_config(&mut config);
                     start_hosting(&mut commands, &config);
                     *page = MenuPage::HostLobby;
                     rebuild_menu(&mut commands, &roots);
@@ -215,7 +216,12 @@ pub(crate) fn handle_menu_buttons(
                 // Handled by refresh_lan_hosts_system
             }
             MenuAction::StartMultiplayer => {
-                commands.insert_resource(multiplayer::PendingGameStart);
+                // Start 3-second countdown (or cancel if already counting)
+                commands.insert_resource(super::CountdownState {
+                    timer: Timer::from_seconds(3.0, TimerMode::Once),
+                    current_digit: 3,
+                    broadcast_sent: false,
+                });
             }
             MenuAction::BackToMultiplayer => {
                 *page = MenuPage::Multiplayer;
@@ -234,6 +240,12 @@ pub(crate) fn handle_menu_buttons(
                 multiplayer::stop_client(&mut commands, &client_state);
                 *page = MenuPage::JoinLobby;
                 rebuild_menu(&mut commands, &roots);
+            }
+            MenuAction::CancelCountdown => {
+                commands.remove_resource::<super::CountdownState>();
+            }
+            MenuAction::KickPlayer => {
+                // Handled by kick_player_system
             }
         }
     }
@@ -265,10 +277,19 @@ pub(crate) fn handle_selector_clicks(
         match selector.field {
             SelectorField::SlotType(slot_idx) => {
                 if slot_idx < 4 {
-                    let new_occupant = match selector.index {
-                        0 => SlotOccupant::Human,
-                        1 => SlotOccupant::Ai(AiDifficulty::Medium),
-                        _ => SlotOccupant::Closed,
+                    let new_occupant = if *page == MenuPage::HostLobby {
+                        match selector.index {
+                            0 => SlotOccupant::Human,
+                            1 => SlotOccupant::Open,
+                            2 => SlotOccupant::Ai(AiDifficulty::Medium),
+                            _ => SlotOccupant::Closed,
+                        }
+                    } else {
+                        match selector.index {
+                            0 => SlotOccupant::Human,
+                            1 => SlotOccupant::Ai(AiDifficulty::Medium),
+                            _ => SlotOccupant::Closed,
+                        }
                     };
 
                     // If setting to Human in single-player, move the previous human to AI
@@ -296,6 +317,7 @@ pub(crate) fn handle_selector_clicks(
                         #[cfg(not(target_arch = "wasm32"))]
                         if let Some(ref host) = host_state {
                             multiplayer::broadcast_lobby_update(lobby, host, &config);
+                            commands.insert_resource(multiplayer::PendingLobbyBroadcast);
                         }
                     }
 
@@ -314,6 +336,7 @@ pub(crate) fn handle_selector_clicks(
                         #[cfg(not(target_arch = "wasm32"))]
                         if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
                             multiplayer::broadcast_lobby_update(lobby, host, &config);
+                            commands.insert_resource(multiplayer::PendingLobbyBroadcast);
                         }
                     }
                 }
@@ -325,6 +348,7 @@ pub(crate) fn handle_selector_clicks(
                     #[cfg(not(target_arch = "wasm32"))]
                     if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
                         multiplayer::broadcast_lobby_update(lobby, host, &config);
+                        commands.insert_resource(multiplayer::PendingLobbyBroadcast);
                     }
                     rebuild_menu(&mut commands, &roots);
                 }
@@ -344,6 +368,7 @@ pub(crate) fn handle_selector_clicks(
                 #[cfg(not(target_arch = "wasm32"))]
                 if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
                     multiplayer::broadcast_lobby_update(lobby, host, &config);
+                    commands.insert_resource(multiplayer::PendingLobbyBroadcast);
                 }
                 // Rebuild to update team buttons
                 rebuild_menu(&mut commands, &roots);
@@ -398,6 +423,14 @@ pub(crate) fn handle_selector_clicks(
             SelectorField::MapSeed => {
                 // Handled by randomize_seed_system
             }
+            SelectorField::PreferredFaction => {
+                let preferred = if selector.index == 0 {
+                    None
+                } else {
+                    Some((selector.index - 1) as u8)
+                };
+                commands.insert_resource(super::PreferredFaction(preferred));
+            }
         }
     }
 }
@@ -408,6 +441,7 @@ pub(crate) fn update_selector_visuals(
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
     lobby: Option<Res<crate::multiplayer::LobbyState>>,
+    preferred_faction: Option<Res<super::PreferredFaction>>,
     mut selectors: Query<(
         &MenuSelector,
         &mut BackgroundColor,
@@ -425,10 +459,19 @@ pub(crate) fn update_selector_visuals(
             SelectorField::SlotType(slot_idx) => {
                 if slot_idx < 4 {
                     let slot = config.slots[slot_idx];
-                    let expected_idx = match slot {
-                        SlotOccupant::Human | SlotOccupant::Open => 0,
-                        SlotOccupant::Ai(_) => 1,
-                        SlotOccupant::Closed => 2,
+                    let expected_idx = if is_multiplayer {
+                        match slot {
+                            SlotOccupant::Human => 0,
+                            SlotOccupant::Open => 1,
+                            SlotOccupant::Ai(_) => 2,
+                            SlotOccupant::Closed => 3,
+                        }
+                    } else {
+                        match slot {
+                            SlotOccupant::Human => 0,
+                            SlotOccupant::Ai(_) => 1,
+                            SlotOccupant::Closed | SlotOccupant::Open => 2,
+                        }
                     };
                     selector.index == expected_idx
                 } else {
@@ -503,6 +546,12 @@ pub(crate) fn update_selector_visuals(
                 slot_idx < 4 && selector.index == config.player_teams[slot_idx] as usize
             }
             SelectorField::MapSeed => false,
+            SelectorField::PreferredFaction => {
+                let pref_idx = preferred_faction.as_ref()
+                    .map(|pf| pf.0.map_or(0, |v| v as usize + 1))
+                    .unwrap_or(0);
+                selector.index == pref_idx
+            }
         };
 
         // Team buttons use custom colors per team
