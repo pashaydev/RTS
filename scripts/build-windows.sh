@@ -4,11 +4,7 @@ set -euo pipefail
 # Build a Windows distribution bundle.
 # Usage: ./scripts/build-windows.sh [--skip-build]
 #
-# Output: dist/windows/rts/
-#   rts.exe
-#   assets/   (only the asset subtrees actually used by the game)
-#   config/   (empty, created for runtime settings)
-#   saves/    (empty, created for save files)
+# Output: dist/windows-rts.zip (containing rts/ folder with exe + assets)
 
 SKIP_BUILD=false
 if [[ "${1:-}" == "--skip-build" ]]; then
@@ -66,14 +62,20 @@ copy_asset_dir "ToonyTinyPeople/textures/units"
 copy_asset_dir "KayKit_Skeletons/characters/gltf"
 copy_asset_dir "KayKit_Character_Animations/Animations/gltf/Rig_Medium"
 
+# --- Create zip archive ---
+ZIP="$ROOT/dist/windows-rts.zip"
+echo "==> Creating archive at $ZIP"
+rm -f "$ZIP"
+(cd "$ROOT/dist/windows" && zip -r "$ZIP" rts/)
+
+# --- Clean up folder ---
+rm -rf "$ROOT/dist/windows"
+
 # --- Summary ---
-EXE_SIZE=$(du -sh "$DIST/rts.exe" | cut -f1)
-ASSET_SIZE=$(du -sh "$DEST" | cut -f1)
+ZIP_SIZE=$(du -sh "$ZIP" | cut -f1)
 echo ""
 echo "==> Done!"
-echo "    Executable:  $EXE_SIZE"
-echo "    Assets:      $ASSET_SIZE"
-echo "    Output:      $DIST/"
+echo "    Archive:  $ZIP_SIZE"
+echo "    Output:   $ZIP"
 echo ""
-echo "    To distribute, zip the $DIST folder."
-echo "    Users run rts.exe from inside the folder."
+echo "    Extract the zip and run rts.exe from inside the rts/ folder."
