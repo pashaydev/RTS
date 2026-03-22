@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::{
-    AiControlledFactions, AiDifficulty, AiFactionSettings, AiPersonality, AppState, Faction,
-    Health, RtsCamera, Selected, UiPressActive, UnitSpeed,
+    AiControlledFactions, AiFactionSettings, AppState, Faction, GameSetupConfig, Health,
+    RtsCamera, Selected, UiPressActive, UnitSpeed,
 };
 use crate::fog::FogTweakSettings;
 use crate::ground::HeightMap;
@@ -62,6 +62,7 @@ impl Plugin for DebugPlugin {
                 (
                     sync_entity_spawn_tweaks,
                     sync_entity_selected_tweaks,
+                    sync_runtime_debug_tweaks,
                     sync_save_load_tweaks,
                     sync_ai_debug_tweaks,
                     sync_network_debug_tweaks,
@@ -505,27 +506,82 @@ struct TweakButton {
 }
 
 fn debug_control_surface() -> Color {
-    theme::ICON_FRAME_BG
+    Color::srgba(0.06, 0.06, 0.06, 0.96)
 }
 
 fn debug_control_border() -> Color {
-    theme::BORDER_SUBTLE
+    Color::srgba(1.0, 1.0, 1.0, 0.14)
 }
 
 fn debug_hover_surface() -> Color {
-    theme::BTN_HOVER
+    Color::srgba(0.12, 0.12, 0.12, 0.98)
 }
 
 fn debug_pressed_surface() -> Color {
-    theme::BTN_PRESSED
+    Color::srgba(0.18, 0.18, 0.18, 0.98)
 }
 
 fn debug_active_surface() -> Color {
-    theme::ACCENT.with_alpha(0.2)
+    Color::srgba(1.0, 1.0, 1.0, 0.14)
 }
 
 fn debug_slider_fill() -> Color {
-    theme::ACCENT
+    Color::srgba(0.92, 0.92, 0.92, 0.96)
+}
+
+fn debug_text_primary() -> Color {
+    Color::srgb(0.94, 0.94, 0.94)
+}
+
+fn debug_text_secondary() -> Color {
+    Color::srgb(0.64, 0.64, 0.64)
+}
+
+fn debug_inverse_text() -> Color {
+    Color::srgb(0.05, 0.05, 0.05)
+}
+
+fn debug_separator() -> Color {
+    Color::srgba(1.0, 1.0, 1.0, 0.10)
+}
+
+fn debug_emphasis_border() -> Color {
+    Color::srgba(1.0, 1.0, 1.0, 0.30)
+}
+
+fn debug_card_node() -> Node {
+    Node {
+        flex_direction: FlexDirection::Column,
+        row_gap: Val::Px(4.0),
+        width: Val::Percent(100.0),
+        padding: UiRect::all(Val::Px(6.0)),
+        border: UiRect::all(Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(4.0)),
+        ..default()
+    }
+}
+
+fn debug_row_node() -> Node {
+    Node {
+        flex_direction: FlexDirection::Row,
+        align_items: AlignItems::Center,
+        justify_content: JustifyContent::SpaceBetween,
+        column_gap: Val::Px(10.0),
+        width: Val::Percent(100.0),
+        padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
+        border: UiRect::all(Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(4.0)),
+        ..default()
+    }
+}
+
+fn debug_pill_node() -> Node {
+    Node {
+        padding: UiRect::axes(Val::Px(6.0), Val::Px(1.0)),
+        border_radius: BorderRadius::all(Val::Px(999.0)),
+        border: UiRect::all(Val::Px(1.0)),
+        ..default()
+    }
 }
 
 /// Tracks which buttons were pressed this frame.
@@ -537,7 +593,18 @@ pub struct DebugButtonPressed {
 // ── Populate the debug widget content area ──
 
 pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
-    // Stats section (always visible)
+    let stats_header = commands
+        .spawn((
+            Text::new("RUNTIME"),
+            TextFont {
+                font_size: theme::FONT_SMALL,
+                ..default()
+            },
+            TextColor(debug_text_secondary()),
+        ))
+        .id();
+    commands.entity(parent).add_child(stats_header);
+
     let fps = commands
         .spawn((
             DebugFpsText,
@@ -546,7 +613,15 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
                 font_size: theme::FONT_BODY,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(debug_text_primary()),
+            Node {
+                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(debug_control_surface()),
+            BorderColor::all(debug_control_border()),
         ))
         .id();
     commands.entity(parent).add_child(fps);
@@ -559,7 +634,15 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
                 font_size: theme::FONT_BODY,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(debug_text_primary()),
+            Node {
+                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(debug_control_surface()),
+            BorderColor::all(debug_control_border()),
         ))
         .id();
     commands.entity(parent).add_child(ent_count);
@@ -572,7 +655,15 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
                 font_size: theme::FONT_BODY,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(debug_text_primary()),
+            Node {
+                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(debug_control_surface()),
+            BorderColor::all(debug_control_border()),
         ))
         .id();
     commands.entity(parent).add_child(day_cycle);
@@ -583,10 +674,10 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Px(1.0),
-                margin: UiRect::axes(Val::ZERO, Val::Px(4.0)),
+                margin: UiRect::axes(Val::ZERO, Val::Px(6.0)),
                 ..default()
             },
-            BackgroundColor(theme::SEPARATOR),
+            BackgroundColor(debug_separator()),
         ))
         .id();
     commands.entity(parent).add_child(sep);
@@ -610,24 +701,26 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
             Button,
             Node {
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
                 flex_grow: 1.0,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(theme::BG_SURFACE),
+            BackgroundColor(debug_control_surface()),
+            BorderColor::all(debug_control_border()),
         ))
         .id();
     let expand_text = commands
         .spawn((
             Pickable::IGNORE,
-            Text::new("Dev Tool"),
+            Text::new("Inspect"),
             TextFont {
                 font_size: theme::FONT_BODY,
                 ..default()
             },
-            TextColor(theme::TEXT_PRIMARY),
+            TextColor(debug_text_primary()),
         ))
         .id();
     commands.entity(expand_btn).add_child(expand_text);
@@ -641,12 +734,14 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
             Button,
             Node {
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(theme::BG_SURFACE),
+            BackgroundColor(debug_control_surface()),
+            BorderColor::all(debug_control_border()),
         ))
         .id();
     let save_text = commands
@@ -658,7 +753,7 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
                 font_size: theme::FONT_BODY,
                 ..default()
             },
-            TextColor(theme::TEXT_PRIMARY),
+            TextColor(debug_text_primary()),
         ))
         .id();
     commands.entity(save_btn).add_child(save_text);
@@ -671,7 +766,7 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
             TweakPanelBuiltVersion(0),
             Node {
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(2.0),
+                row_gap: Val::Px(4.0),
                 width: Val::Percent(100.0),
                 ..default()
             },
@@ -967,8 +1062,8 @@ fn update_tweak_visuals(
     for (tog, interaction, mut bg) in &mut toggle_q {
         if let Some(v) = tweaks.get_bool(&tog.folder, &tog.label) {
             let target = match (*interaction, v) {
-                (Interaction::Pressed, true) => theme::ACCENT.with_alpha(0.38),
-                (Interaction::Hovered, true) => theme::ACCENT.with_alpha(0.3),
+                (Interaction::Pressed, true) => Color::srgba(1.0, 1.0, 1.0, 0.28),
+                (Interaction::Hovered, true) => Color::srgba(1.0, 1.0, 1.0, 0.22),
                 (_, true) => debug_active_surface(),
                 (Interaction::Pressed, false) => debug_pressed_surface(),
                 (Interaction::Hovered, false) => debug_hover_surface(),
@@ -1028,7 +1123,7 @@ fn spawn_section_header(parent: &mut ChildSpawnerCommands, section: &str) {
                 border: UiRect::bottom(Val::Px(1.0)),
                 ..default()
             },
-            BorderColor::all(theme::SEPARATOR),
+            BorderColor::all(debug_separator()),
         ))
         .with_children(|row| {
             row.spawn((
@@ -1037,7 +1132,7 @@ fn spawn_section_header(parent: &mut ChildSpawnerCommands, section: &str) {
                     font_size: theme::FONT_SMALL,
                     ..default()
                 },
-                TextColor(theme::WARNING),
+                TextColor(debug_text_secondary()),
             ));
         });
 }
@@ -1058,9 +1153,9 @@ fn spawn_folder_header(
                 padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
                 margin: UiRect::top(Val::Px(4.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(5.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
                 width: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
+                justify_content: JustifyContent::FlexStart,
                 align_items: AlignItems::Center,
                 ..default()
             },
@@ -1068,17 +1163,17 @@ fn spawn_folder_header(
             BorderColor::all(if collapsed {
                 debug_control_border()
             } else {
-                theme::ACCENT.with_alpha(0.45)
+                debug_emphasis_border()
             }),
         ))
         .with_children(|header| {
             header.spawn((
-                Text::new(format!("{} {}", arrow, display_name)),
+                Text::new(format!("{} {}", arrow, display_name.to_uppercase())),
                 TextFont {
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(theme::TEXT_PRIMARY),
+                TextColor(debug_text_primary()),
             ));
         });
 }
@@ -1095,15 +1190,7 @@ fn spawn_slider_row(
 
     parent
         .spawn((
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(4.0),
-                width: Val::Percent(100.0),
-                padding: UiRect::all(Val::Px(6.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(5.0)),
-                ..default()
-            },
+            debug_card_node(),
             BackgroundColor(debug_control_surface()),
             BorderColor::all(debug_control_border()),
         ))
@@ -1122,7 +1209,7 @@ fn spawn_slider_row(
                         font_size: theme::FONT_BODY,
                         ..default()
                     },
-                    TextColor(theme::TEXT_PRIMARY),
+                    TextColor(debug_text_primary()),
                 ));
 
                 top.spawn((
@@ -1135,13 +1222,10 @@ fn spawn_slider_row(
                         font_size: theme::FONT_BODY,
                         ..default()
                     },
-                    TextColor(theme::WARNING),
-                    Node {
-                        padding: UiRect::axes(Val::Px(5.0), Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(999.0)),
-                        ..default()
-                    },
-                    BackgroundColor(theme::BG_PANEL),
+                    TextColor(debug_inverse_text()),
+                    debug_pill_node(),
+                    BackgroundColor(debug_slider_fill()),
+                    BorderColor::all(debug_slider_fill()),
                 ));
             });
 
@@ -1159,8 +1243,8 @@ fn spawn_slider_row(
                     align_items: AlignItems::Center,
                     ..default()
                 },
-                BackgroundColor(theme::HP_BAR_BG),
-                BorderColor::all(theme::SEPARATOR),
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.06)),
+                BorderColor::all(debug_control_border()),
             ))
             .with_children(|track| {
                 track.spawn((
@@ -1175,13 +1259,6 @@ fn spawn_slider_row(
                         ..default()
                     },
                     BackgroundColor(debug_slider_fill()),
-                    BoxShadow::new(
-                        debug_slider_fill().with_alpha(0.35),
-                        Val::Px(0.0),
-                        Val::Px(0.0),
-                        Val::Px(0.0),
-                        Val::Px(6.0),
-                    ),
                 ));
 
                 track.spawn((
@@ -1199,8 +1276,8 @@ fn spawn_slider_row(
                         border_radius: BorderRadius::all(Val::Px(999.0)),
                         ..default()
                     },
-                    BackgroundColor(theme::TEXT_PRIMARY),
-                    BorderColor::all(theme::ACCENT),
+                    BackgroundColor(debug_text_primary()),
+                    BorderColor::all(Color::BLACK),
                 ));
             });
         });
@@ -1209,17 +1286,7 @@ fn spawn_slider_row(
 fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, value: bool) {
     parent
         .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
-                column_gap: Val::Px(10.0),
-                width: Val::Percent(100.0),
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(5.0)),
-                ..default()
-            },
+            debug_row_node(),
             BackgroundColor(debug_control_surface()),
             BorderColor::all(debug_control_border()),
         ))
@@ -1230,7 +1297,7 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(theme::TEXT_PRIMARY),
+                TextColor(debug_text_primary()),
                 Node {
                     flex_grow: 1.0,
                     ..default()
@@ -1262,7 +1329,7 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                 },
                 BackgroundColor(bg),
                 BorderColor::all(if value {
-                    theme::ACCENT.with_alpha(0.55)
+                    debug_emphasis_border()
                 } else {
                     debug_control_border()
                 }),
@@ -1279,7 +1346,7 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                         font_size: theme::FONT_BODY,
                         ..default()
                     },
-                    TextColor(theme::TEXT_PRIMARY),
+                    TextColor(debug_text_primary()),
                 ));
             });
         });
@@ -1288,19 +1355,9 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
 fn spawn_readonly_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, text: &str) {
     parent
         .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
-                column_gap: Val::Px(10.0),
-                width: Val::Percent(100.0),
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(5.0)),
-                ..default()
-            },
-            BackgroundColor(theme::BG_PANEL),
-            BorderColor::all(theme::SEPARATOR),
+            debug_row_node(),
+            BackgroundColor(debug_control_surface()),
+            BorderColor::all(debug_control_border()),
         ))
         .with_children(|row| {
             row.spawn((
@@ -1309,7 +1366,7 @@ fn spawn_readonly_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &s
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(debug_text_secondary()),
             ));
 
             row.spawn((
@@ -1322,7 +1379,7 @@ fn spawn_readonly_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &s
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(theme::TEXT_PRIMARY),
+                TextColor(debug_text_primary()),
             ));
         });
 }
@@ -1337,7 +1394,7 @@ fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: 
                 width: Val::Percent(100.0),
                 padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(5.0)),
+                border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
             },
             BackgroundColor(debug_control_surface()),
@@ -1350,7 +1407,7 @@ fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: 
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(debug_text_secondary()),
             ));
 
             row.spawn((
@@ -1366,7 +1423,7 @@ fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: 
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.5, 0.5, 0.5)),
-                BorderColor::all(theme::SEPARATOR),
+                BorderColor::all(debug_control_border()),
             ));
         });
 }
@@ -1374,17 +1431,7 @@ fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: 
 fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, display: &str) {
     parent
         .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
-                column_gap: Val::Px(10.0),
-                width: Val::Percent(100.0),
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(5.0)),
-                ..default()
-            },
+            debug_row_node(),
             BackgroundColor(debug_control_surface()),
             BorderColor::all(debug_control_border()),
         ))
@@ -1395,7 +1442,7 @@ fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str,
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(theme::TEXT_PRIMARY),
+                TextColor(debug_text_primary()),
                 Node {
                     flex_grow: 1.0,
                     ..default()
@@ -1418,7 +1465,7 @@ fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str,
                     border_radius: BorderRadius::all(Val::Px(999.0)),
                     ..default()
                 },
-                BackgroundColor(theme::BG_PANEL),
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)),
                 BorderColor::all(debug_control_border()),
             ))
             .with_children(|btn| {
@@ -1433,7 +1480,7 @@ fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str,
                         font_size: theme::FONT_BODY,
                         ..default()
                     },
-                    TextColor(theme::WARNING),
+                    TextColor(debug_text_primary()),
                 ));
             });
         });
@@ -1459,21 +1506,21 @@ fn spawn_button_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(5.0)),
+                    border_radius: BorderRadius::all(Val::Px(4.0)),
                     ..default()
                 },
-                BackgroundColor(theme::WARNING.with_alpha(0.16)),
-                BorderColor::all(theme::WARNING.with_alpha(0.42)),
+                BackgroundColor(debug_control_surface()),
+                BorderColor::all(debug_emphasis_border()),
             ))
             .with_children(|btn| {
                 btn.spawn((
                     Pickable::IGNORE,
-                    Text::new(text),
+                    Text::new(text.to_uppercase()),
                     TextFont {
                         font_size: theme::FONT_BODY,
                         ..default()
                     },
-                    TextColor(theme::TEXT_PRIMARY),
+                    TextColor(debug_text_primary()),
                 ));
             });
         });
@@ -1950,6 +1997,7 @@ pub struct DebugSpawnState {
 
 const SPAWN_FOLDER: &str = "Entities/Spawn";
 const SELECTED_FOLDER: &str = "Entities/Selected";
+const RUNTIME_FOLDER: &str = "Game/Runtime";
 const AI_FOLDER: &str = "Game/AI Settings";
 const SAVE_FOLDER: &str = "Game/Save & Load";
 const NET_CONN_FOLDER: &str = "Network/Connection";
@@ -1986,21 +2034,17 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_button(SELECTED_FOLDER, "Kill Selected");
     tweaks.add_button(SELECTED_FOLDER, "Delete Selected");
 
+    // Runtime inspection folder
+    tweaks.add_readonly(RUNTIME_FOLDER, "Camera Pivot", "--");
+    tweaks.add_readonly(RUNTIME_FOLDER, "Camera Distance", "--");
+    tweaks.add_readonly(RUNTIME_FOLDER, "Cursor World", "--");
+    tweaks.add_readonly(RUNTIME_FOLDER, "UI Capture", "--");
+
     // AI Settings folder
     for prefix in ["P2", "P3", "P4"] {
-        tweaks.add_bool(AI_FOLDER, &format!("{prefix} AI Enabled"), true);
-        tweaks.add_cycle_enum(
-            AI_FOLDER,
-            &format!("{prefix} Difficulty"),
-            vec!["Easy".into(), "Medium".into(), "Hard".into()],
-            1,
-        );
-        tweaks.add_cycle_enum(
-            AI_FOLDER,
-            &format!("{prefix} Personality"),
-            vec!["Balanced".into(), "Aggressive".into(), "Defensive".into(), "Economic".into(), "Supportive".into()],
-            0,
-        );
+        tweaks.add_readonly(AI_FOLDER, &format!("{prefix} AI Enabled"), "--");
+        tweaks.add_readonly(AI_FOLDER, &format!("{prefix} Difficulty"), "--");
+        tweaks.add_readonly(AI_FOLDER, &format!("{prefix} Personality"), "--");
         tweaks.add_readonly(AI_FOLDER, &format!("{prefix} State"), "--");
     }
 
@@ -2014,6 +2058,7 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
         let folder = net_folder(field.folder_key);
         tweaks.add_readonly(folder, field.label, "--");
     }
+    tweaks.add_readonly(NET_CONN_FOLDER, "Tap API", "--");
 }
 
 fn cursor_ground_pos(
@@ -2053,6 +2098,10 @@ fn get_selected_kind_and_faction(tweaks: &DebugTweaks) -> (EntityKind, Faction) 
         _ => Faction::Neutral,
     };
     (kind, faction)
+}
+
+fn format_debug_vec3(v: Vec3) -> String {
+    format!("{:.1}, {:.1}, {:.1}", v.x, v.y, v.z)
 }
 
 fn sync_entity_spawn_tweaks(
@@ -2157,6 +2206,37 @@ fn sync_entity_spawn_tweaks(
     }
 }
 
+fn sync_runtime_debug_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    camera_q: Query<&RtsCamera>,
+    cam_query: Query<(&Camera, &GlobalTransform)>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    ui_press: Res<UiPressActive>,
+) {
+    if let Ok(camera) = camera_q.single() {
+        tweaks.set_readonly_if_changed(
+            RUNTIME_FOLDER,
+            "Camera Pivot",
+            &format_debug_vec3(camera.pivot),
+        );
+        tweaks.set_readonly_if_changed(
+            RUNTIME_FOLDER,
+            "Camera Distance",
+            &format!("{:.1}", camera.distance),
+        );
+    }
+
+    let cursor_text = cursor_ground_pos(&cam_query, &windows)
+        .map(format_debug_vec3)
+        .unwrap_or_else(|| "--".to_string());
+    tweaks.set_readonly_if_changed(RUNTIME_FOLDER, "Cursor World", &cursor_text);
+    tweaks.set_readonly_if_changed(
+        RUNTIME_FOLDER,
+        "UI Capture",
+        if ui_press.0 { "Dragging UI" } else { "Free" },
+    );
+}
+
 fn sync_entity_selected_tweaks(
     mut commands: Commands,
     mut tweaks: ResMut<DebugTweaks>,
@@ -2251,82 +2331,80 @@ fn sync_save_load_tweaks(
 
 fn sync_ai_debug_tweaks(
     mut tweaks: ResMut<DebugTweaks>,
-    mut ai_controlled: ResMut<AiControlledFactions>,
-    mut ai_settings: ResMut<AiFactionSettings>,
+    game_config: Res<GameSetupConfig>,
+    ai_controlled: Res<AiControlledFactions>,
+    ai_settings: Res<AiFactionSettings>,
 ) {
-    // AI enable/disable toggles
-    let factions = [
-        ("P2 AI Enabled", Faction::Player2),
-        ("P3 AI Enabled", Faction::Player3),
-        ("P4 AI Enabled", Faction::Player4),
+    let rows = [
+        ("P2", Faction::Player2),
+        ("P3", Faction::Player3),
+        ("P4", Faction::Player4),
     ];
-    for (label, faction) in &factions {
-        if let Some(enabled) = tweaks.get_bool(AI_FOLDER, label) {
-            if enabled {
-                ai_controlled.factions.insert(*faction);
+    for (prefix, faction) in rows {
+        let configured = crate::ai::types::faction_uses_ai(&game_config, faction);
+        let running = ai_controlled.factions.contains(&faction) && configured;
+
+        tweaks.set_readonly_if_changed(
+            AI_FOLDER,
+            &format!("{prefix} AI Enabled"),
+            if running {
+                "Yes"
+            } else if configured {
+                "Configured"
             } else {
-                ai_controlled.factions.remove(faction);
-            }
-        }
-    }
+                "No"
+            },
+        );
 
-    // Difficulty per faction
-    let diff_factions = [
-        ("P2 Difficulty", Faction::Player2),
-        ("P3 Difficulty", Faction::Player3),
-        ("P4 Difficulty", Faction::Player4),
-    ];
-    for (label, faction) in &diff_factions {
-        if let Some(selected) = tweaks.get_cycle_selected(AI_FOLDER, label) {
-            let difficulty = match selected {
-                0 => AiDifficulty::Easy,
-                2 => AiDifficulty::Hard,
-                _ => AiDifficulty::Medium,
-            };
-            let config = ai_settings.settings.entry(*faction).or_default();
-            config.difficulty = difficulty;
-        }
-    }
-
-    // Personality per faction
-    let pers_factions = [
-        ("P2 Personality", Faction::Player2),
-        ("P3 Personality", Faction::Player3),
-        ("P4 Personality", Faction::Player4),
-    ];
-    for (label, faction) in &pers_factions {
-        if let Some(selected) = tweaks.get_cycle_selected(AI_FOLDER, label) {
-            let personality = match selected {
-                1 => AiPersonality::Aggressive,
-                2 => AiPersonality::Defensive,
-                3 => AiPersonality::Economic,
-                4 => AiPersonality::Supportive,
-                _ => AiPersonality::Balanced,
-            };
-            let config = ai_settings.settings.entry(*faction).or_default();
-            config.personality = personality;
-        }
-    }
-
-    // Update readonly state displays
-    let state_factions = [
-        ("P2 State", Faction::Player2),
-        ("P3 State", Faction::Player3),
-        ("P4 State", Faction::Player4),
-    ];
-    for (label, faction) in &state_factions {
-        if let Some(config) = ai_settings.settings.get(faction) {
-            let status = format!(
-                "{} {} | Str:{:.1} W:{} M:{} Atk:{} Def:{}",
-                config.phase_name,
-                config.posture_name,
-                config.relative_strength,
-                config.worker_count,
-                config.military_count,
-                config.attack_squad_size,
-                config.defense_squad_size
+        if let Some(config) = ai_settings.settings.get(&faction) {
+            tweaks.set_readonly_if_changed(
+                AI_FOLDER,
+                &format!("{prefix} Difficulty"),
+                &format!("{:?}", config.difficulty),
             );
-            tweaks.set_readonly_if_changed(AI_FOLDER, label, &status);
+            tweaks.set_readonly_if_changed(
+                AI_FOLDER,
+                &format!("{prefix} Personality"),
+                &format!("{:?}", config.personality),
+            );
+
+            let status = if running {
+                format!(
+                    "{} {} | Str:{:.1} W:{} M:{} Atk:{} Def:{}",
+                    config.phase_name,
+                    config.posture_name,
+                    config.relative_strength,
+                    config.worker_count,
+                    config.military_count,
+                    config.attack_squad_size,
+                    config.defense_squad_size
+                )
+            } else if configured {
+                "Pending brain sync".to_string()
+            } else {
+                "Disabled".to_string()
+            };
+            tweaks.set_readonly_if_changed(AI_FOLDER, &format!("{prefix} State"), &status);
+        } else {
+            tweaks.set_readonly_if_changed(
+                AI_FOLDER,
+                &format!("{prefix} Difficulty"),
+                if configured { "Unknown" } else { "--" },
+            );
+            tweaks.set_readonly_if_changed(
+                AI_FOLDER,
+                &format!("{prefix} Personality"),
+                if configured { "Unknown" } else { "--" },
+            );
+            tweaks.set_readonly_if_changed(
+                AI_FOLDER,
+                &format!("{prefix} State"),
+                if configured {
+                    "Pending brain sync"
+                } else {
+                    "Disabled"
+                },
+            );
         }
     }
 }
@@ -2355,6 +2433,10 @@ fn sync_network_debug_tweaks(
         _ => "--".to_string(),
     };
     tweaks.set_readonly_if_changed(NET_CONN_FOLDER, "Status", &status);
+    let tap_api = crate::multiplayer::debug_tap::http_addr()
+        .map(|addr| format!("http://{addr}/events"))
+        .unwrap_or_else(|| "--".to_string());
+    tweaks.set_readonly_if_changed(NET_CONN_FOLDER, "Tap API", &tap_api);
 
     // Default stats for when resource isn't present yet
     let default_stats = crate::multiplayer::NetStats::default();

@@ -118,6 +118,12 @@ pub fn record_error(lane: &str, detail: impl Into<String>) {
     record("error", lane, detail.into(), 0, None);
 }
 
+pub fn http_addr() -> Option<String> {
+    DEBUG_STATE
+        .get()
+        .and_then(|state| state.http_addr.as_ref().cloned())
+}
+
 pub fn payload_preview(raw: &[u8]) -> String {
     let text = String::from_utf8_lossy(raw);
     if text.len() > MAX_PAYLOAD_PREVIEW {

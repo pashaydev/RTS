@@ -21,7 +21,6 @@ pub fn ai_economy_system(
         Res<ActivePlayer>,
         Res<TeamConfig>,
         Res<AiControlledFactions>,
-        Res<FactionBaseState>,
     ),
     mut ai_state: ResMut<AiState>,
     mut all_resources: ResMut<AllPlayerResources>,
@@ -57,7 +56,7 @@ pub fn ai_economy_system(
     ),
 ) {
     let dt = time.delta_secs();
-    let (config, active_player, teams, ai_controlled, base_state) = context;
+    let (config, active_player, teams, ai_controlled) = context;
     let (
         all_units_q,
         workers_q,
@@ -81,8 +80,6 @@ pub fn ai_economy_system(
         }
 
         let is_friendly = teams.is_allied(&faction, &active_player.0);
-        let is_founded =
-            base_state.is_founded(&faction) || all_completed.has(&faction, EntityKind::Base);
 
         let brain = match ai_state.factions.get_mut(&faction) {
             Some(b) => b,
@@ -164,46 +161,6 @@ pub fn ai_economy_system(
             None => continue,
         };
         brain.base_position = Some(base_pos);
-
-        if !is_founded {
-            let bp = registry.get(EntityKind::Base);
-            let carried = carried_totals.get(&faction);
-            if bp
-                .cost
-                .can_afford_with_carried(all_resources.get(&faction), carried)
-            {
-                let deficits =
-                    bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
-                let drain = SpendFromCarried {
-                    faction,
-                    amounts: deficits,
-                };
-                if drain.has_deficit() {
-                    pending_drains.drains.push(drain);
-                }
-
-                let pos = find_build_pos(
-                    base_pos,
-                    &our_building_positions,
-                    EntityKind::Base,
-                    &footprints_q,
-                    &height_map,
-                    Some(base_pos),
-                );
-                spawn_ai_building(
-                    &mut commands,
-                    &cache,
-                    EntityKind::Base,
-                    pos,
-                    &registry,
-                    building_models.as_deref(),
-                    &height_map,
-                    faction,
-                );
-                brain.pending_builds += 1;
-            }
-            continue;
-        }
 
         // Get player base pos for friendly AI resource avoidance
         let player_base_pos = if is_friendly {

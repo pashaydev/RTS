@@ -23,6 +23,7 @@ impl Plugin for AiPlugin {
             .add_systems(
                 Update,
                 (strategy::ai_strategy_system, economy::ai_economy_system)
+                    .chain()
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(

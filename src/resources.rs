@@ -1033,8 +1033,10 @@ fn worker_ai_system(
                     );
                     if !matches!(new_state, UnitState::Idle) {
                         *state = new_state;
+                        continue;
                     }
-                    continue;
+                    // No valid depot exists yet. Keep the worker available for
+                    // bootstrapping tasks like constructing the first base.
                 }
                 // Check for nearby unfinished buildings first (prioritize construction)
                 let auto_build_range = 20.0;
