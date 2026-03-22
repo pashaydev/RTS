@@ -1466,7 +1466,13 @@ fn resource_processor_system(
     >,
     mut nodes: Query<(&Transform, &mut ResourceNode), Without<Building>>,
     vfx_assets: Option<Res<VfxAssets>>,
+    unit_factions: Query<&Faction, With<Unit>>,
 ) {
+    // Pre-compute unit counts per faction for upkeep modifier
+    let mut faction_unit_counts: std::collections::HashMap<Faction, u32> = std::collections::HashMap::new();
+    for f in &unit_factions {
+        *faction_unit_counts.entry(*f).or_default() += 1;
+    }
     for (_building_entity, building_tf, mut processor, state, faction, storage, assigned_workers) in
         &mut processors
     {
@@ -1484,8 +1490,13 @@ fn resource_processor_system(
 
         // With 0 workers: 30% trickle rate. Each worker adds worker_rate_bonus fraction of base.
         let trickle_fraction = if worker_count == 0.0 { 0.3 } else { 0.0 };
-        let effective_rate = processor.harvest_rate * trickle_fraction
+        let base_rate = processor.harvest_rate * trickle_fraction
             + (worker_count * processor.harvest_rate * processor.worker_rate_bonus);
+        // Apply population upkeep modifier
+        let upkeep = income_modifier_for_population(
+            faction_unit_counts.get(faction).copied().unwrap_or(0),
+        );
+        let effective_rate = base_rate * upkeep;
         processor.harvest_accumulator += effective_rate;
         let amount = processor.harvest_accumulator as u32;
         processor.harvest_accumulator -= amount as f32;
@@ -2435,7 +2446,11 @@ fn resource_respawn_system(
         }
 
         // For each resource type this building manages
+        // Only Wood regrows; mineral nodes (Copper, Iron, Gold, Oil) are finite
         for rt in config.resource_types.clone() {
+            if rt != ResourceType::Wood {
+                continue;
+            }
             // Count existing nodes + growing resources of this type within radius
             let mut count = 0u8;
             for (node_tf, node) in &existing_nodes {

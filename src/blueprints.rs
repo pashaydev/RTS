@@ -21,6 +21,7 @@ pub enum EntityKind {
     Mage,
     Priest,
     Cavalry,
+    Scout,
 
     // Siege
     Catapult,
@@ -82,7 +83,8 @@ impl EntityKind {
             | Self::Knight
             | Self::Mage
             | Self::Priest
-            | Self::Cavalry => EntityCategory::Unit,
+            | Self::Cavalry
+            | Self::Scout => EntityCategory::Unit,
 
             Self::Catapult | Self::BatteringRam => EntityCategory::Siege,
 
@@ -116,6 +118,41 @@ impl EntityKind {
         }
     }
 
+    /// Returns the armor type for this entity kind (used in the damage counter system).
+    pub fn armor_type(self) -> ArmorType {
+        use ArmorType::*;
+        match self {
+            // Light armor: workers, ranged, casters, scouts, light mobs, summons
+            Self::Worker | Self::Archer | Self::Mage | Self::Priest | Self::Scout
+            | Self::Goblin | Self::Skeleton
+            | Self::SkeletonMinion | Self::SpiritWolf | Self::FireElemental => Light,
+            // Heavy armor: melee fighters, heavy mobs
+            Self::Soldier | Self::Tank | Self::Knight | Self::Cavalry
+            | Self::Orc | Self::Demon => Heavy,
+            // Siege armor: siege units
+            Self::Catapult | Self::BatteringRam => Siege,
+            // Structure armor: all buildings
+            _ => Structure,
+        }
+    }
+
+    /// Returns the damage type for this entity kind (used in the damage counter system).
+    pub fn damage_type(self) -> DamageType {
+        use DamageType::*;
+        match self {
+            // Pierce: ranged physical
+            Self::Archer | Self::Skeleton
+            | Self::Tower | Self::WatchTower | Self::GuardTower
+            | Self::BallistaTower | Self::BombardTower => Pierce,
+            // Magic: casters, demons, magic summons
+            Self::Mage | Self::Priest | Self::Demon | Self::FireElemental => Magic,
+            // Siege: siege units
+            Self::Catapult | Self::BatteringRam => SiegeDmg,
+            // Melee: everything else (workers, soldiers, knights, cavalry, etc.)
+            _ => Melee,
+        }
+    }
+
     pub fn display_name(self) -> &'static str {
         match self {
             Self::Worker => "Worker",
@@ -126,6 +163,7 @@ impl EntityKind {
             Self::Mage => "Mage",
             Self::Priest => "Priest",
             Self::Cavalry => "Cavalry",
+            Self::Scout => "Scout",
             Self::Catapult => "Catapult",
             Self::BatteringRam => "Battering Ram",
             Self::Base => "Base",
@@ -170,6 +208,7 @@ impl EntityKind {
         EntityKind::Mage,
         EntityKind::Priest,
         EntityKind::Cavalry,
+        EntityKind::Scout,
         EntityKind::Catapult,
         EntityKind::BatteringRam,
         EntityKind::Base,
@@ -227,6 +266,7 @@ impl EntityKind {
             Self::Mage => "Ranged caster with Fireball and Frost Nova.",
             Self::Priest => "Support caster with Heal and Holy Smite.",
             Self::Cavalry => "Fast mounted unit for flanking.",
+            Self::Scout => "Fast recon unit with high vision. No combat ability.",
             Self::Catapult => "Long-range siege unit with AoE Boulder Throw.",
             Self::BatteringRam => "Melee siege unit with massive anti-structure damage.",
             Self::Base => "Main headquarters. Unlocks all other buildings.",
@@ -578,7 +618,7 @@ pub fn build_registry() -> BlueprintRegistry {
 
             faction: Faction::Player1,
             combat: Some(CombatStats {
-                hp: 115.0,
+                hp: 80.0,
                 damage: 6.0,
                 attack_range: 1.8,
                 attack_cooldown_secs: 1.2,
@@ -617,7 +657,7 @@ pub fn build_registry() -> BlueprintRegistry {
         Blueprint {
             faction: Faction::Player1,
             combat: Some(CombatStats {
-                hp: 100.0,
+                hp: 120.0,
                 damage: 12.0,
                 attack_range: 2.0,
                 attack_cooldown_secs: 1.0,
@@ -653,7 +693,7 @@ pub fn build_registry() -> BlueprintRegistry {
             faction: Faction::Player1,
             combat: Some(CombatStats {
                 hp: 100.0,
-                damage: 8.0,
+                damage: 10.0,
                 attack_range: 12.0,
                 attack_cooldown_secs: 1.5,
                 aggro_range: None,
@@ -688,7 +728,7 @@ pub fn build_registry() -> BlueprintRegistry {
         Blueprint {
             faction: Faction::Player1,
             combat: Some(CombatStats {
-                hp: 100.0,
+                hp: 250.0,
                 damage: 18.0,
                 attack_range: 2.5,
                 attack_cooldown_secs: 2.0,
@@ -772,7 +812,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             gathering: None,
             vision: Some(VisionStats { range: 20.0 }),
-            cost: ResourceCost::new().with(ResourceType::Wood, 10).with(ResourceType::Gold, 40),
+            cost: ResourceCost::new().with(ResourceType::Wood, 15).with(ResourceType::Gold, 50),
             train_time_secs: 15.0,
             building: None,
             mob_ai: None,
@@ -854,6 +894,38 @@ pub fn build_registry() -> BlueprintRegistry {
 
 
 
+        },
+    );
+
+    blueprints.insert(
+        EntityKind::Scout,
+        Blueprint {
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 40.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 999.0,
+                aggro_range: None,
+                is_ranged: false,
+            }),
+            movement: Some(MovementStats {
+                speed: 8.0,
+                y_offset: 0.7,
+            }),
+            gathering: None,
+            vision: Some(VisionStats { range: 25.0 }),
+            cost: ResourceCost::new().with(ResourceType::Wood, 15),
+            train_time_secs: 4.0,
+            building: None,
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.0 },
+                color: Color::srgb(0.3, 0.6, 0.3),
+                selected_color: Color::srgb(0.5, 0.8, 0.5),
+                selected_emissive: LinearRgba::new(0.05, 0.15, 0.05, 1.0),
+                scale: 0.8,
+            },
         },
     );
 
@@ -1012,7 +1084,7 @@ pub fn build_registry() -> BlueprintRegistry {
             building: Some(BuildingData {
                 construction_time_secs: 12.0,
                 half_height: 1.25,
-                trains: vec![EntityKind::Worker, EntityKind::Soldier],
+                trains: vec![EntityKind::Worker, EntityKind::Soldier, EntityKind::Scout],
                 prerequisite: Some(EntityKind::Base),
                 level_upgrades: vec![
                     BuildingLevelData {
@@ -2604,12 +2676,16 @@ pub fn spawn_from_blueprint_with_faction(
     // Category markers
     match kind.category() {
         EntityCategory::Unit | EntityCategory::Siege | EntityCategory::Summon => {
+            let stance = match kind {
+                EntityKind::Worker | EntityKind::Priest => UnitStance::Defensive,
+                _ => UnitStance::Aggressive,
+            };
             entity_cmds.insert((
                 Unit,
                 UnitState::default(),
                 TaskSource::default(),
                 TaskQueue::default(),
-                UnitStance::default(),
+                stance,
             ));
         }
         EntityCategory::Mob => {
@@ -2822,6 +2898,8 @@ pub fn spawn_from_blueprint_with_faction(
             AttackCooldown {
                 timer: Timer::from_seconds(combat.attack_cooldown_secs, TimerMode::Repeating),
             },
+            kind.armor_type(),
+            kind.damage_type(),
         ));
         if let Some(aggro) = combat.aggro_range {
             entity_cmds.insert(AggroRange(aggro));
@@ -2829,6 +2907,9 @@ pub fn spawn_from_blueprint_with_faction(
         if combat.is_ranged {
             entity_cmds.insert(IsRanged);
         }
+    } else {
+        // Buildings without combat stats still need armor type for counter system
+        entity_cmds.insert(kind.armor_type());
     }
 
     // Movement

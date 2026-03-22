@@ -599,6 +599,7 @@ impl Plugin for MultiplayerPlugin {
                     server::replication::host_broadcast_resource_sync,
                     server::replication::host_broadcast_day_cycle_sync,
                     server::replication::host_broadcast_neutral_world_sync,
+                    server::replication::host_broadcast_victory_events,
                 )
                     .in_set(NetSet::Broadcast)
                     .run_if(in_state(AppState::InGame))

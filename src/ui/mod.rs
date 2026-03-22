@@ -5,6 +5,7 @@ pub mod buttons;
 pub mod event_log_widget;
 pub mod fonts;
 pub mod group_hotkeys_widget;
+pub mod hints_widget;
 pub mod menu_helpers;
 pub mod notifications;
 pub mod production_queue_widget;
@@ -41,7 +42,16 @@ impl Plugin for UiPlugin {
             .init_resource::<event_log_widget::GameEventLog>()
             .init_resource::<event_log_widget::EventLogRenderState>()
             .init_resource::<event_log_widget::EventLogFilter>()
+            .init_resource::<hints_widget::HintState>()
             .add_systems(OnEnter(AppState::InGame), mark_pending_ui_spawn)
+            .add_systems(
+                Update,
+                (
+                    hints_widget::hints_system,
+                    hints_widget::idle_worker_notification_system,
+                )
+                    .run_if(in_state(AppState::InGame)),
+            )
             .add_systems(
                 PostUpdate,
                 fonts::apply_default_fonts,

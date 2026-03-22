@@ -107,12 +107,12 @@ fn update_projectiles(
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut projectiles: Query<(Entity, &mut Transform, &Projectile)>,
-    mut targets: Query<(&Transform, &mut Health), Without<Projectile>>,
+    mut targets: Query<(&Transform, &mut Health, Option<&ArmorType>), Without<Projectile>>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
     for (proj_entity, mut proj_tf, projectile) in &mut projectiles {
-        let Ok((target_tf, mut health)) = targets.get_mut(projectile.target) else {
+        let Ok((target_tf, mut health, opt_armor)) = targets.get_mut(projectile.target) else {
             // Target gone, despawn projectile
             commands.entity(proj_entity).despawn();
             continue;
@@ -123,8 +123,11 @@ fn update_projectiles(
         let dist = dir.length();
 
         if dist < 0.5 {
-            // Hit! Apply damage
-            health.current -= projectile.damage;
+            // Hit! Apply damage with armor multiplier
+            let multiplier = opt_armor
+                .map(|armor| projectile.damage_type.multiplier_vs(*armor))
+                .unwrap_or(1.0);
+            health.current -= projectile.damage * multiplier;
 
             // Spawn impact flash
             commands.spawn((

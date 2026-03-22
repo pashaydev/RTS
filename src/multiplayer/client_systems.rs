@@ -542,6 +542,7 @@ pub fn client_apply_server_events(
     mut pending_events: ResMut<PendingNetEvents>,
     mut event_log: ResMut<GameEventLog>,
     time: Res<Time>,
+    mut victory_state: Option<ResMut<crate::victory::VictoryState>>,
 ) {
     let events = std::mem::take(&mut pending_events.events);
     for event in &events {
@@ -570,6 +571,40 @@ pub fn client_apply_server_events(
                     None,
                 );
                 client.disconnected.store(true, Ordering::Relaxed);
+            }
+            GameEvent::FactionEliminated { faction_index } => {
+                if let Some(faction) = Faction::from_net_index(*faction_index) {
+                    info!("{} eliminated!", faction.display_name());
+                    event_log.push_with_level(
+                        time.elapsed_secs(),
+                        format!("{} has been eliminated!", faction.display_name()),
+                        EventCategory::Alert,
+                        LogLevel::Warning,
+                        None,
+                        Some(faction),
+                    );
+                    if let Some(vs) = victory_state.as_deref_mut() {
+                        vs.faction_status.insert(faction, crate::victory::FactionStatus::Eliminated);
+                    }
+                }
+            }
+            GameEvent::Victory { winner_faction, winner_team } => {
+                if let Some(faction) = Faction::from_net_index(*winner_faction) {
+                    info!("{} wins!", faction.display_name());
+                    event_log.push_with_level(
+                        time.elapsed_secs(),
+                        format!("{} is victorious!", faction.display_name()),
+                        EventCategory::Alert,
+                        LogLevel::Warning,
+                        None,
+                        Some(faction),
+                    );
+                    if let Some(vs) = victory_state.as_deref_mut() {
+                        vs.game_over = true;
+                        vs.winner = Some(faction);
+                        vs.winner_team = *winner_team;
+                    }
+                }
             }
             _ => {}
         }

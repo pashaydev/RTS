@@ -275,6 +275,18 @@ pub enum GameEvent {
     HostShutdown {
         reason: String,
     },
+    /// A faction has been eliminated from the match.
+    #[serde(rename = "faction_eliminated")]
+    FactionEliminated {
+        faction_index: u8,
+    },
+    /// A faction (or team) has won the match.
+    #[serde(rename = "victory")]
+    Victory {
+        winner_faction: u8,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        winner_team: Option<u8>,
+    },
 }
 
 /// Serializable lobby player info for network transmission.

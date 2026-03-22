@@ -215,6 +215,9 @@ fn spawn_mob_camps(
             camp.center.z,
         );
 
+        // Determine camp reward based on mob tier
+        let camp_reward = camp_reward_for_kind(camp.kind);
+
         // Spawn regular mobs in a circle
         for i in 0..camp.count {
             let angle = i as f32 / camp.count as f32 * std::f32::consts::TAU;
@@ -241,6 +244,11 @@ fn spawn_mob_camps(
                 patrol_target: None,
                 chase_elapsed: 0.0,
             });
+
+            // Attach camp reward to first mob if camp has no boss
+            if i == 0 && !camp.has_boss {
+                commands.entity(entity).insert(camp_reward.clone());
+            }
         }
 
         // Spawn boss
@@ -258,9 +266,10 @@ fn spawn_mob_camps(
                 &height_map,
             );
 
-            // Apply boss modifiers
+            // Apply boss modifiers + camp reward
             commands.entity(entity).insert((
                 Boss,
+                camp_reward.clone(),
                 Health {
                     current: camp.boss_hp,
                     max: camp.boss_hp,
@@ -287,6 +296,26 @@ fn spawn_mob_camps(
             ));
         }
     }
+}
+
+/// Returns the resource reward for clearing a mob camp of the given kind.
+fn camp_reward_for_kind(kind: EntityKind) -> CampReward {
+    use crate::blueprints::ResourceCost;
+    let resources = match kind {
+        EntityKind::Goblin => ResourceCost::new()
+            .with(ResourceType::Wood, 30)
+            .with(ResourceType::Copper, 15),
+        EntityKind::Skeleton | EntityKind::Orc => ResourceCost::new()
+            .with(ResourceType::Wood, 50)
+            .with(ResourceType::Iron, 30)
+            .with(ResourceType::Gold, 20),
+        EntityKind::Demon => ResourceCost::new()
+            .with(ResourceType::Wood, 80)
+            .with(ResourceType::Iron, 50)
+            .with(ResourceType::Gold, 40),
+        _ => ResourceCost::new(),
+    };
+    CampReward { resources }
 }
 
 fn mob_patrol(

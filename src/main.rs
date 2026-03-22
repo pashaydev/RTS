@@ -1,3 +1,4 @@
+mod ages;
 mod ai;
 mod animation;
 mod attention;
@@ -33,6 +34,7 @@ mod ui;
 mod unit_ai;
 mod units;
 mod vfx;
+mod victory;
 
 use bevy::ecs::error;
 use bevy::prelude::*;
@@ -127,5 +129,7 @@ fn main() {
         .add_plugins(pause_menu::PauseMenuPlugin)
         .add_plugins(net_bridge::NetBridgePlugin)
         .add_plugins(multiplayer::MultiplayerPlugin)
+        .add_plugins(victory::VictoryPlugin)
+        .add_plugins(ages::AgesPlugin)
         .run();
 }

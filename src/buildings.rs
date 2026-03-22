@@ -703,7 +703,7 @@ fn confirm_placement(
     carried_totals: Res<CarriedResourceTotals>,
     mut pending_drains: ResMut<PendingCarriedDrains>,
     registry: Res<BlueprintRegistry>,
-    extras: (Res<AllCompletedBuildings>, Option<Res<BiomeMap>>),
+    extras: (Res<AllCompletedBuildings>, Option<Res<BiomeMap>>, Res<crate::ages::FactionAges>),
     height_map: Res<HeightMap>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -724,7 +724,7 @@ fn confirm_placement(
         With<Unit>,
     >,
 ) {
-    let (all_completed, biome_map) = extras;
+    let (all_completed, biome_map, faction_ages) = extras;
     let mode = placement.mode;
     let Some(kind) = placement_kind(mode) else {
         return;
@@ -789,6 +789,17 @@ fn confirm_placement(
         true
     };
     if !prereq_met {
+        return;
+    }
+
+    // Check age requirement
+    let required_age = crate::ages::required_age_for_building(kind);
+    let current_age = faction_ages.get_age(&faction);
+    if current_age < required_age {
+        placement.hint_text = Some(format!(
+            "Requires {}",
+            required_age.display_name()
+        ));
         return;
     }
 
@@ -1506,6 +1517,7 @@ fn tower_auto_attack(
                     target: target_entity,
                     speed: 20.0,
                     damage: damage.0,
+                    damage_type: DamageType::Pierce,
                 },
                 Mesh3d(vfx.sphere_mesh.clone()),
                 MeshMaterial3d(vfx.projectile_material.clone()),

@@ -307,12 +307,13 @@ fn execute_attacks(
         &AttackRange,
         Option<&IsRanged>,
         &Faction,
+        Option<&DamageType>,
     )>,
-    mut healths: Query<(&Transform, &mut Health)>,
+    mut healths: Query<(&Transform, &mut Health, Option<&ArmorType>)>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (atk_tf, attack_target, mut cooldown, damage, range, is_ranged, faction) in &mut attackers {
+    for (atk_tf, attack_target, mut cooldown, damage, range, is_ranged, faction, opt_dmg_type) in &mut attackers {
         // Client: only execute attacks for local player's units
         if *net_role == NetRole::Client && *faction != active_player.0 {
             continue;
@@ -323,7 +324,7 @@ fn execute_attacks(
             continue;
         }
 
-        let Ok((target_tf, mut health)) = healths.get_mut(attack_target.0) else {
+        let Ok((target_tf, mut health, opt_armor)) = healths.get_mut(attack_target.0) else {
             continue;
         };
 
@@ -332,13 +333,20 @@ fn execute_attacks(
             continue;
         }
 
+        // Compute damage multiplier from damage type vs armor type
+        let multiplier = match (opt_dmg_type, opt_armor) {
+            (Some(dmg_type), Some(armor_type)) => dmg_type.multiplier_vs(*armor_type),
+            _ => 1.0,
+        };
+
         if is_ranged.is_some() {
-            // Ranged: spawn projectile
+            // Ranged: spawn projectile (carries damage_type for on-hit multiplier)
             commands.spawn((
                 Projectile {
                     target: attack_target.0,
                     speed: 15.0,
                     damage: damage.0,
+                    damage_type: opt_dmg_type.copied().unwrap_or(DamageType::Melee),
                 },
                 FogHideable::Vfx,
                 Mesh3d(vfx.sphere_mesh.clone()),
@@ -349,8 +357,8 @@ fn execute_attacks(
                 NotShadowReceiver,
             ));
         } else {
-            // Melee: apply damage directly + flash VFX
-            health.current -= damage.0;
+            // Melee: apply damage directly with multiplier + flash VFX
+            health.current -= damage.0 * multiplier;
             commands.spawn((
                 VfxFlash {
                     timer: Timer::from_seconds(0.15, TimerMode::Once),
@@ -381,19 +389,22 @@ fn handle_death(
         Option<&Transform>,
         Option<&UnitState>,
         Option<&Faction>,
+        Option<&CampReward>,
     )>,
     mut attackers_with_target: Query<(Entity, &AttackTarget, Option<&mut PatrolState>)>,
     mut all_assigned_workers: Query<&mut AssignedWorkers>,
     workers_with_state: Query<(Entity, &UnitState), With<Unit>>,
     time: Res<Time>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
+    mut all_resources: ResMut<AllPlayerResources>,
+    attacker_factions: Query<&Faction, With<AttackTarget>>,
 ) {
     let is_client = *net_role == NetRole::Client;
     // Collect dead entities first to avoid borrow issues
     // On client: only detect death for local player's entities (remote deaths come via EntityDespawn)
     let dead_list: Vec<_> = dead
         .iter()
-        .filter(|(_, health, _, _, _, _, _, opt_faction)| {
+        .filter(|(_, health, _, _, _, _, _, opt_faction, _)| {
             if health.current > 0.0 {
                 return false;
             }
@@ -414,6 +425,7 @@ fn handle_death(
                 opt_transform,
                 opt_unit_state,
                 opt_faction,
+                opt_reward,
             )| {
                 (
                     entity,
@@ -423,6 +435,7 @@ fn handle_death(
                     opt_transform.map(|t| *t),
                     opt_unit_state.copied(),
                     opt_faction.copied(),
+                    opt_reward.cloned(),
                 )
             },
         )
@@ -436,8 +449,34 @@ fn handle_death(
         opt_transform,
         opt_unit_state,
         opt_faction,
+        opt_camp_reward,
     ) in &dead_list
     {
+        // Grant camp reward resources to the killing faction (host only)
+        if !is_client {
+            if let Some(reward) = opt_camp_reward {
+                // Find who was attacking this mob to determine the rewarded faction
+                let killer_faction = attackers_with_target
+                    .iter()
+                    .find(|(_, at, _)| at.0 == *dead_entity)
+                    .and_then(|(attacker_e, _, _)| attacker_factions.get(attacker_e).ok());
+                if let Some(killer_f) = killer_faction {
+                    if let Some(res) = all_resources.resources.get_mut(killer_f) {
+                        for (rt, amt) in reward.resources.cost_entries() {
+                            res.amounts[rt.index()] += amt;
+                        }
+                    }
+                    event_log.push(
+                        time.elapsed_secs(),
+                        format!("Camp cleared! Resources gained."),
+                        crate::ui::event_log_widget::EventCategory::Resource,
+                        opt_transform.map(|t| t.translation),
+                        Some(*killer_f),
+                    );
+                }
+            }
+        }
+
         for (attacker_entity, attack_target, opt_patrol) in &mut attackers_with_target {
             if attack_target.0 == *dead_entity {
                 commands.entity(attacker_entity).remove::<AttackTarget>();

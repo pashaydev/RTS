@@ -1238,6 +1238,33 @@ pub fn host_broadcast_neutral_world_sync(
     broadcast_msg(&mut socket, &msg);
 }
 
+/// Drain victory-related game events and broadcast to clients.
+pub fn host_broadcast_victory_events(
+    mut socket: ResMut<MatchboxSocket>,
+    host: Res<HostNetState>,
+    time: Res<Time>,
+    mut victory_state: Option<ResMut<crate::victory::VictoryState>>,
+) {
+    let Some(ref mut victory) = victory_state else {
+        return;
+    };
+    if victory.pending_net_events.is_empty() {
+        return;
+    }
+    let events: Vec<GameEvent> = victory.pending_net_events.drain(..).collect();
+    let seq = {
+        let mut s = host.seq.lock().unwrap();
+        *s += 1;
+        *s
+    };
+    let msg = ServerMessage::Event {
+        seq,
+        timestamp: time.elapsed_secs_f64(),
+        events,
+    };
+    broadcast_msg(&mut socket, &msg);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

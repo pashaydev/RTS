@@ -1299,6 +1299,54 @@ pub struct AttackRange(pub f32);
 #[derive(Component)]
 pub struct AggroRange(pub f32);
 
+// ── Damage / Armor type system (unit counters) ──
+
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum ArmorType {
+    Light,
+    Heavy,
+    Siege,
+    Structure,
+}
+
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
+pub enum DamageType {
+    Melee,
+    Pierce,
+    Magic,
+    SiegeDmg,
+}
+
+impl DamageType {
+    /// Returns the damage multiplier for this damage type against the given armor type.
+    pub fn multiplier_vs(self, armor: ArmorType) -> f32 {
+        use ArmorType::*;
+        use DamageType::*;
+        match (self, armor) {
+            // Melee: good vs siege, normal vs light, reduced vs heavy/structure
+            (Melee, Light) => 1.0,
+            (Melee, Heavy) => 0.75,
+            (Melee, Siege) => 1.5,
+            (Melee, Structure) => 0.5,
+            // Pierce: normal vs light, bad vs heavy/siege
+            (Pierce, Light) => 1.0,
+            (Pierce, Heavy) => 0.5,
+            (Pierce, Siege) => 0.25,
+            (Pierce, Structure) => 0.5,
+            // Magic: bonus vs all units, weak vs siege
+            (Magic, Light) => 1.25,
+            (Magic, Heavy) => 1.25,
+            (Magic, Siege) => 0.5,
+            (Magic, Structure) => 0.75,
+            // Siege: devastating vs structures, weak vs units
+            (SiegeDmg, Light) => 0.5,
+            (SiegeDmg, Heavy) => 0.75,
+            (SiegeDmg, Siege) => 0.5,
+            (SiegeDmg, Structure) => 3.0,
+        }
+    }
+}
+
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
 pub enum Faction {
     Player1,
@@ -1764,6 +1812,7 @@ pub struct Projectile {
     pub target: Entity,
     pub speed: f32,
     pub damage: f32,
+    pub damage_type: DamageType,
 }
 
 #[derive(Component)]
@@ -1899,6 +1948,7 @@ impl IconAssets {
             EntityKind::Mage => self.mage.clone(),
             EntityKind::Priest => self.priest.clone(),
             EntityKind::Cavalry => self.cavalry.clone(),
+            EntityKind::Scout => self.archer.clone(), // reuse archer icon for now
             // Siege
             EntityKind::Catapult => self.catapult.clone(),
             EntityKind::BatteringRam => self.battering_ram.clone(),
@@ -1985,6 +2035,12 @@ pub struct InspectedEnemy {
 
 #[derive(Component)]
 pub struct Boss;
+
+/// Resources granted when this mob is killed (camp reward system).
+#[derive(Component, Clone)]
+pub struct CampReward {
+    pub resources: crate::blueprints::ResourceCost,
+}
 
 #[derive(Component)]
 pub struct SelectionInfoPanel;
@@ -2220,6 +2276,17 @@ pub fn faction_unit_cap_stats<'a>(
         used: count_faction_units(faction, unit_factions),
         queued: count_faction_queued_units(faction, queues),
         cap: faction_unit_cap(faction, buildings),
+    }
+}
+
+/// Returns the income modifier for a faction based on their total unit count.
+/// Implements WC3-style upkeep: more units = lower income to prevent deathball.
+pub fn income_modifier_for_population(unit_count: u32) -> f32 {
+    match unit_count {
+        0..=20 => 1.0,
+        21..=40 => 0.85,
+        41..=60 => 0.70,
+        _ => 0.50,
     }
 }
 
