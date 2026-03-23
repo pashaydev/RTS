@@ -18,6 +18,10 @@ impl Plugin for VfxPlugin {
                 update_combat_dust,
                 summon_vfx_system,
                 animate_spawn,
+                animate_attack_lunge,
+                animate_hit_recoil,
+                tick_hit_reactions,
+                apply_camera_shake,
             )
                 .run_if(in_state(AppState::InGame)),
         );
@@ -187,6 +191,18 @@ fn update_projectiles(
                 NotShadowCaster,
                 NotShadowReceiver,
             ));
+
+            // ── Juice: hit recoil + hit reaction on ranged hit ──
+            let hit_dir = dir.normalize_or_zero();
+            let hit_dir_flat = Vec3::new(-hit_dir.x, 0.0, -hit_dir.z); // projectile dir is toward target
+            commands.entity(projectile.target).insert(HitRecoil {
+                direction: hit_dir_flat,
+                timer: Timer::from_seconds(0.12, TimerMode::Once),
+                strength: 0.12,
+            });
+            commands
+                .entity(projectile.target)
+                .insert(HitReaction(Timer::from_seconds(0.2, TimerMode::Once)));
 
             commands.entity(proj_entity).despawn();
         } else {
@@ -444,6 +460,85 @@ fn animate_spawn(
         if anim.timer.is_finished() {
             tf.scale = anim.target_scale;
             commands.entity(entity).remove::<SpawnAnimation>();
+        }
+    }
+}
+
+// ── Combat juice systems ──
+
+/// Melee attacker lunges forward briefly on hit.
+pub fn animate_attack_lunge(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut lungers: Query<(Entity, &mut Transform, &mut AttackLunge)>,
+) {
+    for (entity, mut tf, mut lunge) in &mut lungers {
+        lunge.timer.tick(time.delta());
+        let t = lunge.timer.fraction();
+        // Ease-out: peak at start, settle back
+        let offset_frac = (1.0 - t) * (1.0 - t); // quadratic ease-out (inverted)
+        tf.translation += lunge.direction * lunge.strength * offset_frac * time.delta_secs() * 8.0;
+
+        if lunge.timer.is_finished() {
+            commands.entity(entity).remove::<AttackLunge>();
+        }
+    }
+}
+
+/// Target gets pushed back and briefly scales up on hit.
+pub fn animate_hit_recoil(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut recoiling: Query<(Entity, &mut Transform, &mut HitRecoil)>,
+) {
+    for (entity, mut tf, mut recoil) in &mut recoiling {
+        recoil.timer.tick(time.delta());
+        let t = recoil.timer.fraction();
+        // Push back with ease-out
+        let push_frac = (1.0 - t) * (1.0 - t);
+        tf.translation += recoil.direction * recoil.strength * push_frac * time.delta_secs() * 8.0;
+        // Brief scale pulse (5% at start, settling back)
+        let scale_boost = 1.0 + 0.05 * (1.0 - t);
+        let base = tf.scale.x / scale_boost.max(0.001); // approximate base
+        tf.scale = Vec3::splat(base * (1.0 + 0.05 * (1.0 - t)));
+
+        if recoil.timer.is_finished() {
+            commands.entity(entity).remove::<HitRecoil>();
+        }
+    }
+}
+
+/// Tick hit reaction timers and remove when done.
+pub fn tick_hit_reactions(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut reactions: Query<(Entity, &mut HitReaction)>,
+) {
+    for (entity, mut reaction) in &mut reactions {
+        reaction.0.tick(time.delta());
+        if reaction.0.is_finished() {
+            commands.entity(entity).remove::<HitReaction>();
+        }
+    }
+}
+
+/// Camera shake for heavy hits — sinusoidal offset that decays.
+pub fn apply_camera_shake(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut cameras: Query<(Entity, &mut Transform, &mut CameraShake)>,
+) {
+    for (entity, mut tf, mut shake) in &mut cameras {
+        shake.timer.tick(time.delta());
+        let remaining = 1.0 - shake.timer.fraction();
+        let t = time.elapsed_secs();
+        let offset_x = (t * 55.0).sin() * shake.intensity * remaining;
+        let offset_y = (t * 73.0).cos() * shake.intensity * remaining * 0.7;
+        tf.translation.x += offset_x;
+        tf.translation.y += offset_y;
+
+        if shake.timer.is_finished() {
+            commands.entity(entity).remove::<CameraShake>();
         }
     }
 }

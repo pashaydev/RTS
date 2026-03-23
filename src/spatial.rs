@@ -12,7 +12,7 @@ impl Plugin for SpatialPlugin {
             .add_systems(
                 Update,
                 (rebuild_spatial_grid, rebuild_wall_grid)
-                    .before(crate::combat::player_auto_acquire_target)
+                    .before(crate::combat::approach_attack_target)
                     .run_if(in_state(AppState::InGame)),
             );
     }

@@ -565,7 +565,7 @@ pub struct DecisionTimer {
 impl Default for DecisionTimer {
     fn default() -> Self {
         Self {
-            timer: Timer::from_seconds(0.2, TimerMode::Repeating),
+            timer: Timer::from_seconds(0.1, TimerMode::Repeating),
         }
     }
 }
@@ -1338,6 +1338,40 @@ pub struct AttackWindup {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct AttackRecovery {
     pub remaining_secs: f32,
+}
+
+/// Chase timeout — units give up chasing if they can't land a hit within max_secs.
+#[derive(Component, Clone, Debug)]
+pub struct ChaseTimer {
+    pub elapsed: f32,
+    pub max_secs: f32,
+}
+
+/// Brief forward lunge on melee attack connect.
+#[derive(Component, Clone, Debug)]
+pub struct AttackLunge {
+    pub direction: Vec3,
+    pub timer: Timer,
+    pub strength: f32,
+}
+
+/// Knockback impulse applied to target on hit.
+#[derive(Component, Clone, Debug)]
+pub struct HitRecoil {
+    pub direction: Vec3,
+    pub timer: Timer,
+    pub strength: f32,
+}
+
+/// Triggers AnimState::Damage briefly on hit.
+#[derive(Component, Clone, Debug)]
+pub struct HitReaction(pub Timer);
+
+/// Camera shake for heavy hits.
+#[derive(Component, Clone, Debug)]
+pub struct CameraShake {
+    pub timer: Timer,
+    pub intensity: f32,
 }
 
 // ── Damage / Armor type system (unit counters) ──

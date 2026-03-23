@@ -428,7 +428,8 @@ pub fn unit_state_executor_system(
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
-                    .remove::<AttackTarget>();
+                    .remove::<AttackTarget>()
+                    .remove::<ChaseTimer>();
             }
 
             UnitState::Moving(pos) => {
@@ -449,7 +450,8 @@ pub fn unit_state_executor_system(
                     commands
                         .entity(entity)
                         .remove::<AttackTarget>()
-                        .remove::<LeashOrigin>();
+                        .remove::<LeashOrigin>()
+                        .remove::<ChaseTimer>();
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;

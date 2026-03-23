@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use crate::blueprints::{EntityKind, IsRanged};
 use crate::components::*;
 use crate::multiplayer::NetRole;
-use crate::spatial::{SpatialHashGrid, WallSpatialGrid};
+use crate::spatial::WallSpatialGrid;
 
 pub struct CombatPlugin;
 
@@ -13,7 +13,6 @@ impl Plugin for CombatPlugin {
         app.add_systems(
             Update,
             (
-                player_auto_acquire_target,
                 approach_attack_target,
                 start_attack_windups,
                 resolve_attack_windups,
@@ -91,91 +90,7 @@ fn explode_props(
     }
 }
 
-pub fn player_auto_acquire_target(
-    mut commands: Commands,
-    teams: Res<TeamConfig>,
-    spatial_grid: Res<SpatialHashGrid>,
-    net_role: Res<NetRole>,
-    active_player: Res<ActivePlayer>,
-    idle_units: Query<
-        (
-            Entity,
-            &Transform,
-            &AttackRange,
-            &Faction,
-            Option<&UnitState>,
-            Option<&UnitStance>,
-        ),
-        (With<Unit>, Without<MoveTarget>, Without<AttackTarget>, Without<Dying>),
-    >,
-    factions: Query<&Faction>,
-    building_check: Query<(), With<Building>>,
-) {
-    for (unit_entity, unit_tf, range, faction, unit_state, opt_stance) in &idle_units {
-        // Client: only auto-acquire for local player's units
-        if *net_role == NetRole::Client && *faction != active_player.0 {
-            continue;
-        }
-        // Skip units that are busy (not idle)
-        if let Some(state) = unit_state {
-            if !matches!(state, UnitState::Idle) {
-                continue;
-            }
-        }
-
-        let stance = opt_stance.copied().unwrap_or_default();
-
-        // Passive units never auto-acquire
-        if stance == UnitStance::Passive {
-            continue;
-        }
-
-        let scan_range = range.0 * stance.scan_multiplier();
-        if scan_range <= 0.0 {
-            continue;
-        }
-
-        let mut closest_dist = f32::MAX;
-        let mut closest_target = None;
-
-        // Use spatial hash to find nearby entities
-        let nearby = spatial_grid.query_radius(unit_tf.translation, scan_range);
-        for (target_entity, target_pos) in &nearby {
-            if *target_entity == unit_entity {
-                continue;
-            }
-            // Skip buildings unless aggressive stance
-            if stance != UnitStance::Aggressive && building_check.get(*target_entity).is_ok() {
-                continue;
-            }
-            let Some(target_faction) = factions.get(*target_entity).ok() else {
-                continue;
-            };
-            if !teams.is_hostile(faction, target_faction) {
-                continue;
-            }
-            let dx = target_pos.x - unit_tf.translation.x;
-            let dz = target_pos.z - unit_tf.translation.z;
-            let dist = (dx * dx + dz * dz).sqrt();
-            if dist < closest_dist {
-                closest_dist = dist;
-                closest_target = Some(*target_entity);
-            }
-        }
-
-        if let Some(target) = closest_target {
-            // Record leash origin for defensive stance
-            if stance == UnitStance::Defensive {
-                commands
-                    .entity(unit_entity)
-                    .insert(LeashOrigin(unit_tf.translation));
-            }
-            commands.entity(unit_entity).insert(AttackTarget(target));
-        }
-    }
-}
-
-fn approach_attack_target(
+pub fn approach_attack_target(
     mut commands: Commands,
     time: Res<Time>,
     teams: Res<TeamConfig>,
@@ -185,14 +100,15 @@ fn approach_attack_target(
     mut attackers: Query<
         (
             Entity,
-            &mut Transform,
+            &Transform,
             &AttackTarget,
-            &UnitSpeed,
             &AttackRange,
             &Faction,
             Option<&mut UnitState>,
             Option<&AttackWindup>,
             Option<&AttackRecovery>,
+            Option<&mut ChaseTimer>,
+            Option<&TaskSource>,
         ),
         With<Unit>,
     >,
@@ -203,11 +119,22 @@ fn approach_attack_target(
             Or<(With<WallSegmentPiece>, With<WallPostPiece>)>,
         ),
     >,
-    targets: Query<&Transform, Without<AttackTarget>>,
+    all_transforms: Query<&Transform>,
 ) {
-    for (attacker_entity, mut tf, attack_target, speed, range, faction, opt_state, windup, recovery) in
-        &mut attackers
+    for (
+        attacker_entity,
+        tf,
+        attack_target,
+        range,
+        faction,
+        opt_state,
+        windup,
+        recovery,
+        opt_chase_timer,
+        opt_task_source,
+    ) in &mut attackers
     {
+        // During windup/recovery, unit is locked in animation — skip
         if windup.is_some() || recovery.is_some() {
             continue;
         }
@@ -215,10 +142,11 @@ fn approach_attack_target(
         if *net_role == NetRole::Client && *faction != active_player.0 {
             continue;
         }
-        let Ok(target_tf) = targets.get(attack_target.0) else {
+        let Ok(target_tf) = all_transforms.get(attack_target.0) else {
             continue;
         };
 
+        // ── Wall redirect: if a hostile wall blocks the path, retarget it ──
         let target_is_wall = wall_check.get(attack_target.0).is_ok();
         if !target_is_wall {
             let from = Vec2::new(tf.translation.x, tf.translation.z);
@@ -230,7 +158,6 @@ fn approach_attack_target(
                 let dir = delta / line_len;
                 let mut blocking_wall: Option<(Entity, f32)> = None;
 
-                // Use wall spatial grid: check walls near the midpoint with radius = half the line length
                 let mid = tf.translation.lerp(target_tf.translation, 0.5);
                 let search_radius = line_len * 0.5 + 2.0;
                 let nearby_walls = wall_grid.query_radius(mid, search_radius);
@@ -239,14 +166,12 @@ fn approach_attack_target(
                     if !teams.is_hostile(faction, &wall_faction) {
                         continue;
                     }
-
                     let wall_pos = Vec2::new(wall_pos_3d.x, wall_pos_3d.z);
                     let rel = wall_pos - from;
                     let t = rel.dot(dir);
                     if t <= 0.3 || t >= line_len - 0.3 {
                         continue;
                     }
-
                     let closest = from + dir * t;
                     let perp_dist = wall_pos.distance(closest);
                     if perp_dist <= wall_fp + 0.35
@@ -270,34 +195,51 @@ fn approach_attack_target(
             }
         }
 
-        let dir = Vec3::new(
-            target_tf.translation.x - tf.translation.x,
-            0.0,
-            target_tf.translation.z - tf.translation.z,
-        );
-        let dist = dir.length();
+        // ── Distance check (2D only — ignore terrain height) ──
+        let dx = target_tf.translation.x - tf.translation.x;
+        let dz = target_tf.translation.z - tf.translation.z;
+        let dist = (dx * dx + dz * dz).sqrt();
 
         if dist > range.0 {
-            let step = dir.normalize() * speed.0 * time.delta_secs();
-            let candidate = tf.translation + step;
+            // Out of range — delegate movement to the pathfinding pipeline via MoveTarget
+            commands
+                .entity(attacker_entity)
+                .insert(MoveTarget(target_tf.translation));
 
-            // Use wall spatial grid for collision check
-            let nearby_walls = wall_grid.query_radius(candidate, 3.0);
-            let blocked = nearby_walls.iter().any(|(wall_entity, wall_pos, wall_fp, wall_faction)| {
-                if *wall_entity == attack_target.0 {
-                    return false;
+            // ── Chase timeout ──
+            if let Some(mut chase) = opt_chase_timer {
+                chase.elapsed += time.delta_secs();
+                if chase.elapsed > chase.max_secs {
+                    // Give up chasing
+                    commands
+                        .entity(attacker_entity)
+                        .remove::<AttackTarget>()
+                        .remove::<MoveTarget>()
+                        .remove::<LeashOrigin>()
+                        .remove::<ChaseTimer>();
+                    if let Some(mut state) = opt_state {
+                        *state = UnitState::Idle;
+                    }
+                    continue;
                 }
-                if !teams.is_hostile(faction, wall_faction) {
-                    return false;
-                }
-                let a = Vec2::new(candidate.x, candidate.z);
-                let b = Vec2::new(wall_pos.x, wall_pos.z);
-                a.distance(b) < wall_fp + 0.6
-            });
-            if blocked {
-                continue;
+            } else {
+                // Start chase timer
+                let max_secs = if opt_task_source.map_or(false, |s| *s == TaskSource::Manual) {
+                    10.0
+                } else {
+                    6.0
+                };
+                commands.entity(attacker_entity).insert(ChaseTimer {
+                    elapsed: 0.0,
+                    max_secs,
+                });
             }
-            tf.translation = candidate;
+        } else {
+            // In range — stop moving, reset chase timer
+            commands
+                .entity(attacker_entity)
+                .remove::<MoveTarget>()
+                .remove::<ChaseTimer>();
         }
     }
 }
@@ -342,7 +284,8 @@ fn start_attack_windups(
         let Ok(target_tf) = targets.get(attack_target.0) else {
             continue;
         };
-        if atk_tf.translation.distance(target_tf.translation) > range.0 * 1.15 {
+        let d = atk_tf.translation - target_tf.translation;
+        if (d.x * d.x + d.z * d.z).sqrt() > range.0 * 1.15 {
             continue;
         }
 
@@ -374,6 +317,7 @@ fn resolve_attack_windups(
         Option<&ChargeBonus>,
     )>,
     mut healths: Query<(&Transform, &mut Health, Option<&ArmorType>)>,
+    camera_q: Query<Entity, With<Camera3d>>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
@@ -396,7 +340,8 @@ fn resolve_attack_windups(
             continue;
         };
 
-        let dist = atk_tf.translation.distance(target_tf.translation);
+        let d2 = atk_tf.translation - target_tf.translation;
+        let dist = (d2.x * d2.x + d2.z * d2.z).sqrt();
         if dist > range.0 * 1.2 {
             commands.entity(entity).remove::<AttackWindup>();
             commands.entity(entity).insert(AttackRecovery {
@@ -443,7 +388,8 @@ fn resolve_attack_windups(
         } else {
             // Melee: apply damage directly with multiplier + flash VFX
             let charge_mult = opt_charge.map(|c| c.damage_mult).unwrap_or(1.0);
-            health.current -= damage.0 * multiplier * charge_mult;
+            let dealt = damage.0 * multiplier * charge_mult;
+            health.current -= dealt;
             // Consume charge bonus after use
             if opt_charge.is_some() {
                 commands.entity(entity).remove::<ChargeBonus>();
@@ -458,8 +404,42 @@ fn resolve_attack_windups(
                 0.15,
                 0.8,
             );
-            spawn_combat_dust(&mut commands, &vfx, target_tf.translation, profile.impact_scale);
+            spawn_combat_dust_scaled(&mut commands, &vfx, target_tf.translation, profile.impact_scale, dealt);
+
+            // ── Juice: melee lunge (attacker lunges forward briefly) ──
+            let hit_dir = (target_tf.translation - atk_tf.translation).normalize_or_zero();
+            let hit_dir_flat = Vec3::new(hit_dir.x, 0.0, hit_dir.z);
+            commands.entity(entity).insert(AttackLunge {
+                direction: hit_dir_flat,
+                timer: Timer::from_seconds(0.1, TimerMode::Once),
+                strength: 0.3,
+            });
+
+            // ── Juice: hit recoil on target ──
+            commands.entity(target).insert(HitRecoil {
+                direction: hit_dir_flat,
+                timer: Timer::from_seconds(0.12, TimerMode::Once),
+                strength: 0.15,
+            });
+
+            // ── Juice: hit reaction anim on target ──
+            commands
+                .entity(target)
+                .insert(HitReaction(Timer::from_seconds(0.2, TimerMode::Once)));
+
+            // ── Juice: camera shake for heavy melee hits ──
+            if dealt > 25.0 {
+                if let Ok(cam_entity) = camera_q.single() {
+                    commands.entity(cam_entity).insert(CameraShake {
+                        timer: Timer::from_seconds(0.15, TimerMode::Once),
+                        intensity: (dealt * 0.004).min(0.3),
+                    });
+                }
+            }
         }
+
+        // Reset chase timer on successful hit
+        commands.entity(entity).remove::<ChaseTimer>();
 
         commands.entity(entity).remove::<AttackWindup>();
         commands.entity(entity).insert(AttackRecovery {
@@ -513,21 +493,41 @@ fn spawn_combat_flash(
     ));
 }
 
-fn spawn_combat_dust(commands: &mut Commands, vfx: &VfxAssets, pos: Vec3, intensity: f32) {
-    for (offset, vel_scale) in [
-        (Vec3::new(0.2, 0.0, 0.1), 0.8),
+fn spawn_combat_dust_scaled(
+    commands: &mut Commands,
+    vfx: &VfxAssets,
+    pos: Vec3,
+    intensity: f32,
+    damage: f32,
+) {
+    // Scale particle count by damage: 2 base + up to 4 extra for heavy hits
+    let count = 2 + ((damage / 15.0).min(4.0) as usize);
+    let base_offsets = [
+        (Vec3::new(0.2, 0.0, 0.1), 0.8f32),
         (Vec3::new(-0.15, 0.0, -0.05), 1.0),
-    ] {
+        (Vec3::new(0.1, 0.0, -0.2), 0.9),
+        (Vec3::new(-0.25, 0.0, 0.15), 1.1),
+        (Vec3::new(0.0, 0.0, 0.25), 0.7),
+        (Vec3::new(0.18, 0.0, -0.12), 1.2),
+    ];
+    let spread = 1.0 + damage * 0.01; // heavier hits spread particles wider
+    for i in 0..count {
+        let (offset, vel_scale) = base_offsets[i % base_offsets.len()];
+        let scaled_offset = offset * spread;
         commands.spawn((
             CombatDust {
                 timer: Timer::from_seconds(0.35 + intensity * 0.08, TimerMode::Once),
-                velocity: Vec3::new(offset.x * 2.5, 1.1 * vel_scale, offset.z * 2.5),
+                velocity: Vec3::new(
+                    scaled_offset.x * 2.5,
+                    (1.1 + damage * 0.02) * vel_scale, // heavier hits launch higher
+                    scaled_offset.z * 2.5,
+                ),
                 start_scale: 0.08 + intensity * 0.04,
             },
             FogHideable::Vfx,
             Mesh3d(vfx.sphere_mesh.clone()),
             MeshMaterial3d(vfx.dust_material.clone()),
-            Transform::from_translation(pos + offset).with_scale(Vec3::splat(0.08)),
+            Transform::from_translation(pos + scaled_offset).with_scale(Vec3::splat(0.08)),
             NotShadowCaster,
             NotShadowReceiver,
         ));

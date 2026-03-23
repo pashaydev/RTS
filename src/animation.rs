@@ -146,6 +146,7 @@ fn find_animation_player(
 fn drive_animations(
     mut anim_controllers: Query<
         (
+            Entity,
             &mut AnimationController,
             &AnimPlayerRef,
             &Health,
@@ -160,16 +161,18 @@ fn drive_animations(
             Option<&CastingAbility>,
             &Transform,
             Option<&MovementSmoothing>,
-            Option<&UnitSpeed>,
         ),
         Without<FrustumCulled>,
     >,
+    hit_reactions: Query<(), With<HitReaction>>,
+    unit_speeds: Query<&UnitSpeed>,
     target_transforms: Query<&Transform, Without<AnimationController>>,
     registry: Option<Res<UnitAnimationRegistry>>,
     legacy_assets: Option<Res<AnimationAssets>>,
     mut anim_players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
 ) {
     for (
+        anim_entity,
         mut controller,
         anim_ref,
         health,
@@ -184,7 +187,6 @@ fn drive_animations(
         casting_ability,
         my_tf,
         opt_smoothing,
-        opt_unit_speed,
     ) in &mut anim_controllers
     {
         let patrol_kind = patrol_state.map(|p| p.state);
@@ -195,6 +197,9 @@ fn drive_animations(
             } else {
                 AnimState::DeathB
             }
+        } else if hit_reactions.get(anim_entity).is_ok() {
+            // Brief hit reaction flinch
+            AnimState::Damage
         } else if casting_ability.is_some() {
             // Currently casting an ability — use CastA for casters, AttackA for melee
             if matches!(kind, EntityKind::Mage | EntityKind::Priest) {
@@ -242,6 +247,7 @@ fn drive_animations(
             }
         } else if move_target.is_some() {
             // Pick Walk vs Run based on current speed relative to max speed
+            let opt_unit_speed = unit_speeds.get(anim_entity).ok();
             let use_run = opt_smoothing
                 .zip(opt_unit_speed)
                 .map_or(false, |(sm, us)| sm.current_speed > us.0 * 0.55);
@@ -294,28 +300,46 @@ fn drive_animations(
 fn face_movement_direction(
     time: Res<Time>,
     zoom_level: Res<CameraZoomLevel>,
-    mut query: Query<
-        (
-            &mut Transform,
-            Option<&MoveTarget>,
-            Option<&NavPath>,
-            Option<&AttackTarget>,
-            Option<&PatrolState>,
-            Option<&IdleBehavior>,
-        ),
-        (Or<(With<Unit>, With<Mob>)>, Without<FrustumCulled>),
-    >,
-    target_transforms: Query<&Transform, (Without<Unit>, Without<Mob>)>,
+    mut queries: ParamSet<(
+        Query<
+            (Entity, &Transform),
+            (Or<(With<Unit>, With<Mob>)>, Without<FrustumCulled>),
+        >,
+        Query<
+            (
+                Entity,
+                &mut Transform,
+                Option<&MoveTarget>,
+                Option<&NavPath>,
+                Option<&AttackTarget>,
+                Option<&PatrolState>,
+                Option<&IdleBehavior>,
+            ),
+            (Or<(With<Unit>, With<Mob>)>, Without<FrustumCulled>),
+        >,
+    )>,
+    non_unit_transforms: Query<&Transform, (Without<Unit>, Without<Mob>)>,
 ) {
     let rate = 8.0;
     let apply_lean = zoom_level.detail == DetailLevel::Close;
 
-    for (mut transform, move_target, nav_path, attack_target, patrol_state, idle_behavior) in
-        &mut query
+    // First pass: collect positions of all units/mobs for unit-vs-unit facing
+    let unit_positions: std::collections::HashMap<Entity, Vec3> = queries
+        .p0()
+        .iter()
+        .map(|(e, tf)| (e, tf.translation))
+        .collect();
+
+    for (entity, mut transform, move_target, nav_path, attack_target, patrol_state, idle_behavior) in
+        &mut queries.p1()
     {
         let target_pos = if let Some(at) = attack_target {
-            if let Ok(target_tf) = target_transforms.get(at.0) {
-                Some(target_tf.translation)
+            if at.0 != entity {
+                // Try unit positions first, then non-unit (buildings, etc.)
+                unit_positions
+                    .get(&at.0)
+                    .copied()
+                    .or_else(|| non_unit_transforms.get(at.0).ok().map(|tf| tf.translation))
             } else {
                 None
             }
