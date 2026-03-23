@@ -1461,6 +1461,7 @@ fn resource_processor_system(
             &Faction,
             Option<&mut StorageInventory>,
             Option<&AssignedWorkers>,
+            Option<&BuildingPaused>,
         ),
         With<Building>,
     >,
@@ -1473,10 +1474,15 @@ fn resource_processor_system(
     for f in &unit_factions {
         *faction_unit_counts.entry(*f).or_default() += 1;
     }
-    for (_building_entity, building_tf, mut processor, state, faction, storage, assigned_workers) in
+    for (_building_entity, building_tf, mut processor, state, faction, storage, assigned_workers, paused) in
         &mut processors
     {
         if *state != BuildingState::Complete {
+            continue;
+        }
+
+        // Skip harvesting if building is paused
+        if paused.is_some() {
             continue;
         }
 
@@ -1576,13 +1582,19 @@ fn production_chain_system(
             &Faction,
             Option<&mut StorageInventory>,
             &EntityKind,
+            Option<&BuildingPaused>,
         ),
         With<Building>,
     >,
     vfx_assets: Option<Res<VfxAssets>>,
 ) {
-    for (_entity, building_tf, mut production, state, level, faction, mut storage, building_kind) in &mut producers {
+    for (_entity, building_tf, mut production, state, level, faction, mut storage, building_kind, paused) in &mut producers {
         if *state != BuildingState::Complete {
+            continue;
+        }
+
+        // Skip production if building is paused
+        if paused.is_some() {
             continue;
         }
 
@@ -1906,6 +1918,7 @@ fn spawn_deposit_vfx(
                 timer: Timer::from_seconds(duration, TimerMode::Once),
                 start_scale: scale,
                 end_scale: 0.0,
+                rise_speed: 0.5,
             },
             FogHideable::Vfx,
             Mesh3d(vfx.sphere_mesh.clone()),
@@ -2266,7 +2279,7 @@ fn processor_worker_visual_system(
         ),
         With<Unit>,
     >,
-    processors: Query<(Entity, &Transform, &ResourceProcessor, &BuildingState), With<Building>>,
+    processors: Query<(Entity, &Transform, &ResourceProcessor, &BuildingState, Option<&BuildingPaused>), With<Building>>,
     nodes: Query<(Entity, &Transform, &ResourceNode), Without<Unit>>,
 ) {
     // Collect nodes targeted by other workers to avoid clustering
@@ -2291,13 +2304,18 @@ fn processor_worker_visual_system(
             continue;
         };
 
-        let Ok((_, building_tf, processor, building_state)) = processors.get(building_entity)
+        let Ok((_, building_tf, processor, building_state, building_paused)) = processors.get(building_entity)
         else {
             // Building gone — handled by unit_state_executor
             continue;
         };
 
         if *building_state != BuildingState::Complete {
+            continue;
+        }
+
+        // Skip phase state machine if building is paused — workers stay assigned but freeze
+        if building_paused.is_some() {
             continue;
         }
 
@@ -2399,6 +2417,7 @@ fn processor_worker_visual_system(
                                     timer: Timer::from_seconds(0.25, TimerMode::Once),
                                     start_scale: 0.12,
                                     end_scale: 0.0,
+                                    rise_speed: 0.35,
                                 },
                                 FogHideable::Vfx,
                                 Mesh3d(vfx.sphere_mesh.clone()),

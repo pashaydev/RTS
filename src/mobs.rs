@@ -26,11 +26,23 @@ impl Plugin for MobsPlugin {
 }
 
 struct CampSpawn {
-    kind: EntityKind,
     center: Vec3,
-    count: usize,
-    has_boss: bool,
-    boss_hp: f32,
+    reward_kind: EntityKind,
+    members: Vec<CampMemberSpawn>,
+}
+
+#[derive(Clone, Copy)]
+struct CampMemberSpawn {
+    kind: EntityKind,
+    ring_radius: f32,
+    angle_offset: f32,
+    hp_mult: f32,
+    damage_mult: f32,
+    speed_mult: f32,
+    range_mult: f32,
+    scale_mult: f32,
+    aggro_bonus: f32,
+    boss: bool,
 }
 
 /// Ring zone descriptor for procedural camp generation.
@@ -38,9 +50,6 @@ struct RingZone {
     min_radius_frac: f32,
     max_radius_frac: f32,
     kinds: &'static [EntityKind],
-    mob_count: (usize, usize), // (min, max)
-    has_boss: bool,
-    boss_hp: (f32, f32), // (min, max)
 }
 
 const RING_ZONES: &[RingZone] = &[
@@ -48,27 +57,98 @@ const RING_ZONES: &[RingZone] = &[
         min_radius_frac: 0.0,
         max_radius_frac: 0.3,
         kinds: &[EntityKind::Goblin],
-        mob_count: (3, 4),
-        has_boss: false,
-        boss_hp: (0.0, 0.0),
     },
     RingZone {
         min_radius_frac: 0.3,
         max_radius_frac: 0.6,
         kinds: &[EntityKind::Skeleton, EntityKind::Orc],
-        mob_count: (5, 6),
-        has_boss: true,
-        boss_hp: (200.0, 300.0),
     },
     RingZone {
         min_radius_frac: 0.6,
         max_radius_frac: 1.0,
         kinds: &[EntityKind::Demon],
-        mob_count: (5, 7),
-        has_boss: true,
-        boss_hp: (400.0, 500.0),
     },
 ];
+
+fn build_camp_members(
+    rng: &mut StdRng,
+    zone_idx: usize,
+    primary_kind: EntityKind,
+) -> (EntityKind, Vec<CampMemberSpawn>) {
+    use EntityKind::*;
+
+    let members = match zone_idx {
+        0 => {
+            if rng.random_bool(0.5) {
+                vec![
+                    CampMemberSpawn { kind: Goblin, ring_radius: 0.25, angle_offset: 0.1, hp_mult: 0.95, damage_mult: 1.0, speed_mult: 1.15, range_mult: 1.0, scale_mult: 0.92, aggro_bonus: 1.5, boss: false },
+                    CampMemberSpawn { kind: Goblin, ring_radius: 0.35, angle_offset: 1.5, hp_mult: 0.95, damage_mult: 1.0, speed_mult: 1.12, range_mult: 1.0, scale_mult: 0.92, aggro_bonus: 1.5, boss: false },
+                    CampMemberSpawn { kind: Goblin, ring_radius: 0.42, angle_offset: 2.9, hp_mult: 1.0, damage_mult: 1.1, speed_mult: 1.05, range_mult: 1.0, scale_mult: 0.98, aggro_bonus: 1.0, boss: false },
+                    CampMemberSpawn { kind: Goblin, ring_radius: 0.2, angle_offset: 4.2, hp_mult: 1.15, damage_mult: 1.25, speed_mult: 1.0, range_mult: 1.05, scale_mult: 1.08, aggro_bonus: 2.0, boss: false },
+                ]
+            } else {
+                vec![
+                    CampMemberSpawn { kind: Goblin, ring_radius: 0.3, angle_offset: 0.2, hp_mult: 0.9, damage_mult: 1.0, speed_mult: 1.18, range_mult: 1.0, scale_mult: 0.9, aggro_bonus: 1.0, boss: false },
+                    CampMemberSpawn { kind: Goblin, ring_radius: 0.38, angle_offset: 2.1, hp_mult: 0.9, damage_mult: 1.0, speed_mult: 1.18, range_mult: 1.0, scale_mult: 0.9, aggro_bonus: 1.0, boss: false },
+                    CampMemberSpawn { kind: Goblin, ring_radius: 0.26, angle_offset: 4.3, hp_mult: 0.95, damage_mult: 1.05, speed_mult: 1.12, range_mult: 1.0, scale_mult: 0.93, aggro_bonus: 1.0, boss: false },
+                    CampMemberSpawn { kind: Skeleton, ring_radius: 0.08, angle_offset: 5.4, hp_mult: 1.2, damage_mult: 1.2, speed_mult: 0.92, range_mult: 1.1, scale_mult: 1.04, aggro_bonus: 2.5, boss: false },
+                ]
+            }
+        }
+        1 => {
+            if primary_kind == Orc {
+                vec![
+                    CampMemberSpawn { kind: Orc, ring_radius: 0.14, angle_offset: 0.0, hp_mult: 1.45, damage_mult: 1.3, speed_mult: 0.95, range_mult: 1.05, scale_mult: 1.16, aggro_bonus: 3.0, boss: true },
+                    CampMemberSpawn { kind: Skeleton, ring_radius: 0.34, angle_offset: 1.7, hp_mult: 1.0, damage_mult: 1.0, speed_mult: 1.0, range_mult: 1.0, scale_mult: 1.0, aggro_bonus: 1.5, boss: false },
+                    CampMemberSpawn { kind: Skeleton, ring_radius: 0.3, angle_offset: 3.4, hp_mult: 1.0, damage_mult: 1.0, speed_mult: 1.0, range_mult: 1.0, scale_mult: 1.0, aggro_bonus: 1.5, boss: false },
+                    CampMemberSpawn { kind: Orc, ring_radius: 0.42, angle_offset: 4.9, hp_mult: 1.1, damage_mult: 1.15, speed_mult: 0.98, range_mult: 1.0, scale_mult: 1.06, aggro_bonus: 2.0, boss: false },
+                    CampMemberSpawn { kind: Goblin, ring_radius: 0.46, angle_offset: 2.6, hp_mult: 0.95, damage_mult: 1.0, speed_mult: 1.1, range_mult: 1.0, scale_mult: 0.92, aggro_bonus: 1.0, boss: false },
+                ]
+            } else {
+                vec![
+                    CampMemberSpawn { kind: Skeleton, ring_radius: 0.14, angle_offset: 0.0, hp_mult: 1.55, damage_mult: 1.25, speed_mult: 0.96, range_mult: 1.15, scale_mult: 1.14, aggro_bonus: 3.0, boss: true },
+                    CampMemberSpawn { kind: Skeleton, ring_radius: 0.3, angle_offset: 1.3, hp_mult: 1.0, damage_mult: 1.0, speed_mult: 1.0, range_mult: 1.0, scale_mult: 1.0, aggro_bonus: 1.5, boss: false },
+                    CampMemberSpawn { kind: Skeleton, ring_radius: 0.38, angle_offset: 2.9, hp_mult: 1.0, damage_mult: 1.0, speed_mult: 1.0, range_mult: 1.0, scale_mult: 1.0, aggro_bonus: 1.5, boss: false },
+                    CampMemberSpawn { kind: Orc, ring_radius: 0.34, angle_offset: 4.3, hp_mult: 1.15, damage_mult: 1.15, speed_mult: 0.96, range_mult: 1.0, scale_mult: 1.08, aggro_bonus: 2.0, boss: false },
+                    CampMemberSpawn { kind: Goblin, ring_radius: 0.46, angle_offset: 5.4, hp_mult: 0.9, damage_mult: 1.0, speed_mult: 1.12, range_mult: 1.0, scale_mult: 0.92, aggro_bonus: 1.0, boss: false },
+                ]
+            }
+        }
+        _ => {
+            if rng.random_bool(0.5) {
+                vec![
+                    CampMemberSpawn { kind: Demon, ring_radius: 0.12, angle_offset: 0.2, hp_mult: 1.55, damage_mult: 1.35, speed_mult: 1.0, range_mult: 1.2, scale_mult: 1.18, aggro_bonus: 4.0, boss: true },
+                    CampMemberSpawn { kind: Orc, ring_radius: 0.34, angle_offset: 1.6, hp_mult: 1.2, damage_mult: 1.15, speed_mult: 0.95, range_mult: 1.0, scale_mult: 1.08, aggro_bonus: 2.0, boss: false },
+                    CampMemberSpawn { kind: Orc, ring_radius: 0.4, angle_offset: 3.2, hp_mult: 1.2, damage_mult: 1.15, speed_mult: 0.95, range_mult: 1.0, scale_mult: 1.08, aggro_bonus: 2.0, boss: false },
+                    CampMemberSpawn { kind: Skeleton, ring_radius: 0.42, angle_offset: 4.6, hp_mult: 1.0, damage_mult: 1.05, speed_mult: 1.0, range_mult: 1.05, scale_mult: 1.0, aggro_bonus: 1.5, boss: false },
+                    CampMemberSpawn { kind: Skeleton, ring_radius: 0.28, angle_offset: 5.4, hp_mult: 1.0, damage_mult: 1.05, speed_mult: 1.0, range_mult: 1.05, scale_mult: 1.0, aggro_bonus: 1.5, boss: false },
+                ]
+            } else {
+                vec![
+                    CampMemberSpawn { kind: Demon, ring_radius: 0.18, angle_offset: 0.0, hp_mult: 1.15, damage_mult: 1.15, speed_mult: 1.05, range_mult: 1.12, scale_mult: 1.06, aggro_bonus: 3.0, boss: false },
+                    CampMemberSpawn { kind: Demon, ring_radius: 0.18, angle_offset: 3.14, hp_mult: 1.15, damage_mult: 1.15, speed_mult: 1.05, range_mult: 1.12, scale_mult: 1.06, aggro_bonus: 3.0, boss: false },
+                    CampMemberSpawn { kind: Orc, ring_radius: 0.38, angle_offset: 1.3, hp_mult: 1.1, damage_mult: 1.1, speed_mult: 0.98, range_mult: 1.0, scale_mult: 1.02, aggro_bonus: 1.8, boss: false },
+                    CampMemberSpawn { kind: Orc, ring_radius: 0.36, angle_offset: 4.5, hp_mult: 1.1, damage_mult: 1.1, speed_mult: 0.98, range_mult: 1.0, scale_mult: 1.02, aggro_bonus: 1.8, boss: false },
+                    CampMemberSpawn { kind: Demon, ring_radius: 0.08, angle_offset: 2.1, hp_mult: 1.65, damage_mult: 1.35, speed_mult: 1.0, range_mult: 1.18, scale_mult: 1.2, aggro_bonus: 4.0, boss: true },
+                ]
+            }
+        }
+    };
+
+    let reward_kind = members
+        .iter()
+        .map(|m| m.kind)
+        .max_by_key(|kind| match kind {
+            Goblin => 0,
+            Skeleton => 1,
+            Orc => 2,
+            Demon => 3,
+            _ => 0,
+        })
+        .unwrap_or(primary_kind);
+
+    (reward_kind, members)
+}
 
 fn generate_camps(
     rng: &mut StdRng,
@@ -129,19 +209,12 @@ fn generate_camps(
                 }
 
                 let kind = zone.kinds[rng.random_range(0..zone.kinds.len())];
-                let mob_count = rng.random_range(zone.mob_count.0..=zone.mob_count.1);
-                let boss_hp = if zone.has_boss {
-                    rng.random_range(zone.boss_hp.0..=zone.boss_hp.1)
-                } else {
-                    0.0
-                };
+                let (reward_kind, members) = build_camp_members(rng, zone_idx, kind);
 
                 camps.push(CampSpawn {
-                    kind,
                     center: Vec3::new(x, 0.0, z),
-                    count: mob_count,
-                    has_boss: zone.has_boss,
-                    boss_hp,
+                    reward_kind,
+                    members,
                 });
                 placed = true;
                 break;
@@ -201,13 +274,13 @@ fn spawn_mob_camps(
     );
 
     for camp in &camps {
-        let bp = registry.get(camp.kind);
+        let bp = registry.get(camp.reward_kind);
         let patrol_radius = bp
             .mob_ai
             .as_ref()
             .map(|ai| ai.patrol_radius)
-            .unwrap_or(12.0);
-        let y_off = bp.movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8);
+            .unwrap_or(12.0)
+            + camp.members.len() as f32 * 0.6;
 
         let center = Vec3::new(
             camp.center.x,
@@ -216,19 +289,22 @@ fn spawn_mob_camps(
         );
 
         // Determine camp reward based on mob tier
-        let camp_reward = camp_reward_for_kind(camp.kind);
+        let camp_reward = camp_reward_for_kind(camp.reward_kind);
 
-        // Spawn regular mobs in a circle
-        for i in 0..camp.count {
-            let angle = i as f32 / camp.count as f32 * std::f32::consts::TAU;
-            let offset_r = patrol_radius * 0.3;
+        for (i, member) in camp.members.iter().enumerate() {
+            let member_bp = registry.get(member.kind);
+            let member_combat = member_bp.combat.as_ref().unwrap();
+            let member_move = member_bp.movement.as_ref().unwrap();
+            let member_y_off = member_move.y_offset;
+            let angle = member.angle_offset;
+            let offset_r = patrol_radius * member.ring_radius;
             let x = center.x + angle.cos() * offset_r;
             let z = center.z + angle.sin() * offset_r;
 
             let entity = spawn_from_blueprint(
                 &mut commands,
                 &cache,
-                camp.kind,
+                member.kind,
                 Vec3::new(x, 0.0, z),
                 &registry,
                 None,
@@ -236,56 +312,8 @@ fn spawn_mob_camps(
                 &height_map,
             );
 
-            // Override patrol center
-            commands.entity(entity).insert(PatrolState {
-                state: PatrolStateKind::Idle,
-                center,
-                radius: patrol_radius,
-                patrol_target: None,
-                chase_elapsed: 0.0,
-            });
-
-            // Attach camp reward to first mob if camp has no boss
-            if i == 0 && !camp.has_boss {
-                commands.entity(entity).insert(camp_reward.clone());
-            }
-        }
-
-        // Spawn boss
-        if camp.has_boss {
-            let combat = bp.combat.as_ref().unwrap();
-
-            let entity = spawn_from_blueprint(
-                &mut commands,
-                &cache,
-                camp.kind,
-                Vec3::new(center.x, 0.0, center.z),
-                &registry,
-                None,
-                unit_models.as_deref(),
-                &height_map,
-            );
-
-            // Apply boss modifiers + camp reward
-            commands.entity(entity).insert((
-                Boss,
-                camp_reward.clone(),
-                Health {
-                    current: camp.boss_hp,
-                    max: camp.boss_hp,
-                },
-                UnitSpeed(bp.movement.as_ref().unwrap().speed * 0.9),
-                AttackDamage(combat.damage * 1.5),
-                AttackRange(combat.attack_range * 1.2),
-                AttackCooldown {
-                    timer: Timer::from_seconds(1.0, TimerMode::Repeating),
-                },
-                Transform::from_translation(Vec3::new(
-                    center.x,
-                    height_map.sample(center.x, center.z) + y_off * 1.5,
-                    center.z,
-                ))
-                .with_scale(Vec3::splat(1.5)),
+            let mut entity_cmd = commands.entity(entity);
+            entity_cmd.insert((
                 PatrolState {
                     state: PatrolStateKind::Idle,
                     center,
@@ -293,7 +321,31 @@ fn spawn_mob_camps(
                     patrol_target: None,
                     chase_elapsed: 0.0,
                 },
+                Health {
+                    current: member_combat.hp * member.hp_mult,
+                    max: member_combat.hp * member.hp_mult,
+                },
+                UnitSpeed(member_move.speed * member.speed_mult),
+                AttackDamage(member_combat.damage * member.damage_mult),
+                AttackRange(member_combat.attack_range * member.range_mult),
+                AggroRange(member_combat.aggro_range.unwrap_or(12.0) + member.aggro_bonus),
+                Transform::from_translation(Vec3::new(
+                    x,
+                    height_map.sample(x, z) + member_y_off,
+                    z,
+                ))
+                .with_scale(Vec3::splat(member.scale_mult)),
             ));
+
+            if member.boss {
+                entity_cmd.insert((
+                    Boss,
+                    camp_reward.clone(),
+                    CombatFxKind::Siege,
+                ));
+            } else if i == 0 && camp.members.iter().all(|m| !m.boss) {
+                entity_cmd.insert(camp_reward.clone());
+            }
         }
     }
 }

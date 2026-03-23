@@ -67,10 +67,12 @@ pub fn update_action_bar(
             Option<&TowerAutoAttackEnabled>,
             Option<&ResourceProcessor>,
             Option<&ProductionState>,
+            Option<&BuildingPaused>,
         ),
         (With<Building>, With<Selected>),
     >,
     assigned_workers_q: Query<&AssignedWorkers>,
+    worker_states_q: Query<&UnitState, With<Unit>>,
     player_state: (
         Res<AllCompletedBuildings>,
         Res<FactionBaseState>,
@@ -94,6 +96,7 @@ pub fn update_action_bar(
                 Changed<TowerAutoAttackEnabled>,
                 Changed<AssignedWorkers>,
                 Changed<ProductionState>,
+                Changed<BuildingPaused>,
             )>,
         >,
         Query<Entity, With<BuildGridButton>>,
@@ -107,6 +110,7 @@ pub fn update_action_bar(
         Local<UnitCapStats>,
     ),
     ui_state: (Res<IconAssets>, Res<RallyPointMode>),
+    formation: Res<ActiveFormation>,
 ) {
     let (all_completed, base_state, active_player, all_resources) = player_state;
     let (all_units, all_training_queues, all_buildings_for_cap) = unit_cap_queries;
@@ -150,7 +154,7 @@ pub fn update_action_bar(
     let current_queue_len = selected_buildings
         .iter()
         .next()
-        .and_then(|(_, _, _, _, _, _, q, _, _, _, _, _)| q.map(|q| q.queue.len()))
+        .and_then(|(_, _, _, _, _, _, q, _, _, _, _, _, _)| q.map(|q| q.queue.len()))
         .unwrap_or(0);
     let queue_changed = current_queue_len != *last_queue_len;
     *last_queue_len = current_queue_len;
@@ -210,14 +214,29 @@ pub fn update_action_bar(
                 auto_attack,
                 proc_opt,
                 production_state,
+                building_paused,
             )) = selected_buildings.single()
             {
                 if *state == BuildingState::Complete {
                     let player_res = all_resources.get(&active_player.0);
-                    let worker_count = assigned_workers_q
+                    let worker_info: Vec<(Entity, AssignedPhase)> = assigned_workers_q
                         .get(building_entity)
-                        .map(|aw| aw.workers.len())
-                        .unwrap_or(0);
+                        .map(|aw| {
+                            aw.workers
+                                .iter()
+                                .filter_map(|&w| {
+                                    if let Ok(unit_state) = worker_states_q.get(w) {
+                                        if let UnitState::AssignedGathering { phase, .. } =
+                                            unit_state
+                                        {
+                                            return Some((w, phase.clone()));
+                                        }
+                                    }
+                                    Some((w, AssignedPhase::SeekingNode))
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     spawn_building_action_bar(
                         &mut commands,
                         bar_entity,
@@ -230,7 +249,8 @@ pub fn update_action_bar(
                         auto_attack,
                         proc_opt,
                         production_state,
-                        worker_count,
+                        &worker_info,
+                        building_paused.is_some(),
                         &icons,
                         &registry,
                         player_res,
@@ -271,6 +291,7 @@ pub fn update_action_bar(
                     bar_entity,
                     &selected_units,
                     layout_bucket,
+                    &formation,
                 );
             }
         }
@@ -332,6 +353,7 @@ fn spawn_units_action_bar(
         (With<Unit>, With<Selected>),
     >,
     layout_bucket: u8,
+    formation: &ActiveFormation,
 ) {
     let container = commands
         .spawn((widget_content_stack(), Interaction::None))
@@ -586,6 +608,127 @@ fn spawn_units_action_bar(
         commands.entity(container).add_child(drop_btn);
     }
 
+    // --- Formation toggle button ---
+    if unit_count > 1 {
+        let form_label = format!("Formation: {} (G)", formation.formation.display_name());
+        let form_btn = commands
+            .spawn((
+                Button,
+                CycleFormationButton,
+                ButtonAnimState::new([0.0, 0.0, 0.0, 0.0]),
+                ButtonStyle::Filled,
+                ActionTooltipTrigger {
+                    text: "Cycle Formation (G)\nNone → Line → Box → Wedge".to_string(),
+                },
+                Node {
+                    margin: UiRect::top(Val::Px(6.0)),
+                    align_self: AlignSelf::FlexStart,
+                    padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Text::new(form_label),
+                    TextFont {
+                        font_size: theme::FONT_BODY,
+                        ..default()
+                    },
+                    TextColor(theme::TEXT_SECONDARY),
+                ));
+            })
+            .id();
+        commands.entity(container).add_child(form_btn);
+    }
+
+    // --- Ability buttons (shown when a unit with abilities is selected) ---
+    {
+        let mut shown_abilities = std::collections::HashSet::new();
+        for (kind, _, _, _) in selected_units.iter() {
+            let unit_abilities: Vec<AbilityId> = match *kind {
+                EntityKind::Knight => vec![AbilityId::KnightCharge],
+                EntityKind::Mage => vec![AbilityId::MageFireball, AbilityId::MageFrostNova],
+                EntityKind::Priest => vec![AbilityId::PriestHeal, AbilityId::PriestHolySmite],
+                EntityKind::Catapult => vec![AbilityId::CatapultAoeBoulder],
+                _ => vec![],
+            };
+            for a in unit_abilities {
+                shown_abilities.insert(a);
+            }
+        }
+
+        if !shown_abilities.is_empty() {
+            let ability_label = commands
+                .spawn((
+                    Text::new("Abilities"),
+                    TextFont {
+                        font_size: theme::FONT_BODY,
+                        ..default()
+                    },
+                    TextColor(theme::TEXT_SECONDARY),
+                    Node {
+                        margin: UiRect::top(Val::Px(8.0)),
+                        ..default()
+                    },
+                ))
+                .id();
+            commands.entity(container).add_child(ability_label);
+
+            let ability_row = commands
+                .spawn(Node {
+                    margin: UiRect::top(Val::Px(4.0)),
+                    ..widget_wrap_row(4.0, 4.0)
+                })
+                .id();
+            commands.entity(container).add_child(ability_row);
+
+            // Sort abilities for consistent display
+            let mut abilities_sorted: Vec<AbilityId> = shown_abilities.into_iter().collect();
+            abilities_sorted.sort_by_key(|a| format!("{:?}", a));
+
+            for ability in abilities_sorted {
+                let label = format!("{} ({})", ability.display_name(), ability.hotkey());
+                let btn = commands
+                    .spawn((
+                        Button,
+                        AbilityButton(ability),
+                        ButtonAnimState::new([0.0, 0.0, 0.0, 0.0]),
+                        ButtonStyle::Filled,
+                        ActionTooltipTrigger {
+                            text: format!(
+                                "{}\n{}\nCooldown: {:.0}s",
+                                ability.display_name(),
+                                ability.description(),
+                                ability.cooldown_secs()
+                            ),
+                        },
+                        Node {
+                            min_width: cmd_min_width,
+                            flex_grow: if layout_bucket == 0 { 1.0 } else { 0.0 },
+                            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                            border_radius: BorderRadius::all(Val::Px(4.0)),
+                            ..default()
+                        },
+                        BackgroundColor(Color::NONE),
+                    ))
+                    .with_children(|b| {
+                        b.spawn((
+                            Text::new(label),
+                            TextFont {
+                                font_size: theme::FONT_BODY,
+                                ..default()
+                            },
+                            TextColor(Color::srgb(0.4, 0.8, 1.0)),
+                        ));
+                    })
+                    .id();
+                commands.entity(ability_row).add_child(btn);
+            }
+        }
+    }
+
     if worker_count > 0 && worker_count == unit_count {
         let scuttle_btn = commands
             .spawn((
@@ -629,7 +772,8 @@ fn spawn_building_action_bar(
     auto_attack: Option<&TowerAutoAttackEnabled>,
     processor: Option<&ResourceProcessor>,
     production: Option<&ProductionState>,
-    worker_count: usize,
+    worker_info: &[(Entity, AssignedPhase)],
+    is_paused: bool,
     icons: &IconAssets,
     registry: &BlueprintRegistry,
     player_res: &PlayerResources,
@@ -816,6 +960,7 @@ fn spawn_building_action_bar(
 
     // Processor info section
     if let Some(proc) = processor {
+        let worker_count = worker_info.len();
         let proc_row = commands
             .spawn(Node {
                 width: Val::Percent(100.0),
@@ -833,23 +978,30 @@ fn spawn_building_action_bar(
             .collect();
         let effective_rate =
             proc.harvest_rate + (worker_count as f32 * proc.harvest_rate * proc.worker_rate_bonus);
+        let status_suffix = if is_paused { " [PAUSED]" } else { "" };
         let harvest_label = commands
             .spawn((
                 Text::new(format!(
-                    "Harvesting: {} ({:.1}/s)",
+                    "Harvesting: {} ({:.1}/s){}",
                     rt_names.join(", "),
-                    effective_rate
+                    if is_paused { 0.0 } else { effective_rate },
+                    status_suffix
                 )),
                 TextFont {
                     font_size: theme::FONT_BODY,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(if is_paused {
+                    theme::WARNING
+                } else {
+                    theme::TEXT_SECONDARY
+                }),
             ))
             .id();
         commands.entity(proc_row).add_child(harvest_label);
 
         if proc.max_workers > 0 {
+            // Worker slots row: interactive clickable slots
             let slot_row = commands
                 .spawn(Node {
                     ..widget_wrap_row(4.0, 2.0)
@@ -857,40 +1009,66 @@ fn spawn_building_action_bar(
                 .id();
             commands.entity(proc_row).add_child(slot_row);
 
-            let workers_label = commands
-                .spawn((
-                    Text::new(format!("Workers: {}/{}", worker_count, proc.max_workers)),
-                    TextFont {
-                        font_size: theme::FONT_BODY,
-                        ..default()
-                    },
-                    TextColor(theme::TEXT_SECONDARY),
-                ))
-                .id();
-            commands.entity(slot_row).add_child(workers_label);
-
-            for i in 0..proc.max_workers {
-                let is_filled = (i as usize) < worker_count;
-                let circle = commands
-                    .spawn((
-                        Node {
-                            width: Val::Px(10.0),
-                            height: Val::Px(10.0),
-                            border_radius: BorderRadius::all(Val::Px(5.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            ..default()
-                        },
-                        BorderColor::all(theme::ACCENT),
-                        BackgroundColor(if is_filled {
-                            theme::ACCENT
-                        } else {
-                            Color::srgba(0.0, 0.0, 0.0, 0.2)
-                        }),
-                    ))
-                    .id();
-                commands.entity(slot_row).add_child(circle);
+            for i in 0..proc.max_workers as usize {
+                if i < worker_count {
+                    // Filled slot — clickable, shows phase letter
+                    let (worker_entity, phase) = &worker_info[i];
+                    let phase_letter = match phase {
+                        AssignedPhase::SeekingNode => "S",
+                        AssignedPhase::MovingToNode(_) => "M",
+                        AssignedPhase::Harvesting { .. } => "H",
+                        AssignedPhase::ReturningToBuilding => "R",
+                        AssignedPhase::Depositing { .. } => "D",
+                    };
+                    let slot = commands
+                        .spawn((
+                            Button,
+                            UnassignSpecificWorkerButton(*worker_entity),
+                            Node {
+                                width: Val::Px(20.0),
+                                height: Val::Px(20.0),
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BorderColor::all(theme::ACCENT),
+                            BackgroundColor(theme::ACCENT.with_alpha(0.7)),
+                            Interaction::None,
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new(phase_letter),
+                                TextFont {
+                                    font_size: 10.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                        })
+                        .id();
+                    commands.entity(slot_row).add_child(slot);
+                } else {
+                    // Empty slot — non-interactive placeholder
+                    let slot = commands
+                        .spawn((
+                            Node {
+                                width: Val::Px(20.0),
+                                height: Val::Px(20.0),
+                                border_radius: BorderRadius::all(Val::Px(4.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                ..default()
+                            },
+                            BorderColor::all(theme::ACCENT.with_alpha(0.3)),
+                            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.2)),
+                        ))
+                        .id();
+                    commands.entity(slot_row).add_child(slot);
+                }
             }
 
+            // Button row: [ - ] Workers: X/Y [ + ]   [Pause/Resume]  [Unassign All]
             let btn_row = commands
                 .spawn(Node {
                     ..widget_wrap_row(4.0, 4.0)
@@ -898,50 +1076,21 @@ fn spawn_building_action_bar(
                 .id();
             commands.entity(proc_row).add_child(btn_row);
 
-            if worker_count < proc.max_workers as usize {
-                let rest_bg = [0.14, 0.14, 0.14, 0.94];
-                let assign_btn = commands
-                    .spawn((
-                        Button,
-                        AssignWorkerButton,
-                        ButtonAnimState::new(rest_bg),
-                        ButtonStyle::Ghost,
-                        Node {
-                            min_width: Val::Px(92.0),
-                            padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(4.0)),
-                            ..default()
-                        },
-                        BorderColor::all(theme::ACCENT.with_alpha(0.3)),
-                        BackgroundColor(theme::BG_ELEVATED),
-                        Interaction::None,
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            Text::new("+ Assign"),
-                            TextFont {
-                                font_size: theme::FONT_SMALL,
-                                ..default()
-                            },
-                            TextColor(theme::ACCENT),
-                        ));
-                    })
-                    .id();
-                commands.entity(btn_row).add_child(assign_btn);
-            }
+            let rest_bg = [0.14, 0.14, 0.14, 0.94];
 
+            // "-" button (unassign one)
             if worker_count > 0 {
-                let rest_bg = [0.14, 0.14, 0.14, 0.94];
-                let unassign_btn = commands
+                let minus_btn = commands
                     .spawn((
                         Button,
-                        UnassignWorkerButton,
+                        UnassignOneWorkerButton,
                         ButtonAnimState::new(rest_bg),
                         ButtonStyle::Destructive,
                         Node {
-                            min_width: Val::Px(92.0),
-                            padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
+                            width: Val::Px(28.0),
+                            height: Val::Px(24.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
                             border: UiRect::all(Val::Px(1.0)),
                             border_radius: BorderRadius::all(Val::Px(4.0)),
                             ..default()
@@ -952,7 +1101,129 @@ fn spawn_building_action_bar(
                     ))
                     .with_children(|btn| {
                         btn.spawn((
-                            Text::new("- Unassign"),
+                            Text::new("-"),
+                            TextFont {
+                                font_size: theme::FONT_BODY,
+                                ..default()
+                            },
+                            TextColor(theme::DESTRUCTIVE),
+                        ));
+                    })
+                    .id();
+                commands.entity(btn_row).add_child(minus_btn);
+            }
+
+            // Workers label
+            let workers_label = commands
+                .spawn((
+                    Text::new(format!("Workers: {}/{}", worker_count, proc.max_workers)),
+                    TextFont {
+                        font_size: theme::FONT_BODY,
+                        ..default()
+                    },
+                    TextColor(theme::TEXT_SECONDARY),
+                    Node {
+                        margin: UiRect::axes(Val::Px(4.0), Val::ZERO),
+                        ..default()
+                    },
+                ))
+                .id();
+            commands.entity(btn_row).add_child(workers_label);
+
+            // "+" button (assign one)
+            if worker_count < proc.max_workers as usize {
+                let plus_btn = commands
+                    .spawn((
+                        Button,
+                        AssignWorkerButton,
+                        ButtonAnimState::new(rest_bg),
+                        ButtonStyle::Ghost,
+                        Node {
+                            width: Val::Px(28.0),
+                            height: Val::Px(24.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(4.0)),
+                            ..default()
+                        },
+                        BorderColor::all(theme::ACCENT.with_alpha(0.3)),
+                        BackgroundColor(theme::BG_ELEVATED),
+                        Interaction::None,
+                    ))
+                    .with_children(|btn| {
+                        btn.spawn((
+                            Text::new("+"),
+                            TextFont {
+                                font_size: theme::FONT_BODY,
+                                ..default()
+                            },
+                            TextColor(theme::ACCENT),
+                        ));
+                    })
+                    .id();
+                commands.entity(btn_row).add_child(plus_btn);
+            }
+
+            // Pause/Resume toggle button
+            let pause_label = if is_paused { "Resume" } else { "Pause" };
+            let pause_color = if is_paused {
+                theme::ACCENT
+            } else {
+                theme::WARNING
+            };
+            let pause_btn = commands
+                .spawn((
+                    Button,
+                    PauseBuildingButton,
+                    ButtonAnimState::new(rest_bg),
+                    ButtonStyle::Ghost,
+                    Node {
+                        padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        margin: UiRect::left(Val::Px(8.0)),
+                        ..default()
+                    },
+                    BorderColor::all(pause_color.with_alpha(0.3)),
+                    BackgroundColor(theme::BG_ELEVATED),
+                    Interaction::None,
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        Text::new(pause_label),
+                        TextFont {
+                            font_size: theme::FONT_SMALL,
+                            ..default()
+                        },
+                        TextColor(pause_color),
+                    ));
+                })
+                .id();
+            commands.entity(btn_row).add_child(pause_btn);
+
+            // "Unassign All" small button (only when >1 worker)
+            if worker_count > 1 {
+                let unassign_all_btn = commands
+                    .spawn((
+                        Button,
+                        UnassignWorkerButton,
+                        ButtonAnimState::new(rest_bg),
+                        ButtonStyle::Destructive,
+                        Node {
+                            padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
+                            border: UiRect::all(Val::Px(1.0)),
+                            border_radius: BorderRadius::all(Val::Px(4.0)),
+                            margin: UiRect::left(Val::Px(4.0)),
+                            ..default()
+                        },
+                        BorderColor::all(theme::DESTRUCTIVE.with_alpha(0.3)),
+                        BackgroundColor(theme::BG_ELEVATED),
+                        Interaction::None,
+                    ))
+                    .with_children(|btn| {
+                        btn.spawn((
+                            Text::new("Unassign All"),
                             TextFont {
                                 font_size: theme::FONT_SMALL,
                                 ..default()
@@ -961,7 +1232,7 @@ fn spawn_building_action_bar(
                         ));
                     })
                     .id();
-                commands.entity(btn_row).add_child(unassign_btn);
+                commands.entity(btn_row).add_child(unassign_all_btn);
             }
         } else {
             let auto_badge = commands
@@ -975,6 +1246,44 @@ fn spawn_building_action_bar(
                 ))
                 .id();
             commands.entity(proc_row).add_child(auto_badge);
+
+            // Pause/Resume for automated buildings too
+            let rest_bg = [0.14, 0.14, 0.14, 0.94];
+            let pause_label = if is_paused { "Resume" } else { "Pause" };
+            let pause_color = if is_paused {
+                theme::ACCENT
+            } else {
+                theme::WARNING
+            };
+            let pause_btn = commands
+                .spawn((
+                    Button,
+                    PauseBuildingButton,
+                    ButtonAnimState::new(rest_bg),
+                    ButtonStyle::Ghost,
+                    Node {
+                        padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        margin: UiRect::top(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BorderColor::all(pause_color.with_alpha(0.3)),
+                    BackgroundColor(theme::BG_ELEVATED),
+                    Interaction::None,
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        Text::new(pause_label),
+                        TextFont {
+                            font_size: theme::FONT_SMALL,
+                            ..default()
+                        },
+                        TextColor(pause_color),
+                    ));
+                })
+                .id();
+            commands.entity(proc_row).add_child(pause_btn);
         }
 
         spawn_separator(commands, container);
@@ -1009,18 +1318,15 @@ fn spawn_building_action_bar(
             let is_active = prod.active_recipe == Some(idx);
             let is_locked = recipe.requires_level > level;
 
-            let recipe_row = commands
-                .spawn(Node {
-                    width: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(2.0),
-                    padding: UiRect::all(Val::Px(4.0)),
-                    ..default()
-                })
-                .id();
-            commands.entity(prod_col).add_child(recipe_row);
-
             if is_locked {
+                let locked_row = commands
+                    .spawn(Node {
+                        width: Val::Percent(100.0),
+                        padding: UiRect::all(Val::Px(4.0)),
+                        ..default()
+                    })
+                    .id();
+                commands.entity(prod_col).add_child(locked_row);
                 let locked_text = commands
                     .spawn((
                         Text::new(format!(
@@ -1034,18 +1340,46 @@ fn spawn_building_action_bar(
                         TextColor(theme::TEXT_SECONDARY.with_alpha(0.5)),
                     ))
                     .id();
-                commands.entity(recipe_row).add_child(locked_text);
+                commands.entity(locked_row).add_child(locked_text);
             } else {
+                // Clickable recipe row — click to select, click active to deselect
+                let rest_bg = [0.14, 0.14, 0.14, 0.94];
+                let recipe_row = commands
+                    .spawn((
+                        Button,
+                        SelectRecipeButton(idx),
+                        ButtonAnimState::new(rest_bg),
+                        ButtonStyle::Ghost,
+                        Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: Val::Px(2.0),
+                            padding: UiRect::all(Val::Px(4.0)),
+                            border: UiRect::left(Val::Px(if is_active { 3.0 } else { 0.0 })),
+                            border_radius: BorderRadius::all(Val::Px(2.0)),
+                            ..default()
+                        },
+                        BorderColor::all(if is_active {
+                            theme::ACCENT
+                        } else {
+                            Color::NONE
+                        }),
+                        BackgroundColor(if is_active {
+                            theme::ACCENT.with_alpha(0.1)
+                        } else {
+                            Color::NONE
+                        }),
+                        Interaction::None,
+                    ))
+                    .id();
+                commands.entity(prod_col).add_child(recipe_row);
+
                 // Recipe name + cycle time
-                let status = if is_active { "Active" } else { "" };
-                let header_text = if status.is_empty() {
-                    format!("{}  ({:.0}s)", recipe.name, recipe.cycle_secs)
-                } else {
-                    format!(
-                        "{}  ({:.0}s) [{}]",
-                        recipe.name, recipe.cycle_secs, status
-                    )
-                };
+                let status = if is_active { "Active" } else { "Click to start" };
+                let header_text = format!(
+                    "{}  ({:.0}s) [{}]",
+                    recipe.name, recipe.cycle_secs, status
+                );
                 let header = commands
                     .spawn((
                         Text::new(header_text),
@@ -1102,7 +1436,7 @@ fn spawn_building_action_bar(
                     commands.entity(recipe_row).add_child(outputs_label);
                 }
 
-                // Progress bar for active recipe
+                // Visual progress bar for active recipe
                 if is_active {
                     let elapsed = prod.progress_timer.elapsed_secs();
                     let duration = prod.progress_timer.duration().as_secs_f32();
@@ -1111,25 +1445,61 @@ fn spawn_building_action_bar(
                     } else {
                         0.0
                     };
-                    let filled = (pct * 20.0) as usize;
-                    let empty = 20 - filled;
-                    let bar = format!(
-                        "  [{}{}] {:.0}%",
-                        "=".repeat(filled),
-                        " ".repeat(empty),
-                        pct * 100.0
-                    );
-                    let progress_label = commands
+
+                    // Progress bar container
+                    let bar_row = commands
+                        .spawn(Node {
+                            width: Val::Percent(100.0),
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(6.0),
+                            margin: UiRect::top(Val::Px(2.0)),
+                            ..default()
+                        })
+                        .id();
+                    commands.entity(recipe_row).add_child(bar_row);
+
+                    // Outer bar background
+                    let bar_bg = commands
                         .spawn((
-                            Text::new(bar),
+                            Node {
+                                width: Val::Percent(80.0),
+                                height: Val::Px(6.0),
+                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                overflow: Overflow::clip(),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.8)),
+                        ))
+                        .id();
+                    commands.entity(bar_row).add_child(bar_bg);
+
+                    // Inner bar fill
+                    let bar_fill = commands
+                        .spawn((
+                            Node {
+                                width: Val::Percent(pct * 100.0),
+                                height: Val::Percent(100.0),
+                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                ..default()
+                            },
+                            BackgroundColor(theme::ACCENT),
+                        ))
+                        .id();
+                    commands.entity(bar_bg).add_child(bar_fill);
+
+                    // Percentage text
+                    let pct_label = commands
+                        .spawn((
+                            Text::new(format!("{:.0}%", pct * 100.0)),
                             TextFont {
-                                font_size: theme::FONT_BODY,
+                                font_size: theme::FONT_SMALL,
                                 ..default()
                             },
                             TextColor(theme::ACCENT),
                         ))
                         .id();
-                    commands.entity(recipe_row).add_child(progress_label);
+                    commands.entity(bar_row).add_child(pct_label);
                 }
             }
         }

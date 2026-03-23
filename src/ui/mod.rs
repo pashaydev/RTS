@@ -129,6 +129,9 @@ impl Plugin for UiPlugin {
                     buttons::handle_assign_worker_button,
                     buttons::handle_unassign_worker_button,
                     buttons::handle_unassign_specific_worker_button,
+                    buttons::handle_unassign_one_worker_button,
+                    buttons::handle_pause_building_button,
+                    buttons::handle_select_recipe_button,
                 )
                     .run_if(in_state(AppState::InGame))
                     .run_if(player_can_command),
@@ -161,6 +164,8 @@ impl Plugin for UiPlugin {
                     buttons::handle_hold_position_button,
                     buttons::handle_stop_button,
                     buttons::handle_cycle_stance_button,
+                    buttons::handle_ability_button,
+                    buttons::handle_formation_button,
                 )
                     .run_if(in_state(AppState::InGame))
                     .run_if(player_can_command),

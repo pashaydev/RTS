@@ -1,3 +1,4 @@
+mod abilities;
 mod ages;
 mod ai;
 mod animation;
@@ -116,6 +117,7 @@ fn main() {
             combat::CombatPlugin,
             fog::FogPlugin,
         ))
+        .add_plugins(abilities::AbilitiesPlugin)
         .add_plugins(spatial::SpatialPlugin)
         .add_plugins(pathfinding::PathfindingPlugin)
         .add_plugins(roads::RoadPlugin)

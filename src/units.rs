@@ -314,10 +314,13 @@ fn move_units(
             Option<&AttackTarget>,
             Option<&mut NavPath>,
             Has<NavPending>,
+            Option<&StatusEffects>,
+            Option<&mut MovementSmoothing>,
         ),
         With<Unit>,
     >,
 ) {
+    let dt = time.delta_secs();
     for (
         entity,
         mut transform,
@@ -329,10 +332,16 @@ fn move_units(
         attack_target,
         nav_path,
         is_pending,
+        opt_status,
+        opt_smoothing,
     ) in &mut query
     {
         // Client: only move local player's units; remote units are positioned by state sync
         if *net_role == crate::multiplayer::NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
+        // Stunned units cannot move
+        if opt_status.map_or(false, |s| s.is_stunned()) {
             continue;
         }
         // Wait for path computation — don't walk blindly
@@ -355,11 +364,13 @@ fn move_units(
         let flat_dir = Vec3::new(direction.x, 0.0, direction.z);
         let distance = flat_dir.length();
 
-        // Waypoint arrival threshold (tighter for intermediate waypoints)
-        let arrival_dist = if nav_path
+        // Check if this is the final waypoint (for deceleration)
+        let is_final_waypoint = nav_path
             .as_ref()
-            .map_or(false, |n| n.current_index + 1 < n.waypoints.len())
-        {
+            .map_or(true, |n| n.current_index + 1 >= n.waypoints.len());
+
+        // Waypoint arrival threshold (tighter for intermediate waypoints)
+        let arrival_dist = if !is_final_waypoint {
             1.8 // intermediate waypoint
         } else {
             0.5 // final destination
@@ -370,7 +381,15 @@ fn move_units(
             if let Some(mut nav) = nav_path {
                 nav.current_index += 1;
                 if nav.current_index >= nav.waypoints.len() {
-                    // Path complete
+                    // Path complete — reset smoothing speed and add arrival spread
+                    if let Some(mut smoothing) = opt_smoothing {
+                        smoothing.current_speed = 0.0;
+                    }
+                    // Small random offset to prevent units stacking on exact same point
+                    let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 0.6;
+                    let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 0.6;
+                    transform.translation.x += spread_x;
+                    transform.translation.z += spread_z;
                     commands
                         .entity(entity)
                         .remove::<MoveTarget>()
@@ -378,6 +397,13 @@ fn move_units(
                         .remove::<NavDirect>();
                 }
             } else {
+                if let Some(mut smoothing) = opt_smoothing {
+                    smoothing.current_speed = 0.0;
+                }
+                let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 0.6;
+                let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 0.6;
+                transform.translation.x += spread_x;
+                transform.translation.z += spread_z;
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
@@ -396,9 +422,36 @@ fn move_units(
                 1.0
             };
 
+            let slow_factor = opt_status.map_or(1.0, |s| s.slow_factor());
+            let base_max_speed = unit_speed.0 * speed_mult * slow_factor;
+
+            // Compute effective speed with acceleration/deceleration smoothing
+            let effective_speed = if let Some(mut smoothing) = opt_smoothing {
+                let variation = smoothing.speed_variation;
+                let mut target_speed = base_max_speed * variation;
+
+                // Decelerate near final destination for smooth stopping
+                if is_final_waypoint && distance < 3.0 {
+                    target_speed *= (distance / 3.0).clamp(0.15, 1.0);
+                }
+
+                // Ramp current_speed toward target_speed
+                if smoothing.current_speed < target_speed {
+                    smoothing.current_speed =
+                        (smoothing.current_speed + smoothing.acceleration * dt).min(target_speed);
+                } else {
+                    smoothing.current_speed =
+                        (smoothing.current_speed - smoothing.deceleration * dt).max(target_speed);
+                }
+
+                smoothing.current_speed * dt
+            } else {
+                // Fallback for units without MovementSmoothing
+                base_max_speed * dt
+            };
+
             let move_dir = flat_dir.normalize();
-            let speed = unit_speed.0 * speed_mult * time.delta_secs();
-            let step = move_dir * speed;
+            let step = move_dir * effective_speed;
             let candidate = transform.translation + step;
             let ignore_wall = attack_target.map(|at| at.0);
 

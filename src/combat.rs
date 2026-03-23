@@ -15,9 +15,12 @@ impl Plugin for CombatPlugin {
             (
                 player_auto_acquire_target,
                 approach_attack_target,
-                execute_attacks,
+                start_attack_windups,
+                resolve_attack_windups,
+                tick_attack_recovery,
                 explode_props,
                 handle_death,
+                tick_dying,
             )
                 .chain()
                 .run_if(in_state(AppState::InGame)),
@@ -53,6 +56,7 @@ fn explode_props(
                 timer: Timer::from_seconds(0.3, TimerMode::Once),
                 start_scale: 0.4,
                 end_scale: prop.radius * 0.55,
+                rise_speed: 0.6,
             },
             FogHideable::Vfx,
             Mesh3d(vfx.sphere_mesh.clone()),
@@ -102,7 +106,7 @@ pub fn player_auto_acquire_target(
             Option<&UnitState>,
             Option<&UnitStance>,
         ),
-        (With<Unit>, Without<MoveTarget>, Without<AttackTarget>),
+        (With<Unit>, Without<MoveTarget>, Without<AttackTarget>, Without<Dying>),
     >,
     factions: Query<&Faction>,
     building_check: Query<(), With<Building>>,
@@ -187,6 +191,8 @@ fn approach_attack_target(
             &AttackRange,
             &Faction,
             Option<&mut UnitState>,
+            Option<&AttackWindup>,
+            Option<&AttackRecovery>,
         ),
         With<Unit>,
     >,
@@ -199,9 +205,12 @@ fn approach_attack_target(
     >,
     targets: Query<&Transform, Without<AttackTarget>>,
 ) {
-    for (attacker_entity, mut tf, attack_target, speed, range, faction, opt_state) in
+    for (attacker_entity, mut tf, attack_target, speed, range, faction, opt_state, windup, recovery) in
         &mut attackers
     {
+        if windup.is_some() || recovery.is_some() {
+            continue;
+        }
         // Client: only approach for local player's units
         if *net_role == NetRole::Client && *faction != active_player.0 {
             continue;
@@ -293,43 +302,106 @@ fn approach_attack_target(
     }
 }
 
-fn execute_attacks(
+fn start_attack_windups(
+    mut commands: Commands,
+    time: Res<Time>,
+    net_role: Res<NetRole>,
+    active_player: Res<ActivePlayer>,
+    mut attackers: Query<(
+        Entity,
+        &Transform,
+        &AttackTarget,
+        &mut AttackCooldown,
+        &AttackRange,
+        &AttackProfile,
+        &Faction,
+        Option<&AttackWindup>,
+        Option<&AttackRecovery>,
+        Option<&StatusEffects>,
+    )>,
+    targets: Query<&Transform>,
+) {
+    for (entity, atk_tf, attack_target, mut cooldown, range, profile, faction, windup, recovery, opt_status) in
+        &mut attackers
+    {
+        if *net_role == NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
+        if windup.is_some() || recovery.is_some() {
+            continue;
+        }
+        // Stunned units cannot attack
+        if opt_status.map_or(false, |s| s.is_stunned()) {
+            continue;
+        }
+        cooldown.ready_in = (cooldown.ready_in - time.delta_secs()).max(0.0);
+        if cooldown.ready_in > 0.0 {
+            continue;
+        }
+
+        let Ok(target_tf) = targets.get(attack_target.0) else {
+            continue;
+        };
+        if atk_tf.translation.distance(target_tf.translation) > range.0 * 1.15 {
+            continue;
+        }
+
+        cooldown.ready_in = cooldown.interval;
+        commands.entity(entity).insert(AttackWindup {
+            target: attack_target.0,
+            remaining_secs: profile.windup_secs.max(0.01),
+        });
+    }
+}
+
+fn resolve_attack_windups(
     mut commands: Commands,
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
     net_role: Res<NetRole>,
     active_player: Res<ActivePlayer>,
     mut attackers: Query<(
+        Entity,
         &Transform,
-        &AttackTarget,
-        &mut AttackCooldown,
+        &AttackProfile,
+        &CombatFxKind,
         &AttackDamage,
         &AttackRange,
         Option<&IsRanged>,
         &Faction,
         Option<&DamageType>,
+        &mut AttackWindup,
+        Option<&ChargeBonus>,
     )>,
     mut healths: Query<(&Transform, &mut Health, Option<&ArmorType>)>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (atk_tf, attack_target, mut cooldown, damage, range, is_ranged, faction, opt_dmg_type) in &mut attackers {
+    for (entity, atk_tf, profile, fx_kind, damage, range, is_ranged, faction, opt_dmg_type, mut windup, opt_charge) in &mut attackers {
         // Client: only execute attacks for local player's units
         if *net_role == NetRole::Client && *faction != active_player.0 {
             continue;
         }
-        cooldown.timer.tick(time.delta());
-
-        if !cooldown.timer.just_finished() {
+        windup.remaining_secs -= time.delta_secs();
+        if windup.remaining_secs > 0.0 {
             continue;
         }
 
-        let Ok((target_tf, mut health, opt_armor)) = healths.get_mut(attack_target.0) else {
+        let target = windup.target;
+        let Ok((target_tf, mut health, opt_armor)) = healths.get_mut(target) else {
+            commands.entity(entity).remove::<AttackWindup>();
+            commands.entity(entity).insert(AttackRecovery {
+                remaining_secs: profile.recovery_secs,
+            });
             continue;
         };
 
         let dist = atk_tf.translation.distance(target_tf.translation);
         if dist > range.0 * 1.2 {
+            commands.entity(entity).remove::<AttackWindup>();
+            commands.entity(entity).insert(AttackRecovery {
+                remaining_secs: (profile.recovery_secs * 0.5).max(0.05),
+            });
             continue;
         }
 
@@ -343,36 +415,122 @@ fn execute_attacks(
             // Ranged: spawn projectile (carries damage_type for on-hit multiplier)
             commands.spawn((
                 Projectile {
-                    target: attack_target.0,
-                    speed: 15.0,
+                    target,
+                    speed: profile.projectile_speed.max(8.0),
                     damage: damage.0,
                     damage_type: opt_dmg_type.copied().unwrap_or(DamageType::Melee),
+                    fx_kind: *fx_kind,
+                    impact_scale: profile.impact_scale,
                 },
                 FogHideable::Vfx,
                 Mesh3d(vfx.sphere_mesh.clone()),
                 MeshMaterial3d(vfx.projectile_material.clone()),
                 Transform::from_translation(atk_tf.translation + Vec3::Y * 0.5)
-                    .with_scale(Vec3::splat(0.15)),
+                    .with_scale(Vec3::splat(profile.projectile_scale.max(0.12))),
                 NotShadowCaster,
                 NotShadowReceiver,
             ));
+            spawn_combat_flash(
+                &mut commands,
+                &vfx,
+                atk_tf.translation + Vec3::Y * 0.7,
+                *fx_kind,
+                profile.projectile_scale.max(0.16),
+                profile.projectile_scale.max(0.32),
+                0.18,
+                0.4,
+            );
         } else {
             // Melee: apply damage directly with multiplier + flash VFX
-            health.current -= damage.0 * multiplier;
-            commands.spawn((
-                VfxFlash {
-                    timer: Timer::from_seconds(0.15, TimerMode::Once),
-                    start_scale: 0.3,
-                    end_scale: 0.8,
-                },
-                FogHideable::Vfx,
-                Mesh3d(vfx.sphere_mesh.clone()),
-                MeshMaterial3d(vfx.melee_material.clone()),
-                Transform::from_translation(target_tf.translation).with_scale(Vec3::splat(0.3)),
-                NotShadowCaster,
-                NotShadowReceiver,
-            ));
+            let charge_mult = opt_charge.map(|c| c.damage_mult).unwrap_or(1.0);
+            health.current -= damage.0 * multiplier * charge_mult;
+            // Consume charge bonus after use
+            if opt_charge.is_some() {
+                commands.entity(entity).remove::<ChargeBonus>();
+            }
+            spawn_combat_flash(
+                &mut commands,
+                &vfx,
+                target_tf.translation,
+                *fx_kind,
+                0.2,
+                profile.impact_scale,
+                0.15,
+                0.8,
+            );
+            spawn_combat_dust(&mut commands, &vfx, target_tf.translation, profile.impact_scale);
         }
+
+        commands.entity(entity).remove::<AttackWindup>();
+        commands.entity(entity).insert(AttackRecovery {
+            remaining_secs: profile.recovery_secs,
+        });
+    }
+}
+
+fn tick_attack_recovery(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut recoveries: Query<(Entity, &mut AttackRecovery)>,
+) {
+    for (entity, mut recovery) in &mut recoveries {
+        recovery.remaining_secs -= time.delta_secs();
+        if recovery.remaining_secs <= 0.0 {
+            commands.entity(entity).remove::<AttackRecovery>();
+        }
+    }
+}
+
+fn spawn_combat_flash(
+    commands: &mut Commands,
+    vfx: &VfxAssets,
+    pos: Vec3,
+    fx_kind: CombatFxKind,
+    start_scale: f32,
+    end_scale: f32,
+    lifetime: f32,
+    rise_speed: f32,
+) {
+    let material = match fx_kind {
+        CombatFxKind::Slash | CombatFxKind::Shadow => vfx.melee_material.clone(),
+        CombatFxKind::Pierce | CombatFxKind::Arcane | CombatFxKind::Siege => {
+            vfx.impact_material.clone()
+        }
+    };
+    commands.spawn((
+        VfxFlash {
+            timer: Timer::from_seconds(lifetime, TimerMode::Once),
+            start_scale,
+            end_scale,
+            rise_speed,
+        },
+        FogHideable::Vfx,
+        Mesh3d(vfx.sphere_mesh.clone()),
+        MeshMaterial3d(material),
+        Transform::from_translation(pos).with_scale(Vec3::splat(start_scale)),
+        NotShadowCaster,
+        NotShadowReceiver,
+    ));
+}
+
+fn spawn_combat_dust(commands: &mut Commands, vfx: &VfxAssets, pos: Vec3, intensity: f32) {
+    for (offset, vel_scale) in [
+        (Vec3::new(0.2, 0.0, 0.1), 0.8),
+        (Vec3::new(-0.15, 0.0, -0.05), 1.0),
+    ] {
+        commands.spawn((
+            CombatDust {
+                timer: Timer::from_seconds(0.35 + intensity * 0.08, TimerMode::Once),
+                velocity: Vec3::new(offset.x * 2.5, 1.1 * vel_scale, offset.z * 2.5),
+                start_scale: 0.08 + intensity * 0.04,
+            },
+            FogHideable::Vfx,
+            Mesh3d(vfx.sphere_mesh.clone()),
+            MeshMaterial3d(vfx.dust_material.clone()),
+            Transform::from_translation(pos + offset).with_scale(Vec3::splat(0.08)),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
     }
 }
 
@@ -390,8 +548,9 @@ fn handle_death(
         Option<&UnitState>,
         Option<&Faction>,
         Option<&CampReward>,
-    )>,
-    mut attackers_with_target: Query<(Entity, &AttackTarget, Option<&mut PatrolState>)>,
+    ), Without<Dying>>,
+    mut attackers_with_target: Query<(Entity, &AttackTarget, Option<&mut PatrolState>), Without<Dying>>,
+    mut experience_q: Query<&mut Experience>,
     mut all_assigned_workers: Query<&mut AssignedWorkers>,
     workers_with_state: Query<(Entity, &UnitState), With<Unit>>,
     time: Res<Time>,
@@ -526,6 +685,76 @@ fn handle_death(
             commands.entity(*dead_entity).remove::<Selected>();
         }
 
-        commands.entity(*dead_entity).despawn();
+        if *is_building {
+            // Buildings despawn immediately
+            commands.entity(*dead_entity).despawn();
+        } else {
+            // Units play death animation before despawning
+            let scale = opt_transform
+                .map(|t| t.scale)
+                .unwrap_or(Vec3::ONE);
+            // Find killer entity and faction for XP granting
+            let killer_entity = attackers_with_target
+                .iter()
+                .find(|(_, at, _)| at.0 == *dead_entity)
+                .map(|(e, _, _)| e);
+            let killer_faction = killer_entity
+                .and_then(|e| attacker_factions.get(e).ok())
+                .copied();
+
+            // Grant XP to killer
+            if let Some(killer_e) = killer_entity {
+                let dead_max_hp = dead
+                    .iter()
+                    .find(|(e, ..)| *e == *dead_entity)
+                    .map(|(_, h, ..)| h.max)
+                    .unwrap_or(50.0);
+                let xp = (dead_max_hp / 5.0) as u32;
+                if let Ok(mut exp) = experience_q.get_mut(killer_e) {
+                    exp.current += xp;
+                    // Check for level-up
+                    if let Some((next_level, threshold)) = exp.level.next() {
+                        if exp.current >= threshold {
+                            exp.level = next_level;
+                        }
+                    }
+                }
+            }
+
+            commands
+                .entity(*dead_entity)
+                .remove::<Unit>()
+                .remove::<AttackTarget>()
+                .remove::<MoveTarget>()
+                .remove::<AttackWindup>()
+                .remove::<AttackRecovery>()
+                .remove::<AttackCooldown>()
+                .insert(Dying {
+                    timer: Timer::from_seconds(1.5, TimerMode::Once),
+                    killed_by: killer_faction,
+                    original_scale: scale,
+                });
+        }
+    }
+}
+
+fn tick_dying(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut dying: Query<(Entity, &mut Dying, &mut Transform)>,
+) {
+    for (entity, mut dying, mut tf) in &mut dying {
+        dying.timer.tick(time.delta());
+
+        // Shrink during the last 0.4 seconds
+        let remaining = dying.timer.remaining_secs();
+        if remaining < 0.4 {
+            let shrink_frac = (remaining / 0.4).max(0.0);
+            tf.scale = dying.original_scale * shrink_frac;
+        }
+
+        if dying.timer.is_finished() {
+            commands.entity(entity).despawn();
+        }
     }
 }

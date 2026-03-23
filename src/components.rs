@@ -463,6 +463,7 @@ pub enum CommandMode {
     Normal,
     AttackMove,
     Patrol,
+    AbilityTarget(AbilityId),
 }
 
 #[derive(Component)]
@@ -1287,7 +1288,8 @@ pub struct AttackTarget(pub Entity);
 
 #[derive(Component)]
 pub struct AttackCooldown {
-    pub timer: Timer,
+    pub ready_in: f32,
+    pub interval: f32,
 }
 
 #[derive(Component)]
@@ -1298,6 +1300,35 @@ pub struct AttackRange(pub f32);
 
 #[derive(Component)]
 pub struct AggroRange(pub f32);
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct AttackProfile {
+    pub windup_secs: f32,
+    pub recovery_secs: f32,
+    pub projectile_speed: f32,
+    pub projectile_scale: f32,
+    pub impact_scale: f32,
+}
+
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CombatFxKind {
+    Slash,
+    Pierce,
+    Arcane,
+    Siege,
+    Shadow,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct AttackWindup {
+    pub target: Entity,
+    pub remaining_secs: f32,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct AttackRecovery {
+    pub remaining_secs: f32,
+}
 
 // ── Damage / Armor type system (unit counters) ──
 
@@ -1813,6 +1844,8 @@ pub struct Projectile {
     pub speed: f32,
     pub damage: f32,
     pub damage_type: DamageType,
+    pub fx_kind: CombatFxKind,
+    pub impact_scale: f32,
 }
 
 #[derive(Component)]
@@ -1820,6 +1853,7 @@ pub struct VfxFlash {
     pub timer: Timer,
     pub start_scale: f32,
     pub end_scale: f32,
+    pub rise_speed: f32,
 }
 
 #[derive(Resource)]
@@ -1846,6 +1880,325 @@ pub struct GatherParticle {
 pub struct FootstepDust {
     pub timer: Timer,
     pub velocity: Vec3,
+}
+
+#[derive(Component)]
+pub struct CombatDust {
+    pub timer: Timer,
+    pub velocity: Vec3,
+    pub start_scale: f32,
+}
+
+/// Marks a unit as dying — plays death animation then despawns.
+#[derive(Component)]
+pub struct Dying {
+    pub timer: Timer,
+    pub killed_by: Option<Faction>,
+    pub original_scale: Vec3,
+}
+
+/// Marks a freshly spawned entity for scale-in animation.
+#[derive(Component)]
+pub struct SpawnAnimation {
+    pub timer: Timer,
+    pub target_scale: Vec3,
+}
+
+/// Enhanced VFX for summoned creatures (SpiritWolf, FireElemental).
+#[derive(Component)]
+pub struct SummonVfx {
+    pub color: Color,
+    pub emissive: LinearRgba,
+    pub pulse_speed: f32,
+    pub particle_timer: Timer,
+    pub light_entity: Option<Entity>,
+}
+
+// ── Formation System ──
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum FormationType {
+    #[default]
+    None,
+    Line,
+    Box,
+    Wedge,
+}
+
+impl FormationType {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::None => "No Formation",
+            Self::Line => "Line",
+            Self::Box => "Box",
+            Self::Wedge => "Wedge",
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::None => Self::Line,
+            Self::Line => Self::Box,
+            Self::Box => Self::Wedge,
+            Self::Wedge => Self::None,
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct ActiveFormation {
+    pub formation: FormationType,
+}
+
+// ── Unit Veterancy ──
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum VeterancyLevel {
+    #[default]
+    Recruit,
+    Veteran,
+    Elite,
+}
+
+impl VeterancyLevel {
+    pub fn damage_mult(self) -> f32 {
+        match self {
+            Self::Recruit => 1.0,
+            Self::Veteran => 1.15,
+            Self::Elite => 1.30,
+        }
+    }
+
+    pub fn hp_mult(self) -> f32 {
+        match self {
+            Self::Recruit => 1.0,
+            Self::Veteran => 1.10,
+            Self::Elite => 1.25,
+        }
+    }
+
+    pub fn speed_mult(self) -> f32 {
+        match self {
+            Self::Recruit => 1.0,
+            Self::Veteran => 1.0,
+            Self::Elite => 1.10,
+        }
+    }
+
+    pub fn next(self) -> Option<(Self, u32)> {
+        match self {
+            Self::Recruit => Some((Self::Veteran, 100)),
+            Self::Veteran => Some((Self::Elite, 300)),
+            Self::Elite => None,
+        }
+    }
+
+    pub fn star_count(self) -> u8 {
+        match self {
+            Self::Recruit => 0,
+            Self::Veteran => 1,
+            Self::Elite => 2,
+        }
+    }
+}
+
+#[derive(Component, Default)]
+pub struct Experience {
+    pub current: u32,
+    pub level: VeterancyLevel,
+}
+
+/// Tracks the last applied veterancy level to avoid re-applying bonuses.
+#[derive(Component)]
+pub struct VeterancyApplied(pub VeterancyLevel);
+
+/// Marker for veterancy star indicator entities.
+#[derive(Component)]
+pub struct VeterancyIndicator;
+
+// ── Active Abilities ──
+
+/// Identifies an ability by a unique enum variant.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum AbilityId {
+    KnightCharge,
+    MageFireball,
+    MageFrostNova,
+    PriestHeal,
+    PriestHolySmite,
+    CatapultAoeBoulder,
+}
+
+impl AbilityId {
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::KnightCharge => "Charge",
+            Self::MageFireball => "Fireball",
+            Self::MageFrostNova => "Frost Nova",
+            Self::PriestHeal => "Heal",
+            Self::PriestHolySmite => "Holy Smite",
+            Self::CatapultAoeBoulder => "Boulder",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::KnightCharge => "Dash forward dealing 2x damage on next attack.",
+            Self::MageFireball => "Launch an AoE fireball at target area.",
+            Self::MageFrostNova => "Freeze nearby enemies, dealing damage and slowing them.",
+            Self::PriestHeal => "Heal a friendly unit for 40 HP.",
+            Self::PriestHolySmite => "Deal 25 holy damage (50 to undead).",
+            Self::CatapultAoeBoulder => "Launch a boulder that deals AoE damage.",
+        }
+    }
+
+    pub fn cooldown_secs(self) -> f32 {
+        match self {
+            Self::KnightCharge => 12.0,
+            Self::MageFireball => 8.0,
+            Self::MageFrostNova => 15.0,
+            Self::PriestHeal => 6.0,
+            Self::PriestHolySmite => 10.0,
+            Self::CatapultAoeBoulder => 0.0, // uses normal attack cooldown
+        }
+    }
+
+    pub fn range(self) -> f32 {
+        match self {
+            Self::KnightCharge => 10.0,
+            Self::MageFireball => 14.0,
+            Self::MageFrostNova => 0.0, // self-centered
+            Self::PriestHeal => 12.0,
+            Self::PriestHolySmite => 10.0,
+            Self::CatapultAoeBoulder => 25.0,
+        }
+    }
+
+    pub fn radius(self) -> f32 {
+        match self {
+            Self::KnightCharge => 0.0,
+            Self::MageFireball => 4.0,
+            Self::MageFrostNova => 5.0,
+            Self::PriestHeal => 0.0,
+            Self::PriestHolySmite => 0.0,
+            Self::CatapultAoeBoulder => 3.0,
+        }
+    }
+
+    pub fn targeting(self) -> AbilityTargeting {
+        match self {
+            Self::KnightCharge => AbilityTargeting::PointTarget,
+            Self::MageFireball => AbilityTargeting::PointTarget,
+            Self::MageFrostNova => AbilityTargeting::NoTarget,
+            Self::PriestHeal => AbilityTargeting::UnitTarget,
+            Self::PriestHolySmite => AbilityTargeting::UnitTarget,
+            Self::CatapultAoeBoulder => AbilityTargeting::PointTarget,
+        }
+    }
+
+    pub fn hotkey(self) -> &'static str {
+        match self {
+            Self::KnightCharge | Self::MageFireball | Self::PriestHeal | Self::CatapultAoeBoulder => "Q",
+            Self::MageFrostNova | Self::PriestHolySmite => "W",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AbilityTargeting {
+    NoTarget,
+    PointTarget,
+    UnitTarget,
+}
+
+/// Component: tracks abilities and their cooldowns for a unit.
+#[derive(Component)]
+pub struct UnitAbilities {
+    pub abilities: Vec<AbilityId>,
+    pub cooldowns: std::collections::HashMap<AbilityId, f32>,
+}
+
+impl UnitAbilities {
+    pub fn new(abilities: Vec<AbilityId>) -> Self {
+        let cooldowns = abilities
+            .iter()
+            .map(|&id| (id, 0.0_f32))
+            .collect();
+        Self { abilities, cooldowns }
+    }
+
+    pub fn is_ready(&self, id: AbilityId) -> bool {
+        self.cooldowns.get(&id).map_or(false, |&cd| cd <= 0.0)
+    }
+
+    pub fn trigger_cooldown(&mut self, id: AbilityId) {
+        if let Some(cd) = self.cooldowns.get_mut(&id) {
+            *cd = id.cooldown_secs();
+        }
+    }
+}
+
+/// Component: marks a unit as currently casting an ability.
+#[derive(Component)]
+pub struct CastingAbility {
+    pub ability: AbilityId,
+    pub target_pos: Option<Vec3>,
+    pub target_entity: Option<Entity>,
+    pub cast_timer: Timer,
+}
+
+/// Temporary bonus from Knight Charge — next attack deals 2x damage.
+#[derive(Component)]
+pub struct ChargeBonus {
+    pub timer: Timer,
+    pub damage_mult: f32,
+}
+
+/// AoE splash damage on projectile impact.
+#[derive(Component)]
+pub struct AoeSplash {
+    pub radius: f32,
+    pub falloff: bool,
+}
+
+// ── Status Effects ──
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StatusEffectKind {
+    Slow,
+    Stun,
+    Burning,
+}
+
+#[derive(Clone)]
+pub struct ActiveStatusEffect {
+    pub kind: StatusEffectKind,
+    pub remaining: f32,
+    pub strength: f32,
+}
+
+/// Component: active status effects on a unit.
+#[derive(Component, Default)]
+pub struct StatusEffects {
+    pub effects: Vec<ActiveStatusEffect>,
+}
+
+impl StatusEffects {
+    pub fn has(&self, kind: StatusEffectKind) -> bool {
+        self.effects.iter().any(|e| e.kind == kind)
+    }
+
+    pub fn slow_factor(&self) -> f32 {
+        self.effects
+            .iter()
+            .filter(|e| e.kind == StatusEffectKind::Slow)
+            .map(|e| 1.0 - e.strength)
+            .fold(1.0, |acc, f| acc * f)
+    }
+
+    pub fn is_stunned(&self) -> bool {
+        self.has(StatusEffectKind::Stun)
+    }
 }
 
 #[derive(Component)]
@@ -2337,6 +2690,23 @@ pub struct AssignWorkerButton;
 pub struct UnassignWorkerButton;
 
 #[derive(Component)]
+pub struct UnassignOneWorkerButton;
+
+#[derive(Component)]
+pub struct PauseBuildingButton;
+
+#[derive(Component)]
+pub struct SelectRecipeButton(pub usize);
+
+/// Marker: building harvesting/production is paused.
+#[derive(Component)]
+pub struct BuildingPaused;
+
+/// Tag on phase-indicator text inside a worker slot, stores the worker entity.
+#[derive(Component)]
+pub struct WorkerSlotPhaseText(pub Entity);
+
+#[derive(Component)]
 pub struct TrainingQueueDisplay;
 
 #[derive(Component)]
@@ -2384,6 +2754,12 @@ pub struct StopButton;
 
 #[derive(Component)]
 pub struct CycleStanceButton;
+
+#[derive(Component)]
+pub struct AbilityButton(pub AbilityId);
+
+#[derive(Component)]
+pub struct CycleFormationButton;
 
 #[derive(Component)]
 pub struct ActionTooltip {
@@ -2792,3 +3168,72 @@ pub enum PauseAction {
 
 #[derive(Component)]
 pub struct SpectatorStatsText;
+
+// ── Camera Zoom Detail Level ──
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetailLevel {
+    Close,  // distance < 25.0
+    Medium, // 25.0 .. 55.0
+    Far,    // > 55.0
+}
+
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct CameraZoomLevel {
+    pub distance: f32,
+    pub detail: DetailLevel,
+}
+
+impl Default for CameraZoomLevel {
+    fn default() -> Self {
+        Self {
+            distance: 60.0,
+            detail: DetailLevel::Far,
+        }
+    }
+}
+
+impl CameraZoomLevel {
+    pub fn from_distance(d: f32) -> Self {
+        let detail = if d < 25.0 {
+            DetailLevel::Close
+        } else if d < 55.0 {
+            DetailLevel::Medium
+        } else {
+            DetailLevel::Far
+        };
+        Self { distance: d, detail }
+    }
+}
+
+// ── Movement Smoothing ──
+
+#[derive(Component)]
+pub struct MovementSmoothing {
+    pub current_speed: f32,
+    pub acceleration: f32,
+    pub deceleration: f32,
+    /// Per-unit random multiplier (0.93..1.07) set on spawn for natural group movement.
+    pub speed_variation: f32,
+}
+
+impl Default for MovementSmoothing {
+    fn default() -> Self {
+        Self {
+            current_speed: 0.0,
+            acceleration: 12.0,
+            deceleration: 8.0,
+            speed_variation: 1.0,
+        }
+    }
+}
+
+// ── Idle Behavior ──
+
+#[derive(Component)]
+pub struct IdleBehavior {
+    pub fidget_timer: Timer,
+    pub fidget_look_target: Option<Vec3>,
+    pub fidget_elapsed: f32,
+    pub breathing_phase: f32,
+}

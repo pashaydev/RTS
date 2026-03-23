@@ -212,6 +212,7 @@ Use `RTS_NET_DEBUG_PORT` to pin the port.
 | Scroll wheel | Zoom |
 | `+ / -` | Alternate zoom |
 | Screen edges | Edge-scroll |
+| `Space` | Focus on selection (or last selection) |
 
 ### Selection
 

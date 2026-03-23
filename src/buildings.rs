@@ -1493,8 +1493,8 @@ fn tower_auto_attack(
             }
         }
 
-        cooldown.timer.tick(time.delta());
-        if !cooldown.timer.just_finished() {
+        cooldown.ready_in = (cooldown.ready_in - time.delta_secs()).max(0.0);
+        if cooldown.ready_in > 0.0 {
             continue;
         }
 
@@ -1512,12 +1512,15 @@ fn tower_auto_attack(
         }
 
         if let Some(target_entity) = closest_target {
+            cooldown.ready_in = cooldown.interval;
             commands.spawn((
                 Projectile {
                     target: target_entity,
                     speed: 20.0,
                     damage: damage.0,
                     damage_type: DamageType::Pierce,
+                    fx_kind: CombatFxKind::Pierce,
+                    impact_scale: 0.8,
                 },
                 Mesh3d(vfx.sphere_mesh.clone()),
                 MeshMaterial3d(vfx.projectile_material.clone()),
@@ -1981,6 +1984,7 @@ fn building_upgrade_system(
                         timer: Timer::from_seconds(0.6, TimerMode::Once),
                         start_scale: 0.8,
                         end_scale: 0.0,
+                        rise_speed: 0.7,
                     },
                     Mesh3d(vfx.sphere_mesh.clone()),
                     MeshMaterial3d(vfx.impact_material.clone()),

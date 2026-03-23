@@ -27,7 +27,7 @@ flowchart TB
     subgraph Transport["TRANSPORT LAYER"]
         WEBRTC["WebRTC Data Channels\n(reliable + unreliable)"]
         HTTP["HTTP File Server\n:7880\n(serves dist/ for browsers)"]
-        LAN["LAN Discovery + host helpers\n(still lives in transport.rs)"]
+        LAN["LAN Discovery + host helpers\n"]
     end
 
     subgraph Client1["CLIENT (Native)"]

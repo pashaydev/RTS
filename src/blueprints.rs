@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline, OutlineStencil, OutlineVolume};
+use rand::Rng;
 use std::collections::HashMap;
 
 use crate::components::*;
@@ -321,6 +322,110 @@ pub struct CombatStats {
     pub attack_cooldown_secs: f32,
     pub aggro_range: Option<f32>,
     pub is_ranged: bool,
+}
+
+fn default_attack_profile(kind: EntityKind, combat: &CombatStats) -> AttackProfile {
+    let mut profile = match kind {
+        EntityKind::Worker => AttackProfile {
+            windup_secs: 0.28,
+            recovery_secs: 0.36,
+            projectile_speed: 0.0,
+            projectile_scale: 0.0,
+            impact_scale: 0.65,
+        },
+        EntityKind::Archer | EntityKind::Scout | EntityKind::Tower | EntityKind::WatchTower => {
+            AttackProfile {
+                windup_secs: 0.18,
+                recovery_secs: 0.25,
+                projectile_speed: 24.0,
+                projectile_scale: 0.11,
+                impact_scale: 0.55,
+            }
+        }
+        EntityKind::BallistaTower | EntityKind::Catapult | EntityKind::BatteringRam => {
+            AttackProfile {
+                windup_secs: 0.35,
+                recovery_secs: 0.45,
+                projectile_speed: 18.0,
+                projectile_scale: 0.2,
+                impact_scale: 1.1,
+            }
+        }
+        EntityKind::Mage | EntityKind::Priest => AttackProfile {
+            windup_secs: 0.32,
+            recovery_secs: 0.3,
+            projectile_speed: 16.0,
+            projectile_scale: 0.16,
+            impact_scale: 0.85,
+        },
+        EntityKind::Goblin => AttackProfile {
+            windup_secs: 0.16,
+            recovery_secs: 0.24,
+            projectile_speed: 0.0,
+            projectile_scale: 0.0,
+            impact_scale: 0.55,
+        },
+        EntityKind::Skeleton => AttackProfile {
+            windup_secs: 0.22,
+            recovery_secs: 0.28,
+            projectile_speed: 0.0,
+            projectile_scale: 0.0,
+            impact_scale: 0.65,
+        },
+        EntityKind::Orc => AttackProfile {
+            windup_secs: 0.3,
+            recovery_secs: 0.34,
+            projectile_speed: 0.0,
+            projectile_scale: 0.0,
+            impact_scale: 0.95,
+        },
+        EntityKind::Demon => AttackProfile {
+            windup_secs: 0.38,
+            recovery_secs: 0.4,
+            projectile_speed: 14.0,
+            projectile_scale: 0.18,
+            impact_scale: 1.1,
+        },
+        _ if combat.is_ranged => AttackProfile {
+            windup_secs: 0.22,
+            recovery_secs: 0.28,
+            projectile_speed: 18.0,
+            projectile_scale: 0.14,
+            impact_scale: 0.7,
+        },
+        _ => AttackProfile {
+            windup_secs: 0.24,
+            recovery_secs: 0.3,
+            projectile_speed: 0.0,
+            projectile_scale: 0.0,
+            impact_scale: 0.75,
+        },
+    };
+
+    if combat.is_ranged && profile.projectile_speed <= 0.0 {
+        profile.projectile_speed = 16.0;
+        profile.projectile_scale = 0.14;
+    }
+
+    profile
+}
+
+fn default_combat_fx(kind: EntityKind, combat: &CombatStats) -> CombatFxKind {
+    match kind {
+        EntityKind::Archer
+        | EntityKind::Scout
+        | EntityKind::Tower
+        | EntityKind::WatchTower
+        | EntityKind::GuardTower
+        | EntityKind::BallistaTower => CombatFxKind::Pierce,
+        EntityKind::Mage | EntityKind::Priest | EntityKind::Demon => CombatFxKind::Arcane,
+        EntityKind::Catapult | EntityKind::BatteringRam | EntityKind::BombardTower => {
+            CombatFxKind::Siege
+        }
+        EntityKind::Goblin => CombatFxKind::Shadow,
+        _ if combat.is_ranged => CombatFxKind::Pierce,
+        _ => CombatFxKind::Slash,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -2680,13 +2785,48 @@ pub fn spawn_from_blueprint_with_faction(
                 EntityKind::Worker | EntityKind::Priest => UnitStance::Defensive,
                 _ => UnitStance::Aggressive,
             };
+            let mut rng = rand::rng();
             entity_cmds.insert((
                 Unit,
                 UnitState::default(),
                 TaskSource::default(),
                 TaskQueue::default(),
                 stance,
+                StatusEffects::default(),
+                Experience::default(),
+                VeterancyApplied(VeterancyLevel::Recruit),
+                SpawnAnimation {
+                    timer: Timer::from_seconds(0.5, TimerMode::Once),
+                    target_scale: Vec3::splat(bp.visual.scale),
+                },
+                MovementSmoothing {
+                    current_speed: 0.0,
+                    acceleration: 12.0,
+                    deceleration: 8.0,
+                    speed_variation: rng.random_range(0.93..1.07),
+                },
+                IdleBehavior {
+                    fidget_timer: Timer::from_seconds(
+                        rng.random_range(5.0..10.0),
+                        TimerMode::Repeating,
+                    ),
+                    fidget_look_target: None,
+                    fidget_elapsed: 0.0,
+                    breathing_phase: rng.random_range(0.0..std::f32::consts::TAU),
+                },
             ));
+
+            // Assign abilities based on unit kind
+            let abilities: Vec<AbilityId> = match kind {
+                EntityKind::Knight => vec![AbilityId::KnightCharge],
+                EntityKind::Mage => vec![AbilityId::MageFireball, AbilityId::MageFrostNova],
+                EntityKind::Priest => vec![AbilityId::PriestHeal, AbilityId::PriestHolySmite],
+                EntityKind::Catapult => vec![AbilityId::CatapultAoeBoulder],
+                _ => vec![],
+            };
+            if !abilities.is_empty() {
+                entity_cmds.insert(UnitAbilities::new(abilities));
+            }
         }
         EntityCategory::Mob => {
             entity_cmds.insert((Mob, FogHideable::Mob));
@@ -2888,6 +3028,8 @@ pub fn spawn_from_blueprint_with_faction(
 
     // Combat stats
     if let Some(ref combat) = bp.combat {
+        let attack_profile = default_attack_profile(kind, combat);
+        let combat_fx = default_combat_fx(kind, combat);
         entity_cmds.insert((
             Health {
                 current: combat.hp,
@@ -2896,8 +3038,11 @@ pub fn spawn_from_blueprint_with_faction(
             AttackDamage(combat.damage),
             AttackRange(combat.attack_range),
             AttackCooldown {
-                timer: Timer::from_seconds(combat.attack_cooldown_secs, TimerMode::Repeating),
+                ready_in: combat.attack_cooldown_secs * 0.35,
+                interval: combat.attack_cooldown_secs,
             },
+            attack_profile,
+            combat_fx,
             kind.armor_type(),
             kind.damage_type(),
         ));
@@ -2969,6 +3114,29 @@ pub fn spawn_from_blueprint_with_faction(
                 commands.entity(entity_id).add_child(child);
             }
         }
+    }
+
+    // Summon VFX for SpiritWolf and FireElemental
+    match kind {
+        EntityKind::SpiritWolf => {
+            commands.entity(entity_id).insert(SummonVfx {
+                color: Color::srgba(0.3, 0.5, 1.0, 0.6),
+                emissive: LinearRgba::new(0.2, 0.4, 1.0, 1.0),
+                pulse_speed: 3.0,
+                particle_timer: Timer::from_seconds(0.15, TimerMode::Repeating),
+                light_entity: None,
+            });
+        }
+        EntityKind::FireElemental => {
+            commands.entity(entity_id).insert(SummonVfx {
+                color: Color::srgba(1.0, 0.4, 0.1, 0.7),
+                emissive: LinearRgba::new(1.5, 0.6, 0.1, 1.0),
+                pulse_speed: 5.0,
+                particle_timer: Timer::from_seconds(0.1, TimerMode::Repeating),
+                light_entity: None,
+            });
+        }
+        _ => {}
     }
 
     // Spawn GLTF scene child for character models

@@ -430,8 +430,6 @@ pub struct UnitModelAssets {
 
 const TTP_UNITS_PATH: &str = "ToonyTinyPeople/models/units";
 const TTP_MACHINES_PATH: &str = "ToonyTinyPeople/models/units/machines";
-const SKELETONS_PATH: &str = "KayKit_Skeletons/characters/gltf";
-
 fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
     let mut scenes = HashMap::new();
 
@@ -445,6 +443,7 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
         (EntityKind::Mage, "TT_Mage.glb"),
         (EntityKind::Priest, "TT_Priest.glb"),
         (EntityKind::Cavalry, "TT_Light_Cavalry.glb"),
+        (EntityKind::Scout, "TT_Crossbowman.glb"),
     ];
     for (kind, filename) in ttp_units {
         let handle = asset_server.load(format!("{TTP_UNITS_PATH}/{filename}#Scene0"));
@@ -461,16 +460,16 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
         scenes.insert(*kind, handle);
     }
 
-    // Mobs & summons keep KayKit skeleton models
+    // Neutrals and summons reuse spare animated TTP characters
     let mob_mappings: &[(EntityKind, &str)] = &[
-        (EntityKind::Goblin, "Skeleton_Rogue.glb"),
-        (EntityKind::Skeleton, "Skeleton_Warrior.glb"),
-        (EntityKind::Orc, "Skeleton_Minion.glb"),
-        (EntityKind::Demon, "Skeleton_Mage.glb"),
-        (EntityKind::SkeletonMinion, "Skeleton_Minion.glb"),
+        (EntityKind::Goblin, "TT_Scout.glb"),
+        (EntityKind::Skeleton, "TT_Swordman.glb"),
+        (EntityKind::Orc, "TT_Commander.glb"),
+        (EntityKind::Demon, "TT_HighPriest.glb"),
+        (EntityKind::SkeletonMinion, "TT_Light_Infantry.glb"),
     ];
     for (kind, filename) in mob_mappings {
-        let handle = asset_server.load(format!("{SKELETONS_PATH}/{filename}#Scene0"));
+        let handle = asset_server.load(format!("{TTP_UNITS_PATH}/{filename}#Scene0"));
         scenes.insert(*kind, handle);
     }
 
@@ -487,15 +486,16 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
         (EntityKind::Mage, 0.45, -0.8, 0.0),
         (EntityKind::Priest, 0.45, -0.8, 0.0),
         (EntityKind::Cavalry, 0.45, -1.1, 0.0),
+        (EntityKind::Scout, 0.42, -0.7, 0.0),
         // TTP siege machines
         (EntityKind::Catapult, 0.4, -0.9, 0.0),
         (EntityKind::BatteringRam, 0.4, -0.8, 0.0),
-        // KayKit mobs (unchanged)
-        (EntityKind::Goblin, 0.38, -0.65, 0.0),
-        (EntityKind::Skeleton, 0.4, -0.78, 0.0),
-        (EntityKind::Orc, 0.58, -1.05, 0.0),
-        (EntityKind::Demon, 0.52, -1.15, 0.0),
-        (EntityKind::SkeletonMinion, 0.38, -0.7, 0.0),
+        // Neutrals / summons on TTP rigs
+        (EntityKind::Goblin, 0.42, -0.65, 0.0),
+        (EntityKind::Skeleton, 0.44, -0.78, 0.0),
+        (EntityKind::Orc, 0.5, -1.05, 0.0),
+        (EntityKind::Demon, 0.48, -1.15, 0.0),
+        (EntityKind::SkeletonMinion, 0.4, -0.7, 0.0),
     ];
     let calibration: HashMap<_, _> = calibration_data
         .iter()
@@ -545,9 +545,15 @@ pub fn ttp_anim_set(kind: EntityKind) -> Option<TtpAnimSet> {
         EntityKind::Mage => Some(TtpAnimSet::Staff),
         EntityKind::Priest => Some(TtpAnimSet::Staff),
         EntityKind::Cavalry => Some(TtpAnimSet::Cavalry),
+        EntityKind::Scout => Some(TtpAnimSet::Infantry),
         EntityKind::Catapult => Some(TtpAnimSet::Machine),
         EntityKind::BatteringRam => Some(TtpAnimSet::Machine),
-        _ => None, // mobs use legacy
+        EntityKind::Goblin => Some(TtpAnimSet::Infantry),
+        EntityKind::Skeleton => Some(TtpAnimSet::Shield),
+        EntityKind::Orc => Some(TtpAnimSet::Shield),
+        EntityKind::Demon => Some(TtpAnimSet::Staff),
+        EntityKind::SkeletonMinion => Some(TtpAnimSet::Infantry),
+        _ => None,
     }
 }
 
@@ -608,8 +614,14 @@ fn load_ttp_gltf_handles(asset_server: &AssetServer) -> TtpGltfHandles {
         (EntityKind::Mage, TTP_UNITS_PATH, "TT_Mage.glb"),
         (EntityKind::Priest, TTP_UNITS_PATH, "TT_Priest.glb"),
         (EntityKind::Cavalry, TTP_UNITS_PATH, "TT_Light_Cavalry.glb"),
+        (EntityKind::Scout, TTP_UNITS_PATH, "TT_Crossbowman.glb"),
         (EntityKind::Catapult, TTP_MACHINES_PATH, "catapult.glb"),
         (EntityKind::BatteringRam, TTP_MACHINES_PATH, "ram.glb"),
+        (EntityKind::Goblin, TTP_UNITS_PATH, "TT_Scout.glb"),
+        (EntityKind::Skeleton, TTP_UNITS_PATH, "TT_Swordman.glb"),
+        (EntityKind::Orc, TTP_UNITS_PATH, "TT_Commander.glb"),
+        (EntityKind::Demon, TTP_UNITS_PATH, "TT_HighPriest.glb"),
+        (EntityKind::SkeletonMinion, TTP_UNITS_PATH, "TT_Light_Infantry.glb"),
     ];
 
     for (kind, base_path, filename) in ttp_units {

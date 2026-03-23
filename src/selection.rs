@@ -32,6 +32,7 @@ impl Plugin for SelectionPlugin {
             .init_resource::<UiClickedThisFrame>()
             .init_resource::<UiPressActive>()
             .init_resource::<CommandMode>()
+            .init_resource::<ActiveFormation>()
             .init_resource::<NextTaskId>()
             .init_resource::<SubgroupCycleState>()
             .init_resource::<DoubleClickDetector>()
@@ -931,10 +932,11 @@ fn handle_right_click_move(
         Query<(&Camera, &GlobalTransform)>,
         Query<&Window, With<PrimaryWindow>>,
     ),
-    selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
+    selected_units: Query<(Entity, &EntityKind, &Faction, &Transform), (With<Unit>, With<Selected>)>,
     mut task_queues: Query<&mut TaskQueue, With<Unit>>,
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
+    formation: Res<ActiveFormation>,
     pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     target_queries: (
         Query<Entity, With<Mob>>,
@@ -995,8 +997,8 @@ fn handle_right_click_move(
 
     let units_vec: Vec<(Entity, EntityKind)> = selected_units
         .iter()
-        .filter(|(_, _, faction)| **faction == active_player.0)
-        .map(|(e, k, _)| (e, *k))
+        .filter(|(_, _, faction, _)| **faction == active_player.0)
+        .map(|(e, k, _, _)| (e, *k))
         .collect();
     if units_vec.is_empty() {
         return;
@@ -1520,12 +1522,21 @@ fn handle_right_click_move(
                         );
                     }
                 } else if n > 1 {
-                    let spacing = 1.5;
-                    let radius = (spacing * n as f32 / std::f32::consts::TAU).max(1.0);
+                    // Calculate centroid of selected units
+                    let centroid = selected_units
+                        .iter()
+                        .filter(|(_, _, f, _)| **f == active_player.0)
+                        .map(|(_, _, _, tf)| tf.translation)
+                        .fold(Vec3::ZERO, |a, b| a + b)
+                        / n as f32;
+                    let facing = Vec2::new(point.x - centroid.x, point.z - centroid.z)
+                        .normalize_or_zero();
+
+                    let offsets = formation_offsets(formation.formation, n, facing);
+
                     for (i, (entity, _kind)) in units_vec.iter().enumerate() {
-                        let angle = i as f32 / n as f32 * std::f32::consts::TAU;
-                        let offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
-                        let dest = point + offset;
+                        let off = offsets.get(i).copied().unwrap_or(Vec2::ZERO);
+                        let dest = point + Vec3::new(off.x, 0.0, off.y);
                         if shift {
                             enqueue_task(
                                 &mut task_queues,
@@ -1554,6 +1565,62 @@ fn handle_right_click_move(
     }
 }
 
+/// Compute formation offsets for a group of units.
+fn formation_offsets(formation: FormationType, count: usize, facing: Vec2) -> Vec<Vec2> {
+    let spacing = 2.0;
+    // Perpendicular vector (rotate 90 degrees)
+    let perp = Vec2::new(-facing.y, facing.x);
+
+    match formation {
+        FormationType::None => {
+            // Default circular spread
+            let radius = (spacing * count as f32 / std::f32::consts::TAU).max(1.0);
+            (0..count)
+                .map(|i| {
+                    let angle = i as f32 / count as f32 * std::f32::consts::TAU;
+                    Vec2::new(angle.cos() * radius, angle.sin() * radius)
+                })
+                .collect()
+        }
+        FormationType::Line => {
+            // Units spread perpendicular to movement direction
+            (0..count)
+                .map(|i| {
+                    let offset = (i as f32 - (count as f32 - 1.0) / 2.0) * spacing;
+                    perp * offset
+                })
+                .collect()
+        }
+        FormationType::Box => {
+            // N x M grid formation
+            let cols = (count as f32).sqrt().ceil() as usize;
+            let spacing_val = spacing * 1.25;
+            (0..count)
+                .map(|i| {
+                    let col = i % cols;
+                    let row = i / cols;
+                    let x = (col as f32 - (cols as f32 - 1.0) / 2.0) * spacing_val;
+                    let y = -(row as f32) * spacing_val; // rows go backward
+                    perp * x + facing * y
+                })
+                .collect()
+        }
+        FormationType::Wedge => {
+            // V-shape with leader at front
+            let mut offsets = Vec::with_capacity(count);
+            offsets.push(Vec2::ZERO); // Leader at tip
+            for i in 1..count {
+                let side = if i % 2 == 1 { 1.0 } else { -1.0 };
+                let depth = ((i + 1) / 2) as f32;
+                let lateral = depth * spacing * 0.8;
+                let backward = depth * spacing * 0.6;
+                offsets.push(perp * side * lateral - facing * backward);
+            }
+            offsets
+        }
+    }
+}
+
 /// Hotkey-based unit commands:
 /// - `A` → enter attack-move mode (next left-click issues attack-move)
 /// - `P` → enter patrol mode (next left-click issues patrol to position)
@@ -1573,7 +1640,9 @@ fn handle_unit_command_hotkeys(
     windows: Query<&Window, With<PrimaryWindow>>,
     selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
     mut task_queues: Query<&mut TaskQueue, With<Unit>>,
+    mut unit_abilities: Query<&mut UnitAbilities>,
     active_player: Res<ActivePlayer>,
+    mut formation: ResMut<ActiveFormation>,
     ui_clicked: Res<UiClickedThisFrame>,
     ui_press: Res<UiPressActive>,
     placement: Res<BuildingPlacementState>,
@@ -1647,6 +1716,12 @@ fn handle_unit_command_hotkeys(
             return;
         }
 
+        // --- Formation toggle (G) ---
+        if keys.just_pressed(KeyCode::KeyG) {
+            formation.formation = formation.formation.cycle();
+            return;
+        }
+
         // --- 3. Enter Command Modes ---
         if keys.just_pressed(KeyCode::KeyF) {
             *cmd_mode = CommandMode::AttackMove;
@@ -1656,6 +1731,44 @@ fn handle_unit_command_hotkeys(
         if keys.just_pressed(KeyCode::KeyP) {
             *cmd_mode = CommandMode::Patrol;
             return;
+        }
+
+        // --- Ability hotkeys (Q = first ability, W = second ability) ---
+        let ability_hotkey = if keys.just_pressed(KeyCode::KeyQ) {
+            Some(0usize)
+        } else if keys.just_pressed(KeyCode::KeyW) {
+            Some(1usize)
+        } else {
+            None
+        };
+        if let Some(slot) = ability_hotkey {
+            // Find first selected unit with abilities
+            for (entity, _kind, faction) in &selected_units {
+                if *faction != active_player.0 {
+                    continue;
+                }
+                if let Ok(abilities) = unit_abilities.get(entity) {
+                    if let Some(&ability) = abilities.abilities.get(slot) {
+                        if ability.targeting() == AbilityTargeting::NoTarget {
+                            // Execute immediately
+                            if let Ok(mut ab) = unit_abilities.get_mut(entity) {
+                                if ab.is_ready(ability) {
+                                    ab.trigger_cooldown(ability);
+                                    commands.entity(entity).insert(CastingAbility {
+                                        ability,
+                                        target_pos: None,
+                                        target_entity: None,
+                                        cast_timer: Timer::from_seconds(0.3, TimerMode::Once),
+                                    });
+                                }
+                            }
+                        } else {
+                            *cmd_mode = CommandMode::AbilityTarget(ability);
+                        }
+                        return;
+                    }
+                }
+            }
         }
     }
 
@@ -1764,6 +1877,21 @@ fn handle_unit_command_hotkeys(
                         *entity,
                         QueuedTask::Patrol(point),
                     );
+                }
+            }
+        }
+        CommandMode::AbilityTarget(ability) => {
+            for (entity, _kind) in &units_vec {
+                if let Ok(mut abilities) = unit_abilities.get_mut(*entity) {
+                    if abilities.is_ready(ability) {
+                        abilities.trigger_cooldown(ability);
+                        commands.entity(*entity).insert(CastingAbility {
+                            ability,
+                            target_pos: Some(point),
+                            target_entity: None,
+                            cast_timer: Timer::from_seconds(0.3, TimerMode::Once),
+                        });
+                    }
                 }
             }
         }

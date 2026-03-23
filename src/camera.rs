@@ -4,7 +4,7 @@ use bevy::light::cluster::{ClusterConfig, ClusterZConfig};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::components::{ActivePlayer, AppState, CursorOverUi, DragState, GameSetupConfig, GameWorld, MapSeed, RtsCamera};
+use crate::components::{ActivePlayer, AppState, CameraZoomLevel, CursorOverUi, DragState, GameSetupConfig, GameWorld, MapSeed, RtsCamera, UiMode};
 
 // ── Tuning constants ──
 
@@ -18,13 +18,20 @@ const EDGE_THRESHOLD: f32 = 0.06;
 const PITCH_MIN: f32 = 0.4;
 const PITCH_MAX: f32 = 1.1;
 const DISTANCE_MIN: f32 = 10.0;
-const DISTANCE_MAX: f32 = 50.0;
+const DISTANCE_MAX: f32 = 100.0;
+
+#[derive(Resource, Default)]
+pub struct LastSelection {
+    pub entities: Vec<Entity>,
+}
 
 pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CursorOverUi>()
+            .init_resource::<LastSelection>()
+            .init_resource::<CameraZoomLevel>()
             .add_systems(
                 OnEnter(AppState::InGame),
                 spawn_camera
@@ -35,11 +42,14 @@ impl Plugin for CameraPlugin {
                 Update,
                 (
                     update_cursor_over_ui,
+                    track_last_selection,
+                    camera_focus_selection,
                     camera_pan_input,
                     camera_edge_scroll,
                     camera_zoom_input,
                     camera_rotate_input,
                     camera_smooth_update,
+                    update_zoom_level,
                 )
                     .chain()
                     .run_if(in_state(AppState::InGame)),
@@ -288,4 +298,68 @@ fn camera_smooth_update(time: Res<Time>, mut query: Query<(&mut RtsCamera, &mut 
     let offset = Vec3::new(cam.angle.sin() * h_dist, height, cam.angle.cos() * h_dist);
     transform.translation = cam.pivot + offset;
     transform.look_at(cam.pivot, Vec3::Y);
+}
+
+fn track_last_selection(
+    ui_mode: Res<UiMode>,
+    mut last: ResMut<LastSelection>,
+) {
+    if let UiMode::SelectedUnits(ref entities) = *ui_mode {
+        if !entities.is_empty() {
+            last.entities = entities.clone();
+        }
+    } else if let UiMode::SelectedBuilding(entity) = *ui_mode {
+        last.entities = vec![entity];
+    }
+}
+
+fn camera_focus_selection(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    ui_mode: Res<UiMode>,
+    last: Res<LastSelection>,
+    transforms: Query<&GlobalTransform>,
+    mut cam_query: Query<&mut RtsCamera>,
+) {
+    if !keyboard.pressed(KeyCode::Space) {
+        return;
+    }
+
+    let Ok(mut cam) = cam_query.single_mut() else {
+        return;
+    };
+
+    let entities: &[Entity] = match &*ui_mode {
+        UiMode::SelectedUnits(ref e) if !e.is_empty() => e,
+        UiMode::SelectedBuilding(e) => std::slice::from_ref(e),
+        _ => &last.entities,
+    };
+
+    if entities.is_empty() {
+        return;
+    }
+
+    let mut center = Vec3::ZERO;
+    let mut count = 0u32;
+    for &entity in entities {
+        if let Ok(gt) = transforms.get(entity) {
+            center += gt.translation();
+            count += 1;
+        }
+    }
+
+    if count > 0 {
+        center /= count as f32;
+        center.y = 0.0;
+        cam.target_pivot = center;
+        cam.pan_velocity = Vec3::ZERO;
+    }
+}
+
+fn update_zoom_level(
+    camera_q: Query<&RtsCamera>,
+    mut zoom_level: ResMut<CameraZoomLevel>,
+) {
+    if let Ok(cam) = camera_q.single() {
+        *zoom_level = CameraZoomLevel::from_distance(cam.distance);
+    }
 }

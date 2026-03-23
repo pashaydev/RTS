@@ -575,7 +575,7 @@ pub fn handle_assign_worker_button(
                 continue;
             }
 
-            let slots_available = processor.max_workers as usize - current_count;
+            let slots_available = 1; // Assign one worker per click
             let mut assigned = 0;
             for (worker_entity, state, faction) in &idle_workers {
                 if *faction != active_player.0 {
@@ -664,6 +664,89 @@ pub fn handle_unassign_specific_worker_button(
         // Remove from all buildings' AssignedWorkers
         for mut aw in &mut assigned_workers_q {
             aw.workers.retain(|&w| w != worker);
+        }
+    }
+}
+
+// ── Unassign one worker (last in list) ──
+
+pub fn handle_unassign_one_worker_button(
+    mut commands: Commands,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<UnassignOneWorkerButton>)>,
+    selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
+    mut assigned_workers_q: Query<&mut AssignedWorkers>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+
+        for building_entity in &selected_buildings {
+            if let Ok(mut aw) = assigned_workers_q.get_mut(building_entity) {
+                if let Some(worker_entity) = aw.workers.pop() {
+                    crate::resources::unassign_worker_from_processor(&mut commands, worker_entity);
+                }
+            }
+        }
+    }
+}
+
+// ── Pause/Resume building toggle ──
+
+pub fn handle_pause_building_button(
+    mut commands: Commands,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<PauseBuildingButton>)>,
+    selected_buildings: Query<(Entity, Option<&BuildingPaused>), (With<Building>, With<Selected>)>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+
+        for (building_entity, paused) in &selected_buildings {
+            if paused.is_some() {
+                commands.entity(building_entity).remove::<BuildingPaused>();
+            } else {
+                commands.entity(building_entity).insert(BuildingPaused);
+            }
+        }
+    }
+}
+
+// ── Select production recipe ──
+
+pub fn handle_select_recipe_button(
+    interactions: Query<(&Interaction, &SelectRecipeButton), Changed<Interaction>>,
+    selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
+    mut productions: Query<&mut ProductionState>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for (interaction, btn) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+
+        for building_entity in &selected_buildings {
+            if let Ok(mut prod) = productions.get_mut(building_entity) {
+                if prod.active_recipe == Some(btn.0) {
+                    // Click active recipe again → stop production
+                    prod.active_recipe = None;
+                } else {
+                    prod.active_recipe = Some(btn.0);
+                    prod.progress_timer.reset();
+                }
+            }
         }
     }
 }
@@ -1348,6 +1431,65 @@ pub fn handle_cycle_stance_button(
                 .and_modify(|mut stance| {
                     *stance = stance.cycle();
                 });
+        }
+    }
+}
+
+pub fn handle_formation_button(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<CycleFormationButton>)>,
+    mut formation: ResMut<ActiveFormation>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction == Interaction::Pressed {
+            ui_clicked.0 = 2;
+            ui_press.0 = true;
+            formation.formation = formation.formation.cycle();
+        }
+    }
+}
+
+pub fn handle_ability_button(
+    mut commands: Commands,
+    interactions: Query<(&Interaction, &AbilityButton), Changed<Interaction>>,
+    mut selected_units: Query<
+        (Entity, &Faction, &mut UnitAbilities, &Transform),
+        (With<Unit>, With<Selected>),
+    >,
+    active_player: Res<ActivePlayer>,
+    mut cmd_mode: ResMut<CommandMode>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for (interaction, ability_btn) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+
+        let ability = ability_btn.0;
+
+        if ability.targeting() == AbilityTargeting::NoTarget {
+            // Execute immediately on all selected units that have this ability
+            for (entity, faction, mut abilities, _tf) in &mut selected_units {
+                if *faction != active_player.0 {
+                    continue;
+                }
+                if abilities.is_ready(ability) {
+                    abilities.trigger_cooldown(ability);
+                    commands.entity(entity).insert(CastingAbility {
+                        ability,
+                        target_pos: None,
+                        target_entity: None,
+                        cast_timer: Timer::from_seconds(0.3, TimerMode::Once),
+                    });
+                }
+            }
+        } else {
+            // Enter ability targeting mode
+            *cmd_mode = CommandMode::AbilityTarget(ability);
         }
     }
 }
