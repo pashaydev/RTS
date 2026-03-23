@@ -5,6 +5,19 @@ use std::collections::HashSet;
 
 use crate::components::*;
 
+pub struct HintsWidgetPlugin;
+
+impl Plugin for HintsWidgetPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<HintState>()
+            .add_systems(
+                Update,
+                (hints_system, idle_worker_notification_system)
+                    .run_if(in_state(AppState::InGame)),
+            );
+    }
+}
+
 /// Tracks onboarding hint state.
 #[derive(Resource)]
 pub struct HintState {

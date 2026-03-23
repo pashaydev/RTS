@@ -1,3 +1,4 @@
+pub(crate) mod helpers;
 mod multiplayer;
 mod pages;
 mod systems;
@@ -5,7 +6,7 @@ mod systems;
 use bevy::prelude::*;
 
 use crate::components::*;
-use crate::ui::menu_helpers;
+use crate::ui::core::text_input;
 
 // ── Resources & Components ──
 
@@ -223,8 +224,8 @@ impl Plugin for MenuPlugin {
             .add_systems(
                 Update,
                 (
-                    menu_helpers::text_input_system,
-                    menu_helpers::text_input_cursor_blink,
+                    text_input::text_input_system,
+                    text_input::text_input_cursor_blink,
                     systems::random_name_system,
                 )
                     .run_if(in_state(AppState::MainMenu)),
@@ -232,7 +233,7 @@ impl Plugin for MenuPlugin {
             .add_systems(
                 Update,
                 (
-                    menu_helpers::menu_scroll_system,
+                    text_input::scroll_panel_system,
                     systems::randomize_seed_system,
                 )
                     .run_if(in_state(AppState::MainMenu)),

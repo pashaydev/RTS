@@ -10,7 +10,7 @@ use crate::multiplayer::{
     matchbox_transport::{self, MatchboxInbox, PeerMap},
 };
 use crate::theme;
-use crate::ui::menu_helpers::*;
+use crate::ui::core::text_input::{clipboard_read, clipboard_write};
 
 use super::super::*;
 use super::{

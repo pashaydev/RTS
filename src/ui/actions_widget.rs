@@ -1,9 +1,117 @@
 use bevy::prelude::*;
 
-use super::shared::{format_cost, widget_content_stack, widget_wrap_row};
+use super::core::shared::{format_cost, widget_content_stack, widget_wrap_row};
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::fonts::UiFonts;
+use super::core::hud::HudReady;
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::components::*;
 use crate::theme;
+
+use super::buttons;
+
+pub struct ActionsWidgetPlugin;
+
+impl Plugin for ActionsWidgetPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ActionBarLayoutRevision>()
+            // Spawn actions widget frame
+            .add_systems(
+                Update,
+                spawn_actions_widget
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_added::<HudReady>),
+            )
+            // Actions widget update
+            .add_systems(
+                Update,
+                (track_action_bar_layout, update_action_bar)
+                    .chain()
+                    .after(super::core::hud::compute_ui_mode)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            // Build & train buttons (player command gated)
+            .add_systems(
+                Update,
+                (buttons::handle_build_buttons, buttons::handle_train_buttons)
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
+            )
+            // Building action buttons (player command gated)
+            .add_systems(
+                Update,
+                (
+                    buttons::handle_upgrade_button,
+                    buttons::handle_demolish_button,
+                    buttons::handle_demolish_confirm,
+                    buttons::handle_scuttle_unit_button,
+                    buttons::handle_drop_cargo_button,
+                    buttons::handle_rally_point_button,
+                    buttons::handle_toggle_auto_attack,
+                    buttons::handle_cancel_train,
+                    buttons::handle_assign_worker_button,
+                    buttons::handle_unassign_worker_button,
+                    buttons::handle_unassign_specific_worker_button,
+                    buttons::handle_unassign_one_worker_button,
+                    buttons::handle_pause_building_button,
+                    buttons::handle_select_recipe_button,
+                )
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
+            )
+            // Training/construction display updates
+            .add_systems(
+                Update,
+                (
+                    buttons::update_training_queue_display,
+                    buttons::update_construction_progress_display,
+                    buttons::update_train_cost_colors,
+                )
+                    .run_if(in_state(AppState::InGame)),
+            )
+            // Upgrade progress & action bar transitions
+            .add_systems(
+                Update,
+                (
+                    buttons::update_upgrade_progress_display,
+                    buttons::action_bar_transition_system,
+                )
+                    .run_if(in_state(AppState::InGame)),
+            )
+            // Unit command buttons (player command gated)
+            .add_systems(
+                Update,
+                (
+                    buttons::handle_attack_move_button,
+                    buttons::handle_patrol_button,
+                    buttons::handle_hold_position_button,
+                    buttons::handle_stop_button,
+                    buttons::handle_cycle_stance_button,
+                    buttons::handle_ability_button,
+                    buttons::handle_formation_button,
+                )
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
+            );
+    }
+}
+
+fn spawn_actions_widget(
+    mut commands: Commands,
+    registry: Res<WidgetRegistry>,
+    fonts: Res<UiFonts>,
+    hud_ready: Res<HudReady>,
+) {
+    let actions_content = spawn_widget_frame(
+        &mut commands,
+        hud_ready.hud_root,
+        WidgetId::Actions,
+        registry.slots.get(&WidgetId::Actions).unwrap(),
+        registry.is_visible(WidgetId::Actions),
+        &fonts,
+    );
+    commands.entity(actions_content).insert(ActionBarInner);
+}
 
 #[derive(Resource)]
 pub struct ActionBarLayoutRevision {

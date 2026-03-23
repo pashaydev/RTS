@@ -5,7 +5,7 @@ use rand::Rng;
 use crate::components::*;
 use crate::theme;
 use crate::ui::fonts::UiFonts;
-use crate::ui::menu_helpers::*;
+use super::helpers::*;
 
 use super::*;
 use crate::multiplayer::{ClientNetState, HostNetState, LobbyState, NetRole};

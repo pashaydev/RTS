@@ -3,6 +3,50 @@ use bevy::prelude::*;
 use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::theme;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::fonts::UiFonts;
+use super::core::hud::HudReady;
+
+pub struct GroupHotkeysWidgetPlugin;
+
+impl Plugin for GroupHotkeysWidgetPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ControlGroups>()
+            .add_systems(
+                Update,
+                spawn_group_hotkeys_widget
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_added::<HudReady>),
+            )
+            .add_systems(
+                Update,
+                (update_group_hotkeys_widget, handle_group_slot_click)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                handle_control_group_keys
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(player_can_command),
+            );
+    }
+}
+
+fn spawn_group_hotkeys_widget(
+    mut commands: Commands,
+    registry: Res<WidgetRegistry>,
+    fonts: Res<UiFonts>,
+    hud_ready: Res<HudReady>,
+) {
+    spawn_widget_frame(
+        &mut commands,
+        hud_ready.hud_root,
+        WidgetId::GroupHotkeys,
+        registry.slots.get(&WidgetId::GroupHotkeys).unwrap(),
+        registry.is_visible(WidgetId::GroupHotkeys),
+        &fonts,
+    );
+}
 
 // ── Control Groups Resource ──
 

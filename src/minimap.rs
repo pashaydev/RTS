@@ -42,8 +42,8 @@ impl Plugin for MinimapPlugin {
                 Update,
                 setup_minimap
                     .after(crate::ground::spawn_ground)
-                    .after(crate::ui::spawn_hud)
-                    .run_if(in_state(AppState::InGame)),
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_exists::<crate::ui::core::hud::HudReady>),
             )
             .add_systems(
                 Update,
@@ -138,6 +138,11 @@ fn setup_minimap(
     mut content_q: Query<(Entity, &mut Node), With<MinimapWidgetContent>>,
 ) {
     if existing_texture.is_some() {
+        return;
+    }
+
+    // Wait until the widget content entity exists (spawned by ExternalWidgetFramesPlugin)
+    if content_q.is_empty() {
         return;
     }
 

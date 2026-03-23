@@ -5,7 +5,7 @@ use bevy::window::PrimaryWindow;
 use std::collections::HashMap;
 
 use crate::theme;
-use crate::ui::fonts::{self, UiFonts};
+use super::fonts::{self, UiFonts};
 
 // ── Widget Identifiers ──
 

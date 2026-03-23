@@ -4,7 +4,7 @@ use crate::components::*;
 use crate::multiplayer::{LobbyState, LobbyStatus, NetRole};
 use crate::theme;
 use crate::ui::fonts::{self, UiFonts};
-use crate::ui::menu_helpers::*;
+use super::super::helpers::*;
 
 use super::super::*;
 use super::super::pages;

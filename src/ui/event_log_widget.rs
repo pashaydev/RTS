@@ -1,8 +1,52 @@
 use bevy::prelude::*;
 use std::collections::VecDeque;
 
-use crate::components::{ActivePlayer, Faction, TeamConfig};
+use crate::components::{ActivePlayer, AppState, Faction, TeamConfig};
 use crate::theme;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::fonts::UiFonts;
+use super::core::hud::HudReady;
+
+pub struct EventLogWidgetPlugin;
+
+impl Plugin for EventLogWidgetPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<GameEventLog>()
+            .init_resource::<EventLogRenderState>()
+            .init_resource::<EventLogFilter>()
+            .add_systems(
+                Update,
+                spawn_event_log_widget
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_added::<HudReady>),
+            )
+            .add_systems(
+                Update,
+                (
+                    handle_log_level_pills,
+                    update_event_log.after(handle_log_level_pills),
+                    handle_event_log_click,
+                )
+                    .run_if(in_state(AppState::InGame)),
+            );
+    }
+}
+
+fn spawn_event_log_widget(
+    mut commands: Commands,
+    registry: Res<WidgetRegistry>,
+    fonts: Res<UiFonts>,
+    hud_ready: Res<HudReady>,
+) {
+    spawn_widget_frame(
+        &mut commands,
+        hud_ready.hud_root,
+        WidgetId::EventLog,
+        registry.slots.get(&WidgetId::EventLog).unwrap(),
+        registry.is_visible(WidgetId::EventLog),
+        &fonts,
+    );
+}
 
 // ── Log Level ──
 

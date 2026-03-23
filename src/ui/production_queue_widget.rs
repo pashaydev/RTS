@@ -4,6 +4,47 @@ use std::collections::BTreeMap;
 use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::theme;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::fonts::UiFonts;
+use super::core::hud::HudReady;
+
+pub struct ProductionQueueWidgetPlugin;
+
+impl Plugin for ProductionQueueWidgetPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            spawn_production_queue_widget
+                .run_if(in_state(AppState::InGame))
+                .run_if(resource_added::<HudReady>),
+        )
+        .add_systems(
+            Update,
+            (
+                update_production_queue,
+                handle_queue_row_click,
+                handle_queue_cancel_buttons,
+            )
+                .run_if(in_state(AppState::InGame)),
+        );
+    }
+}
+
+fn spawn_production_queue_widget(
+    mut commands: Commands,
+    registry: Res<WidgetRegistry>,
+    fonts: Res<UiFonts>,
+    hud_ready: Res<HudReady>,
+) {
+    spawn_widget_frame(
+        &mut commands,
+        hud_ready.hud_root,
+        WidgetId::ProductionQueue,
+        registry.slots.get(&WidgetId::ProductionQueue).unwrap(),
+        registry.is_visible(WidgetId::ProductionQueue),
+        &fonts,
+    );
+}
 
 #[derive(Component)]
 pub struct QueuePanelItem;

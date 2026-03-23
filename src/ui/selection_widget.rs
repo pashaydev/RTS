@@ -1,10 +1,129 @@
 use bevy::prelude::*;
 
 use super::group_hotkeys_widget::{group_color, ControlGroups};
-use super::shared::spawn_hp_bar;
+use super::core::shared::{hp_color, spawn_hp_bar};
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::fonts::UiFonts;
+use super::core::hud::HudReady;
 use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::theme;
+
+pub struct SelectionWidgetPlugin;
+
+impl Plugin for SelectionWidgetPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            spawn_selection_widget
+                .run_if(in_state(AppState::InGame))
+                .run_if(resource_added::<HudReady>),
+        )
+        .add_systems(
+            Update,
+            (
+                rebuild_selection_panel,
+                update_hp_bars,
+                handle_unit_card_click,
+                clear_stale_inspected,
+            )
+                .after(super::core::hud::compute_ui_mode)
+                .run_if(in_state(AppState::InGame)),
+        );
+    }
+}
+
+fn spawn_selection_widget(
+    mut commands: Commands,
+    registry: Res<WidgetRegistry>,
+    fonts: Res<UiFonts>,
+    hud_ready: Res<HudReady>,
+) {
+    let selection_content = spawn_widget_frame(
+        &mut commands,
+        hud_ready.hud_root,
+        WidgetId::Selection,
+        registry.slots.get(&WidgetId::Selection).unwrap(),
+        registry.is_visible(WidgetId::Selection),
+        &fonts,
+    );
+    commands
+        .entity(selection_content)
+        .insert(SelectionInfoPanel);
+}
+
+pub fn handle_unit_card_click(
+    mut commands: Commands,
+    interactions: Query<(&Interaction, &UnitCardRef), (Changed<Interaction>, With<Button>)>,
+    selected: Query<Entity, With<Selected>>,
+    mut ui_press: ResMut<UiPressActive>,
+    keys: Res<ButtonInput<KeyCode>>,
+    entity_kinds: Query<&EntityKind, With<Unit>>,
+) {
+    for (interaction, card_ref) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_press.0 = true;
+
+        let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+
+        if ctrl {
+            if let Ok(clicked_kind) = entity_kinds.get(card_ref.0) {
+                let target_kind = *clicked_kind;
+                let mut to_deselect = Vec::new();
+                let mut has_target = false;
+                for entity in &selected {
+                    if let Ok(kind) = entity_kinds.get(entity) {
+                        if *kind == target_kind {
+                            has_target = true;
+                        } else {
+                            to_deselect.push(entity);
+                        }
+                    }
+                }
+                if has_target {
+                    for entity in to_deselect {
+                        commands.entity(entity).remove::<Selected>();
+                    }
+                }
+            }
+        } else {
+            for entity in &selected {
+                commands.entity(entity).remove::<Selected>();
+            }
+            commands.entity(card_ref.0).try_insert(Selected);
+        }
+    }
+}
+
+pub fn update_hp_bars(
+    mut hp_fills: Query<(&HpBarFill, &mut Node, &mut BackgroundColor)>,
+    healths: Query<&Health>,
+) {
+    for (hp_bar, mut node, mut bg) in &mut hp_fills {
+        if let Ok(health) = healths.get(hp_bar.0) {
+            let pct = (health.current / health.max).clamp(0.0, 1.0) * 100.0;
+            node.width = Val::Percent(pct);
+            *bg = BackgroundColor(hp_color(health.current, health.max));
+        }
+    }
+}
+
+pub fn clear_stale_inspected(
+    mut inspected: ResMut<InspectedEnemy>,
+    mob_query: Query<Entity, With<Mob>>,
+    unit_query: Query<Entity, With<Unit>>,
+    building_query: Query<Entity, With<Building>>,
+) {
+    if let Some(e) = inspected.entity {
+        let exists =
+            mob_query.get(e).is_ok() || unit_query.get(e).is_ok() || building_query.get(e).is_ok();
+        if !exists {
+            inspected.entity = None;
+        }
+    }
+}
 
 pub fn rebuild_selection_panel(
     mut commands: Commands,

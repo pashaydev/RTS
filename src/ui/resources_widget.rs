@@ -3,6 +3,45 @@ use bevy::prelude::*;
 use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::theme;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::fonts::UiFonts;
+use super::core::hud::HudReady;
+
+pub struct ResourcesWidgetPlugin;
+
+impl Plugin for ResourcesWidgetPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            spawn_resources_widget
+                .run_if(in_state(AppState::InGame))
+                .run_if(resource_added::<HudReady>),
+        )
+        .add_systems(
+            Update,
+            (update_resource_texts, update_processed_resource_visibility)
+                .run_if(in_state(AppState::InGame)),
+        );
+    }
+}
+
+fn spawn_resources_widget(
+    mut commands: Commands,
+    icons: Res<IconAssets>,
+    registry: Res<WidgetRegistry>,
+    fonts: Res<UiFonts>,
+    hud_ready: Res<HudReady>,
+) {
+    let content = spawn_widget_frame(
+        &mut commands,
+        hud_ready.hud_root,
+        WidgetId::Resources,
+        registry.slots.get(&WidgetId::Resources).unwrap(),
+        registry.is_visible(WidgetId::Resources),
+        &fonts,
+    );
+    spawn_resource_content(&mut commands, content, &icons);
+}
 
 pub fn update_resource_texts(
     all_resources: Res<AllPlayerResources>,

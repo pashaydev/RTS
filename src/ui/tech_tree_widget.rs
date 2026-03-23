@@ -3,6 +3,42 @@ use bevy::prelude::*;
 use crate::blueprints::BlueprintRegistry;
 use crate::components::*;
 use crate::theme;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::fonts::UiFonts;
+use super::core::hud::HudReady;
+
+pub struct TechTreeWidgetPlugin;
+
+impl Plugin for TechTreeWidgetPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            spawn_tech_tree_widget
+                .run_if(in_state(AppState::InGame))
+                .run_if(resource_added::<HudReady>),
+        )
+        .add_systems(
+            Update,
+            update_tech_tree.run_if(in_state(AppState::InGame)),
+        );
+    }
+}
+
+fn spawn_tech_tree_widget(
+    mut commands: Commands,
+    registry: Res<WidgetRegistry>,
+    fonts: Res<UiFonts>,
+    hud_ready: Res<HudReady>,
+) {
+    spawn_widget_frame(
+        &mut commands,
+        hud_ready.hud_root,
+        WidgetId::TechTree,
+        registry.slots.get(&WidgetId::TechTree).unwrap(),
+        registry.is_visible(WidgetId::TechTree),
+        &fonts,
+    );
+}
 
 #[derive(Component)]
 pub struct TechTreeContent;

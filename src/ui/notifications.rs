@@ -2,6 +2,32 @@ use bevy::prelude::*;
 
 use crate::components::*;
 use crate::theme;
+use super::core::hud::HudReady;
+
+pub struct NotificationsWidgetPlugin;
+
+impl Plugin for NotificationsWidgetPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            spawn_notification_widget
+                .run_if(in_state(AppState::InGame))
+                .run_if(resource_added::<HudReady>),
+        )
+        .add_systems(
+            Update,
+            (update_ally_notifications, handle_notification_click)
+                .run_if(in_state(AppState::InGame)),
+        );
+    }
+}
+
+fn spawn_notification_widget(
+    mut commands: Commands,
+    hud_ready: Res<HudReady>,
+) {
+    spawn_notification_container(&mut commands, hud_ready.hud_root);
+}
 
 #[derive(Component)]
 pub struct AllyNotificationToast {

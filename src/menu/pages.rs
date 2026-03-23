@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::components::*;
 use crate::theme;
 use crate::ui::fonts::{self, UiFonts};
-use crate::ui::menu_helpers::*;
+use super::helpers::*;
 
 use super::*;
 

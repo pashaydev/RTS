@@ -1,8 +1,36 @@
 use bevy::prelude::*;
 
-use super::widget_framework::{WidgetId, WidgetRegistry};
+use super::core::framework::{WidgetId, WidgetRegistry};
+use super::core::hud::HudReady;
+use crate::components::AppState;
 use crate::theme;
 use crate::ui::fonts::{self, UiFonts};
+
+pub struct WidgetToolbarPlugin;
+
+impl Plugin for WidgetToolbarPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            spawn_toolbar_widget
+                .run_if(in_state(AppState::InGame))
+                .run_if(resource_added::<HudReady>),
+        )
+        .add_systems(
+            Update,
+            (widget_toolbar_system, update_toolbar_visuals)
+                .run_if(in_state(AppState::InGame)),
+        );
+    }
+}
+
+fn spawn_toolbar_widget(
+    mut commands: Commands,
+    fonts: Res<UiFonts>,
+    hud_ready: Res<HudReady>,
+) {
+    spawn_toolbar(&mut commands, hud_ready.hud_root, &fonts);
+}
 
 #[derive(Component)]
 pub struct WidgetToolbar;

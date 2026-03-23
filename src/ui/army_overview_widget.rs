@@ -3,6 +3,42 @@ use bevy::prelude::*;
 use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::theme;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::fonts::UiFonts;
+use super::core::hud::HudReady;
+
+pub struct ArmyOverviewWidgetPlugin;
+
+impl Plugin for ArmyOverviewWidgetPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            spawn_army_overview_widget
+                .run_if(in_state(AppState::InGame))
+                .run_if(resource_added::<HudReady>),
+        )
+        .add_systems(
+            Update,
+            update_army_overview.run_if(in_state(AppState::InGame)),
+        );
+    }
+}
+
+fn spawn_army_overview_widget(
+    mut commands: Commands,
+    registry: Res<WidgetRegistry>,
+    fonts: Res<UiFonts>,
+    hud_ready: Res<HudReady>,
+) {
+    spawn_widget_frame(
+        &mut commands,
+        hud_ready.hud_root,
+        WidgetId::ArmyOverview,
+        registry.slots.get(&WidgetId::ArmyOverview).unwrap(),
+        registry.is_visible(WidgetId::ArmyOverview),
+        &fonts,
+    );
+}
 
 #[derive(Component)]
 pub struct ArmyOverviewContent;
