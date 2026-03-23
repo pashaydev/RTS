@@ -1,12 +1,14 @@
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
-use std::collections::{BinaryHeap, HashSet};
 use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashSet};
 
+use crate::blueprints::EntityKind;
 use crate::components::{
-    AppState, Biome, BiomeMap, Building, BuildingState, Ground, MoveTarget, Unit,
+    AppState, Biome, BiomeMap, BuildSitePreparation, Building, BuildingFootprint,
+    BuildingState, Ground, MoveTarget, Unit,
 };
-use crate::ground::HeightMap;
+use crate::ground::{foundation_radii, HeightMap};
 
 // ── Constants ──
 
@@ -23,11 +25,16 @@ const ASTAR_NODE_LIMIT: usize = 5000;
 #[derive(Resource)]
 pub struct TrafficMap {
     pub intensity: Vec<f32>,
-    pub original_heights: Vec<f32>,
     pub original_colors: Vec<[f32; 4]>,
     pub grid_size: usize,
     pub step: f32,
     pub half_map: f32,
+    pub dirty: bool,
+}
+
+#[derive(Resource)]
+pub struct FoundationTerrain {
+    pub heights: Vec<f32>,
     pub dirty: bool,
 }
 
@@ -82,6 +89,7 @@ impl Plugin for RoadPlugin {
                 accumulate_unit_traffic,
                 decay_traffic,
                 seed_building_paths,
+                recompute_foundation_terrain,
                 update_terrain_mesh,
             )
                 .chain()
@@ -119,11 +127,14 @@ fn init_traffic_map(
 
     commands.insert_resource(TrafficMap {
         intensity: vec![0.0; vertex_count],
-        original_heights: height_map.heights.clone(),
         original_colors,
         grid_size,
         step: height_map.step,
         half_map: height_map.half_map,
+        dirty: false,
+    });
+    commands.insert_resource(FoundationTerrain {
+        heights: height_map.natural_heights.clone(),
         dirty: false,
     });
 
@@ -263,17 +274,78 @@ fn seed_building_paths(
     }
 }
 
+fn recompute_foundation_terrain(
+    height_map: Res<HeightMap>,
+    mut terrain: ResMut<FoundationTerrain>,
+    mut traffic: ResMut<TrafficMap>,
+    buildings: Query<(&Transform, &BuildingFootprint, &EntityKind), With<Building>>,
+    prep_sites: Query<&BuildSitePreparation, With<Unit>>,
+    changed_buildings: Query<
+        Entity,
+        (
+            With<Building>,
+            Or<(Added<Building>, Changed<Transform>, Changed<BuildingFootprint>)>,
+        ),
+    >,
+    changed_prep_sites: Query<Entity, Added<BuildSitePreparation>>,
+    removed_buildings: RemovedComponents<Building>,
+    removed_prep_sites: RemovedComponents<BuildSitePreparation>,
+) {
+    let building_removed = !removed_buildings.is_empty();
+    let prep_removed = !removed_prep_sites.is_empty();
+    if changed_buildings.is_empty()
+        && changed_prep_sites.is_empty()
+        && !building_removed
+        && !prep_removed
+    {
+        return;
+    }
+
+    let mut stamped = height_map.natural_heights.clone();
+
+    for (transform, footprint, kind) in &buildings {
+        if !crate::buildings::uses_terrain_foundation(*kind) {
+            continue;
+        }
+        stamp_foundation(
+            &mut stamped,
+            &height_map,
+            transform.translation.x,
+            transform.translation.z,
+            footprint.0,
+        );
+    }
+
+    for prep in &prep_sites {
+        if !crate::buildings::uses_terrain_foundation(prep.kind) {
+            continue;
+        }
+        stamp_foundation(
+            &mut stamped,
+            &height_map,
+            prep.position.x,
+            prep.position.z,
+            crate::buildings::footprint_for_kind(prep.kind),
+        );
+    }
+
+    terrain.heights = stamped;
+    terrain.dirty = true;
+    traffic.dirty = true;
+}
+
 fn update_terrain_mesh(
     time: Res<Time>,
     mut timer: ResMut<MeshUpdateTimer>,
     mut traffic: ResMut<TrafficMap>,
     biome_map: Res<BiomeMap>,
     mut height_map: ResMut<HeightMap>,
+    mut foundation_terrain: ResMut<FoundationTerrain>,
     ground_q: Query<&Mesh3d, With<Ground>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     timer.0.tick(time.delta());
-    if !timer.0.just_finished() || !traffic.dirty {
+    if !foundation_terrain.dirty && (!timer.0.just_finished() || !traffic.dirty) {
         return;
     }
 
@@ -297,7 +369,7 @@ fn update_terrain_mesh(
     let mut new_heights = vec![0.0f32; vertex_count];
     for i in 0..vertex_count {
         let t = traffic.intensity[i];
-        let h = traffic.original_heights[i] - t * MAX_DEPRESSION;
+        let h = foundation_terrain.heights[i] - t * MAX_DEPRESSION;
         new_heights[i] = h;
         positions[i][1] = h;
     }
@@ -360,6 +432,53 @@ fn update_terrain_mesh(
     }
 
     traffic.dirty = false;
+    foundation_terrain.dirty = false;
+}
+
+fn stamp_foundation(
+    heights: &mut [f32],
+    height_map: &HeightMap,
+    center_x: f32,
+    center_z: f32,
+    footprint: f32,
+) {
+    let target_height = height_map.foundation_target_height(center_x, center_z, footprint);
+    let (inner_radius, outer_radius) = foundation_radii(footprint, height_map.step);
+    let min_x = (((center_x - outer_radius) + height_map.half_map) / height_map.step)
+        .floor()
+        .max(0.0) as usize;
+    let max_x = (((center_x + outer_radius) + height_map.half_map) / height_map.step)
+        .ceil()
+        .min((height_map.grid_size - 1) as f32) as usize;
+    let min_z = (((center_z - outer_radius) + height_map.half_map) / height_map.step)
+        .floor()
+        .max(0.0) as usize;
+    let max_z = (((center_z + outer_radius) + height_map.half_map) / height_map.step)
+        .ceil()
+        .min((height_map.grid_size - 1) as f32) as usize;
+
+    for iz in min_z..=max_z {
+        for ix in min_x..=max_x {
+            let world_x = -height_map.half_map + ix as f32 * height_map.step;
+            let world_z = -height_map.half_map + iz as f32 * height_map.step;
+            let dx = world_x - center_x;
+            let dz = world_z - center_z;
+            let distance = (dx * dx + dz * dz).sqrt();
+            if distance > outer_radius {
+                continue;
+            }
+
+            let blend = if distance <= inner_radius {
+                1.0
+            } else {
+                let t = ((distance - inner_radius) / (outer_radius - inner_radius)).clamp(0.0, 1.0);
+                1.0 - (t * t * (3.0 - 2.0 * t))
+            };
+
+            let idx = iz * height_map.grid_size + ix;
+            heights[idx] = heights[idx] + (target_height - heights[idx]) * blend;
+        }
+    }
 }
 
 // ── A* Pathfinding ──

@@ -16,6 +16,7 @@ pub const HALF_MAP: f32 = 250.0;
 #[derive(Resource)]
 pub struct HeightMap {
     pub heights: Vec<f32>,
+    pub natural_heights: Vec<f32>,
     pub grid_size: usize,
     pub step: f32,
     pub map_size: f32,
@@ -23,9 +24,7 @@ pub struct HeightMap {
 }
 
 impl HeightMap {
-    /// Sample terrain height at any world position using triangle interpolation
-    /// that exactly matches the rendered mesh triangulation (tl-bl-tr / tr-bl-br).
-    pub fn sample(&self, x: f32, z: f32) -> f32 {
+    fn sample_from(&self, heights: &[f32], x: f32, z: f32) -> f32 {
         let gx = (x + self.half_map) / self.step;
         let gz = (z + self.half_map) / self.step;
         let ix = (gx.floor().max(0.0) as usize).min(self.grid_size - 2);
@@ -33,19 +32,33 @@ impl HeightMap {
         let fx = (gx - ix as f32).clamp(0.0, 1.0);
         let fz = (gz - iz as f32).clamp(0.0, 1.0);
 
-        let h00 = self.heights[iz * self.grid_size + ix]; // tl
-        let h10 = self.heights[iz * self.grid_size + ix + 1]; // tr
-        let h01 = self.heights[(iz + 1) * self.grid_size + ix]; // bl
-        let h11 = self.heights[(iz + 1) * self.grid_size + ix + 1]; // br
+        let h00 = heights[iz * self.grid_size + ix];
+        let h10 = heights[iz * self.grid_size + ix + 1];
+        let h01 = heights[(iz + 1) * self.grid_size + ix];
+        let h11 = heights[(iz + 1) * self.grid_size + ix + 1];
 
-        // Match mesh triangulation: diagonal from bl(0,1) to tr(1,0)
         if fx + fz <= 1.0 {
-            // Triangle 1 (tl, bl, tr)
             h00 + (h10 - h00) * fx + (h01 - h00) * fz
         } else {
-            // Triangle 2 (tr, bl, br)
             h11 + (h10 - h11) * (1.0 - fz) + (h01 - h11) * (1.0 - fx)
         }
+    }
+
+    fn world_pos_for_grid(&self, ix: usize, iz: usize) -> (f32, f32) {
+        (
+            -self.half_map + ix as f32 * self.step,
+            -self.half_map + iz as f32 * self.step,
+        )
+    }
+
+    /// Sample terrain height at any world position using triangle interpolation
+    /// that exactly matches the rendered mesh triangulation (tl-bl-tr / tr-bl-br).
+    pub fn sample(&self, x: f32, z: f32) -> f32 {
+        self.sample_from(&self.heights, x, z)
+    }
+
+    pub fn sample_natural(&self, x: f32, z: f32) -> f32 {
+        self.sample_from(&self.natural_heights, x, z)
     }
 
     /// Returns the maximum slope (rise/run) under a building footprint.
@@ -58,6 +71,53 @@ impl HeightMap {
             .map(|(dx, dz)| (self.sample(x + dx, z + dz) - h_center).abs() / r)
             .fold(0.0_f32, f32::max)
     }
+
+    pub fn foundation_target_height(&self, x: f32, z: f32, footprint: f32) -> f32 {
+        let (inner_radius, _) = foundation_radii(footprint, self.step);
+        let min_x = (((x - inner_radius) + self.half_map) / self.step)
+            .floor()
+            .max(0.0) as usize;
+        let max_x = (((x + inner_radius) + self.half_map) / self.step)
+            .ceil()
+            .min((self.grid_size - 1) as f32) as usize;
+        let min_z = (((z - inner_radius) + self.half_map) / self.step)
+            .floor()
+            .max(0.0) as usize;
+        let max_z = (((z + inner_radius) + self.half_map) / self.step)
+            .ceil()
+            .min((self.grid_size - 1) as f32) as usize;
+
+        let radius_sq = inner_radius * inner_radius;
+        let mut sum = 0.0;
+        let mut count = 0usize;
+
+        for iz in min_z..=max_z {
+            for ix in min_x..=max_x {
+                let (world_x, world_z) = self.world_pos_for_grid(ix, iz);
+                let dx = world_x - x;
+                let dz = world_z - z;
+                if dx * dx + dz * dz > radius_sq {
+                    continue;
+                }
+
+                let idx = iz * self.grid_size + ix;
+                sum += self.natural_heights[idx];
+                count += 1;
+            }
+        }
+
+        if count == 0 {
+            self.sample_natural(x, z)
+        } else {
+            sum / count as f32
+        }
+    }
+}
+
+pub fn foundation_radii(footprint: f32, step: f32) -> (f32, f32) {
+    let inner = (footprint * 0.65).max(step * 1.1);
+    let outer = inner + footprint * 0.35 + step * 2.0;
+    (inner, outer)
 }
 const NOISE_SCALE: f64 = 0.008;
 const AMPLITUDE: f32 = 10.0;
@@ -354,7 +414,8 @@ pub fn spawn_ground(
         Transform::from_translation(Vec3::ZERO),
     ));
     commands.insert_resource(HeightMap {
-        heights: grid_heights,
+        heights: grid_heights.clone(),
+        natural_heights: grid_heights,
         grid_size: actual_grid_size,
         step,
         map_size: actual_map_size,

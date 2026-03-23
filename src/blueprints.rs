@@ -2738,7 +2738,15 @@ pub fn spawn_from_blueprint_with_faction(
     } else {
         bp.building.as_ref().map(|b| b.half_height).unwrap_or(0.0)
     };
-    let y = height_map.sample(pos.x, pos.z) + y_off + building_y;
+    let ground_y = if kind.category() == EntityCategory::Building
+        && crate::buildings::uses_terrain_foundation(kind)
+    {
+        let footprint = crate::buildings::footprint_for_kind(kind);
+        height_map.foundation_target_height(pos.x, pos.z, footprint)
+    } else {
+        height_map.sample(pos.x, pos.z)
+    };
+    let y = ground_y + y_off + building_y;
 
     let pick_radius = bp.visual.mesh_kind.pick_radius() * bp.visual.scale;
 

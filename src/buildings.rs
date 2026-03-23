@@ -81,6 +81,10 @@ pub fn footprint_for_kind(kind: EntityKind) -> f32 {
     }
 }
 
+pub fn uses_terrain_foundation(kind: EntityKind) -> bool {
+    !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost | EntityKind::OilRig)
+}
+
 /// Returns the allowed biomes for a building kind, or `None` for default (any non-water).
 pub fn allowed_biomes(kind: EntityKind) -> Option<&'static [Biome]> {
     match kind {
@@ -136,6 +140,7 @@ impl Plugin for BuildingsPlugin {
                 Update,
                 (
                     pending_build_arrival_system,
+                    build_site_preparation_system,
                     pending_build_cleanup_system,
                     construction_progress_system,
                     tower_auto_attack,
@@ -359,7 +364,12 @@ fn update_placement_preview(
         return;
     };
 
-    let y = height_map.sample(world_pos.x, world_pos.z) + half_h;
+    let ground_y = if uses_terrain_foundation(kind) {
+        height_map.foundation_target_height(world_pos.x, world_pos.z, new_footprint)
+    } else {
+        height_map.sample(world_pos.x, world_pos.z)
+    };
+    let y = ground_y + half_h;
     ghost_tf.translation = Vec3::new(world_pos.x, y, world_pos.z);
 
     let mut valid = true;
@@ -1166,10 +1176,6 @@ fn pending_build_arrival_system(
     mut commands: Commands,
     mut workers: Query<(Entity, &Transform, &UnitState, &PendingBuildOrder), With<Unit>>,
     registry: Res<BlueprintRegistry>,
-    cache: Res<EntityVisualCache>,
-    ghost_mats: Res<BuildingGhostMaterials>,
-    height_map: Res<HeightMap>,
-    building_models: Option<Res<BuildingModelAssets>>,
     existing_buildings: Query<
         (&Transform, &BuildingFootprint),
         (With<Building>, Without<GhostBuilding>),
@@ -1190,7 +1196,6 @@ fn pending_build_arrival_system(
         }
 
         let kind = pending.kind;
-        let faction = pending.faction;
         let build_pos = pending.position;
         let new_footprint = footprint_for_kind(kind);
 
@@ -1201,9 +1206,8 @@ fn pending_build_arrival_system(
         });
 
         if blocked {
-            // Refund resources and cancel
             let bp = registry.get(kind);
-            let res = all_resources.get_mut(&faction);
+            let res = all_resources.get_mut(&pending.faction);
             for (rt, amt) in bp.cost.cost_entries() {
                 res.add(rt, amt);
             }
@@ -1217,19 +1221,107 @@ fn pending_build_arrival_system(
             continue;
         }
 
-        // Spawn the building
-        let bp = registry.get(kind);
+        commands
+            .entity(w_entity)
+            .remove::<PendingBuildOrder>()
+            .insert(BuildSitePreparation {
+                kind,
+                position: build_pos,
+                faction: pending.faction,
+                prep_timer: Timer::from_seconds(1.25, TimerMode::Once),
+                vfx_timer: Timer::from_seconds(0.12, TimerMode::Repeating),
+                burst_count: 0,
+            })
+            .insert(UnitState::MovingToPlot(build_pos))
+            .insert(TaskSource::Manual);
+    }
+}
+
+fn build_site_preparation_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    registry: Res<BlueprintRegistry>,
+    cache: Res<EntityVisualCache>,
+    ghost_mats: Res<BuildingGhostMaterials>,
+    height_map: Res<HeightMap>,
+    building_models: Option<Res<BuildingModelAssets>>,
+    vfx_assets: Option<Res<VfxAssets>>,
+    mut workers: Query<(Entity, &Transform, &UnitState, &mut BuildSitePreparation), With<Unit>>,
+    existing_buildings: Query<
+        (&Transform, &BuildingFootprint),
+        (With<Building>, Without<GhostBuilding>),
+    >,
+    mut all_resources: ResMut<AllPlayerResources>,
+) {
+    for (worker_entity, worker_tf, worker_state, mut prep) in &mut workers {
+        if !matches!(*worker_state, UnitState::MovingToPlot(_)) {
+            continue;
+        }
+
+        let flat_dist = Vec2::new(
+            worker_tf.translation.x - prep.position.x,
+            worker_tf.translation.z - prep.position.z,
+        )
+        .length();
+        if flat_dist > 4.0 {
+            commands.entity(worker_entity).insert(MoveTarget(prep.position));
+            continue;
+        }
+
+        prep.prep_timer.tick(time.delta());
+        prep.vfx_timer.tick(time.delta());
+
+        if prep.vfx_timer.just_finished() {
+            spawn_foundation_prep_vfx(
+                &mut commands,
+                vfx_assets.as_deref(),
+                &height_map,
+                prep.position,
+                footprint_for_kind(prep.kind),
+                prep.burst_count,
+            );
+            prep.burst_count = prep.burst_count.wrapping_add(1);
+        }
+
+        if !prep.prep_timer.is_finished() {
+            commands.entity(worker_entity).insert(MoveTarget(prep.position));
+            continue;
+        }
+
+        let new_footprint = footprint_for_kind(prep.kind);
+        let blocked = existing_buildings.iter().any(|(building_tf, existing_fp)| {
+            let check_pos = Vec3::new(prep.position.x, building_tf.translation.y, prep.position.z);
+            building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
+        });
+
+        if blocked {
+            let bp = registry.get(prep.kind);
+            let res = all_resources.get_mut(&prep.faction);
+            for (rt, amt) in bp.cost.cost_entries() {
+                res.add(rt, amt);
+            }
+
+            commands
+                .entity(worker_entity)
+                .remove::<BuildSitePreparation>()
+                .remove::<MoveTarget>()
+                .insert(UnitState::Idle)
+                .insert(TaskSource::Auto);
+            continue;
+        }
+
+        let bp = registry.get(prep.kind);
         let is_gltf = bp.visual.mesh_kind.is_gltf();
         let building_entity = spawn_from_blueprint_with_faction(
             &mut commands,
             &cache,
-            kind,
-            build_pos,
+            prep.kind,
+            prep.position,
             &registry,
             building_models.as_deref(),
             None,
             &height_map,
-            faction,
+            prep.faction,
         );
 
         if !is_gltf {
@@ -1238,10 +1330,9 @@ fn pending_build_arrival_system(
                 .insert(MeshMaterial3d(ghost_mats.under_construction.clone()));
         }
 
-        // Transition worker to actively building
         commands
-            .entity(w_entity)
-            .remove::<PendingBuildOrder>()
+            .entity(worker_entity)
+            .remove::<BuildSitePreparation>()
             .remove::<MoveTarget>()
             .insert(UnitState::Building(building_entity))
             .insert(TaskSource::Manual);
@@ -1252,6 +1343,7 @@ fn pending_build_arrival_system(
 fn pending_build_cleanup_system(
     mut commands: Commands,
     removed: Query<(Entity, &PendingBuildOrder, &UnitState), With<Unit>>,
+    preparing: Query<(Entity, &BuildSitePreparation, &UnitState), With<Unit>>,
     mut all_resources: ResMut<AllPlayerResources>,
     registry: Res<BlueprintRegistry>,
 ) {
@@ -1266,6 +1358,60 @@ fn pending_build_cleanup_system(
 
             commands.entity(entity).remove::<PendingBuildOrder>();
         }
+    }
+
+    for (entity, prep, state) in &preparing {
+        if matches!(state, UnitState::MovingToPlot(_)) {
+            continue;
+        }
+
+        let bp = registry.get(prep.kind);
+        let res = all_resources.get_mut(&prep.faction);
+        for (rt, amt) in bp.cost.cost_entries() {
+            res.add(rt, amt);
+        }
+
+        commands.entity(entity).remove::<BuildSitePreparation>();
+    }
+}
+
+fn spawn_foundation_prep_vfx(
+    commands: &mut Commands,
+    vfx_assets: Option<&VfxAssets>,
+    height_map: &HeightMap,
+    position: Vec3,
+    footprint: f32,
+    burst_count: u8,
+) {
+    let Some(vfx) = vfx_assets else {
+        return;
+    };
+
+    let burst_seed = burst_count as f32 * 0.73;
+    let particle_count = 6usize;
+    for idx in 0..particle_count {
+        let t = idx as f32 / particle_count as f32;
+        let angle = burst_seed + t * std::f32::consts::TAU;
+        let radius = footprint * (0.35 + 0.45 * ((burst_count as f32 * 0.27 + t).fract()));
+        let world_x = position.x + angle.cos() * radius;
+        let world_z = position.z + angle.sin() * radius;
+        let ground_y = height_map.sample(world_x, world_z);
+        let outward = Vec3::new(angle.cos(), 0.0, angle.sin());
+        let lift = 1.6 + t * 0.6;
+
+        commands.spawn((
+            GatherParticle {
+                velocity: outward * 1.6 + Vec3::Y * lift,
+                timer: Timer::from_seconds(0.55 + t * 0.2, TimerMode::Once),
+                start_scale: 0.16 + t * 0.06,
+            },
+            FogHideable::Vfx,
+            Mesh3d(vfx.cube_mesh.clone()),
+            MeshMaterial3d(vfx.dust_material.clone()),
+            Transform::from_translation(Vec3::new(world_x, ground_y + 0.15, world_z)),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
     }
 }
 

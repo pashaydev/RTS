@@ -20,7 +20,11 @@ impl Plugin for GroupHotkeysWidgetPlugin {
             )
             .add_systems(
                 Update,
-                (update_group_hotkeys_widget, handle_group_slot_click)
+                (
+                    update_group_hotkeys_widget,
+                    handle_group_slot_click,
+                    group_slot_interaction_system,
+                )
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
@@ -100,6 +104,17 @@ pub struct GroupHotkeyContent;
 #[derive(Component)]
 pub struct GroupSlotButton(pub usize);
 
+fn grid_columns_for(count: usize) -> u16 {
+    match count {
+        0..=2 => count.max(1) as u16,
+        3 => 3,
+        4 => 2,
+        5..=6 => 3,
+        7..=8 => 4,
+        _ => 3, // 9 slots -> 3x3
+    }
+}
+
 pub fn update_group_hotkeys_widget(
     mut commands: Commands,
     icons: Res<IconAssets>,
@@ -137,20 +152,21 @@ pub fn update_group_hotkeys_widget(
             GroupHotkeyContent,
             Node {
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(4.0),
+                row_gap: Val::Px(6.0),
                 ..default()
             },
         ))
         .id();
     commands.entity(content).add_child(root);
 
-    // Grid of group slots
+    // Responsive grid of group slots (CSS Grid)
+    let cols = grid_columns_for(control_groups.groups.len());
     let container = commands
         .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            flex_wrap: FlexWrap::Wrap,
-            column_gap: Val::Px(3.0),
-            row_gap: Val::Px(3.0),
+            display: Display::Grid,
+            grid_template_columns: RepeatedGridTrack::flex(cols, 1.0),
+            column_gap: Val::Px(4.0),
+            row_gap: Val::Px(4.0),
             ..default()
         })
         .id();
@@ -173,40 +189,26 @@ pub fn update_group_hotkeys_widget(
             .count();
         let has_selected_members = selected_in_group > 0;
 
-        // Determine visual state
-        let (bg_color, border_color, border_width) = if is_active && !is_empty {
+        // Determine visual state (base/default, hover/press handled by interaction system)
+        let (bg_color, border_color) = if is_active && !is_empty {
             // Currently recalled group
-            (
-                Color::srgba(0.15, 0.25, 0.45, 0.8),
-                group_color(i),
-                1.5,
-            )
+            (Color::srgba(0.15, 0.25, 0.45, 0.8), group_color(i))
         } else if has_selected_members {
             // Contains some of the currently selected units
             (
                 Color::srgba(0.18, 0.22, 0.28, 0.7),
                 group_color(i).with_alpha(0.5),
-                1.0,
             )
         } else if is_empty && has_selection {
             // Empty slot while units are selected — assignable
             (
                 Color::srgba(0.12, 0.12, 0.12, 0.3),
                 Color::srgba(0.4, 0.4, 0.4, 0.3),
-                1.0,
             )
         } else if is_empty {
-            (
-                Color::srgba(0.15, 0.15, 0.15, 0.3),
-                Color::NONE,
-                0.0,
-            )
+            (Color::srgba(0.15, 0.15, 0.15, 0.3), Color::NONE)
         } else {
-            (
-                Color::srgba(0.2, 0.2, 0.25, 0.6),
-                Color::NONE,
-                0.0,
-            )
+            (Color::srgba(0.2, 0.2, 0.25, 0.6), Color::NONE)
         };
 
         let slot = commands
@@ -214,14 +216,14 @@ pub fn update_group_hotkeys_widget(
                 GroupSlotButton(i),
                 Button,
                 Node {
-                    width: Val::Percent(31.0),
-                    min_width: Val::Px(32.0),
-                    min_height: Val::Px(32.0),
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                    border: UiRect::all(Val::Px(border_width)),
+                    align_items: AlignItems::Center,
+                    padding: UiRect::all(Val::Px(4.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    min_width: Val::Px(40.0),
+                    min_height: Val::Px(40.0),
+                    flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(1.0),
                     ..default()
                 },
@@ -367,6 +369,62 @@ pub fn update_group_hotkeys_widget(
             ))
             .id();
         commands.entity(root).add_child(hint);
+    }
+}
+
+fn group_slot_interaction_system(
+    mut interactions: Query<
+        (
+            &Interaction,
+            &mut BackgroundColor,
+            &mut BorderColor,
+            &GroupSlotButton,
+        ),
+        (Changed<Interaction>, With<Button>),
+    >,
+    control_groups: Res<ControlGroups>,
+    group_state: Res<ControlGroupState>,
+    unit_kinds: Query<&EntityKind, With<Unit>>,
+) {
+    let hovered_bg = Color::srgb(0.24, 0.24, 0.34);
+    let pressed_bg = Color::srgb(0.30, 0.62, 0.46);
+    let border_hovered = Color::srgba(1.0, 1.0, 1.0, 0.25);
+    let border_pressed = Color::srgba(0.35, 0.85, 0.55, 0.7);
+
+    for (interaction, mut bg, mut border, slot) in &mut interactions {
+        let i = slot.0;
+
+        let alive: Vec<Entity> = control_groups.groups[i]
+            .iter()
+            .copied()
+            .filter(|e| unit_kinds.get(*e).is_ok())
+            .collect();
+
+        let is_empty = alive.is_empty();
+        let is_active = group_state.active_group == Some(i);
+
+        let (base_bg, base_border) = if is_active && !is_empty {
+            (Color::srgba(0.15, 0.25, 0.45, 0.8), group_color(i))
+        } else if is_empty {
+            (Color::srgba(0.15, 0.15, 0.15, 0.3), Color::NONE)
+        } else {
+            (Color::srgba(0.2, 0.2, 0.25, 0.6), Color::NONE)
+        };
+
+        match *interaction {
+            Interaction::Pressed => {
+                *bg = pressed_bg.into();
+                *border = BorderColor::all(border_pressed);
+            }
+            Interaction::Hovered => {
+                *bg = hovered_bg.into();
+                *border = BorderColor::all(border_hovered);
+            }
+            Interaction::None => {
+                *bg = base_bg.into();
+                *border = BorderColor::all(base_border);
+            }
+        }
     }
 }
 

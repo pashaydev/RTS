@@ -637,6 +637,16 @@ pub struct PendingBuildOrder {
     pub faction: Faction,
 }
 
+#[derive(Component)]
+pub struct BuildSitePreparation {
+    pub kind: crate::blueprints::EntityKind,
+    pub position: Vec3,
+    pub faction: Faction,
+    pub prep_timer: Timer,
+    pub vfx_timer: Timer,
+    pub burst_count: u8,
+}
+
 /// Task queue for shift+click command queuing.
 #[derive(Component, Default)]
 pub struct TaskQueue {
