@@ -1,5 +1,6 @@
 //! Host-side systems: relay client commands, handle disconnects.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_matchbox::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -10,6 +11,8 @@ use game_state::message::{
     ServerFrame, ServerMessage, TerrainDescriptor, WorldBaseline,
 };
 
+use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
+use crate::buildings;
 use crate::components::*;
 use crate::lighting::DayCycle;
 use crate::net_bridge::{EntityNetMap, NetworkId};
@@ -53,14 +56,121 @@ fn send_to_player(
 /// Execute a player input command on the ECS. Used by both host and client.
 /// Mirrors the full component setup that the local right-click handler does,
 /// so that MoveTarget, TaskSource, TaskQueue, etc. are all set correctly.
+fn stance_from_net_u8(stance: u8) -> UnitStance {
+    match stance {
+        0 => UnitStance::Passive,
+        2 => UnitStance::Aggressive,
+        _ => UnitStance::Defensive,
+    }
+}
+
+fn building_can_train(
+    registry: &BlueprintRegistry,
+    building_kind: EntityKind,
+    building_level: u8,
+    unit_kind: EntityKind,
+) -> bool {
+    let Some(building) = registry.get(building_kind).building.as_ref() else {
+        return false;
+    };
+    if building.trains.contains(&unit_kind) {
+        return true;
+    }
+
+    building
+        .level_upgrades
+        .iter()
+        .enumerate()
+        .take(building_level.saturating_sub(1) as usize)
+        .any(|(_, upgrade)| {
+            matches!(
+                &upgrade.bonus,
+                LevelBonus::UnlocksTraining(kinds) if kinds.contains(&unit_kind)
+            )
+        })
+}
+
+#[derive(SystemParam)]
+pub struct HostCommandExecution<'w, 's> {
+    registry: Res<'w, BlueprintRegistry>,
+    carried_totals: Res<'w, CarriedResourceTotals>,
+    pending_drains: ResMut<'w, PendingCarriedDrains>,
+    all_resources: ResMut<'w, AllPlayerResources>,
+    unit_states: ParamSet<
+        'w,
+        's,
+        (
+            Query<'w, 's, &'static mut UnitState>,
+            Query<
+                'w,
+                's,
+                (
+                    Entity,
+                    &'static Transform,
+                    &'static UnitState,
+                    &'static Faction,
+                    &'static EntityKind,
+                    Option<&'static PendingBuildOrder>,
+                ),
+                With<Unit>,
+            >,
+        ),
+    >,
+    task_queues: Query<'w, 's, &'static mut TaskQueue, With<Unit>>,
+    training_buildings: ParamSet<
+        'w,
+        's,
+        (
+            Query<
+                'w,
+                's,
+                (&'static mut TrainingQueue, &'static EntityKind, Option<&'static BuildingLevel>),
+                With<Building>,
+            >,
+            Query<'w, 's, (&'static Faction, &'static TrainingQueue), With<Building>>,
+        ),
+    >,
+    next_task_id: ResMut<'w, NextTaskId>,
+    transforms: Query<'w, 's, &'static GlobalTransform>,
+    unit_factions: Query<'w, 's, &'static Faction>,
+    building_factions: Query<'w, 's, &'static Faction, With<Building>>,
+    all_buildings_for_cap: Query<
+        'w,
+        's,
+        (
+            &'static Faction,
+            &'static EntityKind,
+            &'static BuildingState,
+            &'static BuildingLevel,
+        ),
+        With<Building>,
+    >,
+    base_state: Res<'w, FactionBaseState>,
+    all_completed: Res<'w, AllCompletedBuildings>,
+    biome_map: Option<Res<'w, BiomeMap>>,
+    faction_ages: Res<'w, crate::ages::FactionAges>,
+    height_map: Res<'w, crate::ground::HeightMap>,
+    existing_buildings: Query<
+        'w,
+        's,
+        (&'static Transform, &'static BuildingFootprint, &'static Faction, &'static EntityKind),
+        (With<Building>, Without<GhostBuilding>),
+    >,
+}
+
 pub fn execute_input_command(
     commands: &mut Commands,
     input: &PlayerInput,
     net_map: &EntityNetMap,
     unit_states: &mut Query<&mut UnitState>,
     task_queues: &mut Query<&mut TaskQueue, With<Unit>>,
+    training_buildings: &mut Query<
+        (&mut TrainingQueue, &EntityKind, Option<&BuildingLevel>),
+        With<Building>,
+    >,
     next_task_id: &mut ResMut<NextTaskId>,
     transforms: &Query<&GlobalTransform>,
+    registry: &BlueprintRegistry,
 ) {
     for cmd in &input.commands {
         match cmd {
@@ -219,6 +329,44 @@ pub fn execute_input_command(
                     }
                 }
             }
+            InputCommand::Train { building_id, kind } => {
+                let Some(&ecs_entity) = net_map.to_ecs.get(building_id) else {
+                    continue;
+                };
+                let Some(unit_kind) = EntityKind::from_index(*kind) else {
+                    continue;
+                };
+                let Ok((mut queue, building_kind, building_level)) =
+                    training_buildings.get_mut(ecs_entity)
+                else {
+                    continue;
+                };
+                let level = building_level.map_or(1, |level| level.0);
+                if building_can_train(registry, *building_kind, level, unit_kind) {
+                    queue.queue.push(unit_kind);
+                }
+            }
+            InputCommand::SetRallyPoint {
+                building_id,
+                position,
+            } => {
+                let Some(&ecs_entity) = net_map.to_ecs.get(building_id) else {
+                    continue;
+                };
+                commands.entity(ecs_entity).insert(RallyPoint(Vec3::new(
+                    position[0],
+                    position[1],
+                    position[2],
+                )));
+            }
+            InputCommand::SetStance { stance } => {
+                let new_stance = stance_from_net_u8(*stance);
+                for &eid in &input.entity_ids {
+                    if let Some(&ecs_entity) = net_map.to_ecs.get(&eid) {
+                        commands.entity(ecs_entity).insert(new_stance);
+                    }
+                }
+            }
             _ => {
                 debug!("Unhandled command: {:?}", cmd);
             }
@@ -238,11 +386,7 @@ pub fn host_process_client_commands(
     mut inbox: ResMut<MatchboxInbox>,
     lobby: Res<super::LobbyState>,
     net_map: Res<EntityNetMap>,
-    mut unit_states: Query<&mut UnitState>,
-    mut task_queues: Query<&mut TaskQueue, With<Unit>>,
-    mut next_task_id: ResMut<NextTaskId>,
-    transforms: Query<&GlobalTransform>,
-    unit_factions: Query<&Faction>,
+    mut exec: HostCommandExecution,
     time: Res<Time>,
     mut event_log: ResMut<GameEventLog>,
 ) {
@@ -274,56 +418,181 @@ pub fn host_process_client_commands(
                             net_map
                                 .to_ecs
                                 .get(entity_id)
-                                .and_then(|entity| unit_factions.get(*entity).ok())
+                                .and_then(|entity| exec.unit_factions.get(*entity).ok())
                                 .is_some_and(|faction| *faction == player.faction)
                         })
                         .collect();
 
-                    if owned_entity_ids.is_empty() {
+                    let mut sanitized_input = input.clone();
+                    sanitized_input.player_id = player_id as u32;
+                    sanitized_input.entity_ids = owned_entity_ids;
+                    let has_owned_units = !sanitized_input.entity_ids.is_empty();
+                    let mut sanitized_commands = Vec::new();
+                    let mut queued_trains_from_packet = 0u32;
+                    let mut handled_authoritative_only = false;
+                    for command in &input.commands {
+                        match command {
+                            InputCommand::Move { .. }
+                            | InputCommand::Attack { .. }
+                            | InputCommand::Gather { .. }
+                            | InputCommand::Patrol { .. }
+                            | InputCommand::AttackMove { .. }
+                            | InputCommand::HoldPosition
+                            | InputCommand::SetStance { .. } => {
+                                if has_owned_units {
+                                    sanitized_commands.push(command.clone());
+                                }
+                            }
+                            InputCommand::SetRallyPoint { building_id, .. } => {
+                                let authorized = net_map
+                                    .to_ecs
+                                    .get(building_id)
+                                    .and_then(|building_entity| exec.building_factions.get(*building_entity).ok())
+                                    .is_some_and(|faction| *faction == player.faction);
+                                if authorized {
+                                    sanitized_commands.push(command.clone());
+                                }
+                            }
+                            InputCommand::Train { building_id, kind } => {
+                                let Some(&building_entity) = net_map.to_ecs.get(building_id) else {
+                                    continue;
+                                };
+                                if !exec
+                                    .building_factions
+                                    .get(building_entity)
+                                    .ok()
+                                    .is_some_and(|faction| *faction == player.faction)
+                                {
+                                    continue;
+                                }
+                                let Some(unit_kind) = EntityKind::from_index(*kind) else {
+                                    continue;
+                                };
+                                let (building_kind, level) = {
+                                    let train_query = exec.training_buildings.p0();
+                                    let Ok((_, building_kind, building_level)) =
+                                        train_query.get(building_entity)
+                                    else {
+                                        continue;
+                                    };
+                                    (*building_kind, building_level.map_or(1, |level| level.0))
+                                };
+                                if !building_can_train(&exec.registry, building_kind, level, unit_kind) {
+                                    continue;
+                                }
+
+                                let unit_cap = faction_unit_cap_stats(
+                                    player.faction,
+                                    exec.unit_factions.iter(),
+                                    exec.training_buildings.p1().iter(),
+                                    exec.all_buildings_for_cap.iter(),
+                                );
+                                if !unit_cap.has_room(queued_trains_from_packet + 1) {
+                                    continue;
+                                }
+
+                                let bp = exec.registry.get(unit_kind);
+                                let stored = exec.all_resources.get_mut(&player.faction);
+                                let carried = exec.carried_totals.get(&player.faction);
+                                if !bp.cost.can_afford_with_carried(stored, carried) {
+                                    continue;
+                                }
+                                let deficits = bp.cost.deduct_with_carried(stored);
+                                let drain = SpendFromCarried {
+                                    faction: player.faction,
+                                    amounts: deficits,
+                                };
+                                if drain.has_deficit() {
+                                    exec.pending_drains.drains.push(drain);
+                                }
+
+                                sanitized_commands.push(command.clone());
+                                queued_trains_from_packet += 1;
+                            }
+                            InputCommand::Build { kind, position } => {
+                                let Some(kind) = EntityKind::from_index(*kind) else {
+                                    continue;
+                                };
+                                let build_pos =
+                                    Vec3::new(position[0], position[1], position[2]);
+                                let worker_query = exec.unit_states.p1();
+                                if buildings::try_queue_build_order_authoritative(
+                                    &mut commands,
+                                    kind,
+                                    build_pos,
+                                    player.faction,
+                                    &mut exec.all_resources,
+                                    &exec.base_state,
+                                    &exec.carried_totals,
+                                    &mut exec.pending_drains,
+                                    &exec.registry,
+                                    &exec.all_completed,
+                                    exec.biome_map.as_deref(),
+                                    &exec.faction_ages,
+                                    &exec.height_map,
+                                    &exec.existing_buildings,
+                                    &worker_query,
+                                )
+                                .is_ok()
+                                {
+                                    handled_authoritative_only = true;
+                                }
+                            }
+                            InputCommand::UseAbility { .. }
+                            | InputCommand::Interact { .. } => {}
+                        }
+                    }
+                    sanitized_input.commands = sanitized_commands;
+
+                    if sanitized_input.commands.is_empty() && !handled_authoritative_only {
                         debug_tap::record_error(
                             "host_commands",
-                            format!("player {} attempted to command no owned units", player_id),
+                            format!("player {} attempted unsupported or unauthorized input", player_id),
                         );
                         continue;
                     }
 
-                    let mut sanitized_input = input.clone();
-                    sanitized_input.player_id = player_id as u32;
-                    sanitized_input.entity_ids = owned_entity_ids;
+                    if !sanitized_input.commands.is_empty() {
+                        let mut unit_states = exec.unit_states.p0();
+                        execute_input_command(
+                            &mut commands,
+                            &sanitized_input,
+                            &net_map,
+                            &mut unit_states,
+                            &mut exec.task_queues,
+                            &mut exec.training_buildings.p0(),
+                            &mut exec.next_task_id,
+                            &exec.transforms,
+                            &exec.registry,
+                        );
+                        debug_tap::record_info(
+                            "host_commands",
+                            format!(
+                                "player {} input: {} entities / {} cmds",
+                                player_id,
+                                sanitized_input.entity_ids.len(),
+                                sanitized_input.commands.len()
+                            ),
+                        );
 
-                    // Execute on host ECS
-                    execute_input_command(
-                        &mut commands,
-                        &sanitized_input,
-                        &net_map,
-                        &mut unit_states,
-                        &mut task_queues,
-                        &mut next_task_id,
-                        &transforms,
-                    );
-                    debug_tap::record_info(
-                        "host_commands",
-                        format!(
-                            "player {} input: {} entities / {} cmds",
+                        let seq = {
+                            let mut s = host.seq.lock().unwrap();
+                            *s += 1;
+                            *s
+                        };
+                        let relay = ServerMessage::RelayedInput {
+                            seq,
+                            timestamp: time.elapsed_secs_f64(),
                             player_id,
-                            sanitized_input.entity_ids.len(),
-                            sanitized_input.commands.len()
-                        ),
-                    );
-
-                    // Relay to all other clients
-                    let seq = {
-                        let mut s = host.seq.lock().unwrap();
-                        *s += 1;
-                        *s
-                    };
-                    let relay = ServerMessage::RelayedInput {
-                        seq,
-                        timestamp: time.elapsed_secs_f64(),
-                        player_id,
-                        input: sanitized_input,
-                    };
-                    broadcast_msg(&mut socket, &relay);
+                            input: sanitized_input,
+                        };
+                        broadcast_msg(&mut socket, &relay);
+                    } else if handled_authoritative_only {
+                        debug_tap::record_info(
+                            "host_commands",
+                            format!("player {} authoritative build accepted", player_id),
+                        );
+                    }
                 }
                 ClientMessage::JoinRequest { player_name, .. } => {
                     info!("Player {} joined: {}", player_id, player_name);

@@ -244,32 +244,39 @@ pub(crate) fn connect_to_host_system(
 
 /// Resolve a session code to a Matchbox signaling URL.
 /// - If it starts with `ws://` or `wss://`, use as-is.
-/// - If it's an IP:PORT or IP, build `ws://IP:3536/rts_room`.
+/// - If it's `http(s)://host[:port][/path]`, keep the host and map to the signaling port.
+/// - If it's `host:port`, preserve the explicit port.
+/// - If it's `host`/`ip`, default to the signaling port.
 pub(super) fn resolve_signaling_url(code: &str) -> String {
     let trimmed = code.trim();
     if trimmed.starts_with("ws://") || trimmed.starts_with("wss://") {
         return trimmed.to_string();
     }
 
-    let without_scheme = trimmed
-        .strip_prefix("http://")
-        .or_else(|| trimmed.strip_prefix("https://"))
-        .unwrap_or(trimmed);
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        let without_scheme = trimmed
+            .strip_prefix("http://")
+            .or_else(|| trimmed.strip_prefix("https://"))
+            .unwrap_or(trimmed);
+        let host_port = without_scheme.split('/').next().unwrap_or(without_scheme);
+        let host = if host_port.starts_with('[') {
+            host_port
+                .split_once(']')
+                .map(|(addr, _)| format!("{addr}]"))
+                .unwrap_or_else(|| host_port.to_string())
+        } else {
+            host_port
+                .split_once(':')
+                .map(|(host, _)| host.to_string())
+                .unwrap_or_else(|| host_port.to_string())
+        };
+        return format!("ws://{}:{}/rts_room", host, SIGNALING_PORT);
+    }
 
-    let host_port = without_scheme.split('/').next().unwrap_or(without_scheme);
-    let host = if host_port.starts_with('[') {
-        host_port
-            .split_once(']')
-            .map(|(addr, _)| format!("{addr}]"))
-            .unwrap_or_else(|| host_port.to_string())
-    } else {
-        host_port
-            .split_once(':')
-            .map(|(host, _)| host.to_string())
-            .unwrap_or_else(|| host_port.to_string())
-    };
-
-    format!("ws://{}:{}/rts_room", host, SIGNALING_PORT)
+    match parse_direct_host_port(trimmed, SIGNALING_PORT) {
+        Ok((host, port)) => format!("ws://{}:{}/rts_room", host, port),
+        Err(_) => format!("ws://{}:{}/rts_room", trimmed, SIGNALING_PORT),
+    }
 }
 
 fn parse_direct_host_port(code: &str, default_port: u16) -> Result<(String, u16), String> {
@@ -519,6 +526,14 @@ mod tests {
         assert_eq!(
             resolve_signaling_url("http://192.168.1.5:7880/index.html"),
             "ws://192.168.1.5:3536/rts_room"
+        );
+    }
+
+    #[test]
+    fn resolve_signaling_url_preserves_explicit_direct_port() {
+        assert_eq!(
+            resolve_signaling_url("10.0.4.127:4545"),
+            "ws://10.0.4.127:4545/rts_room"
         );
     }
 

@@ -4,7 +4,7 @@ use bevy::window::PrimaryWindow;
 use bevy_mod_outline::OutlineVolume;
 use game_state::message::{ClientMessage, InputCommand, PlayerInput, ServerMessage};
 
-use crate::blueprints::{EntityKind, EntityVisualCache};
+use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::hover_material::{HoverRingMaterial, HoverRingSettings};
@@ -960,9 +960,11 @@ fn handle_right_click_move(
         Res<NetRole>,
         Option<Res<ClientNetState>>,
         Option<Res<HostNetState>>,
+        Res<BlueprintRegistry>,
         Option<Res<EntityNetMap>>,
         Res<Time>,
         Query<&mut UnitState>,
+        Query<(&mut TrainingQueue, &EntityKind, Option<&BuildingLevel>), With<Building>>,
         Query<&GlobalTransform>,
         Option<ResMut<bevy_matchbox::prelude::MatchboxSocket>>,
     ),
@@ -972,7 +974,18 @@ fn handle_right_click_move(
         target_queries;
     let (other_units, other_buildings) = enemy_detect;
     let (minimap_interaction, ui_clicked, ui_press) = ui_flags;
-    let (net_role, client_net, host_net, net_map, time, mut unit_states_q, all_transforms, mut matchbox_socket) = net_params;
+    let (
+        net_role,
+        client_net,
+        host_net,
+        registry,
+        net_map,
+        time,
+        mut unit_states_q,
+        mut training_buildings,
+        all_transforms,
+        mut matchbox_socket,
+    ) = net_params;
 
     if !mouse.just_pressed(MouseButton::Right) {
         return;
@@ -1231,8 +1244,10 @@ fn handle_right_click_move(
                         nm,
                         &mut unit_states_q,
                         &mut task_queues,
+                        &mut training_buildings,
                         &mut next_task_id,
                         &all_transforms,
+                        &registry,
                     );
                 }
                 return;

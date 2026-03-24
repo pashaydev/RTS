@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::components::*;
 use crate::theme;
+use crate::ui::core::components as ui_components;
 use crate::ui::fonts::{self, UiFonts};
 use super::helpers::*;
 
@@ -425,17 +426,8 @@ pub(crate) fn spawn_slot_card(
     let card = commands
         .spawn((
             SlotCardContainer(slot_index),
-            Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::all(Val::Px(10.0)),
-                margin: UiRect::vertical(Val::Px(4.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                row_gap: Val::Px(8.0),
-                ..default()
-            },
-            BackgroundColor(theme::BG_SURFACE),
-            BorderColor::all(border_col),
+            ui_components::card_node(),
+            ui_components::card_chrome(border_col),
         ))
         .with_children(|card| {
             // Row 1: faction dot + label + type selector + team toggle
@@ -449,12 +441,10 @@ pub(crate) fn spawn_slot_card(
             .with_children(|row| {
                 // Faction color dot
                 row.spawn((
-                    Node {
-                        width: Val::Px(20.0),
-                        height: Val::Px(20.0),
-                        border_radius: BorderRadius::all(Val::Px(10.0)),
-                        margin: UiRect::right(Val::Px(6.0)),
-                        ..default()
+                    {
+                        let mut node = ui_components::badge_node(20.0, 10.0);
+                        node.margin = UiRect::right(Val::Px(6.0));
+                        node
                     },
                     BackgroundColor(faction_color),
                     BoxShadow::new(
@@ -487,11 +477,6 @@ pub(crate) fn spawn_slot_card(
                 let type_strs: Vec<&str> = type_options.iter().map(|s| *s).collect();
                 for (i, &opt) in type_strs.iter().enumerate() {
                     let is_selected = i == type_idx;
-                    let bg = if is_selected {
-                        theme::ACCENT
-                    } else {
-                        theme::BTN_PRIMARY
-                    };
                     let text_color = if is_selected {
                         Color::WHITE
                     } else {
@@ -504,20 +489,12 @@ pub(crate) fn spawn_slot_card(
                             index: i,
                         },
                         Button,
-                        ButtonAnimState::new(bg.to_srgba().to_f32_array()),
-                        ButtonStyle::Filled,
-                        Node {
-                            padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
-                            margin: UiRect::horizontal(Val::Px(1.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            ..default()
-                        },
-                        BackgroundColor(bg),
-                        BorderColor::all(if is_selected {
-                            Color::srgba(0.29, 0.62, 1.0, 0.3)
+                        ui_components::compact_button_node_with_margin(10.0, 5.0, 1.0),
+                        if is_selected {
+                            ui_components::filled_button_chrome(ui_components::UiTone::Accent)
                         } else {
-                            Color::NONE
-                        }),
+                            ui_components::filled_button_chrome(ui_components::UiTone::Neutral)
+                        },
                     ));
                     if is_selected {
                         btn.insert(SelectedOption);
@@ -564,15 +541,11 @@ pub(crate) fn spawn_slot_card(
                                 index: ti,
                             },
                             Button,
-                            Node {
-                                width: Val::Px(size),
-                                height: Val::Px(size),
-                                margin: UiRect::horizontal(Val::Px(2.0)),
-                                border: UiRect::all(Val::Px(if is_sel { 2.0 } else { 1.0 })),
-                                border_radius: BorderRadius::all(Val::Px(4.0)),
-                                justify_content: JustifyContent::Center,
-                                align_items: AlignItems::Center,
-                                ..default()
+                            {
+                                let mut node = ui_components::badge_node(size, 4.0);
+                                node.margin = UiRect::horizontal(Val::Px(2.0));
+                                node.border = UiRect::all(Val::Px(if is_sel { 2.0 } else { 1.0 }));
+                                node
                             },
                             BackgroundColor(if is_sel { color } else { Color::srgba(0.15, 0.15, 0.15, 0.8) }),
                             BorderColor::all(border_color),
@@ -609,17 +582,12 @@ pub(crate) fn spawn_slot_card(
                     row.spawn((
                         super::KickPlayerButton(slot_index),
                         Button,
-                        ButtonAnimState::new(theme::DESTRUCTIVE.to_srgba().to_f32_array()),
-                        ButtonStyle::Filled,
-                        Node {
-                            width: Val::Px(24.0),
-                            height: Val::Px(24.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            margin: UiRect::left(Val::Px(4.0)),
-                            ..default()
+                        {
+                            let mut node = ui_components::icon_button_node(24.0);
+                            node.margin = UiRect::left(Val::Px(4.0));
+                            node
                         },
-                        BackgroundColor(theme::DESTRUCTIVE),
+                        ui_components::filled_button_chrome(ui_components::UiTone::Destructive),
                     ))
                     .with_children(|btn| {
                         btn.spawn((
@@ -666,11 +634,6 @@ pub(crate) fn spawn_slot_card(
                     let diff_names = ["Easy", "Medium", "Hard"];
                     for (i, &opt) in diff_names.iter().enumerate() {
                         let is_selected = i == diff_idx;
-                        let bg = if is_selected {
-                            theme::ACCENT
-                        } else {
-                            theme::BTN_PRIMARY
-                        };
                         let text_color = if is_selected {
                             Color::WHITE
                         } else {
@@ -683,20 +646,12 @@ pub(crate) fn spawn_slot_card(
                                 index: i,
                             },
                             Button,
-                            ButtonAnimState::new(bg.to_srgba().to_f32_array()),
-                            ButtonStyle::Filled,
-                            Node {
-                                padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
-                                margin: UiRect::horizontal(Val::Px(2.0)),
-                                border: UiRect::all(Val::Px(1.0)),
-                                ..default()
-                            },
-                            BackgroundColor(bg),
-                            BorderColor::all(if is_selected {
-                                Color::srgba(0.29, 0.62, 1.0, 0.3)
+                            ui_components::compact_button_node_with_margin(14.0, 7.0, 2.0),
+                            if is_selected {
+                                ui_components::filled_button_chrome(ui_components::UiTone::Accent)
                             } else {
-                                Color::NONE
-                            }),
+                                ui_components::filled_button_chrome(ui_components::UiTone::Neutral)
+                            },
                         ));
                         if is_selected {
                             btn.insert(SelectedOption);

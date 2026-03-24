@@ -1,8 +1,10 @@
 pub mod animations;
 pub mod button_visuals;
+pub mod components;
 pub mod fonts;
 pub mod framework;
 pub mod hud;
+pub mod interactions;
 pub mod shared;
 pub mod text_input;
 pub mod tooltips;
@@ -19,11 +21,20 @@ impl Plugin for UiCorePlugin {
         app.init_resource::<RallyPointMode>()
             .init_resource::<UiMode>()
             .init_resource::<fonts::UiFonts>()
+            .add_message::<interactions::UiClickEvent>()
+            .add_message::<interactions::UiHoldCompleteEvent>()
             .init_resource::<framework::WidgetRegistry>()
             .init_resource::<framework::WidgetResizeState>()
             .init_resource::<framework::WidgetDragState>()
             .init_resource::<framework::GridInteractionActive>()
             .init_resource::<ControlGroupState>()
+            .add_systems(
+                PreUpdate,
+                (
+                    interactions::attach_interaction_state,
+                    interactions::update_interaction_states,
+                ),
+            )
             // HUD lifecycle
             .add_systems(OnEnter(AppState::InGame), hud::mark_pending_ui_spawn)
             .add_systems(
@@ -88,6 +99,7 @@ impl Plugin for UiCorePlugin {
                 Update,
                 (
                     button_visuals::button_hover_visual,
+                    button_visuals::animated_button_chrome_system,
                     button_visuals::animated_button_hover_system,
                 ),
             )

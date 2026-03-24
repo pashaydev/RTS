@@ -1,10 +1,11 @@
-use bevy::ecs::message::MessageWriter;
+use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
 use rand::Rng;
 
 use crate::components::*;
 use crate::theme;
 use crate::ui::fonts::UiFonts;
+use crate::ui::core::interactions::UiClickEvent;
 use super::helpers::*;
 
 use super::*;
@@ -142,7 +143,8 @@ pub(crate) fn page_transition_system(
 // ── Menu Button Handler ──
 
 pub(crate) fn handle_menu_buttons(
-    interactions: Query<(&Interaction, &MenuButton), Changed<Interaction>>,
+    mut click_events: MessageReader<UiClickEvent>,
+    buttons: Query<&MenuButton>,
     mut next_state: ResMut<NextState<AppState>>,
     mut page: ResMut<MenuPage>,
     mut config: ResMut<GameSetupConfig>,
@@ -154,11 +156,10 @@ pub(crate) fn handle_menu_buttons(
     host_state: Option<Res<HostNetState>>,
     client_state: Option<Res<ClientNetState>>,
 ) {
-    for (interaction, btn) in &interactions {
-        if *interaction != Interaction::Pressed {
+    for event in click_events.read() {
+        let Ok(btn) = buttons.get(event.entity) else {
             continue;
-        }
-
+        };
         match btn.0 {
             MenuAction::NewGame => {
                 *page = MenuPage::NewGame;

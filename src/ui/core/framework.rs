@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use crate::theme;
 use super::fonts::{self, UiFonts};
+use super::interactions::{UiClickEvent, UiInteractPhase, UiInteractState};
 
 // ── Widget Identifiers ──
 
@@ -406,11 +407,12 @@ pub fn sync_widget_visibility(
 // ── Handle Close Button ──
 
 pub fn handle_widget_buttons(
+    mut click_events: MessageReader<UiClickEvent>,
     mut registry: ResMut<WidgetRegistry>,
-    close_q: Query<(&Interaction, &WidgetCloseButton), Changed<Interaction>>,
+    close_q: Query<&WidgetCloseButton>,
 ) {
-    for (interaction, close_btn) in &close_q {
-        if *interaction == Interaction::Pressed {
+    for event in click_events.read() {
+        if let Ok(close_btn) = close_q.get(event.entity) {
             registry.set_visible(close_btn.0, false);
         }
     }
@@ -750,13 +752,19 @@ pub fn handle_widget_resize(
 }
 
 pub fn update_resize_handle_visuals(
-    mut handles: Query<(&Interaction, &mut BackgroundColor), With<WidgetResizeHandle>>,
+    mut handles: Query<(&UiInteractState, &mut BackgroundColor), With<WidgetResizeHandle>>,
 ) {
-    for (interaction, mut bg) in &mut handles {
-        match interaction {
-            Interaction::Pressed => *bg = BackgroundColor(theme::ACCENT),
-            Interaction::Hovered => *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.4)),
-            Interaction::None => *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1)),
+    for (state, mut bg) in &mut handles {
+        match state.phase {
+            UiInteractPhase::Pressed => {
+                *bg = BackgroundColor(Color::srgba(0.29, 0.62, 1.0, 0.35 + 0.55 * state.hold_progress))
+            }
+            UiInteractPhase::Hovered => {
+                *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.4))
+            }
+            UiInteractPhase::Idle | UiInteractPhase::Disabled => {
+                *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1))
+            }
         }
     }
 }

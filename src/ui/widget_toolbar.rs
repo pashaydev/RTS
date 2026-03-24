@@ -1,7 +1,9 @@
+use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
 
 use super::core::framework::{WidgetId, WidgetRegistry};
 use super::core::hud::HudReady;
+use super::core::interactions::UiClickEvent;
 use crate::components::AppState;
 use crate::theme;
 use crate::ui::fonts::{self, UiFonts};
@@ -126,13 +128,13 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts) {
 
 /// Reads hotkey presses + button clicks, toggles widget visibility
 pub fn widget_toolbar_system(
+    mut click_events: MessageReader<UiClickEvent>,
     mut registry: ResMut<WidgetRegistry>,
     keys: Res<ButtonInput<KeyCode>>,
-    interactions: Query<(&Interaction, &WidgetToolbarButton), Changed<Interaction>>,
+    buttons: Query<&WidgetToolbarButton>,
 ) {
-    // Button clicks
-    for (interaction, btn) in &interactions {
-        if *interaction == Interaction::Pressed {
+    for event in click_events.read() {
+        if let Ok(btn) = buttons.get(event.entity) {
             registry.toggle(btn.0);
         }
     }

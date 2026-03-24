@@ -48,8 +48,12 @@ pub struct NetStats {
 
     // Sync stats
     pub last_sync_entity_count: u32,
+    pub last_state_unmatched: u32,
     pub net_map_size: u32,
     pub pending_spawns: u32,
+    pub pending_despawns: u32,
+    pub last_spawn_batch: u32,
+    pub last_despawn_batch: u32,
 }
 
 /// Which roles a stat is relevant for.
@@ -143,7 +147,27 @@ pub const NET_STAT_FIELDS: &[NetStatField] = &[
     },
     NetStatField {
         folder_key: "traffic",
+        label: "State Misses",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
         label: "Pending Spawns",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Pending Despawns",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Spawn Batch",
+        visibility: NetStatVisibility::Always,
+    },
+    NetStatField {
+        folder_key: "traffic",
+        label: "Despawn Batch",
         visibility: NetStatVisibility::Always,
     },
 ];
@@ -180,7 +204,11 @@ impl NetStats {
             "Msgs Received" => Some(self.total_msgs_received.to_string()),
             "Sync Entities" => Some(self.last_sync_entity_count.to_string()),
             "Net Map Size" => Some(self.net_map_size.to_string()),
+            "State Misses" => Some(self.last_state_unmatched.to_string()),
             "Pending Spawns" => Some(self.pending_spawns.to_string()),
+            "Pending Despawns" => Some(self.pending_despawns.to_string()),
+            "Spawn Batch" => Some(self.last_spawn_batch.to_string()),
+            "Despawn Batch" => Some(self.last_despawn_batch.to_string()),
             _ => None, // "Status" is derived from LobbyState, handled externally
         }
     }
@@ -684,8 +712,12 @@ mod tests {
             bytes_received_last_sec: 3_072,
             connected_clients: 2,
             last_sync_entity_count: 42,
+            last_state_unmatched: 5,
             net_map_size: 77,
             pending_spawns: 3,
+            pending_despawns: 4,
+            last_spawn_batch: 6,
+            last_despawn_batch: 2,
             ..Default::default()
         };
 
@@ -738,8 +770,24 @@ mod tests {
             Some("77".to_string())
         );
         assert_eq!(
+            stats.display_value("State Misses", &NetRole::Host),
+            Some("5".to_string())
+        );
+        assert_eq!(
             stats.display_value("Pending Spawns", &NetRole::Host),
             Some("3".to_string())
+        );
+        assert_eq!(
+            stats.display_value("Pending Despawns", &NetRole::Host),
+            Some("4".to_string())
+        );
+        assert_eq!(
+            stats.display_value("Spawn Batch", &NetRole::Host),
+            Some("6".to_string())
+        );
+        assert_eq!(
+            stats.display_value("Despawn Batch", &NetRole::Host),
+            Some("2".to_string())
         );
         assert_eq!(stats.display_value("Status", &NetRole::Host), None);
     }

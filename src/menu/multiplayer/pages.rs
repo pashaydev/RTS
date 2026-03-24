@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::components::*;
 use crate::multiplayer::{LobbyState, LobbyStatus, NetRole};
 use crate::theme;
+use crate::ui::core::components as ui_components;
 use crate::ui::fonts::{self, UiFonts};
 use super::super::helpers::*;
 
@@ -104,13 +105,8 @@ pub(crate) fn spawn_host_lobby_page(
                 .spawn((
                     CopyCodeButton,
                     Button,
-                    ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
-                    ButtonStyle::Filled,
-                    Node {
-                        padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
-                        ..default()
-                    },
-                    BackgroundColor(theme::BTN_PRIMARY),
+                    ui_components::compact_button_node(14.0, 7.0),
+                    ui_components::filled_button_chrome(ui_components::UiTone::Neutral),
                 ))
                 .with_children(|btn| {
                     btn.spawn((
@@ -495,17 +491,8 @@ pub(crate) fn spawn_join_lobby_page(
                             max_len: 45,
                         },
                         Button,
-                        Node {
-                            width: Val::Px(240.0),
-                            height: Val::Px(32.0),
-                            padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            align_items: AlignItems::Center,
-                            overflow: Overflow::clip(),
-                            ..default()
-                        },
-                        BackgroundColor(theme::INPUT_BG),
-                        BorderColor::all(theme::INPUT_BORDER),
+                        ui_components::input_node(240.0, 32.0),
+                        ui_components::input_chrome(),
                     ))
                     .with_children(|input| {
                         input.spawn((
@@ -534,13 +521,8 @@ pub(crate) fn spawn_join_lobby_page(
                     .spawn((
                         PasteCodeButton,
                         Button,
-                        ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
-                        ButtonStyle::Filled,
-                        Node {
-                            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                            ..default()
-                        },
-                        BackgroundColor(theme::BTN_PRIMARY),
+                        ui_components::compact_button_node(10.0, 6.0),
+                        ui_components::filled_button_chrome(ui_components::UiTone::Neutral),
                     ))
                     .with_children(|btn| {
                         btn.spawn((
@@ -559,13 +541,8 @@ pub(crate) fn spawn_join_lobby_page(
                     .spawn((
                         ClearCodeButton,
                         Button,
-                        ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
-                        ButtonStyle::Ghost,
-                        Node {
-                            padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                            ..default()
-                        },
-                        BackgroundColor(Color::NONE),
+                        ui_components::compact_button_node(10.0, 6.0),
+                        ui_components::ghost_button_chrome(ui_components::UiTone::Neutral),
                     ))
                     .with_children(|btn| {
                         btn.spawn((
@@ -589,17 +566,16 @@ pub(crate) fn spawn_join_lobby_page(
                     DiscoverLanHostsButton,
                     MenuButton(MenuAction::RefreshLanHosts),
                     Button,
-                    ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
-                    ButtonStyle::Ghost,
-                    Node {
-                        width: Val::Px(120.0),
-                        align_content: AlignContent::Center,
-                        align_items: AlignItems::Center,
-                        padding: UiRect::all(Val::Px(8.0)),
-                        margin: UiRect::bottom(Val::Px(6.0)),
-                        ..default()
+                    {
+                        let mut node = ui_components::compact_button_node(8.0, 8.0);
+                        node.width = Val::Px(120.0);
+                        node.align_content = AlignContent::Center;
+                        node.align_items = AlignItems::Center;
+                        node.margin = UiRect::bottom(Val::Px(6.0));
+                        node.border_radius = BorderRadius::all(Val::Px(8.0));
+                        node
                     },
-                    BackgroundColor(theme::BTN_PRIMARY),
+                    ui_components::ghost_button_chrome(ui_components::UiTone::Neutral),
                 ))
                 .with_children(|parent| {
                     parent.spawn((
@@ -837,8 +813,7 @@ fn spawn_client_slot_card(
                 column_gap: Val::Px(8.0),
                 ..default()
             },
-            BackgroundColor(theme::BG_SURFACE),
-            BorderColor::all(border_color),
+            ui_components::card_chrome(border_color),
         ))
         .with_children(|card| {
             if let Some(player) = lobby_player {
@@ -848,22 +823,12 @@ fn spawn_client_slot_card(
                     theme::DESTRUCTIVE
                 };
                 card.spawn((
-                    Node {
-                        width: Val::Px(8.0),
-                        height: Val::Px(8.0),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
-                        ..default()
-                    },
+                    ui_components::badge_node(8.0, 4.0),
                     BackgroundColor(dot_color),
                 ));
             }
             card.spawn((
-                Node {
-                    width: Val::Px(16.0),
-                    height: Val::Px(16.0),
-                    border_radius: BorderRadius::all(Val::Px(8.0)),
-                    ..default()
-                },
+                ui_components::badge_node(16.0, 8.0),
                 BackgroundColor(faction_color),
             ));
             card.spawn((
@@ -879,14 +844,7 @@ fn spawn_client_slot_card(
             card.spawn(Node { flex_grow: 1.0, ..default() });
             if !matches!(slot, SlotOccupant::Closed | SlotOccupant::Open) {
                 card.spawn((
-                    Node {
-                        width: Val::Px(22.0),
-                        height: Val::Px(22.0),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
-                        justify_content: JustifyContent::Center,
-                        align_items: AlignItems::Center,
-                        ..default()
-                    },
+                    ui_components::badge_node(22.0, 4.0),
                     BackgroundColor(team_color),
                 ))
                 .with_children(|badge| {

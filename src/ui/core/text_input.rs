@@ -9,6 +9,8 @@ use bevy::prelude::*;
 use crate::components::*;
 use crate::theme;
 
+use super::interactions::UiClickEvent;
+
 // ── Scroll ──
 
 #[derive(Component)]
@@ -57,6 +59,8 @@ pub fn scroll_panel_system(
 // ── Text Input System ──
 
 pub fn text_input_system(
+    mut click_events: MessageReader<UiClickEvent>,
+    input_targets: Query<(), With<TextInputField>>,
     mut inputs: Query<(
         Entity,
         &mut TextInputField,
@@ -72,9 +76,9 @@ pub fn text_input_system(
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     let mut clicked_entity: Option<Entity> = None;
-    for (entity, _, interaction, _, _, _) in &inputs {
-        if *interaction == Interaction::Pressed {
-            clicked_entity = Some(entity);
+    for event in click_events.read() {
+        if input_targets.get(event.entity).is_ok() {
+            clicked_entity = Some(event.entity);
         }
     }
 
@@ -240,6 +244,58 @@ pub fn text_input_system(
                 **text = field.value.clone();
             }
         }
+    }
+}
+
+pub fn animate_text_input_chrome(
+    mut commands: Commands,
+    query: Query<
+        (
+            Entity,
+            &Interaction,
+            Option<&TextInputFocused>,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        ),
+        With<TextInputField>,
+    >,
+) {
+    for (entity, interaction, focused, mut bg, mut border) in query {
+        let is_focused = focused.is_some();
+        let is_hovered = *interaction == Interaction::Hovered;
+        let is_pressed = *interaction == Interaction::Pressed;
+
+        *bg = BackgroundColor(if is_pressed {
+            Color::srgba(0.16, 0.18, 0.22, 0.98)
+        } else if is_focused {
+            Color::srgba(0.14, 0.16, 0.20, 0.96)
+        } else if is_hovered {
+            Color::srgba(0.13, 0.14, 0.17, 0.94)
+        } else {
+            theme::INPUT_BG
+        });
+
+        *border = BorderColor::all(if is_pressed || is_focused {
+            Color::srgba(0.42, 0.72, 1.0, 0.85)
+        } else if is_hovered {
+            Color::srgba(0.35, 0.50, 0.72, 0.55)
+        } else {
+            theme::INPUT_BORDER
+        });
+
+        commands.entity(entity).insert(BoxShadow::new(
+            if is_pressed || is_focused {
+                Color::srgba(0.29, 0.62, 1.0, 0.28)
+            } else if is_hovered {
+                Color::srgba(0.29, 0.62, 1.0, 0.16)
+            } else {
+                Color::srgba(0.0, 0.0, 0.0, 0.16)
+            },
+            Val::Px(0.0),
+            Val::Px(2.0),
+            Val::Px(0.0),
+            Val::Px(if is_pressed || is_focused { 12.0 } else { 7.0 }),
+        ));
     }
 }
 

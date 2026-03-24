@@ -257,6 +257,7 @@ pub fn client_receive_commands(
                 pending_state.entities = entities.clone();
                 net_stats.last_sync_entity_count = entities.len() as u32;
                 net_stats.pending_spawns = pending_spawns.spawns.len() as u32;
+                net_stats.pending_despawns = pending_spawns.despawns.len() as u32;
             }
             ServerMessage::BuildingSync { buildings, .. } => {
                 pending_buildings
@@ -271,9 +272,11 @@ pub fn client_receive_commands(
             }
             ServerMessage::EntitySpawn { spawns, .. } => {
                 pending_spawns.spawns.extend(spawns.iter().cloned());
+                net_stats.pending_spawns = pending_spawns.spawns.len() as u32;
             }
             ServerMessage::EntityDespawn { net_ids, .. } => {
                 pending_spawns.despawns.extend(net_ids.iter().copied());
+                net_stats.pending_despawns = pending_spawns.despawns.len() as u32;
             }
             ServerMessage::WorldBaseline { baseline, .. } => {
                 pending_baseline.baseline = Some(baseline.clone());
@@ -306,8 +309,13 @@ pub fn client_receive_commands(
 pub fn client_apply_relayed_inputs(
     mut commands: Commands,
     net_map: Res<EntityNetMap>,
+    registry: Res<BlueprintRegistry>,
     mut unit_states: Query<&mut UnitState>,
     mut task_queues: Query<&mut TaskQueue, With<Unit>>,
+    mut training_buildings: Query<
+        (&mut TrainingQueue, &EntityKind, Option<&BuildingLevel>),
+        With<Building>,
+    >,
     mut next_task_id: ResMut<NextTaskId>,
     read_transforms: Query<&GlobalTransform>,
     mut pending_inputs: ResMut<PendingRelayedInputs>,
@@ -320,8 +328,10 @@ pub fn client_apply_relayed_inputs(
             &net_map,
             &mut unit_states,
             &mut task_queues,
+            &mut training_buildings,
             &mut next_task_id,
             &read_transforms,
+            &registry,
         );
     }
 }
@@ -342,14 +352,15 @@ pub fn client_apply_state_sync(
 ) {
     let seq = pending_state.latest_seq;
     let entities = std::mem::take(&mut pending_state.entities);
+    let total = entities.len();
     if entities.is_empty() {
         return;
     }
 
     building_sync.net_stats.net_map_size = net_map.to_ecs.len() as u32;
+    building_sync.net_stats.last_sync_entity_count = total as u32;
     let mut matched = 0u32;
     let mut unmatched = 0u32;
-    let total = entities.len();
     for snap in &entities {
         let Some(&ecs_entity) = net_map.to_ecs.get(&snap.net_id) else {
             unmatched += 1;
@@ -435,6 +446,7 @@ pub fn client_apply_state_sync(
             }
         }
     }
+    building_sync.net_stats.last_state_unmatched = unmatched;
 
     if seq % 50 == 1 {
         let msg_text = format!(
@@ -455,12 +467,21 @@ pub fn client_apply_state_sync(
             None,
         );
     }
+    if unmatched > 0 || total > 500 {
+        warn!(
+            "Client state sync pressure seq={} total={} unmatched={} net_map={} pending_spawns={} pending_despawns={}",
+            seq,
+            total,
+            unmatched,
+            building_sync.net_stats.net_map_size,
+            building_sync.net_stats.pending_spawns,
+            building_sync.net_stats.pending_despawns,
+        );
+    }
 }
 
 pub fn client_apply_building_sync(
     net_map: Res<EntityNetMap>,
-    factions: Query<&Faction>,
-    active_player: Res<ActivePlayer>,
     mut pending_buildings: ResMut<PendingBuildingSync>,
     mut building_sync: BuildingSyncParams,
 ) {
@@ -469,9 +490,6 @@ pub fn client_apply_building_sync(
         let Some(&ecs_entity) = net_map.to_ecs.get(&bsnap.net_id) else {
             continue;
         };
-        if is_local_entity(ecs_entity, &factions, &active_player) {
-            continue;
-        }
         if let Some(level) = bsnap.level {
             if let Ok(mut bl) = building_sync.building_levels.get_mut(ecs_entity) {
                 bl.0 = level;
@@ -484,8 +502,8 @@ pub fn client_apply_building_sync(
                     .set_elapsed(std::time::Duration::from_secs_f32(duration * progress));
             }
         }
-        if let Some(ref queue_names) = bsnap.training_queue {
-            if let Ok(mut tq) = building_sync.training_q.get_mut(ecs_entity) {
+        if let Ok(mut tq) = building_sync.training_q.get_mut(ecs_entity) {
+            if let Some(ref queue_names) = bsnap.training_queue {
                 tq.queue = queue_names
                     .iter()
                     .filter_map(|name| parse_entity_kind(name))
@@ -496,16 +514,22 @@ pub fn client_apply_building_sync(
                         timer.set_elapsed(std::time::Duration::from_secs_f32(duration * progress));
                     }
                 }
+            } else {
+                tq.queue.clear();
+                tq.timer = None;
             }
         }
-        if let Some(recipe_idx) = bsnap.active_recipe {
-            if let Ok(mut ps) = building_sync.production_q.get_mut(ecs_entity) {
+        if let Ok(mut ps) = building_sync.production_q.get_mut(ecs_entity) {
+            if let Some(recipe_idx) = bsnap.active_recipe {
                 ps.active_recipe = Some(recipe_idx as usize);
                 if let Some(progress) = bsnap.production_progress {
                     let duration = ps.progress_timer.duration().as_secs_f32();
                     ps.progress_timer
                         .set_elapsed(std::time::Duration::from_secs_f32(duration * progress));
                 }
+            } else {
+                ps.active_recipe = None;
+                ps.progress_timer.reset();
             }
         }
     }
@@ -674,6 +698,7 @@ pub fn client_interpolate_remote_units(
 pub fn client_apply_entity_sync(
     mut commands: Commands,
     mut pending: ResMut<PendingNetSpawns>,
+    mut net_stats: ResMut<NetStats>,
     net_map: Res<EntityNetMap>,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
@@ -682,6 +707,11 @@ pub fn client_apply_entity_sync(
     unit_models: Option<Res<UnitModelAssets>>,
     existing_with_id: Query<(Entity, &NetworkId)>,
 ) {
+    net_stats.pending_spawns = pending.spawns.len() as u32;
+    net_stats.pending_despawns = pending.despawns.len() as u32;
+    net_stats.last_spawn_batch = 0;
+    net_stats.last_despawn_batch = 0;
+
     // ── Handle spawns (batched: max 8 per frame to avoid WASM stalls) ──
     if !pending.spawns.is_empty() {
         let mut known_ids: std::collections::HashSet<u32> =
@@ -732,6 +762,8 @@ pub fn client_apply_entity_sync(
             known_ids.insert(spawn_data.net_id);
             spawned += 1;
         }
+        net_stats.last_spawn_batch = spawned;
+        net_stats.pending_spawns = pending.spawns.len() as u32;
         if spawned > 0 || skipped_known > 0 || skipped_parse > 0 {
             info!(
                 "Client entity sync: {} spawned, {} already known, {} parse failures (pending remaining: {})",
@@ -750,6 +782,8 @@ pub fn client_apply_entity_sync(
                 removed += 1;
             }
         }
+        net_stats.last_despawn_batch = removed;
+        net_stats.pending_despawns = pending.despawns.len() as u32;
         if removed > 0 {
             info!("Client despawned {} entities from host", removed);
         }

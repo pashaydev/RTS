@@ -1,10 +1,61 @@
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy_matchbox::prelude::*;
+use game_state::message::{ClientMessage, InputCommand, PlayerInput};
 
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::buildings;
 use crate::components::*;
+use crate::multiplayer::{ClientNetState, NetRole};
+use crate::net_bridge::EntityNetMap;
 use crate::theme;
+
+#[derive(SystemParam)]
+pub(crate) struct OnlineInputParams<'w> {
+    net_role: Res<'w, NetRole>,
+    client_state: Option<Res<'w, ClientNetState>>,
+    matchbox_socket: Option<ResMut<'w, MatchboxSocket>>,
+    net_map: Option<Res<'w, EntityNetMap>>,
+    time: Res<'w, Time>,
+}
+
+fn stance_to_net_u8(stance: UnitStance) -> u8 {
+    match stance {
+        UnitStance::Passive => 0,
+        UnitStance::Defensive => 1,
+        UnitStance::Aggressive => 2,
+    }
+}
+
+fn send_online_input_to_host(
+    client: &ClientNetState,
+    socket: &mut MatchboxSocket,
+    time: &Time,
+    entity_ids: Vec<u32>,
+    commands: Vec<InputCommand>,
+) {
+    if commands.is_empty() {
+        return;
+    }
+
+    let seq = {
+        let mut s = client.seq.lock().unwrap();
+        *s += 1;
+        *s
+    };
+    let msg = ClientMessage::Input {
+        seq,
+        timestamp: time.elapsed_secs_f64(),
+        input: PlayerInput {
+            player_id: client.player_id as u32,
+            tick: 0,
+            entity_ids,
+            commands,
+        },
+    };
+    crate::multiplayer::matchbox_transport::send_to_host(socket, &msg);
+}
 
 // ── Build button handler ──
 
@@ -104,6 +155,7 @@ pub fn handle_build_buttons(
 
 pub fn handle_train_buttons(
     interactions: Query<(&Interaction, &TrainButton), Changed<Interaction>>,
+    mut online: OnlineInputParams,
     mut all_resources: ResMut<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
     carried_totals: Res<CarriedResourceTotals>,
@@ -142,6 +194,35 @@ pub fn handle_train_buttons(
         let player_res = all_resources.get(&active_player.0);
         let carried = carried_totals.get(&active_player.0);
         if !bp.cost.can_afford_with_carried(player_res, carried) {
+            continue;
+        }
+
+        if *online.net_role == NetRole::Client {
+            let (Some(client), Some(ref mut socket), Some(net_map)) = (
+                online.client_state.as_ref(),
+                online.matchbox_socket.as_mut(),
+                online.net_map.as_ref(),
+            ) else {
+                continue;
+            };
+
+            let Some(building_entity) = selected_buildings.iter().next() else {
+                continue;
+            };
+            let Some(&building_id) = net_map.to_net.get(&building_entity) else {
+                continue;
+            };
+
+            send_online_input_to_host(
+                client,
+                socket,
+                &online.time,
+                Vec::new(),
+                vec![InputCommand::Train {
+                    building_id,
+                    kind: kind.to_index(),
+                }],
+            );
             continue;
         }
 
@@ -481,6 +562,7 @@ pub fn handle_drop_cargo_button(
 pub fn handle_rally_point_button(
     mut commands: Commands,
     interactions: Query<&Interaction, (Changed<Interaction>, With<RallyPointButton>)>,
+    mut online: OnlineInputParams,
     mut rally_mode: ResMut<RallyPointMode>,
     mouse: Res<ButtonInput<MouseButton>>,
     camera_q: Query<(&Camera, &GlobalTransform)>,
@@ -514,7 +596,30 @@ pub fn handle_rally_point_button(
         let world_pos = ray.get_point(dist);
 
         for entity in &selected_buildings {
-            commands.entity(entity).insert(RallyPoint(world_pos));
+            if *online.net_role == NetRole::Client {
+                let (Some(client), Some(ref mut socket), Some(net_map)) = (
+                    online.client_state.as_ref(),
+                    online.matchbox_socket.as_mut(),
+                    online.net_map.as_ref(),
+                ) else {
+                    continue;
+                };
+                let Some(&building_id) = net_map.to_net.get(&entity) else {
+                    continue;
+                };
+                send_online_input_to_host(
+                    client,
+                    socket,
+                    &online.time,
+                    Vec::new(),
+                    vec![InputCommand::SetRallyPoint {
+                        building_id,
+                        position: [world_pos.x, world_pos.y, world_pos.z],
+                    }],
+                );
+            } else {
+                commands.entity(entity).insert(RallyPoint(world_pos));
+            }
         }
         rally_mode.0 = false;
     }
@@ -1410,7 +1515,8 @@ pub fn handle_stop_button(
 pub fn handle_cycle_stance_button(
     interactions: Query<&Interaction, (Changed<Interaction>, With<CycleStanceButton>)>,
     mut commands: Commands,
-    selected_units: Query<(Entity, &Faction), (With<Unit>, With<Selected>)>,
+    mut online: OnlineInputParams,
+    selected_units: Query<(Entity, &Faction, Option<&UnitStance>), (With<Unit>, With<Selected>)>,
     active_player: Res<ActivePlayer>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
@@ -1421,7 +1527,46 @@ pub fn handle_cycle_stance_button(
         }
         ui_clicked.0 = 2;
         ui_press.0 = true;
-        for (entity, faction) in &selected_units {
+
+        if *online.net_role == NetRole::Client {
+            let (Some(client), Some(ref mut socket), Some(net_map)) = (
+                online.client_state.as_ref(),
+                online.matchbox_socket.as_mut(),
+                online.net_map.as_ref(),
+            ) else {
+                continue;
+            };
+
+            let mut entity_ids = Vec::new();
+            let mut next_stance = None;
+            for (entity, faction, stance) in &selected_units {
+                if *faction != active_player.0 {
+                    continue;
+                }
+                let Some(&net_id) = net_map.to_net.get(&entity) else {
+                    continue;
+                };
+                entity_ids.push(net_id);
+                if next_stance.is_none() {
+                    next_stance = Some(stance.copied().unwrap_or(UnitStance::Defensive).cycle());
+                }
+            }
+            let Some(stance) = next_stance else {
+                continue;
+            };
+            send_online_input_to_host(
+                client,
+                socket,
+                &online.time,
+                entity_ids,
+                vec![InputCommand::SetStance {
+                    stance: stance_to_net_u8(stance),
+                }],
+            );
+            continue;
+        }
+
+        for (entity, faction, _) in &selected_units {
             if *faction != active_player.0 {
                 continue;
             }

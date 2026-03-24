@@ -4,6 +4,7 @@ use bevy::prelude::*;
 
 use crate::components::*;
 use crate::theme;
+use crate::ui::core::components as ui_components;
 use crate::ui::core::fonts::{self, UiFonts};
 use crate::ui::core::text_input::ScrollablePanel;
 
@@ -93,27 +94,16 @@ pub fn spawn_styled_button(
     fonts: &UiFonts,
 ) -> Entity {
     let bg = if accent {
-        theme::ACCENT
+        ui_components::UiTone::Accent
     } else {
-        theme::BTN_PRIMARY
+        ui_components::UiTone::Neutral
     };
 
     let mut entity_commands = commands.spawn((
         marker,
         Button,
-        ButtonAnimState::new(bg.to_srgba().to_f32_array()),
-        ButtonStyle::Filled,
-        Node {
-            width: Val::Px(240.0),
-            height: Val::Px(44.0),
-            justify_content: JustifyContent::Center,
-            align_items: AlignItems::Center,
-            margin: UiRect::vertical(Val::Px(4.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            ..default()
-        },
-        BackgroundColor(bg),
-        BorderColor::all(Color::NONE),
+        ui_components::button_node(240.0, 44.0),
+        ui_components::filled_button_chrome(bg),
     ));
     if accent {
         entity_commands.insert((
@@ -163,13 +153,8 @@ pub fn spawn_page_header<B: Bundle>(
                 .spawn((
                     back_marker,
                     Button,
-                    ButtonAnimState::new([0.0, 0.0, 0.0, 0.0]),
-                    ButtonStyle::Ghost,
-                    Node {
-                        padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::NONE),
+                    ui_components::compact_button_node(12.0, 6.0),
+                    ui_components::ghost_button_chrome(ui_components::UiTone::Neutral),
                 ))
                 .with_children(|btn| {
                     btn.spawn((
@@ -284,11 +269,6 @@ pub fn spawn_selector_row(
 
             for (i, &opt) in options.iter().enumerate() {
                 let is_selected = i == selected;
-                let bg = if is_selected {
-                    theme::ACCENT
-                } else {
-                    theme::BTN_PRIMARY
-                };
                 let text_color = if is_selected {
                     Color::WHITE
                 } else {
@@ -298,20 +278,12 @@ pub fn spawn_selector_row(
                 let mut btn = parent.spawn((
                     MenuSelector { field, index: i },
                     Button,
-                    ButtonAnimState::new(bg.to_srgba().to_f32_array()),
-                    ButtonStyle::Filled,
-                    Node {
-                        padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
-                        margin: UiRect::horizontal(Val::Px(2.0)),
-                        border: UiRect::all(Val::Px(1.0)),
-                        ..default()
-                    },
-                    BackgroundColor(bg),
-                    BorderColor::all(if is_selected {
-                        Color::srgba(0.29, 0.62, 1.0, 0.3)
+                    ui_components::compact_button_node_with_margin(14.0, 7.0, 2.0),
+                    if is_selected {
+                        ui_components::filled_button_chrome(ui_components::UiTone::Accent)
                     } else {
-                        Color::NONE
-                    }),
+                        ui_components::filled_button_chrome(ui_components::UiTone::Neutral)
+                    },
                 ));
                 if is_selected {
                     btn.insert(SelectedOption);
@@ -366,17 +338,8 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Enti
                         max_len: 45,
                     },
                     Button,
-                    Node {
-                        width: Val::Px(280.0),
-                        height: Val::Px(32.0),
-                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
-                        border: UiRect::all(Val::Px(1.0)),
-                        align_items: AlignItems::Center,
-                        overflow: Overflow::clip(),
-                        ..default()
-                    },
-                    BackgroundColor(theme::INPUT_BG),
-                    BorderColor::all(theme::INPUT_BORDER),
+                    ui_components::input_node(280.0, 32.0),
+                    ui_components::input_chrome(),
                 ))
                 .with_children(|input| {
                     input.spawn((
@@ -404,14 +367,12 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Enti
                 .spawn((
                     RandomNameButton,
                     Button,
-                    ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
-                    ButtonStyle::Ghost,
-                    Node {
-                        padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
-                        margin: UiRect::left(Val::Px(6.0)),
-                        ..default()
+                    {
+                        let mut node = ui_components::compact_button_node(10.0, 6.0);
+                        node.margin = UiRect::left(Val::Px(6.0));
+                        node
                     },
-                    BackgroundColor(Color::NONE),
+                    ui_components::ghost_button_chrome(ui_components::UiTone::Neutral),
                 ))
                 .with_children(|btn| {
                     btn.spawn((

@@ -210,8 +210,10 @@ fn steer_avoidance(
     >,
     buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<Unit>)>,
 ) {
-    let unit_avoidance_radius = 2.5;
-    let unit_strength = 10.0;
+    let unit_avoidance_radius = 3.5;
+    let unit_strength = 12.0;
+    let idle_strength = 18.0; // stronger push when units are stationary
+    let hard_push_radius = 1.2; // very close units get a hard instant push
     let wall_avoidance_radius = 3.5;
     let wall_strength = 12.0;
     let building_avoidance_radius = 1.5; // extra margin beyond footprint
@@ -225,6 +227,7 @@ fn steer_avoidance(
         let my_pos = transform.translation;
         let mut separation = Vec3::ZERO;
         let is_moving = move_target.is_some();
+        let effective_strength = if is_moving { unit_strength } else { idle_strength };
 
         // Determine which building (if any) this unit is trying to reach
         let my_target_building = target_building(unit_state, attack_target);
@@ -242,7 +245,17 @@ fn steer_avoidance(
             let diff = my_pos - *other_pos;
             let flat_diff = Vec3::new(diff.x, 0.0, diff.z);
             let dist = flat_diff.length();
-            if dist > 0.01 && dist < unit_avoidance_radius {
+            if dist < 0.01 {
+                // Nearly perfectly overlapping — push in a deterministic direction based on entity IDs
+                let angle = (entity.to_bits().wrapping_sub(other_e.to_bits()) % 360) as f32
+                    * std::f32::consts::TAU
+                    / 360.0;
+                separation += Vec3::new(angle.cos(), 0.0, angle.sin()) * 2.0;
+            } else if dist < hard_push_radius {
+                // Very close — strong quadratic push to prevent stacking
+                let weight = ((hard_push_radius - dist) / hard_push_radius).powi(2) * 3.0 + 1.0;
+                separation += flat_diff.normalize() * weight;
+            } else if dist < unit_avoidance_radius {
                 let weight = (unit_avoidance_radius - dist) / unit_avoidance_radius;
                 separation += flat_diff.normalize() * weight;
             }
@@ -290,7 +303,15 @@ fn steer_avoidance(
         }
 
         if separation.length_squared() > 0.0 {
-            transform.translation += separation * unit_strength * time.delta_secs();
+            // Cap separation to avoid teleporting
+            let max_sep = 15.0 * time.delta_secs();
+            let sep_vec = separation * effective_strength * time.delta_secs();
+            let sep_len = sep_vec.length();
+            if sep_len > max_sep {
+                transform.translation += sep_vec * (max_sep / sep_len);
+            } else {
+                transform.translation += sep_vec;
+            }
         }
     }
 }
@@ -385,9 +406,9 @@ fn move_units(
                     if let Some(mut smoothing) = opt_smoothing {
                         smoothing.current_speed = 0.0;
                     }
-                    // Small random offset to prevent units stacking on exact same point
-                    let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 0.6;
-                    let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 0.6;
+                    // Random offset to prevent units stacking on exact same point
+                    let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 2.0;
+                    let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 2.0;
                     transform.translation.x += spread_x;
                     transform.translation.z += spread_z;
                     commands
@@ -400,8 +421,8 @@ fn move_units(
                 if let Some(mut smoothing) = opt_smoothing {
                     smoothing.current_speed = 0.0;
                 }
-                let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 0.6;
-                let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 0.6;
+                let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 2.0;
+                let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 2.0;
                 transform.translation.x += spread_x;
                 transform.translation.z += spread_z;
                 commands

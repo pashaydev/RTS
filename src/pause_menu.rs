@@ -1,4 +1,4 @@
-use bevy::ecs::message::MessageWriter;
+use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
 
 use crate::components::*;
@@ -7,6 +7,7 @@ use crate::multiplayer::{HostNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
 use crate::theme;
 use crate::ui::fonts::UiFonts;
+use crate::ui::core::interactions::UiClickEvent;
 
 pub struct PauseMenuPlugin;
 
@@ -356,7 +357,8 @@ fn spawn_overlay_button(
 
 fn handle_pause_buttons(
     mut commands: Commands,
-    interactions: Query<(&Interaction, &PauseMenuButton), Changed<Interaction>>,
+    mut click_events: MessageReader<UiClickEvent>,
+    buttons: Query<&PauseMenuButton>,
     mut overlay: ResMut<InGameOverlay>,
     mut next_state: ResMut<NextState<AppState>>,
     mut exit: MessageWriter<AppExit>,
@@ -376,10 +378,10 @@ fn handle_pause_buttons(
     ),
 ) {
     let (net_role, host_state, mut matchbox_socket, time) = net;
-    for (interaction, btn) in &interactions {
-        if *interaction != Interaction::Pressed {
+    for event in click_events.read() {
+        let Ok(btn) = buttons.get(event.entity) else {
             continue;
-        }
+        };
         ui_clicked.0 = 2;
 
         match btn.0 {

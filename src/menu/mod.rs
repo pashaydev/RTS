@@ -225,6 +225,7 @@ impl Plugin for MenuPlugin {
                 Update,
                 (
                     text_input::text_input_system,
+                    text_input::animate_text_input_chrome,
                     text_input::text_input_cursor_blink,
                     systems::random_name_system,
                 )

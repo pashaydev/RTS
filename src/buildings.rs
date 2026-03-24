@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use bevy::ecs::system::SystemParam;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -12,6 +13,14 @@ use crate::components::*;
 use crate::ground::HeightMap;
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
+
+#[derive(SystemParam)]
+struct PlacementOnlineParams<'w> {
+    net_role: Res<'w, crate::multiplayer::NetRole>,
+    client_state: Option<Res<'w, crate::multiplayer::ClientNetState>>,
+    matchbox_socket: Option<ResMut<'w, bevy_matchbox::prelude::MatchboxSocket>>,
+    time: Res<'w, Time>,
+}
 
 /// Spawn a line of wall posts and segments between the given points.
 /// Returns all spawned entities (posts + segments).
@@ -111,6 +120,173 @@ pub fn biome_requirement_text(kind: EntityKind) -> Option<&'static str> {
         EntityKind::OilRig => Some("Oil Rig must be placed on Water"),
         _ => Some("Cannot place on Water"),
     }
+}
+
+pub fn try_queue_build_order_authoritative(
+    commands: &mut Commands,
+    kind: EntityKind,
+    build_pos: Vec3,
+    faction: Faction,
+    all_resources: &mut AllPlayerResources,
+    base_state: &FactionBaseState,
+    carried_totals: &CarriedResourceTotals,
+    pending_drains: &mut PendingCarriedDrains,
+    registry: &BlueprintRegistry,
+    all_completed: &AllCompletedBuildings,
+    biome_map: Option<&BiomeMap>,
+    faction_ages: &crate::ages::FactionAges,
+    height_map: &HeightMap,
+    existing_buildings: &Query<
+        (&Transform, &BuildingFootprint, &Faction, &EntityKind),
+        (With<Building>, Without<GhostBuilding>),
+    >,
+    workers: &Query<
+        (
+            Entity,
+            &Transform,
+            &UnitState,
+            &Faction,
+            &EntityKind,
+            Option<&PendingBuildOrder>,
+        ),
+        With<Unit>,
+    >,
+) -> Result<(), String> {
+    if matches!(kind, EntityKind::WallSegment | EntityKind::WallPost | EntityKind::Gatehouse) {
+        return Err("This building uses a specialized placement flow.".to_string());
+    }
+
+    let bp = registry.get(kind);
+    let new_footprint = footprint_for_kind(kind);
+    let has_base_started = base_state.is_founded(&faction)
+        || existing_buildings.iter().any(|(_, _, building_faction, building_kind)| {
+            *building_faction == faction && *building_kind == EntityKind::Base
+        })
+        || workers.iter().any(|(_, _, _, worker_faction, _, pending_order)| {
+            *worker_faction == faction
+                && pending_order.is_some_and(|order| order.kind == EntityKind::Base)
+        });
+
+    if kind == EntityKind::Base && has_base_started {
+        return Err("Base is already being founded.".to_string());
+    }
+
+    let prereq_met = if let Some(ref bd) = bp.building {
+        match bd.prerequisite {
+            None => true,
+            Some(prereq_kind) => {
+                if prereq_kind == EntityKind::Base {
+                    base_state.is_founded(&faction) || all_completed.has(&faction, prereq_kind)
+                } else {
+                    all_completed.has(&faction, prereq_kind)
+                }
+            }
+        }
+    } else {
+        true
+    };
+    if !prereq_met {
+        return Err("Prerequisite not met.".to_string());
+    }
+
+    let required_age = crate::ages::required_age_for_building(kind);
+    let current_age = faction_ages.get_age(&faction);
+    if current_age < required_age {
+        return Err(format!("Requires {}", required_age.display_name()));
+    }
+
+    if let Some(biome_map) = biome_map {
+        if !is_biome_valid_for(kind, biome_map.get_biome(build_pos.x, build_pos.z)) {
+            return Err(
+                biome_requirement_text(kind)
+                    .unwrap_or("Invalid biome for building placement")
+                    .to_string(),
+            );
+        }
+    }
+
+    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost) {
+        const MAX_BUILDING_SLOPE: f32 = 0.5;
+        let slope = height_map.max_slope_under_footprint(build_pos.x, build_pos.z, new_footprint);
+        if slope > MAX_BUILDING_SLOPE {
+            return Err("Ground is too steep here.".to_string());
+        }
+    }
+
+    for (building_tf, existing_fp, _, _) in existing_buildings {
+        let dx = building_tf.translation.x - build_pos.x;
+        let dz = building_tf.translation.z - build_pos.z;
+        if (dx * dx + dz * dz).sqrt() < existing_fp.0 + new_footprint {
+            return Err("Building footprint is blocked.".to_string());
+        }
+    }
+
+    let half_map = height_map.half_map;
+    if build_pos.x.abs() > half_map - 5.0 || build_pos.z.abs() > half_map - 5.0 {
+        return Err("Too close to the edge of the map.".to_string());
+    }
+
+    let mut best_worker: Option<(Entity, f32)> = None;
+    for (w_entity, w_tf, w_state, w_faction, w_kind, _) in workers {
+        if *w_kind != EntityKind::Worker || *w_faction != faction {
+            continue;
+        }
+        let available = matches!(
+            w_state,
+            UnitState::Idle
+                | UnitState::Gathering(_)
+                | UnitState::ReturningToDeposit { .. }
+                | UnitState::Depositing { .. }
+                | UnitState::WaitingForStorage { .. }
+                | UnitState::Moving(_)
+        );
+        if !available {
+            continue;
+        }
+        let dist = w_tf.translation.distance(build_pos);
+        if best_worker.map_or(true, |(_, best_dist)| dist < best_dist) {
+            best_worker = Some((w_entity, dist));
+        }
+    }
+
+    let Some((worker_entity, _)) = best_worker else {
+        return Err("No workers available!".to_string());
+    };
+
+    let player_res = all_resources.get(&faction);
+    let carried = carried_totals.get(&faction);
+    if !bp.cost.can_afford_with_carried(player_res, carried) {
+        return Err("Not enough resources.".to_string());
+    }
+
+    let player_res_mut = all_resources.get_mut(&faction);
+    let deficits = bp.cost.deduct_with_carried(player_res_mut);
+    let drain = SpendFromCarried {
+        faction,
+        amounts: deficits,
+    };
+    if drain.has_deficit() {
+        pending_drains.drains.push(drain);
+    }
+
+    commands
+        .entity(worker_entity)
+        .remove::<MoveTarget>()
+        .remove::<AttackTarget>()
+        .insert(UnitState::MovingToPlot(build_pos))
+        .insert(TaskSource::Manual)
+        .insert(PendingBuildOrder {
+            kind,
+            position: build_pos,
+            faction,
+        })
+        .insert(MoveTarget(build_pos));
+    commands
+        .entity(worker_entity)
+        .entry::<TaskQueue>()
+        .and_modify(|mut tq| tq.queue.clear());
+
+    Ok(())
 }
 
 pub struct BuildingsPlugin;
@@ -707,6 +883,7 @@ fn confirm_placement(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
     mut placement: ResMut<BuildingPlacementState>,
+    mut online: PlacementOnlineParams,
     mut all_resources: ResMut<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
     base_state: Res<FactionBaseState>,
@@ -715,26 +892,29 @@ fn confirm_placement(
     registry: Res<BlueprintRegistry>,
     extras: (Res<AllCompletedBuildings>, Option<Res<BiomeMap>>, Res<crate::ages::FactionAges>),
     height_map: Res<HeightMap>,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    ui_interactions: Query<&Interaction, With<Node>>,
-    existing_buildings: Query<
-        (&Transform, &BuildingFootprint, &Faction, &EntityKind),
-        (With<Building>, Without<GhostBuilding>),
-    >,
-    workers: Query<
-        (
-            Entity,
-            &Transform,
-            &UnitState,
-            &Faction,
-            &EntityKind,
-            Option<&PendingBuildOrder>,
-        ),
-        With<Unit>,
-    >,
+    queries: (
+        Query<(&Camera, &GlobalTransform)>,
+        Query<&Window, With<PrimaryWindow>>,
+        Query<&Interaction, With<Node>>,
+        Query<
+            (&Transform, &BuildingFootprint, &Faction, &EntityKind),
+            (With<Building>, Without<GhostBuilding>),
+        >,
+        Query<
+            (
+                Entity,
+                &Transform,
+                &UnitState,
+                &Faction,
+                &EntityKind,
+                Option<&PendingBuildOrder>,
+            ),
+            With<Unit>,
+        >,
+    ),
 ) {
     let (all_completed, biome_map, faction_ages) = extras;
+    let (camera_q, windows, ui_interactions, existing_buildings, workers) = queries;
     let mode = placement.mode;
     let Some(kind) = placement_kind(mode) else {
         return;
@@ -875,6 +1055,41 @@ fn confirm_placement(
     let player_res = all_resources.get(&faction);
     let carried = carried_totals.get(&faction);
     if !bp.cost.can_afford_with_carried(player_res, carried) {
+        return;
+    }
+
+    if *online.net_role == crate::multiplayer::NetRole::Client {
+        let (Some(client), Some(ref mut socket)) =
+            (online.client_state.as_ref(), online.matchbox_socket.as_mut())
+        else {
+            return;
+        };
+        let seq = {
+            let mut s = client.seq.lock().unwrap();
+            *s += 1;
+            *s
+        };
+        let msg = game_state::message::ClientMessage::Input {
+            seq,
+            timestamp: online.time.elapsed_secs_f64(),
+            input: game_state::message::PlayerInput {
+                player_id: client.player_id as u32,
+                tick: 0,
+                entity_ids: Vec::new(),
+                commands: vec![game_state::message::InputCommand::Build {
+                    kind: kind.to_index(),
+                    position: [build_pos.x, build_pos.y, build_pos.z],
+                }],
+            },
+        };
+        crate::multiplayer::matchbox_transport::send_to_host(socket, &msg);
+
+        if let Some(ghost) = placement.preview_entity {
+            commands.entity(ghost).despawn();
+        }
+        placement.mode = PlacementMode::None;
+        placement.preview_entity = None;
+        placement.hint_text = None;
         return;
     }
 

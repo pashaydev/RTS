@@ -932,7 +932,6 @@ fn worker_ai_system(
     vfx_assets: Option<Res<VfxAssets>>,
     net_role: Res<crate::multiplayer::NetRole>,
     active_player: Res<ActivePlayer>,
-    ai_controlled: Res<AiControlledFactions>,
     mut workers: Query<
         (
             Entity,
@@ -985,16 +984,9 @@ fn worker_ai_system(
         mut task_queue,
     ) in &mut workers
     {
-        // Client: only process local player's workers; remote workers driven by state sync
+        // Clients only simulate their local faction's worker logic.
+        // The host remains authoritative for all factions' economy state.
         if *net_role == crate::multiplayer::NetRole::Client && *worker_faction != active_player.0 {
-            continue;
-        }
-        // Host: skip remote human players' workers — only run auto-behavior for
-        // local player and AI-controlled factions. Remote humans make their own decisions.
-        if *net_role == crate::multiplayer::NetRole::Host
-            && *worker_faction != active_player.0
-            && !ai_controlled.factions.contains(worker_faction)
-        {
             continue;
         }
         if *kind != EntityKind::Worker {
@@ -2643,8 +2635,6 @@ fn auto_assign_workers_system(
     time: Res<Time>,
     mut timer: Local<Option<Timer>>,
     net_role: Res<crate::multiplayer::NetRole>,
-    active_player: Res<ActivePlayer>,
-    ai_controlled: Res<AiControlledFactions>,
     mut processors: Query<
         (Entity, &Transform, &ResourceProcessor, &BuildingState, &Faction, &mut AssignedWorkers),
         With<Building>,
@@ -2669,13 +2659,6 @@ fn auto_assign_workers_system(
         &mut processors
     {
         if *state != BuildingState::Complete {
-            continue;
-        }
-        // Host: skip auto-assign for remote human players' buildings
-        if *net_role == crate::multiplayer::NetRole::Host
-            && *building_faction != active_player.0
-            && !ai_controlled.factions.contains(building_faction)
-        {
             continue;
         }
         let slots = processor.max_workers as usize;
