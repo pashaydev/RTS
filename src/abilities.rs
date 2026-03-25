@@ -54,7 +54,15 @@ fn process_ability_casts(
         &Faction,
         &EntityKind,
     )>,
-    mut targets_health: Query<(&Transform, &mut Health, Option<&ArmorType>, Option<&EntityKind>), Without<CastingAbility>>,
+    mut targets_health: Query<
+        (
+            &Transform,
+            &mut Health,
+            Option<&ArmorType>,
+            Option<&EntityKind>,
+        ),
+        Without<CastingAbility>,
+    >,
     factions: Query<&Faction>,
 ) {
     let Some(vfx) = vfx_assets else { return };
@@ -129,10 +137,8 @@ fn process_ability_casts(
                             },
                             Mesh3d(vfx.sphere_mesh.clone()),
                             MeshMaterial3d(fireball_mat),
-                            Transform::from_translation(
-                                caster_tf.translation + Vec3::Y * 1.5,
-                            )
-                            .with_scale(Vec3::splat(0.35)),
+                            Transform::from_translation(caster_tf.translation + Vec3::Y * 1.5)
+                                .with_scale(Vec3::splat(0.35)),
                             NotShadowCaster,
                             NotShadowReceiver,
                         ));
@@ -303,7 +309,15 @@ fn aoe_damage_at(
     damage: f32,
     damage_type: DamageType,
     falloff: bool,
-    targets: &mut Query<(&Transform, &mut Health, Option<&ArmorType>, Option<&EntityKind>), Without<CastingAbility>>,
+    targets: &mut Query<
+        (
+            &Transform,
+            &mut Health,
+            Option<&ArmorType>,
+            Option<&EntityKind>,
+        ),
+        Without<CastingAbility>,
+    >,
     factions: &Query<&Faction>,
     vfx: &VfxAssets,
     materials: &mut Assets<StandardMaterial>,
@@ -457,10 +471,7 @@ fn spawn_veterancy_indicators(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    units: Query<
-        (Entity, &Experience, &Children),
-        Changed<Experience>,
-    >,
+    units: Query<(Entity, &Experience, &Children), Changed<Experience>>,
     indicator_q: Query<Entity, With<VeterancyIndicator>>,
     children_q: Query<&Children>,
 ) {

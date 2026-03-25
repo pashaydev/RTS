@@ -6,8 +6,8 @@ use crate::fog::FogTweakSettings;
 use crate::multiplayer::{HostNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
 use crate::theme;
-use crate::ui::fonts::UiFonts;
 use crate::ui::core::interactions::UiClickEvent;
+use crate::ui::fonts::UiFonts;
 
 pub struct PauseMenuPlugin;
 
@@ -18,15 +18,11 @@ impl Plugin for PauseMenuPlugin {
             .init_resource::<StatsTimer>()
             .add_systems(
                 Update,
-                handle_pause_buttons
-                    .run_if(in_state(AppState::InGame)),
+                handle_pause_buttons.run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
-                (
-                    handle_escape_key,
-                    update_spectator_stats_display,
-                )
+                (handle_escape_key, update_spectator_stats_display)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
@@ -299,9 +295,18 @@ fn spawn_host_end_confirm_content(commands: &mut Commands, panel: Entity, fonts:
         .id();
     commands.entity(panel).add_child(body);
 
-    let cancel_btn = spawn_overlay_button(commands, "Cancel", PauseAction::CancelHostEnd, false, fonts);
-    let confirm_btn = spawn_overlay_button(commands, "End Match", PauseAction::ConfirmHostEnd, true, fonts);
-    commands.entity(panel).add_children(&[cancel_btn, confirm_btn]);
+    let cancel_btn =
+        spawn_overlay_button(commands, "Cancel", PauseAction::CancelHostEnd, false, fonts);
+    let confirm_btn = spawn_overlay_button(
+        commands,
+        "End Match",
+        PauseAction::ConfirmHostEnd,
+        true,
+        fonts,
+    );
+    commands
+        .entity(panel)
+        .add_children(&[cancel_btn, confirm_btn]);
 }
 
 fn spawn_overlay_button(
@@ -446,7 +451,9 @@ fn handle_pause_buttons(
             }
             PauseAction::ConfirmHostEnd => {
                 if *net_role == NetRole::Host {
-                    if let (Some(host), Some(ref mut socket)) = (host_state.as_ref(), matchbox_socket.as_mut()) {
+                    if let (Some(host), Some(ref mut socket)) =
+                        (host_state.as_ref(), matchbox_socket.as_mut())
+                    {
                         broadcast_host_shutdown(host, socket, &time);
                     }
                 }
@@ -484,7 +491,11 @@ fn handle_pause_buttons(
     }
 }
 
-fn broadcast_host_shutdown(host: &HostNetState, socket: &mut bevy_matchbox::prelude::MatchboxSocket, time: &Time) {
+fn broadcast_host_shutdown(
+    host: &HostNetState,
+    socket: &mut bevy_matchbox::prelude::MatchboxSocket,
+    time: &Time,
+) {
     use game_state::message::{GameEvent, ServerMessage};
 
     let seq = {
@@ -504,11 +515,7 @@ fn broadcast_host_shutdown(host: &HostNetState, socket: &mut bevy_matchbox::prel
 
 // ── Death Screen ──
 
-fn spawn_death_screen(
-    commands: &mut Commands,
-    fonts: &UiFonts,
-    faction_stats: &FactionStats,
-) {
+fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, faction_stats: &FactionStats) {
     let root = commands
         .spawn((
             DeathScreenRoot,
@@ -702,18 +709,12 @@ fn spawn_death_screen(
 
     let menu_btn = spawn_overlay_button(commands, "Main Menu", PauseAction::MainMenu, false, fonts);
     let spec_btn = spawn_overlay_button(commands, "Spectate", PauseAction::Spectate, true, fonts);
-    commands
-        .entity(btn_row)
-        .add_children(&[menu_btn, spec_btn]);
+    commands.entity(btn_row).add_children(&[menu_btn, spec_btn]);
 }
 
 // ── Spectator HUD ──
 
-fn spawn_spectator_hud(
-    commands: &mut Commands,
-    fonts: &UiFonts,
-    faction_stats: &FactionStats,
-) {
+fn spawn_spectator_hud(commands: &mut Commands, fonts: &UiFonts, faction_stats: &FactionStats) {
     let root = commands
         .spawn((
             SpectatorHudRoot,
@@ -762,14 +763,12 @@ fn spawn_spectator_hud(
             .unwrap_or(0);
 
         let stat = commands
-            .spawn((
-                Node {
-                    flex_direction: FlexDirection::Row,
-                    align_items: AlignItems::Center,
-                    column_gap: Val::Px(4.0),
-                    ..default()
-                },
-            ))
+            .spawn((Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(4.0),
+                ..default()
+            },))
             .id();
 
         let swatch = commands
@@ -838,9 +837,8 @@ fn update_faction_stats(
     for faction in Faction::PLAYERS.iter() {
         let unit_count = units.iter().filter(|f| **f == *faction).count() as u32;
         let building_count = buildings.iter().filter(|f| **f == *faction).count() as u32;
-        let eliminated = stats_timer.game_start.is_finished()
-            && unit_count == 0
-            && building_count == 0;
+        let eliminated =
+            stats_timer.game_start.is_finished() && unit_count == 0 && building_count == 0;
 
         faction_stats.stats.insert(
             *faction,

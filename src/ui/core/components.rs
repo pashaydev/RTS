@@ -3,12 +3,7 @@ use bevy::prelude::*;
 use crate::components::{ButtonAnimState, ButtonStyle};
 use crate::theme;
 
-pub type UiButtonChrome = (
-    ButtonAnimState,
-    ButtonStyle,
-    BackgroundColor,
-    BorderColor,
-);
+pub type UiButtonChrome = (ButtonAnimState, ButtonStyle, BackgroundColor, BorderColor);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiTone {
@@ -65,10 +60,7 @@ pub fn ghost_button_chrome(tone: UiTone) -> UiButtonChrome {
 
 /// Shadow color for a button tone at the given opacity (used on hover/press).
 pub fn tone_hover_shadow(tone: UiTone) -> Color {
-    tone_shadow(
-        tone,
-        if tone == UiTone::Neutral { 0.25 } else { 0.35 },
-    )
+    tone_shadow(tone, if tone == UiTone::Neutral { 0.25 } else { 0.35 })
 }
 
 pub fn button_node(width: f32, height: f32) -> Node {

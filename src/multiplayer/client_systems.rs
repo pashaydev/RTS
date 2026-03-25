@@ -608,11 +608,15 @@ pub fn client_apply_server_events(
                         Some(faction),
                     );
                     if let Some(vs) = victory_state.as_deref_mut() {
-                        vs.faction_status.insert(faction, crate::victory::FactionStatus::Eliminated);
+                        vs.faction_status
+                            .insert(faction, crate::victory::FactionStatus::Eliminated);
                     }
                 }
             }
-            GameEvent::Victory { winner_faction, winner_team } => {
+            GameEvent::Victory {
+                winner_faction,
+                winner_team,
+            } => {
                 if let Some(faction) = Faction::from_net_index(*winner_faction) {
                     info!("{} wins!", faction.display_name());
                     event_log.push_with_level(

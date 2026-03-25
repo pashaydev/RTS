@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 
+use super::core::fonts::UiFonts;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::theme;
-use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
-use super::core::fonts::UiFonts;
-use super::core::hud::HudReady;
 
 pub struct ResourcesWidgetPlugin;
 
@@ -15,7 +15,7 @@ impl Plugin for ResourcesWidgetPlugin {
             Update,
             spawn_resources_widget
                 .run_if(in_state(AppState::InGame))
-                .run_if(resource_added::<HudReady>),
+                .run_if(any_with_component::<MainHudRoot>),
         )
         .add_systems(
             Update,
@@ -30,11 +30,14 @@ fn spawn_resources_widget(
     icons: Res<IconAssets>,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
-    hud_ready: Res<HudReady>,
+    root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
+    let Ok(hud_root) = root_q.single() else {
+        return;
+    };
     let content = spawn_widget_frame(
         &mut commands,
-        hud_ready.hud_root,
+        hud_root,
         WidgetId::Resources,
         registry.slots.get(&WidgetId::Resources).unwrap(),
         registry.is_visible(WidgetId::Resources),
@@ -49,7 +52,10 @@ pub fn update_resource_texts(
     carried_totals: Res<CarriedResourceTotals>,
     all_units: Query<&Faction, With<Unit>>,
     all_training_queues: Query<(&Faction, &TrainingQueue), With<Building>>,
-    all_buildings_for_cap: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
+    all_buildings_for_cap: Query<
+        (&Faction, &EntityKind, &BuildingState, &BuildingLevel),
+        With<Building>,
+    >,
     mut text_sets: ParamSet<(
         Query<(&mut Text, &ResourceText)>,
         Query<&mut Text, With<PopulationText>>,
@@ -172,10 +178,7 @@ fn spawn_resource_row(
         ..default()
     });
     if is_processed {
-        row_cmds.insert((
-            ProcessedResourceRow(rt),
-            Visibility::Hidden,
-        ));
+        row_cmds.insert((ProcessedResourceRow(rt), Visibility::Hidden));
     }
     let row = row_cmds.id();
     commands.entity(parent).add_child(row);

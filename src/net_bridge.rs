@@ -102,12 +102,7 @@ fn assign_network_ids(
                     )
                 })
                 .unwrap_or((u32::MAX, u32::MAX, u32::MAX));
-            (
-                entity,
-                kind_sort_key(*kind),
-                faction_key,
-                transform_key,
-            )
+            (entity, kind_sort_key(*kind), faction_key, transform_key)
         })
         .collect();
 
@@ -116,11 +111,13 @@ fn assign_network_ids(
         .iter()
         .map(|(entity, transform)| {
             let transform_key = transform
-                .map(|t| (
-                    ordered_f32_bits(t.translation.x),
-                    ordered_f32_bits(t.translation.y),
-                    ordered_f32_bits(t.translation.z),
-                ))
+                .map(|t| {
+                    (
+                        ordered_f32_bits(t.translation.x),
+                        ordered_f32_bits(t.translation.y),
+                        ordered_f32_bits(t.translation.z),
+                    )
+                })
                 .unwrap_or((u32::MAX, u32::MAX, u32::MAX));
             (entity, usize::MAX, u8::MAX, transform_key)
         })
@@ -151,10 +148,7 @@ fn assign_network_ids(
 
 // ── System: rebuild_entity_net_map ───────────────────────────────────────────
 
-fn rebuild_entity_net_map(
-    mut net_map: ResMut<EntityNetMap>,
-    query: Query<(Entity, &NetworkId)>,
-) {
+fn rebuild_entity_net_map(mut net_map: ResMut<EntityNetMap>, query: Query<(Entity, &NetworkId)>) {
     net_map.to_net.clear();
     net_map.to_ecs.clear();
     for (entity, net_id) in &query {

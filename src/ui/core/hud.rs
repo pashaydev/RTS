@@ -4,7 +4,6 @@ use bevy::window::PrimaryWindow;
 use crate::components::*;
 use crate::theme;
 
-
 /// Root UI container that holds all widgets
 #[derive(Component)]
 pub struct UiRoot;
@@ -16,30 +15,7 @@ pub struct MainHudRoot;
 #[derive(Component)]
 pub struct PlacementHintLabel;
 
-#[derive(Resource)]
-pub struct PendingUiSpawn;
-
-/// Inserted when HUD root entities are ready.
-/// Widget plugins observe this to spawn their content.
-#[derive(Resource)]
-pub struct HudReady {
-    pub hud_root: Entity,
-    pub back_overlay_root: Entity,
-    pub front_overlay_root: Entity,
-}
-
-pub fn mark_pending_ui_spawn(mut commands: Commands) {
-    commands.insert_resource(PendingUiSpawn);
-}
-
-pub fn clear_pending_ui_spawn(mut commands: Commands) {
-    commands.remove_resource::<PendingUiSpawn>();
-}
-
-pub fn spawn_hud_roots(
-    mut commands: Commands,
-    existing_roots: Query<Entity, With<UiRoot>>,
-) {
+pub fn spawn_hud_roots(mut commands: Commands, existing_roots: Query<Entity, With<UiRoot>>) {
     if !existing_roots.is_empty() {
         return;
     }
@@ -49,6 +25,7 @@ pub fn spawn_hud_roots(
         .spawn((
             GameWorld,
             UiRoot,
+            DespawnOnExit(AppState::InGame),
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
@@ -134,14 +111,9 @@ pub fn spawn_hud_roots(
             Pickable::IGNORE,
         ))
         .id();
-    commands.entity(front_overlay_root).add_child(placement_hint);
-
-    // Insert HudReady so widget plugins can spawn their content
-    commands.insert_resource(HudReady {
-        hud_root,
-        back_overlay_root,
-        front_overlay_root,
-    });
+    commands
+        .entity(front_overlay_root)
+        .add_child(placement_hint);
 }
 
 pub fn compute_ui_mode(

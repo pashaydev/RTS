@@ -2,17 +2,17 @@ use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
 use rand::Rng;
 
+use super::helpers::*;
 use crate::components::*;
 use crate::theme;
-use crate::ui::fonts::UiFonts;
 use crate::ui::core::interactions::UiClickEvent;
-use super::helpers::*;
+use crate::ui::fonts::UiFonts;
 
-use super::*;
-use crate::multiplayer::{ClientNetState, HostNetState, LobbyState, NetRole};
+use super::multiplayer;
 #[cfg(not(target_arch = "wasm32"))]
 use super::multiplayer::start_hosting;
-use super::multiplayer;
+use super::*;
+use crate::multiplayer::{ClientNetState, HostNetState, LobbyState, NetRole};
 
 // ── Spawn / Cleanup ──
 
@@ -36,6 +36,7 @@ pub(crate) fn spawn_menu(
 
     commands.spawn((
         MenuCamera,
+        DespawnOnExit(AppState::MainMenu),
         Camera2d,
         Camera {
             clear_color: ClearColorConfig::Custom(theme::BG_MENU),
@@ -46,6 +47,7 @@ pub(crate) fn spawn_menu(
     let root = commands
         .spawn((
             MenuRoot,
+            DespawnOnExit(AppState::MainMenu),
             Node {
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
@@ -58,22 +60,32 @@ pub(crate) fn spawn_menu(
         ))
         .id();
 
-    let container = spawn_menu_panel(&mut commands);
-    commands.entity(root).add_child(container);
-    dispatch_page(&mut commands, container, &page, &config, &graphics, &fonts, &lobby, &net_role, &client_state);
-}
+    let panel = spawn_menu_panel(&mut commands);
+    let content = commands
+        .spawn((
+            MenuContentRoot,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(panel).add_child(content);
+    commands.entity(root).add_child(panel);
 
-pub(crate) fn cleanup_menu(
-    mut commands: Commands,
-    roots: Query<Entity, With<MenuRoot>>,
-    cameras: Query<Entity, With<MenuCamera>>,
-) {
-    for e in &roots {
-        commands.entity(e).try_despawn();
-    }
-    for e in &cameras {
-        commands.entity(e).try_despawn();
-    }
+    dispatch_page(
+        &mut commands,
+        content,
+        &page,
+        &config,
+        &graphics,
+        &fonts,
+        &lobby,
+        &net_role,
+        &client_state,
+    );
 }
 
 fn dispatch_page(
@@ -91,25 +103,25 @@ fn dispatch_page(
         MenuPage::Title => pages::spawn_title_page(commands, container, fonts),
         MenuPage::NewGame => pages::spawn_new_game_page(commands, container, config, fonts),
         MenuPage::Options => pages::spawn_options_page(commands, container, graphics, fonts),
-        MenuPage::Multiplayer => {
-            multiplayer::spawn_multiplayer_page(commands, container, fonts)
-        }
+        MenuPage::Multiplayer => multiplayer::spawn_multiplayer_page(commands, container, fonts),
         MenuPage::HostLobby => {
             multiplayer::spawn_host_lobby_page(commands, container, config, fonts, lobby)
         }
         MenuPage::JoinLobby => {
             let role = net_role.as_ref().map(|r| **r).unwrap_or(NetRole::Offline);
             let my_faction = client_state.as_ref().map(|c| c.my_faction);
-            multiplayer::spawn_join_lobby_page(commands, container, config, fonts, lobby, role, my_faction)
+            multiplayer::spawn_join_lobby_page(
+                commands, container, config, fonts, lobby, role, my_faction,
+            )
         }
     }
 }
 
 // ── Page Transition ──
 
-pub(crate) fn page_transition_system(
+pub(crate) fn refresh_menu_page(
     mut commands: Commands,
-    roots: Query<Entity, With<MenuRoot>>,
+    content_roots: Query<(Entity, Option<&Children>), With<MenuContentRoot>>,
     page: Res<MenuPage>,
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
@@ -118,26 +130,31 @@ pub(crate) fn page_transition_system(
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
 ) {
-    if roots.iter().next().is_none() {
-        let root = commands
-            .spawn((
-                MenuRoot,
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    flex_direction: FlexDirection::Column,
-                    ..default()
-                },
-                BackgroundColor(theme::BG_MENU),
-            ))
-            .id();
-
-        let container = spawn_menu_panel(&mut commands);
-        commands.entity(root).add_child(container);
-        dispatch_page(&mut commands, container, &page, &config, &graphics, &fonts, &lobby, &net_role, &client_state);
+    if !page.is_changed() {
+        return;
     }
+
+    let Ok((content_root, children)) = content_roots.single() else {
+        return;
+    };
+
+    if let Some(children) = children {
+        for child in children.iter() {
+            commands.entity(child).try_despawn();
+        }
+    }
+
+    dispatch_page(
+        &mut commands,
+        content_root,
+        &page,
+        &config,
+        &graphics,
+        &fonts,
+        &lobby,
+        &net_role,
+        &client_state,
+    );
 }
 
 // ── Menu Button Handler ──
@@ -151,7 +168,6 @@ pub(crate) fn handle_menu_buttons(
     graphics: Res<GraphicsSettings>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
-    roots: Query<Entity, With<MenuRoot>>,
     mut windows: Query<&mut Window>,
     host_state: Option<Res<HostNetState>>,
     client_state: Option<Res<ClientNetState>>,
@@ -163,18 +179,15 @@ pub(crate) fn handle_menu_buttons(
         match btn.0 {
             MenuAction::NewGame => {
                 *page = MenuPage::NewGame;
-                rebuild_menu(&mut commands, &roots);
             }
             MenuAction::Options => {
                 *page = MenuPage::Options;
-                rebuild_menu(&mut commands, &roots);
             }
             MenuAction::Quit => {
                 exit.write(AppExit::Success);
             }
             MenuAction::Back => {
                 *page = MenuPage::Title;
-                rebuild_menu(&mut commands, &roots);
             }
             MenuAction::StartGame => {
                 next_state.set(AppState::InGame);
@@ -191,11 +204,9 @@ pub(crate) fn handle_menu_buttons(
                     };
                 }
                 *page = MenuPage::Title;
-                rebuild_menu(&mut commands, &roots);
             }
             MenuAction::Multiplayer => {
                 *page = MenuPage::Multiplayer;
-                rebuild_menu(&mut commands, &roots);
             }
             MenuAction::HostGame => {
                 #[cfg(not(target_arch = "wasm32"))]
@@ -203,12 +214,10 @@ pub(crate) fn handle_menu_buttons(
                     multiplayer::prepare_multiplayer_host_config(&mut config);
                     start_hosting(&mut commands, &config);
                     *page = MenuPage::HostLobby;
-                    rebuild_menu(&mut commands, &roots);
                 }
             }
             MenuAction::JoinGame => {
                 *page = MenuPage::JoinLobby;
-                rebuild_menu(&mut commands, &roots);
             }
             MenuAction::ConnectToHost => {
                 // Handled by connect_to_host_system
@@ -226,7 +235,6 @@ pub(crate) fn handle_menu_buttons(
             }
             MenuAction::BackToMultiplayer => {
                 *page = MenuPage::Multiplayer;
-                rebuild_menu(&mut commands, &roots);
             }
             MenuAction::CopySessionCode => {
                 // Copy session code — handled separately
@@ -235,12 +243,10 @@ pub(crate) fn handle_menu_buttons(
                 #[cfg(not(target_arch = "wasm32"))]
                 multiplayer::stop_hosting(&mut commands, &host_state);
                 *page = MenuPage::Multiplayer;
-                rebuild_menu(&mut commands, &roots);
             }
             MenuAction::Disconnect => {
                 multiplayer::stop_client(&mut commands, &client_state);
                 *page = MenuPage::JoinLobby;
-                rebuild_menu(&mut commands, &roots);
             }
             MenuAction::CancelCountdown => {
                 commands.remove_resource::<super::CountdownState>();
@@ -249,12 +255,6 @@ pub(crate) fn handle_menu_buttons(
                 // Handled by kick_player_system
             }
         }
-    }
-}
-
-fn rebuild_menu(commands: &mut Commands, roots: &Query<Entity, With<MenuRoot>>) {
-    for e in roots {
-        commands.entity(e).try_despawn();
     }
 }
 
@@ -570,7 +570,8 @@ pub(crate) fn update_selector_visuals(
             }
             SelectorField::MapSeed => false,
             SelectorField::PreferredFaction => {
-                let pref_idx = preferred_faction.as_ref()
+                let pref_idx = preferred_faction
+                    .as_ref()
                     .map(|pf| pf.0.map_or(0, |v| v as usize + 1))
                     .unwrap_or(0);
                 selector.index == pref_idx
@@ -585,23 +586,31 @@ pub(crate) fn update_selector_visuals(
                 Color::srgb(0.85, 0.3, 0.65),
                 Color::srgb(0.95, 0.5, 0.15),
             ];
-            let color = team_colors.get(selector.index).copied().unwrap_or(team_colors[0]);
+            let color = team_colors
+                .get(selector.index)
+                .copied()
+                .unwrap_or(team_colors[0]);
             let new_bg = if should_be_selected {
                 color
             } else {
                 Color::srgba(0.15, 0.15, 0.15, 0.8)
             };
             *bg = BackgroundColor(new_bg);
-            commands.entity(entity).insert(BorderColor::all(if should_be_selected {
-                Color::WHITE
-            } else {
-                Color::NONE
-            }));
+            commands
+                .entity(entity)
+                .insert(BorderColor::all(if should_be_selected {
+                    Color::WHITE
+                } else {
+                    Color::NONE
+                }));
             if should_be_selected {
                 let c = color.to_srgba();
                 commands.entity(entity).insert(BoxShadow::new(
                     Color::srgba(c.red, c.green, c.blue, 0.5),
-                    Val::Px(0.0), Val::Px(0.0), Val::Px(0.0), Val::Px(3.0),
+                    Val::Px(0.0),
+                    Val::Px(0.0),
+                    Val::Px(0.0),
+                    Val::Px(3.0),
                 ));
             } else {
                 commands.entity(entity).remove::<BoxShadow>();
@@ -609,7 +618,11 @@ pub(crate) fn update_selector_visuals(
             if let Some(children) = children {
                 for child in children.iter() {
                     if let Ok(mut tc) = text_colors.get_mut(child) {
-                        tc.0 = if should_be_selected { Color::WHITE } else { color };
+                        tc.0 = if should_be_selected {
+                            Color::WHITE
+                        } else {
+                            color
+                        };
                     }
                 }
             }

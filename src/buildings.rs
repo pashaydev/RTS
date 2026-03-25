@@ -91,7 +91,10 @@ pub fn footprint_for_kind(kind: EntityKind) -> f32 {
 }
 
 pub fn uses_terrain_foundation(kind: EntityKind) -> bool {
-    !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost | EntityKind::OilRig)
+    !matches!(
+        kind,
+        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::OilRig
+    )
 }
 
 /// Returns the allowed biomes for a building kind, or `None` for default (any non-water).
@@ -152,20 +155,27 @@ pub fn try_queue_build_order_authoritative(
         With<Unit>,
     >,
 ) -> Result<(), String> {
-    if matches!(kind, EntityKind::WallSegment | EntityKind::WallPost | EntityKind::Gatehouse) {
+    if matches!(
+        kind,
+        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::Gatehouse
+    ) {
         return Err("This building uses a specialized placement flow.".to_string());
     }
 
     let bp = registry.get(kind);
     let new_footprint = footprint_for_kind(kind);
     let has_base_started = base_state.is_founded(&faction)
-        || existing_buildings.iter().any(|(_, _, building_faction, building_kind)| {
-            *building_faction == faction && *building_kind == EntityKind::Base
-        })
-        || workers.iter().any(|(_, _, _, worker_faction, _, pending_order)| {
-            *worker_faction == faction
-                && pending_order.is_some_and(|order| order.kind == EntityKind::Base)
-        });
+        || existing_buildings
+            .iter()
+            .any(|(_, _, building_faction, building_kind)| {
+                *building_faction == faction && *building_kind == EntityKind::Base
+            })
+        || workers
+            .iter()
+            .any(|(_, _, _, worker_faction, _, pending_order)| {
+                *worker_faction == faction
+                    && pending_order.is_some_and(|order| order.kind == EntityKind::Base)
+            });
 
     if kind == EntityKind::Base && has_base_started {
         return Err("Base is already being founded.".to_string());
@@ -197,11 +207,9 @@ pub fn try_queue_build_order_authoritative(
 
     if let Some(biome_map) = biome_map {
         if !is_biome_valid_for(kind, biome_map.get_biome(build_pos.x, build_pos.z)) {
-            return Err(
-                biome_requirement_text(kind)
-                    .unwrap_or("Invalid biome for building placement")
-                    .to_string(),
-            );
+            return Err(biome_requirement_text(kind)
+                .unwrap_or("Invalid biome for building placement")
+                .to_string());
         }
     }
 
@@ -422,11 +430,7 @@ fn cursor_terrain_hit(ray: Ray3d, height_map: &HeightMap) -> Option<Vec3> {
                 }
 
                 let hit = ray.get_point((low_t + high_t) * 0.5);
-                return Some(Vec3::new(
-                    hit.x,
-                    height_map.sample(hit.x, hit.z),
-                    hit.z,
-                ));
+                return Some(Vec3::new(hit.x, height_map.sample(hit.x, hit.z), hit.z));
             }
 
             prev_t = t;
@@ -495,7 +499,10 @@ fn wall_cost_from_points(
     let post_cost = &registry.get(EntityKind::WallPost).cost;
 
     for rt in ResourceType::RAW.iter() {
-        total.set(*rt, segments * seg_cost.get(*rt) + posts * post_cost.get(*rt));
+        total.set(
+            *rt,
+            segments * seg_cost.get(*rt) + posts * post_cost.get(*rt),
+        );
     }
     total
 }
@@ -958,7 +965,11 @@ fn confirm_placement(
     carried_totals: Res<CarriedResourceTotals>,
     mut pending_drains: ResMut<PendingCarriedDrains>,
     registry: Res<BlueprintRegistry>,
-    extras: (Res<AllCompletedBuildings>, Option<Res<BiomeMap>>, Res<crate::ages::FactionAges>),
+    extras: (
+        Res<AllCompletedBuildings>,
+        Option<Res<BiomeMap>>,
+        Res<crate::ages::FactionAges>,
+    ),
     height_map: Res<HeightMap>,
     queries: (
         Query<(&Camera, &GlobalTransform)>,
@@ -1014,13 +1025,17 @@ fn confirm_placement(
 
     let faction = active_player.0;
     let has_base_started = base_state.is_founded(&faction)
-        || existing_buildings.iter().any(|(_, _, building_faction, building_kind)| {
-            *building_faction == faction && *building_kind == EntityKind::Base
-        })
-        || workers.iter().any(|(_, _, _, worker_faction, _, pending_order)| {
-            *worker_faction == faction
-                && pending_order.is_some_and(|order| order.kind == EntityKind::Base)
-        });
+        || existing_buildings
+            .iter()
+            .any(|(_, _, building_faction, building_kind)| {
+                *building_faction == faction && *building_kind == EntityKind::Base
+            })
+        || workers
+            .iter()
+            .any(|(_, _, _, worker_faction, _, pending_order)| {
+                *worker_faction == faction
+                    && pending_order.is_some_and(|order| order.kind == EntityKind::Base)
+            });
 
     let is_initial_base_plot =
         matches!(mode, PlacementMode::PlotBase) && kind == EntityKind::Base && !has_base_started;
@@ -1054,10 +1069,7 @@ fn confirm_placement(
     let required_age = crate::ages::required_age_for_building(kind);
     let current_age = faction_ages.get_age(&faction);
     if current_age < required_age {
-        placement.hint_text = Some(format!(
-            "Requires {}",
-            required_age.display_name()
-        ));
+        placement.hint_text = Some(format!("Requires {}", required_age.display_name()));
         return;
     }
 
@@ -1127,9 +1139,10 @@ fn confirm_placement(
     }
 
     if *online.net_role == crate::multiplayer::NetRole::Client {
-        let (Some(client), Some(ref mut socket)) =
-            (online.client_state.as_ref(), online.matchbox_socket.as_mut())
-        else {
+        let (Some(client), Some(ref mut socket)) = (
+            online.client_state.as_ref(),
+            online.matchbox_socket.as_mut(),
+        ) else {
             return;
         };
         let seq = {
@@ -1473,7 +1486,11 @@ fn pending_build_arrival_system(
             continue;
         };
 
-        let flat_dist = Vec2::new(w_tf.translation.x - pending.position.x, w_tf.translation.z - pending.position.z).length();
+        let flat_dist = Vec2::new(
+            w_tf.translation.x - pending.position.x,
+            w_tf.translation.z - pending.position.z,
+        )
+        .length();
         if flat_dist > plot_range {
             continue; // Still walking
         }
@@ -1547,7 +1564,9 @@ fn build_site_preparation_system(
         )
         .length();
         if flat_dist > 4.0 {
-            commands.entity(worker_entity).insert(MoveTarget(prep.position));
+            commands
+                .entity(worker_entity)
+                .insert(MoveTarget(prep.position));
             continue;
         }
 
@@ -1567,7 +1586,9 @@ fn build_site_preparation_system(
         }
 
         if !prep.prep_timer.is_finished() {
-            commands.entity(worker_entity).insert(MoveTarget(prep.position));
+            commands
+                .entity(worker_entity)
+                .insert(MoveTarget(prep.position));
             continue;
         }
 
@@ -1767,9 +1788,7 @@ fn construction_progress_system(
             let current = construction_stage.as_ref().map(|s| s.0).unwrap_or(255);
             if current != desired_stage && desired_stage < 2 {
                 // Swap scene child to construction stage model
-                if let Some(stage_scene) =
-                    construction_assets.stages.get(&(*kind, desired_stage))
-                {
+                if let Some(stage_scene) = construction_assets.stages.get(&(*kind, desired_stage)) {
                     // Remove old scene child
                     if let Ok(children) = children_q.get(entity) {
                         for child in children.iter() {
@@ -1799,8 +1818,7 @@ fn construction_progress_system(
             }
         } else {
             // Non-GLTF: legacy scale lerp
-            let current_scale =
-                0.3 * base_scale + (base_scale - 0.3 * base_scale) * fraction;
+            let current_scale = 0.3 * base_scale + (base_scale - 0.3 * base_scale) * fraction;
             transform.scale = Vec3::splat(current_scale);
         }
 
@@ -1997,11 +2015,10 @@ fn training_queue_system(
         *used_by_faction.entry(*faction).or_default() += 1;
     }
 
-    let mut cap_by_faction: std::collections::HashMap<Faction, u32> =
-        Faction::PLAYERS
-            .into_iter()
-            .map(|faction| (faction, DEFAULT_UNIT_CAP))
-            .collect();
+    let mut cap_by_faction: std::collections::HashMap<Faction, u32> = Faction::PLAYERS
+        .into_iter()
+        .map(|faction| (faction, DEFAULT_UNIT_CAP))
+        .collect();
     for (faction, kind, state, level) in &cap_buildings {
         if *state != BuildingState::Complete {
             continue;
@@ -2010,7 +2027,9 @@ fn training_queue_system(
             unit_capacity_bonus_for_building(*kind, level.0);
     }
 
-    for (transform, building_kind, mut queue, rally_point, building_faction, building_level) in &mut buildings {
+    for (transform, building_kind, mut queue, rally_point, building_faction, building_level) in
+        &mut buildings
+    {
         if queue.queue.is_empty() {
             continue;
         }

@@ -99,8 +99,9 @@ impl DecodedServerPayload {
     fn to_debug_json(&self) -> String {
         match self {
             Self::Message(msg) => codec::to_debug_json(msg),
-            Self::Frame(frame) => serde_json::to_string(frame)
-                .unwrap_or_else(|_| debug_tap::payload_preview(&codec::encode(frame).unwrap_or_default())),
+            Self::Frame(frame) => serde_json::to_string(frame).unwrap_or_else(|_| {
+                debug_tap::payload_preview(&codec::encode(frame).unwrap_or_default())
+            }),
         }
     }
 }
@@ -121,7 +122,10 @@ pub fn poll_matchbox(
             for (peer, state) in changes {
                 match state {
                     PeerState::Connected => {
-                        debug_tap::record_info("matchbox_peer", format!("peer {:?} connected", peer));
+                        debug_tap::record_info(
+                            "matchbox_peer",
+                            format!("peer {:?} connected", peer),
+                        );
                         inbox.connected.push(peer);
                     }
                     PeerState::Disconnected => {
@@ -207,7 +211,10 @@ pub fn poll_matchbox(
                         bytes.len(),
                         Some(debug_tap::payload_preview(bytes)),
                     );
-                    warn!("Client: failed to decode server payload from peer {:?}", peer);
+                    warn!(
+                        "Client: failed to decode server payload from peer {:?}",
+                        peer
+                    );
                 }
             }
         }
@@ -275,8 +282,15 @@ pub fn broadcast_reliable(socket: &mut MatchboxSocket, msg: &ServerMessage) {
     let payload = Some(codec::to_debug_json(msg));
     for peer in peers {
         track_send(packet.len());
-        let _ = socket.channel_mut(RELIABLE_CH).try_send(packet.clone(), peer);
-        debug_tap::record_tx("matchbox_host_tx", detail.clone(), packet.len(), payload.clone());
+        let _ = socket
+            .channel_mut(RELIABLE_CH)
+            .try_send(packet.clone(), peer);
+        debug_tap::record_tx(
+            "matchbox_host_tx",
+            detail.clone(),
+            packet.len(),
+            payload.clone(),
+        );
     }
 }
 
@@ -413,8 +427,17 @@ mod tests {
     #[test]
     fn inbox_clear_empties_all_vecs() {
         let mut inbox = MatchboxInbox {
-            client_commands: vec![(1, ClientMessage::Ping { seq: 0, timestamp: 0.0 })],
-            server_messages: vec![ServerMessage::Pong { seq: 0, timestamp: 0.0 }],
+            client_commands: vec![(
+                1,
+                ClientMessage::Ping {
+                    seq: 0,
+                    timestamp: 0.0,
+                },
+            )],
+            server_messages: vec![ServerMessage::Pong {
+                seq: 0,
+                timestamp: 0.0,
+            }],
             connected: vec![test_peer(1)],
             disconnected: vec![test_peer(2)],
         };

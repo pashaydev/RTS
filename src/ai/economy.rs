@@ -197,8 +197,7 @@ pub fn ai_economy_system(
                     &all_units_q,
                     &cap_buildings_q,
                 ) {
-                    let deficits =
-                        bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
+                    let deficits = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
                     let drain = SpendFromCarried {
                         faction,
                         amounts: deficits,
@@ -367,8 +366,7 @@ pub fn ai_economy_system(
                     near,
                 );
 
-                let deficits =
-                    bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
+                let deficits = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
                 let drain = SpendFromCarried {
                     faction,
                     amounts: deficits,
@@ -418,8 +416,10 @@ pub fn ai_economy_system(
                     // Check if we can afford a wall segment
                     let wall_post_bp = registry.get(EntityKind::WallPost);
                     let wall_seg_bp = registry.get(EntityKind::WallSegment);
-                    let est_wood = wall_post_bp.cost.get(ResourceType::Wood) * 2 + wall_seg_bp.cost.get(ResourceType::Wood);
-                    let est_copper = wall_post_bp.cost.get(ResourceType::Copper) * 2 + wall_seg_bp.cost.get(ResourceType::Copper);
+                    let est_wood = wall_post_bp.cost.get(ResourceType::Wood) * 2
+                        + wall_seg_bp.cost.get(ResourceType::Wood);
+                    let est_copper = wall_post_bp.cost.get(ResourceType::Copper) * 2
+                        + wall_seg_bp.cost.get(ResourceType::Copper);
                     let pr_check = all_resources.get(&faction);
                     if pr_check.get(ResourceType::Wood) < est_wood
                         || pr_check.get(ResourceType::Copper) < est_copper
@@ -437,7 +437,8 @@ pub fn ai_economy_system(
                     let num_segs = (points.len() as u32).saturating_sub(1);
                     let mut total_cost = ResourceCost::default();
                     for rt in ResourceType::ALL.iter() {
-                        let amt = wall_post_bp.cost.get(*rt) * num_posts + wall_seg_bp.cost.get(*rt) * num_segs;
+                        let amt = wall_post_bp.cost.get(*rt) * num_posts
+                            + wall_seg_bp.cost.get(*rt) * num_segs;
                         if amt > 0 {
                             total_cost.set(*rt, amt);
                         }

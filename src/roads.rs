@@ -5,8 +5,8 @@ use std::collections::{BinaryHeap, HashSet};
 
 use crate::blueprints::EntityKind;
 use crate::components::{
-    AppState, Biome, BiomeMap, BuildSitePreparation, Building, BuildingFootprint,
-    BuildingState, Ground, MoveTarget, Unit,
+    AppState, Biome, BiomeMap, BuildSitePreparation, Building, BuildingFootprint, BuildingState,
+    Ground, MoveTarget, Unit,
 };
 use crate::ground::{foundation_radii, HeightMap};
 
@@ -239,13 +239,7 @@ fn seed_building_paths(
                 _ => continue,
             };
 
-            if let Some(path) = astar_grid(
-                start,
-                goal,
-                gs,
-                &height_map.heights,
-                &biome_map.data,
-            ) {
+            if let Some(path) = astar_grid(start, goal, gs, &height_map.heights, &biome_map.data) {
                 for &idx in &path {
                     traffic.intensity[idx] = traffic.intensity[idx].max(TRAFFIC_SEED).min(1.0);
 
@@ -286,7 +280,11 @@ fn recompute_foundation_terrain(
         Entity,
         (
             With<Building>,
-            Or<(Added<Building>, Changed<Transform>, Changed<BuildingFootprint>)>,
+            Or<(
+                Added<Building>,
+                Changed<Transform>,
+                Changed<BuildingFootprint>,
+            )>,
         ),
     >,
     changed_prep_sites: Query<Entity, Added<BuildSitePreparation>>,
@@ -412,19 +410,55 @@ fn update_terrain_mesh(
         for ix in 0..gs {
             let idx = iz * gs + ix;
             let h_self = new_heights[idx];
-            let h_left = if ix > 0 { new_heights[iz * gs + ix - 1] } else { h_self };
-            let h_right = if ix < gs - 1 { new_heights[iz * gs + ix + 1] } else { h_self };
-            let h_up = if iz > 0 { new_heights[(iz - 1) * gs + ix] } else { h_self };
-            let h_down = if iz < gs - 1 { new_heights[(iz + 1) * gs + ix] } else { h_self };
+            let h_left = if ix > 0 {
+                new_heights[iz * gs + ix - 1]
+            } else {
+                h_self
+            };
+            let h_right = if ix < gs - 1 {
+                new_heights[iz * gs + ix + 1]
+            } else {
+                h_self
+            };
+            let h_up = if iz > 0 {
+                new_heights[(iz - 1) * gs + ix]
+            } else {
+                h_self
+            };
+            let h_down = if iz < gs - 1 {
+                new_heights[(iz + 1) * gs + ix]
+            } else {
+                h_self
+            };
 
             // Extrapolate missing neighbors at edges (mirrors slope from the other side)
-            let hx0 = if ix > 0 { h_left } else { 2.0 * h_self - h_right };
-            let hx1 = if ix < gs - 1 { h_right } else { 2.0 * h_self - h_left };
+            let hx0 = if ix > 0 {
+                h_left
+            } else {
+                2.0 * h_self - h_right
+            };
+            let hx1 = if ix < gs - 1 {
+                h_right
+            } else {
+                2.0 * h_self - h_left
+            };
             let hz0 = if iz > 0 { h_up } else { 2.0 * h_self - h_down };
-            let hz1 = if iz < gs - 1 { h_down } else { 2.0 * h_self - h_up };
+            let hz1 = if iz < gs - 1 {
+                h_down
+            } else {
+                2.0 * h_self - h_up
+            };
 
-            let dx_span = if ix > 0 && ix < gs - 1 { 2.0 * step } else { step };
-            let dz_span = if iz > 0 && iz < gs - 1 { 2.0 * step } else { step };
+            let dx_span = if ix > 0 && ix < gs - 1 {
+                2.0 * step
+            } else {
+                step
+            };
+            let dz_span = if iz > 0 && iz < gs - 1 {
+                2.0 * step
+            } else {
+                step
+            };
 
             let nx = (hx0 - hx1) / dx_span;
             let nz = (hz0 - hz1) / dz_span;

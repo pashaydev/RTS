@@ -6,18 +6,19 @@ use game_state::codec;
 
 use crate::components::*;
 use crate::multiplayer::{
-    self, ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole,
+    self,
     matchbox_transport::{self, MatchboxInbox, PeerMap},
+    ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole,
 };
 use crate::theme;
 use crate::ui::core::text_input::{clipboard_read, clipboard_write};
 
 use super::super::*;
-use super::{
-    PendingGameStart, PendingLobbyBroadcast, DEFAULT_PORT,
-    first_open_multiplayer_slot, sync_multiplayer_slots_from_lobby,
-};
 use super::config::SerializableGameConfig;
+use super::{
+    first_open_multiplayer_slot, sync_multiplayer_slots_from_lobby, PendingGameStart,
+    PendingLobbyBroadcast, DEFAULT_PORT,
+};
 
 // ── Update Lobby UI ──
 
@@ -31,7 +32,10 @@ pub(crate) fn update_lobby_ui(
         Option<ResMut<MatchboxInbox>>,
     ),
     client_state: Option<ResMut<ClientNetState>>,
-    pending: (Option<Res<PendingGameStart>>, Option<Res<PendingLobbyBroadcast>>),
+    pending: (
+        Option<Res<PendingGameStart>>,
+        Option<Res<PendingLobbyBroadcast>>,
+    ),
     mut commands: Commands,
     mut next_state: ResMut<NextState<AppState>>,
     texts: (
@@ -41,7 +45,13 @@ pub(crate) fn update_lobby_ui(
     mut config: ResMut<GameSetupConfig>,
     lists: (
         Query<Entity, (With<HostIpList>, Without<HostIpListPopulated>)>,
-        Query<Entity, (With<DiscoveredHostsList>, Without<DiscoveredHostsListPopulated>)>,
+        Query<
+            Entity,
+            (
+                With<DiscoveredHostsList>,
+                Without<DiscoveredHostsListPopulated>,
+            ),
+        >,
     ),
     mut session_tokens: ResMut<multiplayer::SessionTokens>,
     roots: Query<Entity, With<MenuRoot>>,
@@ -65,9 +75,7 @@ pub(crate) fn update_lobby_ui(
         }
         if !lobby.all_ips.is_empty() {
             for ip_list_entity in &ip_list_q {
-                commands
-                    .entity(ip_list_entity)
-                    .insert(HostIpListPopulated);
+                commands.entity(ip_list_entity).insert(HostIpListPopulated);
                 for (ip, iface_name, is_vpn) in &lobby.all_ips {
                     let label = if *is_vpn {
                         format!("{} ({}) [VPN]", ip, iface_name)
@@ -158,9 +166,12 @@ pub(crate) fn update_lobby_ui(
     }
 
     // ── Host: poll matchbox for new peer connections and lobby messages ──
-    if let (Some(host), Some(ref mut socket), Some(ref mut peer_map), Some(ref mut inbox)) =
-        (host_state.as_ref(), socket.as_mut(), peer_map.as_mut(), inbox.as_mut())
-    {
+    if let (Some(host), Some(ref mut socket), Some(ref mut peer_map), Some(ref mut inbox)) = (
+        host_state.as_ref(),
+        socket.as_mut(),
+        peer_map.as_mut(),
+        inbox.as_mut(),
+    ) {
         // Update peers
         if let Ok(changes) = socket.try_update_peers() {
             for (peer, state) in &changes {
@@ -187,10 +198,16 @@ pub(crate) fn update_lobby_ui(
         let connected = std::mem::take(&mut inbox.connected);
         for peer in connected {
             let player_id = peer_map.assign(peer);
-            info!("New peer {:?} assigned player_id {} in lobby", peer, player_id);
+            info!(
+                "New peer {:?} assigned player_id {} in lobby",
+                peer, player_id
+            );
 
             let Some(slot_index) = first_open_multiplayer_slot(&config, &lobby) else {
-                warn!("Rejecting peer {:?}: no open multiplayer slots remain", peer);
+                warn!(
+                    "Rejecting peer {:?}: no open multiplayer slots remain",
+                    peer
+                );
                 continue;
             };
             let seat_index = slot_index as u8;
@@ -214,9 +231,7 @@ pub(crate) fn update_lobby_ui(
         for peer in disconnected {
             if let Some(player_id) = peer_map.remove_peer(&peer) {
                 info!("Player {} disconnected from lobby", player_id);
-                if let Some(player) =
-                    lobby.players.iter_mut().find(|p| p.player_id == player_id)
-                {
+                if let Some(player) = lobby.players.iter_mut().find(|p| p.player_id == player_id) {
                     player.connected = false;
                     lobby_changed = true;
                 }
@@ -228,7 +243,9 @@ pub(crate) fn update_lobby_ui(
         for (player_id, msg) in client_commands {
             match msg {
                 game_state::message::ClientMessage::JoinRequest {
-                    player_name, preferred_faction_index, ..
+                    player_name,
+                    preferred_faction_index,
+                    ..
                 } => {
                     if let Some(player) =
                         lobby.players.iter_mut().find(|p| p.player_id == player_id)
@@ -249,7 +266,9 @@ pub(crate) fn update_lobby_ui(
                                     && p.faction == Faction::PLAYERS[pref]
                             });
                         if slot_available {
-                            if let Some(player) = lobby.players.iter_mut().find(|p| p.player_id == player_id) {
+                            if let Some(player) =
+                                lobby.players.iter_mut().find(|p| p.player_id == player_id)
+                            {
                                 player.seat_index = pref as u8;
                                 player.faction = Faction::PLAYERS[pref];
                                 player.color_index = pref as u8;
@@ -257,9 +276,7 @@ pub(crate) fn update_lobby_ui(
                         }
                     }
 
-                    if let Some(player) =
-                        lobby.players.iter().find(|p| p.player_id == player_id)
-                    {
+                    if let Some(player) = lobby.players.iter().find(|p| p.player_id == player_id) {
                         let faction_index = Faction::PLAYERS
                             .iter()
                             .position(|f| *f == player.faction)
@@ -385,9 +402,7 @@ pub(crate) fn update_lobby_ui(
 
     // ── Client: detect dead connection ──
     if let Some(ref client) = client_state {
-        if client
-            .disconnected
-            .load(Ordering::Relaxed)
+        if client.disconnected.load(Ordering::Relaxed)
             && !matches!(lobby.status, LobbyStatus::Connected)
         {
             let error_msg = if matches!(lobby.status, LobbyStatus::Connecting) {
@@ -417,7 +432,10 @@ pub(crate) fn update_lobby_ui(
                         info!("Client connected to host peer {:?}", peer);
                         lobby.status = LobbyStatus::Connected;
                         commands.remove_resource::<ConnectionTimer>();
-                        commands.insert_resource(LobbyPingTimer(Timer::from_seconds(2.0, TimerMode::Repeating)));
+                        commands.insert_resource(LobbyPingTimer(Timer::from_seconds(
+                            2.0,
+                            TimerMode::Repeating,
+                        )));
                         for e in &roots {
                             commands.entity(e).try_despawn();
                         }
@@ -427,8 +445,7 @@ pub(crate) fn update_lobby_ui(
                         } else {
                             config.player_name.clone()
                         };
-                        let preferred = preferred_faction.as_ref()
-                            .and_then(|pf| pf.0);
+                        let preferred = preferred_faction.as_ref().and_then(|pf| pf.0);
                         let join_msg = game_state::message::ClientMessage::JoinRequest {
                             seq: 0,
                             timestamp: 0.0,
@@ -629,10 +646,9 @@ pub(crate) fn update_web_client_url(
     lobby: Res<LobbyState>,
     mut texts: Query<&mut Text, With<WebClientUrlText>>,
 ) {
-    let dist_exists = std::path::Path::new(
-        &std::env::var("DIST_DIR").unwrap_or_else(|_| "dist".to_string()),
-    )
-    .is_dir();
+    let dist_exists =
+        std::path::Path::new(&std::env::var("DIST_DIR").unwrap_or_else(|_| "dist".to_string()))
+            .is_dir();
 
     let display = if dist_exists && !lobby.all_ips.is_empty() {
         let ip = lobby
@@ -836,7 +852,11 @@ pub(crate) fn kick_player_system(
         let slot_index = kick_btn.0;
         let faction = Faction::PLAYERS[slot_index];
 
-        if let Some(player) = lobby.players.iter_mut().find(|p| p.faction == faction && p.connected) {
+        if let Some(player) = lobby
+            .players
+            .iter_mut()
+            .find(|p| p.faction == faction && p.connected)
+        {
             let player_id = player.player_id;
             player.connected = false;
             info!("Host kicked player {} from slot {}", player_id, slot_index);
@@ -868,14 +888,21 @@ pub(crate) fn lobby_ping_system(
     if !matches!(lobby.status, LobbyStatus::Connected) {
         return;
     }
-    let Some(ref client) = client_state else { return };
+    let Some(ref client) = client_state else {
+        return;
+    };
 
     if ping_timer.is_none() {
-        commands.insert_resource(LobbyPingTimer(Timer::from_seconds(2.0, TimerMode::Repeating)));
+        commands.insert_resource(LobbyPingTimer(Timer::from_seconds(
+            2.0,
+            TimerMode::Repeating,
+        )));
         return;
     }
 
-    let Some(ref mut timer) = ping_timer else { return };
+    let Some(ref mut timer) = ping_timer else {
+        return;
+    };
     timer.0.tick(time.delta());
     if timer.0.just_finished() {
         if let Some(ref mut socket) = socket {

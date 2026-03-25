@@ -296,10 +296,7 @@ fn manage_unit_labels(
     mut commands: Commands,
     icons: Res<IconAssets>,
     faction_colors: Res<FactionColors>,
-    units: Query<
-        (Entity, &EntityKind, &Faction, Has<Hovered>, Has<Selected>),
-        With<Unit>,
-    >,
+    units: Query<(Entity, &EntityKind, &Faction, Has<Hovered>, Has<Selected>), With<Unit>>,
     existing_labels: Query<(Entity, &UnitLabel)>,
 ) {
     let mut label_map = std::collections::HashMap::new();

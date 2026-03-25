@@ -56,8 +56,7 @@ fn discover_animation_players(
         }
 
         // Walk the hierarchy of the scene child to find AnimationPlayer
-        let Some(player_entity) =
-            find_animation_player(scene_entity, &children_q, &anim_players)
+        let Some(player_entity) = find_animation_player(scene_entity, &children_q, &anim_players)
         else {
             continue;
         };
@@ -110,10 +109,9 @@ fn discover_animation_players(
             },
         ));
 
-        commands.entity(player_entity).insert((
-            AnimationGraphHandle(graph),
-            AnimationTransitions::new(),
-        ));
+        commands
+            .entity(player_entity)
+            .insert((AnimationGraphHandle(graph), AnimationTransitions::new()));
 
         if let Some(node_idx) = idle_node {
             if let Ok(mut player) = anim_player_mut.get_mut(player_entity) {
@@ -211,11 +209,16 @@ fn drive_animations(
             AnimState::AttackA
         } else if matches!(
             patrol_kind,
-            Some(PatrolStateKind::Patrolling | PatrolStateKind::Chasing | PatrolStateKind::Returning)
+            Some(
+                PatrolStateKind::Patrolling | PatrolStateKind::Chasing | PatrolStateKind::Returning
+            )
         ) {
             AnimState::Walk
         } else if attack_windup.is_some() {
-            if matches!(kind, EntityKind::Mage | EntityKind::Priest | EntityKind::Demon) {
+            if matches!(
+                kind,
+                EntityKind::Mage | EntityKind::Priest | EntityKind::Demon
+            ) {
                 AnimState::CastA
             } else {
                 AnimState::AttackA
@@ -301,10 +304,7 @@ fn face_movement_direction(
     time: Res<Time>,
     zoom_level: Res<CameraZoomLevel>,
     mut queries: ParamSet<(
-        Query<
-            (Entity, &Transform),
-            (Or<(With<Unit>, With<Mob>)>, Without<FrustumCulled>),
-        >,
+        Query<(Entity, &Transform), (Or<(With<Unit>, With<Mob>)>, Without<FrustumCulled>)>,
         Query<
             (
                 Entity,
@@ -330,8 +330,15 @@ fn face_movement_direction(
         .map(|(e, tf)| (e, tf.translation))
         .collect();
 
-    for (entity, mut transform, move_target, nav_path, attack_target, patrol_state, idle_behavior) in
-        &mut queries.p1()
+    for (
+        entity,
+        mut transform,
+        move_target,
+        nav_path,
+        attack_target,
+        patrol_state,
+        idle_behavior,
+    ) in &mut queries.p1()
     {
         let target_pos = if let Some(at) = attack_target {
             if at.0 != entity {
@@ -386,8 +393,7 @@ fn face_movement_direction(
                     let (_, new_y, _) = transform.rotation.to_euler(EulerRot::YXZ);
                     let angular_delta = (new_y - prev_y).clamp(-0.12, 0.12);
                     if angular_delta.abs() > 0.005 {
-                        transform.rotation *=
-                            Quat::from_rotation_z(-angular_delta * 2.0);
+                        transform.rotation *= Quat::from_rotation_z(-angular_delta * 2.0);
                     }
                 }
             }
@@ -401,7 +407,12 @@ fn idle_fidget_system(
     zoom_level: Res<CameraZoomLevel>,
     mut query: Query<
         (&mut IdleBehavior, &Transform),
-        (With<Unit>, Without<MoveTarget>, Without<AttackTarget>, Without<FrustumCulled>),
+        (
+            With<Unit>,
+            Without<MoveTarget>,
+            Without<AttackTarget>,
+            Without<FrustumCulled>,
+        ),
     >,
 ) {
     // Only run fidget at Close detail
@@ -426,7 +437,8 @@ fn idle_fidget_system(
             continue;
         }
 
-        idle.fidget_timer.tick(std::time::Duration::from_secs_f32(dt));
+        idle.fidget_timer
+            .tick(std::time::Duration::from_secs_f32(dt));
         if idle.fidget_timer.just_finished() {
             // Pick a random direction to look at (3 units away)
             let angle = idle.breathing_phase * 7.3 + time.elapsed_secs() * 2.1;
@@ -443,7 +455,12 @@ fn idle_breathing_system(
     zoom_level: Res<CameraZoomLevel>,
     mut query: Query<
         (&mut IdleBehavior, &mut Transform),
-        (With<Unit>, Without<MoveTarget>, Without<AttackTarget>, Without<FrustumCulled>),
+        (
+            With<Unit>,
+            Without<MoveTarget>,
+            Without<AttackTarget>,
+            Without<FrustumCulled>,
+        ),
     >,
 ) {
     if zoom_level.detail != DetailLevel::Close {

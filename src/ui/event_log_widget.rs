@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 use std::collections::VecDeque;
 
+use super::core::fonts::UiFonts;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::hud::MainHudRoot;
 use crate::components::{ActivePlayer, AppState, Faction, TeamConfig};
 use crate::theme;
-use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
-use super::core::fonts::UiFonts;
-use super::core::hud::HudReady;
 
 pub struct EventLogWidgetPlugin;
 
@@ -18,7 +18,7 @@ impl Plugin for EventLogWidgetPlugin {
                 Update,
                 spawn_event_log_widget
                     .run_if(in_state(AppState::InGame))
-                    .run_if(resource_added::<HudReady>),
+                    .run_if(any_with_component::<MainHudRoot>),
             )
             .add_systems(
                 Update,
@@ -36,11 +36,14 @@ fn spawn_event_log_widget(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
-    hud_ready: Res<HudReady>,
+    root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
+    let Ok(hud_root) = root_q.single() else {
+        return;
+    };
     spawn_widget_frame(
         &mut commands,
-        hud_ready.hud_root,
+        hud_root,
         WidgetId::EventLog,
         registry.slots.get(&WidgetId::EventLog).unwrap(),
         registry.is_visible(WidgetId::EventLog),

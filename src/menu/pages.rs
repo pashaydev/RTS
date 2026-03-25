@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 
+use super::helpers::*;
 use crate::components::*;
 use crate::theme;
 use crate::ui::core::components as ui_components;
 use crate::ui::fonts::{self, UiFonts};
-use super::helpers::*;
 
 use super::*;
 
@@ -93,7 +93,13 @@ pub(crate) fn spawn_new_game_page(
     config: &GameSetupConfig,
     fonts: &UiFonts,
 ) {
-    spawn_page_header(commands, container, "NEW GAME", MenuButton(MenuAction::Back), fonts);
+    spawn_page_header(
+        commands,
+        container,
+        "NEW GAME",
+        MenuButton(MenuAction::Back),
+        fonts,
+    );
 
     spawn_animated_section_divider(commands, container, "PLAYER", fonts);
 
@@ -310,7 +316,13 @@ pub(crate) fn spawn_options_page(
     graphics: &GraphicsSettings,
     fonts: &UiFonts,
 ) {
-    spawn_page_header(commands, container, "OPTIONS", MenuButton(MenuAction::Back), fonts);
+    spawn_page_header(
+        commands,
+        container,
+        "OPTIONS",
+        MenuButton(MenuAction::Back),
+        fonts,
+    );
 
     spawn_animated_section_divider(commands, container, "GRAPHICS", fonts);
 
@@ -398,7 +410,9 @@ pub(crate) fn spawn_slot_card(
 ) {
     let slot = config.slots[slot_index];
     let faction_color = Faction::PLAYERS[slot_index].color();
-    let is_you = is_multiplayer && slot_index == config.local_player_slot && matches!(slot, SlotOccupant::Human);
+    let is_you = is_multiplayer
+        && slot_index == config.local_player_slot
+        && matches!(slot, SlotOccupant::Human);
     let faction_label = if is_you {
         format!("Player {} (YOU)", slot_index + 1)
     } else {
@@ -534,19 +548,15 @@ pub(crate) fn spawn_slot_card(
                     let current_team = config.player_teams[slot_index] as usize;
                     let team_colors = [
                         Color::srgb(0.9, 0.75, 0.2),  // T1: Gold
-                        Color::srgb(0.2, 0.75, 0.85),  // T2: Cyan
-                        Color::srgb(0.85, 0.3, 0.65),  // T3: Pink
-                        Color::srgb(0.95, 0.5, 0.15),  // T4: Orange
+                        Color::srgb(0.2, 0.75, 0.85), // T2: Cyan
+                        Color::srgb(0.85, 0.3, 0.65), // T3: Pink
+                        Color::srgb(0.95, 0.5, 0.15), // T4: Orange
                     ];
                     for ti in 0..4 {
                         let is_sel = ti == current_team;
                         let color = team_colors[ti];
                         let size = if is_sel { 24.0 } else { 20.0 };
-                        let border_color = if is_sel {
-                            Color::WHITE
-                        } else {
-                            Color::NONE
-                        };
+                        let border_color = if is_sel { Color::WHITE } else { Color::NONE };
                         let mut dot = row.spawn((
                             MenuSelector {
                                 field: SelectorField::SlotTeam(slot_index),
@@ -559,7 +569,11 @@ pub(crate) fn spawn_slot_card(
                                 node.border = UiRect::all(Val::Px(if is_sel { 2.0 } else { 1.0 }));
                                 node
                             },
-                            BackgroundColor(if is_sel { color } else { Color::srgba(0.15, 0.15, 0.15, 0.8) }),
+                            BackgroundColor(if is_sel {
+                                color
+                            } else {
+                                Color::srgba(0.15, 0.15, 0.15, 0.8)
+                            }),
                             BorderColor::all(border_color),
                         ));
                         if is_sel {

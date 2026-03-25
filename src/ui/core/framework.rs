@@ -4,9 +4,10 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use std::collections::HashMap;
 
-use crate::theme;
 use super::fonts::{self, UiFonts};
 use super::interactions::{UiClickEvent, UiInteractPhase, UiInteractState};
+use crate::components::AppState;
+use crate::theme;
 
 // ── Widget Identifiers ──
 
@@ -466,6 +467,7 @@ pub fn spawn_grid_overlay(mut commands: Commands, existing: Query<Entity, With<G
     commands
         .spawn((
             GridOverlay,
+            DespawnOnExit(AppState::InGame),
             Visibility::Hidden,
             ZIndex(9999),
             Pickable::IGNORE,
@@ -757,11 +759,14 @@ pub fn update_resize_handle_visuals(
     for (state, mut bg) in &mut handles {
         match state.phase {
             UiInteractPhase::Pressed => {
-                *bg = BackgroundColor(Color::srgba(0.29, 0.62, 1.0, 0.35 + 0.55 * state.hold_progress))
+                *bg = BackgroundColor(Color::srgba(
+                    0.29,
+                    0.62,
+                    1.0,
+                    0.35 + 0.55 * state.hold_progress,
+                ))
             }
-            UiInteractPhase::Hovered => {
-                *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.4))
-            }
+            UiInteractPhase::Hovered => *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.4)),
             UiInteractPhase::Idle | UiInteractPhase::Disabled => {
                 *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1))
             }

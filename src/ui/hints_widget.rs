@@ -9,12 +9,10 @@ pub struct HintsWidgetPlugin;
 
 impl Plugin for HintsWidgetPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<HintState>()
-            .add_systems(
-                Update,
-                (hints_system, idle_worker_notification_system)
-                    .run_if(in_state(AppState::InGame)),
-            );
+        app.init_resource::<HintState>().add_systems(
+            Update,
+            (hints_system, idle_worker_notification_system).run_if(in_state(AppState::InGame)),
+        );
     }
 }
 
@@ -81,31 +79,32 @@ pub fn hints_system(
             }
 
             // Spawn hint overlay
-            commands.spawn((
-                HintOverlay,
-                Node {
-                    position_type: PositionType::Absolute,
-                    top: Val::Px(10.0),
-                    left: Val::Percent(25.0),
-                    width: Val::Percent(50.0),
-                    padding: UiRect::all(Val::Px(10.0)),
-                    justify_content: JustifyContent::Center,
-                    border_radius: BorderRadius::all(Val::Px(8.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(0.1, 0.15, 0.25, 0.85)),
-                GlobalZIndex(50),
-            ))
-            .with_children(|parent| {
-                parent.spawn((
-                    Text::new(hint_text),
-                    TextFont {
-                        font_size: 16.0,
+            commands
+                .spawn((
+                    HintOverlay,
+                    Node {
+                        position_type: PositionType::Absolute,
+                        top: Val::Px(10.0),
+                        left: Val::Percent(25.0),
+                        width: Val::Percent(50.0),
+                        padding: UiRect::all(Val::Px(10.0)),
+                        justify_content: JustifyContent::Center,
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
                         ..default()
                     },
-                    TextColor(Color::srgb(0.9, 0.9, 0.5)),
-                ));
-            });
+                    BackgroundColor(Color::srgba(0.1, 0.15, 0.25, 0.85)),
+                    GlobalZIndex(50),
+                ))
+                .with_children(|parent| {
+                    parent.spawn((
+                        Text::new(hint_text),
+                        TextFont {
+                            font_size: 16.0,
+                            ..default()
+                        },
+                        TextColor(Color::srgb(0.9, 0.9, 0.5)),
+                    ));
+                });
             break;
         }
     }
@@ -146,28 +145,29 @@ pub fn idle_worker_notification_system(
         return;
     }
 
-    commands.spawn((
-        IdleWorkerButton,
-        Button,
-        Node {
-            position_type: PositionType::Absolute,
-            bottom: Val::Px(10.0),
-            right: Val::Px(10.0),
-            padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
-            border_radius: BorderRadius::all(Val::Px(6.0)),
-            ..default()
-        },
-        BackgroundColor(Color::srgba(0.8, 0.6, 0.1, 0.9)),
-        GlobalZIndex(40),
-    ))
-    .with_children(|parent| {
-        parent.spawn((
-            Text::new(format!("Idle Workers: {}", idle_count)),
-            TextFont {
-                font_size: 14.0,
+    commands
+        .spawn((
+            IdleWorkerButton,
+            Button,
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(10.0),
+                right: Val::Px(10.0),
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
-            TextColor(Color::WHITE),
-        ));
-    });
+            BackgroundColor(Color::srgba(0.8, 0.6, 0.1, 0.9)),
+            GlobalZIndex(40),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new(format!("Idle Workers: {}", idle_count)),
+                TextFont {
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+            ));
+        });
 }

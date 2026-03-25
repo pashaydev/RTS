@@ -13,7 +13,8 @@ use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
 pub(crate) struct JoinDiscoveryScan {
-    pub(super) rx: std::sync::Mutex<std::sync::mpsc::Receiver<Vec<crate::multiplayer::DiscoveredHost>>>,
+    pub(super) rx:
+        std::sync::Mutex<std::sync::mpsc::Receiver<Vec<crate::multiplayer::DiscoveredHost>>>,
 }
 
 #[allow(dead_code)]
@@ -36,7 +37,10 @@ pub(super) const WEB_SESSION_WS_PATH_PREFIX: &str = "/session";
 
 // ── Shared Helpers ──
 
-pub(super) fn first_open_multiplayer_slot(config: &GameSetupConfig, lobby: &LobbyState) -> Option<usize> {
+pub(super) fn first_open_multiplayer_slot(
+    config: &GameSetupConfig,
+    lobby: &LobbyState,
+) -> Option<usize> {
     (0..config.slots.len()).find(|&slot_index| {
         matches!(config.slots[slot_index], SlotOccupant::Open)
             && !lobby
@@ -46,7 +50,10 @@ pub(super) fn first_open_multiplayer_slot(config: &GameSetupConfig, lobby: &Lobb
     })
 }
 
-pub(super) fn sync_multiplayer_slots_from_lobby(config: &mut GameSetupConfig, lobby: &LobbyState) -> bool {
+pub(super) fn sync_multiplayer_slots_from_lobby(
+    config: &mut GameSetupConfig,
+    lobby: &LobbyState,
+) -> bool {
     let mut changed = false;
     for (slot_index, faction) in Faction::PLAYERS.iter().enumerate() {
         let occupied_by_human = lobby
@@ -86,29 +93,29 @@ pub(crate) fn prepare_multiplayer_host_config(config: &mut GameSetupConfig) {
 // ── Re-exports ──
 
 pub(crate) use networking::cleanup_network_on_enter_menu;
+pub(crate) use networking::connect_to_host_system;
+pub(crate) use networking::poll_lan_discovery_results_system;
+pub(crate) use networking::refresh_lan_hosts_system;
+pub(crate) use networking::select_discovered_host_system;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use networking::start_hosting;
+pub(crate) use networking::stop_client;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use networking::stop_hosting;
-pub(crate) use networking::stop_client;
-pub(crate) use networking::connect_to_host_system;
-pub(crate) use networking::refresh_lan_hosts_system;
-pub(crate) use networking::poll_lan_discovery_results_system;
-pub(crate) use networking::select_discovered_host_system;
 
-pub(crate) use pages::spawn_multiplayer_page;
 pub(crate) use pages::spawn_host_lobby_page;
 pub(crate) use pages::spawn_join_lobby_page;
+pub(crate) use pages::spawn_multiplayer_page;
 
-pub(crate) use lobby::update_lobby_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) use lobby::broadcast_lobby_update;
-pub(crate) use lobby::update_web_client_url;
-pub(crate) use lobby::copy_session_code_system;
-pub(crate) use lobby::paste_code_system;
 pub(crate) use lobby::clear_code_system;
-pub(crate) use lobby::copy_reset_system;
 pub(crate) use lobby::connection_timer_system;
+pub(crate) use lobby::copy_reset_system;
+pub(crate) use lobby::copy_session_code_system;
 pub(crate) use lobby::countdown_system;
 pub(crate) use lobby::kick_player_system;
 pub(crate) use lobby::lobby_ping_system;
+pub(crate) use lobby::paste_code_system;
+pub(crate) use lobby::update_lobby_ui;
+pub(crate) use lobby::update_web_client_url;

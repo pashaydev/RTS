@@ -141,8 +141,7 @@ impl GameSetupConfig {
             .iter()
             .enumerate()
             .map(|(i, &faction_idx)| {
-                let angle =
-                    2.0 * std::f32::consts::PI * i as f32 / total as f32 + rotation_offset;
+                let angle = 2.0 * std::f32::consts::PI * i as f32 / total as f32 + rotation_offset;
                 let x = angle.cos() * radius;
                 let z = angle.sin() * radius;
                 (Faction::PLAYERS[faction_idx], (x, z))
@@ -204,7 +203,6 @@ pub enum ShadowQuality {
     #[default]
     High,
 }
-
 
 #[derive(Resource, Clone, Debug, Serialize, Deserialize)]
 pub struct GraphicsSettings {
@@ -1083,7 +1081,6 @@ pub struct ModelAssets {
 #[derive(Component)]
 pub struct Decoration;
 
-
 #[derive(Component)]
 pub struct GrassChunk {
     pub chunk_x: i32,
@@ -1546,7 +1543,6 @@ impl TeamConfig {
     pub fn is_hostile(&self, a: &Faction, b: &Faction) -> bool {
         !self.is_allied(a, b)
     }
-
 }
 
 /// Which factions are AI-controlled (not human players).
@@ -1618,7 +1614,6 @@ pub enum AiPersonality {
     Economic,
     Supportive,
 }
-
 
 /// Relation of an AI faction to the human player.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -2157,7 +2152,10 @@ impl AbilityId {
 
     pub fn hotkey(self) -> &'static str {
         match self {
-            Self::KnightCharge | Self::MageFireball | Self::PriestHeal | Self::CatapultAoeBoulder => "Q",
+            Self::KnightCharge
+            | Self::MageFireball
+            | Self::PriestHeal
+            | Self::CatapultAoeBoulder => "Q",
             Self::MageFrostNova | Self::PriestHolySmite => "W",
         }
     }
@@ -2179,11 +2177,11 @@ pub struct UnitAbilities {
 
 impl UnitAbilities {
     pub fn new(abilities: Vec<AbilityId>) -> Self {
-        let cooldowns = abilities
-            .iter()
-            .map(|&id| (id, 0.0_f32))
-            .collect();
-        Self { abilities, cooldowns }
+        let cooldowns = abilities.iter().map(|&id| (id, 0.0_f32)).collect();
+        Self {
+            abilities,
+            cooldowns,
+        }
     }
 
     pub fn is_ready(&self, id: AbilityId) -> bool {
@@ -2668,7 +2666,14 @@ pub fn count_faction_queued_units<'a>(
 
 pub fn faction_unit_cap<'a>(
     faction: Faction,
-    buildings: impl IntoIterator<Item = (&'a Faction, &'a EntityKind, &'a BuildingState, &'a BuildingLevel)>,
+    buildings: impl IntoIterator<
+        Item = (
+            &'a Faction,
+            &'a EntityKind,
+            &'a BuildingState,
+            &'a BuildingLevel,
+        ),
+    >,
 ) -> u32 {
     DEFAULT_UNIT_CAP
         + buildings
@@ -2684,7 +2689,14 @@ pub fn faction_unit_cap_stats<'a>(
     faction: Faction,
     unit_factions: impl IntoIterator<Item = &'a Faction>,
     queues: impl IntoIterator<Item = (&'a Faction, &'a TrainingQueue)>,
-    buildings: impl IntoIterator<Item = (&'a Faction, &'a EntityKind, &'a BuildingState, &'a BuildingLevel)>,
+    buildings: impl IntoIterator<
+        Item = (
+            &'a Faction,
+            &'a EntityKind,
+            &'a BuildingState,
+            &'a BuildingLevel,
+        ),
+    >,
 ) -> UnitCapStats {
     UnitCapStats {
         used: count_faction_units(faction, unit_factions),
@@ -3271,7 +3283,10 @@ impl CameraZoomLevel {
         } else {
             DetailLevel::Far
         };
-        Self { distance: d, detail }
+        Self {
+            distance: d,
+            detail,
+        }
     }
 }
 

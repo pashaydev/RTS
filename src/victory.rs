@@ -13,17 +13,16 @@ pub struct VictoryPlugin;
 
 impl Plugin for VictoryPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(VictoryState::default())
-            .add_systems(
-                Update,
-                (
-                    victory_check_system,
-                    victory_ui_spawn_system,
-                    victory_ui_button_system,
-                )
-                    .chain()
-                    .run_if(in_state(AppState::InGame)),
-            );
+        app.insert_resource(VictoryState::default()).add_systems(
+            Update,
+            (
+                victory_check_system,
+                victory_ui_spawn_system,
+                victory_ui_button_system,
+            )
+                .chain()
+                .run_if(in_state(AppState::InGame)),
+        );
     }
 }
 
@@ -38,7 +37,9 @@ const CHECK_INTERVAL_SECS: f32 = 5.0;
 pub enum FactionStatus {
     Alive,
     /// Faction lost all bases; timer counts down before elimination.
-    GracePeriod { remaining: f32 },
+    GracePeriod {
+        remaining: f32,
+    },
     Eliminated,
 }
 
@@ -175,7 +176,7 @@ fn victory_check_system(
                     );
                 } else {
                     *remaining -= delta * CHECK_INTERVAL_SECS; // approximate: timer fires every CHECK_INTERVAL
-                    // Check if they can afford to rebuild
+                                                               // Check if they can afford to rebuild
                     let can_rebuild = all_resources
                         .resources
                         .get(&faction)
@@ -203,11 +204,11 @@ fn victory_check_system(
             Some(*faction),
         );
         if *net_role == NetRole::Host {
-            victory.pending_net_events.push(
-                game_state::message::GameEvent::FactionEliminated {
+            victory
+                .pending_net_events
+                .push(game_state::message::GameEvent::FactionEliminated {
                     faction_index: faction.to_net_index(),
-                },
-            );
+                });
         }
     }
 
@@ -239,12 +240,12 @@ fn victory_check_system(
             );
             if *net_role == NetRole::Host {
                 let wt = victory.winner_team;
-                victory.pending_net_events.push(
-                    game_state::message::GameEvent::Victory {
+                victory
+                    .pending_net_events
+                    .push(game_state::message::GameEvent::Victory {
                         winner_faction: winner.to_net_index(),
                         winner_team: wt,
-                    },
-                );
+                    });
             }
         }
     } else {
@@ -270,12 +271,12 @@ fn victory_check_system(
             );
             if *net_role == NetRole::Host {
                 let wt = victory.winner_team;
-                victory.pending_net_events.push(
-                    game_state::message::GameEvent::Victory {
+                victory
+                    .pending_net_events
+                    .push(game_state::message::GameEvent::Victory {
                         winner_faction: alive_factions[0].to_net_index(),
                         winner_team: wt,
-                    },
-                );
+                    });
             }
         }
     }
@@ -400,4 +401,3 @@ fn victory_ui_button_system(
         }
     }
 }
-

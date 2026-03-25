@@ -67,7 +67,12 @@ pub fn attach_interaction_state(
         (
             Added<Interaction>,
             Without<UiInteractState>,
-            Or<(With<Button>, With<WidgetDragHandle>, With<WidgetResizeHandle>, With<TextInputField>)>,
+            Or<(
+                With<Button>,
+                With<WidgetDragHandle>,
+                With<WidgetResizeHandle>,
+                With<TextInputField>,
+            )>,
         ),
     >,
 ) {
@@ -77,7 +82,9 @@ pub fn attach_interaction_state(
             behavior.emit_click = false;
         }
 
-        commands.entity(entity).insert((UiInteractState::default(), behavior));
+        commands
+            .entity(entity)
+            .insert((UiInteractState::default(), behavior));
     }
 }
 
@@ -85,7 +92,12 @@ pub fn update_interaction_states(
     time: Res<Time>,
     mut click_events: MessageWriter<UiClickEvent>,
     mut hold_events: MessageWriter<UiHoldCompleteEvent>,
-    mut query: Query<(Entity, &Interaction, &mut UiInteractState, &UiInteractBehavior)>,
+    mut query: Query<(
+        Entity,
+        &Interaction,
+        &mut UiInteractState,
+        &UiInteractBehavior,
+    )>,
 ) {
     let dt = time.delta_secs();
 

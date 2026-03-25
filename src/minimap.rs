@@ -1,12 +1,13 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
-use bevy::ui::RelativeCursorPosition;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::widget::NodeImageMode;
+use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
 
 use crate::components::*;
+use crate::ui::core::hud::MainHudRoot;
 
 const MINIMAP_TEX_SIZE: usize = 200;
 
@@ -43,7 +44,7 @@ impl Plugin for MinimapPlugin {
                 setup_minimap
                     .after(crate::ground::spawn_ground)
                     .run_if(in_state(AppState::InGame))
-                    .run_if(resource_exists::<crate::ui::core::hud::HudReady>),
+                    .run_if(any_with_component::<MainHudRoot>),
             )
             .add_systems(
                 Update,
@@ -56,7 +57,8 @@ impl Plugin for MinimapPlugin {
                     .in_set(MinimapSet)
                     .run_if(in_state(AppState::InGame))
                     .run_if(resource_exists::<MinimapTexture>),
-            );
+            )
+            .add_systems(OnExit(AppState::InGame), cleanup_minimap_state);
     }
 }
 
@@ -190,7 +192,10 @@ fn setup_minimap(
         warn!("Minimap: MinimapWidgetContent entity not found — HUD may not have spawned yet");
     }
     if let Ok((content_entity, mut content_node)) = content_q.single_mut() {
-        info!("Minimap: spawning image node inside widget content entity {:?}", content_entity);
+        info!(
+            "Minimap: spawning image node inside widget content entity {:?}",
+            content_entity
+        );
         content_node.padding = UiRect::ZERO;
         content_node.overflow = Overflow::clip();
 
@@ -214,6 +219,10 @@ fn setup_minimap(
 
 fn reset_minimap_interaction(mut interaction: ResMut<MinimapInteraction>) {
     interaction.clicked = false;
+}
+
+fn cleanup_minimap_state(mut commands: Commands) {
+    commands.remove_resource::<MinimapTexture>();
 }
 
 fn update_minimap_texture(

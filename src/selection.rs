@@ -9,8 +9,8 @@ use crate::components::*;
 use crate::ground::HeightMap;
 use crate::hover_material::{HoverRingMaterial, HoverRingSettings};
 use crate::minimap::{MinimapInteraction, MinimapSet};
-use crate::multiplayer::{ClientNetState, HostNetState, NetRole};
 use crate::multiplayer::host_systems::execute_input_command;
+use crate::multiplayer::{ClientNetState, HostNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
 use crate::orders;
 use crate::theme;
@@ -80,7 +80,10 @@ impl Plugin for SelectionPlugin {
             )
             .add_systems(
                 Update,
-                (tab_subgroup_cycle_system, reset_subgroup_on_selection_change)
+                (
+                    tab_subgroup_cycle_system,
+                    reset_subgroup_on_selection_change,
+                )
                     .chain()
                     .after(SelectionSet)
                     .run_if(in_state(AppState::InGame))
@@ -293,43 +296,44 @@ fn setup_hover_assets(
     commands.insert_resource(HoverRingAssets { mesh: ring_mesh });
 
     // Spawn tooltip UI (hidden by default)
-    commands.spawn((
-        HoverTooltip,
-        Node {
-            position_type: PositionType::Absolute,
-            padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
-            border_radius: BorderRadius::all(Val::Px(5.0)),
-            border: UiRect::all(Val::Px(1.0)),
-            min_width: Val::Px(96.0),
-            max_width: Val::Px(168.0),
-            ..default()
-        },
-        BackgroundColor(theme::BG_PANEL),
-        BorderColor::all(Color::srgba(0.25, 0.25, 0.30, 0.6)),
-        BoxShadow::new(
-            Color::srgba(0.0, 0.0, 0.0, 0.6),
-            Val::Px(0.0),
-            Val::Px(2.0),
-            Val::Px(0.0),
-            Val::Px(8.0),
-        ),
-        GlobalZIndex(100),
-        Visibility::Hidden,
-        GlobalTransform::default(),
-    ))
-    .with_children(|parent| {
-        parent.spawn((
-            HoverTooltipText,
-            Text::new(""),
-            fonts::body_emphasis(&fonts, theme::FONT_LARGE),
-            TextColor(theme::TEXT_PRIMARY),
-            TextLayout::new_with_justify(Justify::Left),
+    commands
+        .spawn((
+            HoverTooltip,
             Node {
-                max_width: Val::Px(148.0),
+                position_type: PositionType::Absolute,
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
+                border_radius: BorderRadius::all(Val::Px(5.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                min_width: Val::Px(96.0),
+                max_width: Val::Px(168.0),
                 ..default()
             },
-        ));
-    });
+            BackgroundColor(theme::BG_PANEL),
+            BorderColor::all(Color::srgba(0.25, 0.25, 0.30, 0.6)),
+            BoxShadow::new(
+                Color::srgba(0.0, 0.0, 0.0, 0.6),
+                Val::Px(0.0),
+                Val::Px(2.0),
+                Val::Px(0.0),
+                Val::Px(8.0),
+            ),
+            GlobalZIndex(100),
+            Visibility::Hidden,
+            GlobalTransform::default(),
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                HoverTooltipText,
+                Text::new(""),
+                fonts::body_emphasis(&fonts, theme::FONT_LARGE),
+                TextColor(theme::TEXT_PRIMARY),
+                TextLayout::new_with_justify(Justify::Left),
+                Node {
+                    max_width: Val::Px(148.0),
+                    ..default()
+                },
+            ));
+        });
 }
 
 fn spawn_selection_box(mut commands: Commands) {
@@ -672,10 +676,7 @@ fn handle_click_select(
                                     }
                                 }
                                 if let Ok(gt) = unit_transforms.get(entity) {
-                                    if camera
-                                        .world_to_viewport(cam_gt, gt.translation())
-                                        .is_ok()
-                                    {
+                                    if camera.world_to_viewport(cam_gt, gt.translation()).is_ok() {
                                         commands.entity(entity).insert(Selected);
                                     }
                                 }
@@ -932,7 +933,10 @@ fn handle_right_click_move(
         Query<(&Camera, &GlobalTransform)>,
         Query<&Window, With<PrimaryWindow>>,
     ),
-    selected_units: Query<(Entity, &EntityKind, &Faction, &Transform), (With<Unit>, With<Selected>)>,
+    selected_units: Query<
+        (Entity, &EntityKind, &Faction, &Transform),
+        (With<Unit>, With<Selected>),
+    >,
     mut task_queues: Query<&mut TaskQueue, With<Unit>>,
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
@@ -1198,7 +1202,9 @@ fn handle_right_click_move(
     };
 
     if *net_role == NetRole::Client {
-        if let (Some(client), Some(ref mut socket)) = (client_net.as_ref(), matchbox_socket.as_mut()) {
+        if let (Some(client), Some(ref mut socket)) =
+            (client_net.as_ref(), matchbox_socket.as_mut())
+        {
             if let Some(input) = make_network_input() {
                 let seq = {
                     let mut s = client.seq.lock().unwrap();
@@ -1544,8 +1550,8 @@ fn handle_right_click_move(
                         .map(|(_, _, _, tf)| tf.translation)
                         .fold(Vec3::ZERO, |a, b| a + b)
                         / n as f32;
-                    let facing = Vec2::new(point.x - centroid.x, point.z - centroid.z)
-                        .normalize_or_zero();
+                    let facing =
+                        Vec2::new(point.x - centroid.x, point.z - centroid.z).normalize_or_zero();
 
                     let offsets = formation_offsets(formation.formation, n, facing);
 

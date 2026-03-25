@@ -263,8 +263,18 @@ fn start_attack_windups(
     )>,
     targets: Query<&Transform>,
 ) {
-    for (entity, atk_tf, attack_target, mut cooldown, range, profile, faction, windup, recovery, opt_status) in
-        &mut attackers
+    for (
+        entity,
+        atk_tf,
+        attack_target,
+        mut cooldown,
+        range,
+        profile,
+        faction,
+        windup,
+        recovery,
+        opt_status,
+    ) in &mut attackers
     {
         if *net_role == NetRole::Client && *faction != active_player.0 {
             continue;
@@ -321,7 +331,20 @@ fn resolve_attack_windups(
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (entity, atk_tf, profile, fx_kind, damage, range, is_ranged, faction, opt_dmg_type, mut windup, opt_charge) in &mut attackers {
+    for (
+        entity,
+        atk_tf,
+        profile,
+        fx_kind,
+        damage,
+        range,
+        is_ranged,
+        faction,
+        opt_dmg_type,
+        mut windup,
+        opt_charge,
+    ) in &mut attackers
+    {
         // Client: only execute attacks for local player's units
         if *net_role == NetRole::Client && *faction != active_player.0 {
             continue;
@@ -404,7 +427,13 @@ fn resolve_attack_windups(
                 0.15,
                 0.8,
             );
-            spawn_combat_dust_scaled(&mut commands, &vfx, target_tf.translation, profile.impact_scale, dealt);
+            spawn_combat_dust_scaled(
+                &mut commands,
+                &vfx,
+                target_tf.translation,
+                profile.impact_scale,
+                dealt,
+            );
 
             // ── Juice: melee lunge (attacker lunges forward briefly) ──
             let hit_dir = (target_tf.translation - atk_tf.translation).normalize_or_zero();
@@ -538,18 +567,24 @@ fn handle_death(
     mut commands: Commands,
     net_role: Res<NetRole>,
     active_player: Res<ActivePlayer>,
-    dead: Query<(
-        Entity,
-        &Health,
-        Option<&Building>,
-        Option<&Selected>,
-        Option<&EntityKind>,
-        Option<&Transform>,
-        Option<&UnitState>,
-        Option<&Faction>,
-        Option<&CampReward>,
-    ), Without<Dying>>,
-    mut attackers_with_target: Query<(Entity, &AttackTarget, Option<&mut PatrolState>), Without<Dying>>,
+    dead: Query<
+        (
+            Entity,
+            &Health,
+            Option<&Building>,
+            Option<&Selected>,
+            Option<&EntityKind>,
+            Option<&Transform>,
+            Option<&UnitState>,
+            Option<&Faction>,
+            Option<&CampReward>,
+        ),
+        Without<Dying>,
+    >,
+    mut attackers_with_target: Query<
+        (Entity, &AttackTarget, Option<&mut PatrolState>),
+        Without<Dying>,
+    >,
     mut experience_q: Query<&mut Experience>,
     mut all_assigned_workers: Query<&mut AssignedWorkers>,
     workers_with_state: Query<(Entity, &UnitState), With<Unit>>,
@@ -646,9 +681,7 @@ fn handle_death(
         }
 
         // If a worker dies while assigned to a processor, remove it from AssignedWorkers
-        if let Some(UnitState::AssignedGathering { building, .. }) =
-            opt_unit_state
-        {
+        if let Some(UnitState::AssignedGathering { building, .. }) = opt_unit_state {
             if let Ok(mut aw) = all_assigned_workers.get_mut(*building) {
                 aw.workers.retain(|&w| w != *dead_entity);
             }
@@ -690,9 +723,7 @@ fn handle_death(
             commands.entity(*dead_entity).despawn();
         } else {
             // Units play death animation before despawning
-            let scale = opt_transform
-                .map(|t| t.scale)
-                .unwrap_or(Vec3::ONE);
+            let scale = opt_transform.map(|t| t.scale).unwrap_or(Vec3::ONE);
             // Find killer entity and faction for XP granting
             let killer_entity = attackers_with_target
                 .iter()

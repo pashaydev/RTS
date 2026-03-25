@@ -1,15 +1,16 @@
 use bevy::prelude::*;
 use bevy_matchbox::prelude::*;
 
-use crate::components::*;
-use crate::multiplayer::{
-    self, ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole,
-    matchbox_transport::{self, MatchboxInbox, PeerMap, SIGNALING_PORT},
-};
 use super::super::*;
 #[cfg(not(target_arch = "wasm32"))]
 use super::JoinDiscoveryScan;
-use super::{DEFAULT_PORT, JoinTarget, PendingGameStart, WEB_SESSION_WS_PATH_PREFIX};
+use super::{JoinTarget, PendingGameStart, DEFAULT_PORT, WEB_SESSION_WS_PATH_PREFIX};
+use crate::components::*;
+use crate::multiplayer::{
+    self,
+    matchbox_transport::{self, MatchboxInbox, PeerMap, SIGNALING_PORT},
+    ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole,
+};
 
 // ── Network Cleanup ──
 
@@ -72,9 +73,8 @@ pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
     };
 
     // Start embedded signaling server (ClientServer topology: first peer = host)
-    let signaling_builder = MatchboxServer::client_server_builder(
-        (Ipv4Addr::UNSPECIFIED, SIGNALING_PORT),
-    );
+    let signaling_builder =
+        MatchboxServer::client_server_builder((Ipv4Addr::UNSPECIFIED, SIGNALING_PORT));
     commands.start_server(signaling_builder);
 
     // Open the host's own socket connecting to the local signaling server
@@ -82,7 +82,10 @@ pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
     commands.open_socket(matchbox_transport::build_socket(&room_url));
 
     let session_code = format!("ws://{}:{}/rts_room", primary_ip, SIGNALING_PORT);
-    info!("Hosting on {} (signaling port {})", session_code, SIGNALING_PORT);
+    info!(
+        "Hosting on {} (signaling port {})",
+        session_code, SIGNALING_PORT
+    );
     for detected in &all_ips {
         let vpn_tag = if detected.is_likely_vpn { " [VPN]" } else { "" };
         info!(
@@ -110,7 +113,10 @@ pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
                 });
             }
             Err(e) => {
-                warn!("Failed to bind LAN discovery socket on {}: {}", discovery_addr, e);
+                warn!(
+                    "Failed to bind LAN discovery socket on {}: {}",
+                    discovery_addr, e
+                );
             }
         }
 
@@ -121,7 +127,10 @@ pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
         if std::path::Path::new(&dist_dir).is_dir() {
             match std::net::TcpListener::bind(&http_addr) {
                 Ok(http_listener) => {
-                    info!("Serving WASM client at http://{}:{}/", primary_ip, http_port);
+                    info!(
+                        "Serving WASM client at http://{}:{}/",
+                        primary_ip, http_port
+                    );
                     let http_shutdown = shutdown.clone();
                     std::thread::spawn(move || {
                         transport::host_file_server_thread(http_listener, dist_dir, http_shutdown);
@@ -163,10 +172,7 @@ pub(crate) fn start_hosting(commands: &mut Commands, config: &GameSetupConfig) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn stop_hosting(
-    commands: &mut Commands,
-    _host_state: &Option<Res<HostNetState>>,
-) {
+pub(crate) fn stop_hosting(commands: &mut Commands, _host_state: &Option<Res<HostNetState>>) {
     commands.close_socket();
     commands.stop_server();
     commands.remove_resource::<HostNetState>();
@@ -174,10 +180,7 @@ pub(crate) fn stop_hosting(
     commands.insert_resource(LobbyState::default());
 }
 
-pub(crate) fn stop_client(
-    commands: &mut Commands,
-    _client_state: &Option<Res<ClientNetState>>,
-) {
+pub(crate) fn stop_client(commands: &mut Commands, _client_state: &Option<Res<ClientNetState>>) {
     commands.close_socket();
     commands.remove_resource::<ClientNetState>();
     commands.insert_resource(NetRole::Offline);
@@ -427,10 +430,11 @@ pub(crate) fn refresh_lan_hosts_system(
 
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let hosts = multiplayer::transport::discover_lan_hosts(std::time::Duration::from_millis(900))
-            .into_iter()
-            .map(|(name, session_code)| multiplayer::DiscoveredHost { name, session_code })
-            .collect();
+        let hosts =
+            multiplayer::transport::discover_lan_hosts(std::time::Duration::from_millis(900))
+                .into_iter()
+                .map(|(name, session_code)| multiplayer::DiscoveredHost { name, session_code })
+                .collect();
         let _ = tx.send(hosts);
     });
 
@@ -462,7 +466,10 @@ pub(crate) fn poll_lan_discovery_results_system(
             lobby.discovery_status = if lobby.discovered_hosts.is_empty() {
                 "No LAN hosts found. Use direct IP:port for VPN or manual join.".to_string()
             } else {
-                format!("Found {} LAN host(s). Select one to autofill the code.", lobby.discovered_hosts.len())
+                format!(
+                    "Found {} LAN host(s). Select one to autofill the code.",
+                    lobby.discovered_hosts.len()
+                )
             };
             commands.remove_resource::<JoinDiscoveryScan>();
             for e in &roots {

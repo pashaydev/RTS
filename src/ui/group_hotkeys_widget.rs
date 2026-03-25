@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 
+use super::core::fonts::UiFonts;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::theme;
-use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
-use super::core::fonts::UiFonts;
-use super::core::hud::HudReady;
 
 pub struct GroupHotkeysWidgetPlugin;
 
@@ -16,7 +16,7 @@ impl Plugin for GroupHotkeysWidgetPlugin {
                 Update,
                 spawn_group_hotkeys_widget
                     .run_if(in_state(AppState::InGame))
-                    .run_if(resource_added::<HudReady>),
+                    .run_if(any_with_component::<MainHudRoot>),
             )
             .add_systems(
                 Update,
@@ -40,11 +40,14 @@ fn spawn_group_hotkeys_widget(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
-    hud_ready: Res<HudReady>,
+    root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
+    let Ok(hud_root) = root_q.single() else {
+        return;
+    };
     spawn_widget_frame(
         &mut commands,
-        hud_ready.hud_root,
+        hud_root,
         WidgetId::GroupHotkeys,
         registry.slots.get(&WidgetId::GroupHotkeys).unwrap(),
         registry.is_visible(WidgetId::GroupHotkeys),
@@ -183,10 +186,7 @@ pub fn update_group_hotkeys_widget(
         let is_empty = alive.is_empty();
         let is_active = group_state.active_group == Some(i);
         // How many of the currently selected units are in this group
-        let selected_in_group = selected_set
-            .iter()
-            .filter(|e| alive.contains(e))
-            .count();
+        let selected_in_group = selected_set.iter().filter(|e| alive.contains(e)).count();
         let has_selected_members = selected_in_group > 0;
 
         // Determine visual state (base/default, hover/press handled by interaction system)
@@ -293,7 +293,11 @@ pub fn update_group_hotkeys_widget(
             commands.entity(slot).add_child(count_row);
 
             // Show up to 3 types, or top 2 + "+N" if more than 3
-            let show_count = if kind_counts.len() > 3 { 2 } else { kind_counts.len() };
+            let show_count = if kind_counts.len() > 3 {
+                2
+            } else {
+                kind_counts.len()
+            };
             for (kind, count) in kind_counts.iter().take(show_count) {
                 let icon = commands
                     .spawn((
@@ -470,8 +474,7 @@ pub fn handle_control_group_keys(
             // Steal: assign selected to this group and remove from all others
             let units: Vec<Entity> = selected.iter().collect();
             if !units.is_empty() {
-                let unit_set: std::collections::HashSet<Entity> =
-                    units.iter().copied().collect();
+                let unit_set: std::collections::HashSet<Entity> = units.iter().copied().collect();
                 for (j, group) in control_groups.groups.iter_mut().enumerate() {
                     if j != i {
                         group.retain(|e| !unit_set.contains(e));

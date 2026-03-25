@@ -114,7 +114,11 @@ pub fn ai_military_system(
         brain.relative_strength = if enemy_str > 0.0 {
             total_own_strength / enemy_str
         } else {
-            if military_count > 0 { 10.0 } else { 0.0 }
+            if military_count > 0 {
+                10.0
+            } else {
+                0.0
+            }
         };
 
         // Check for retreating posture
@@ -128,15 +132,14 @@ pub fn ai_military_system(
         let personality = brain.personality;
 
         // ── Counter-composition training ──
-        let desired_composition: Vec<(EntityKind, usize)> =
-            get_desired_composition_with_intel(
-                top_state,
-                personality,
-                is_friendly,
-                &units_q,
-                &active_player,
-                &brain.enemy_composition,
-            );
+        let desired_composition: Vec<(EntityKind, usize)> = get_desired_composition_with_intel(
+            top_state,
+            personality,
+            is_friendly,
+            &units_q,
+            &active_player,
+            &brain.enemy_composition,
+        );
 
         // Find most under-represented unit type and train it
         let mut best_deficit: Option<(EntityKind, f32)> = None;
@@ -165,8 +168,7 @@ pub fn ai_military_system(
                     &all_unit_factions_q,
                     &building_levels_q,
                 ) {
-                    let deficits =
-                        bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
+                    let deficits = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
                     let drain = SpendFromCarried {
                         faction,
                         amounts: deficits,
@@ -372,9 +374,9 @@ pub fn ai_military_system(
             let staged_count = attack_members
                 .iter()
                 .filter(|&&e| {
-                    units_q
-                        .get(e)
-                        .map_or(false, |(_, _, _, tf)| tf.translation.distance(rally) < STAGING_RADIUS)
+                    units_q.get(e).map_or(false, |(_, _, _, tf)| {
+                        tf.translation.distance(rally) < STAGING_RADIUS
+                    })
                 })
                 .count();
 
@@ -433,9 +435,7 @@ pub fn ai_military_system(
         }
 
         // Notify when ally is ready to attack
-        if is_friendly
-            && attack_ready
-            && (game_time - last_attack_time) > ATTACK_MIN_INTERVAL * 0.8
+        if is_friendly && attack_ready && (game_time - last_attack_time) > ATTACK_MIN_INTERVAL * 0.8
         {
             notifications.push(
                 AllyNotifyKind::ReadyToAttack,
@@ -558,9 +558,7 @@ fn get_desired_composition_with_intel(
     } else if enemy_ranged > enemy_melee + 2 {
         for (kind, count) in result.iter_mut() {
             match kind {
-                EntityKind::Knight | EntityKind::Cavalry => {
-                    *count = (*count + 2).min(*count * 2)
-                }
+                EntityKind::Knight | EntityKind::Cavalry => *count = (*count + 2).min(*count * 2),
                 _ => {}
             }
         }

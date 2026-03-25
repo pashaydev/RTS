@@ -1,23 +1,25 @@
 use bevy::prelude::*;
 
+use super::super::helpers::*;
 use crate::components::*;
 use crate::multiplayer::{LobbyState, LobbyStatus, NetRole};
 use crate::theme;
 use crate::ui::core::components as ui_components;
 use crate::ui::fonts::{self, UiFonts};
-use super::super::helpers::*;
 
-use super::super::*;
 use super::super::pages;
+use super::super::*;
 
 // ── Multiplayer Page ──
 
-pub(crate) fn spawn_multiplayer_page(
-    commands: &mut Commands,
-    container: Entity,
-    fonts: &UiFonts,
-) {
-    spawn_page_header(commands, container, "MULTIPLAYER", MenuButton(MenuAction::Back), fonts);
+pub(crate) fn spawn_multiplayer_page(commands: &mut Commands, container: Entity, fonts: &UiFonts) {
+    spawn_page_header(
+        commands,
+        container,
+        "MULTIPLAYER",
+        MenuButton(MenuAction::Back),
+        fonts,
+    );
 
     spawn_animated_section_divider(commands, container, "NETWORK GAME", fonts);
 
@@ -73,7 +75,13 @@ pub(crate) fn spawn_host_lobby_page(
     fonts: &UiFonts,
     lobby: &LobbyState,
 ) {
-    spawn_page_header(commands, container, "HOST LOBBY", MenuButton(MenuAction::CancelHost), fonts);
+    spawn_page_header(
+        commands,
+        container,
+        "HOST LOBBY",
+        MenuButton(MenuAction::CancelHost),
+        fonts,
+    );
 
     spawn_animated_section_divider(commands, container, "SESSION CODE", fonts);
 
@@ -184,7 +192,10 @@ pub(crate) fn spawn_host_lobby_page(
                 };
                 parent.spawn((
                     Text::new(label),
-                    TextFont { font_size: theme::FONT_SMALL, ..default() },
+                    TextFont {
+                        font_size: theme::FONT_SMALL,
+                        ..default()
+                    },
                     TextColor(color),
                 ));
             }
@@ -676,14 +687,8 @@ pub(crate) fn spawn_join_lobby_page(
             "Connected! Waiting for host to start...".to_string(),
             theme::SUCCESS,
         ),
-        LobbyStatus::Connecting => (
-            "Connecting...".to_string(),
-            theme::WARNING,
-        ),
-        LobbyStatus::Failed(e) => (
-            format!("Failed: {}", e),
-            theme::DESTRUCTIVE,
-        ),
+        LobbyStatus::Connecting => ("Connecting...".to_string(), theme::WARNING),
+        LobbyStatus::Failed(e) => (format!("Failed: {}", e), theme::DESTRUCTIVE),
         LobbyStatus::Waiting => (
             if cfg!(target_arch = "wasm32") {
                 "Enter a hosted session code and press CONNECT".to_string()
@@ -804,7 +809,10 @@ fn spawn_client_slot_card(
         Color::srgb(0.85, 0.3, 0.65),
         Color::srgb(0.95, 0.5, 0.15),
     ];
-    let team_color = team_colors.get(team as usize).copied().unwrap_or(team_colors[0]);
+    let team_color = team_colors
+        .get(team as usize)
+        .copied()
+        .unwrap_or(team_colors[0]);
 
     let border_color = if is_me {
         theme::ACCENT
@@ -845,15 +853,24 @@ fn spawn_client_slot_card(
             ));
             card.spawn((
                 Text::new(display_name),
-                TextFont { font_size: theme::FONT_MEDIUM, ..default() },
+                TextFont {
+                    font_size: theme::FONT_MEDIUM,
+                    ..default()
+                },
                 TextColor(if is_me { theme::ACCENT } else { faction_color }),
             ));
             card.spawn((
                 Text::new(type_label),
-                TextFont { font_size: theme::FONT_SMALL, ..default() },
+                TextFont {
+                    font_size: theme::FONT_SMALL,
+                    ..default()
+                },
                 TextColor(theme::TEXT_SECONDARY),
             ));
-            card.spawn(Node { flex_grow: 1.0, ..default() });
+            card.spawn(Node {
+                flex_grow: 1.0,
+                ..default()
+            });
             if !matches!(slot, SlotOccupant::Closed | SlotOccupant::Open) {
                 card.spawn((
                     ui_components::badge_node(22.0, 4.0),
@@ -862,7 +879,10 @@ fn spawn_client_slot_card(
                 .with_children(|badge| {
                     badge.spawn((
                         Text::new(format!("{}", team + 1)),
-                        TextFont { font_size: 10.0, ..default() },
+                        TextFont {
+                            font_size: 10.0,
+                            ..default()
+                        },
                         TextColor(Color::WHITE),
                         Pickable::IGNORE,
                     ));

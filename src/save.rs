@@ -522,8 +522,7 @@ fn serialize_unit_state(state: &UnitState, lookup: &HashMap<Entity, u64>) -> Sav
         | UnitState::HoldPosition
         | UnitState::AttackMoving(_)
         | UnitState::Patrolling { .. }
-        | UnitState::Attacking(_)
-        => SavedWorkerTask {
+        | UnitState::Attacking(_) => SavedWorkerTask {
             variant: "Idle".into(),
             ..default()
         },

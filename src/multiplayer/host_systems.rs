@@ -124,7 +124,11 @@ pub struct HostCommandExecution<'w, 's> {
             Query<
                 'w,
                 's,
-                (&'static mut TrainingQueue, &'static EntityKind, Option<&'static BuildingLevel>),
+                (
+                    &'static mut TrainingQueue,
+                    &'static EntityKind,
+                    Option<&'static BuildingLevel>,
+                ),
                 With<Building>,
             >,
             Query<'w, 's, (&'static Faction, &'static TrainingQueue), With<Building>>,
@@ -153,7 +157,12 @@ pub struct HostCommandExecution<'w, 's> {
     existing_buildings: Query<
         'w,
         's,
-        (&'static Transform, &'static BuildingFootprint, &'static Faction, &'static EntityKind),
+        (
+            &'static Transform,
+            &'static BuildingFootprint,
+            &'static Faction,
+            &'static EntityKind,
+        ),
         (With<Building>, Without<GhostBuilding>),
     >,
 }
@@ -447,7 +456,9 @@ pub fn host_process_client_commands(
                                 let authorized = net_map
                                     .to_ecs
                                     .get(building_id)
-                                    .and_then(|building_entity| exec.building_factions.get(*building_entity).ok())
+                                    .and_then(|building_entity| {
+                                        exec.building_factions.get(*building_entity).ok()
+                                    })
                                     .is_some_and(|faction| *faction == player.faction);
                                 if authorized {
                                     sanitized_commands.push(command.clone());
@@ -477,7 +488,12 @@ pub fn host_process_client_commands(
                                     };
                                     (*building_kind, building_level.map_or(1, |level| level.0))
                                 };
-                                if !building_can_train(&exec.registry, building_kind, level, unit_kind) {
+                                if !building_can_train(
+                                    &exec.registry,
+                                    building_kind,
+                                    level,
+                                    unit_kind,
+                                ) {
                                     continue;
                                 }
 
@@ -513,8 +529,7 @@ pub fn host_process_client_commands(
                                 let Some(kind) = EntityKind::from_index(*kind) else {
                                     continue;
                                 };
-                                let build_pos =
-                                    Vec3::new(position[0], position[1], position[2]);
+                                let build_pos = Vec3::new(position[0], position[1], position[2]);
                                 let worker_query = exec.unit_states.p1();
                                 if buildings::try_queue_build_order_authoritative(
                                     &mut commands,
@@ -538,8 +553,7 @@ pub fn host_process_client_commands(
                                     handled_authoritative_only = true;
                                 }
                             }
-                            InputCommand::UseAbility { .. }
-                            | InputCommand::Interact { .. } => {}
+                            InputCommand::UseAbility { .. } | InputCommand::Interact { .. } => {}
                         }
                     }
                     sanitized_input.commands = sanitized_commands;
@@ -547,7 +561,10 @@ pub fn host_process_client_commands(
                     if sanitized_input.commands.is_empty() && !handled_authoritative_only {
                         debug_tap::record_error(
                             "host_commands",
-                            format!("player {} attempted unsupported or unauthorized input", player_id),
+                            format!(
+                                "player {} attempted unsupported or unauthorized input",
+                                player_id
+                            ),
                         );
                         continue;
                     }

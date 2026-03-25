@@ -115,7 +115,15 @@ fn update_projectiles(
     vfx_assets: Option<Res<VfxAssets>>,
     spatial_grid: Res<crate::spatial::SpatialHashGrid>,
     mut projectiles: Query<(Entity, &mut Transform, &Projectile, Option<&AoeSplash>)>,
-    mut targets: Query<(&Transform, &mut Health, Option<&ArmorType>, Option<&Faction>), Without<Projectile>>,
+    mut targets: Query<
+        (
+            &Transform,
+            &mut Health,
+            Option<&ArmorType>,
+            Option<&Faction>,
+        ),
+        Without<Projectile>,
+    >,
     factions: Query<&Faction>,
 ) {
     let Some(vfx) = vfx_assets else { return };
@@ -186,8 +194,7 @@ fn update_projectiles(
                 FogHideable::Vfx,
                 Mesh3d(vfx.sphere_mesh.clone()),
                 MeshMaterial3d(impact_material),
-                Transform::from_translation(target_pos)
-                    .with_scale(Vec3::splat(impact_scale * 0.3)),
+                Transform::from_translation(target_pos).with_scale(Vec3::splat(impact_scale * 0.3)),
                 NotShadowCaster,
                 NotShadowReceiver,
             ));
@@ -285,7 +292,11 @@ fn footstep_dust_spawner(
 
         // Adjust interval when encumbered (slower steps = longer interval)
         // At medium zoom, double the interval to reduce particle count
-        let base_interval = if zoom_level.detail == DetailLevel::Medium { 0.8 } else { 0.4 };
+        let base_interval = if zoom_level.detail == DetailLevel::Medium {
+            0.8
+        } else {
+            0.4
+        };
         let interval = if let (Some(carry), Some(cap)) = (carrying, capacity) {
             if cap.0 > 0.0 && carry.weight > 0.0 {
                 base_interval * (1.0 + 0.5 * (carry.weight / cap.0).min(1.0))
@@ -431,10 +442,8 @@ fn summon_vfx_system(
                 },
                 Mesh3d(vfx.sphere_mesh.clone()),
                 MeshMaterial3d(particle_mat),
-                Transform::from_translation(
-                    tf.translation + Vec3::new(offset_x, 0.2, offset_z),
-                )
-                .with_scale(Vec3::splat(0.12)),
+                Transform::from_translation(tf.translation + Vec3::new(offset_x, 0.2, offset_z))
+                    .with_scale(Vec3::splat(0.12)),
                 NotShadowCaster,
                 NotShadowReceiver,
             ));

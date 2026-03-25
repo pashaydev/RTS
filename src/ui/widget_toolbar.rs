@@ -2,7 +2,7 @@ use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
 
 use super::core::framework::{WidgetId, WidgetRegistry};
-use super::core::hud::HudReady;
+use super::core::hud::MainHudRoot;
 use super::core::interactions::UiClickEvent;
 use crate::components::AppState;
 use crate::theme;
@@ -16,12 +16,11 @@ impl Plugin for WidgetToolbarPlugin {
             Update,
             spawn_toolbar_widget
                 .run_if(in_state(AppState::InGame))
-                .run_if(resource_added::<HudReady>),
+                .run_if(any_with_component::<MainHudRoot>),
         )
         .add_systems(
             Update,
-            (widget_toolbar_system, update_toolbar_visuals)
-                .run_if(in_state(AppState::InGame)),
+            (widget_toolbar_system, update_toolbar_visuals).run_if(in_state(AppState::InGame)),
         );
     }
 }
@@ -29,9 +28,12 @@ impl Plugin for WidgetToolbarPlugin {
 fn spawn_toolbar_widget(
     mut commands: Commands,
     fonts: Res<UiFonts>,
-    hud_ready: Res<HudReady>,
+    root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
-    spawn_toolbar(&mut commands, hud_ready.hud_root, &fonts);
+    let Ok(hud_root) = root_q.single() else {
+        return;
+    };
+    spawn_toolbar(&mut commands, hud_root, &fonts);
 }
 
 #[derive(Component)]

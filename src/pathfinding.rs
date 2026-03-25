@@ -70,7 +70,6 @@ impl NavGrid {
     pub fn index(&self, gx: usize, gz: usize) -> usize {
         gz * self.grid_size + gx
     }
-
 }
 
 #[derive(Resource)]
@@ -98,7 +97,10 @@ pub struct PathfindingPlugin;
 impl Plugin for PathfindingPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(NavGridDirty(true))
-            .insert_resource(NavGridRefreshTimer(Timer::from_seconds(2.0, TimerMode::Repeating)))
+            .insert_resource(NavGridRefreshTimer(Timer::from_seconds(
+                2.0,
+                TimerMode::Repeating,
+            )))
             .init_resource::<PathRequestQueue>()
             .add_systems(
                 OnEnter(AppState::InGame),
@@ -170,11 +172,7 @@ fn cleanup_orphan_paths(
     }
 }
 
-fn build_nav_grid(
-    height_map: Res<HeightMap>,
-    biome_map: Res<BiomeMap>,
-    mut commands: Commands,
-) {
+fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut commands: Commands) {
     let half_map = height_map.half_map;
     let step = NAV_GRID_STEP;
     let grid_size = (height_map.map_size / step).round() as usize + 1;
@@ -230,10 +228,7 @@ fn refresh_nav_grid(
     mut nav_grid: ResMut<NavGrid>,
     height_map: Res<HeightMap>,
     biome_map: Res<BiomeMap>,
-    buildings: Query<
-        (&Transform, &BuildingFootprint, &BuildingState),
-        With<Building>,
-    >,
+    buildings: Query<(&Transform, &BuildingFootprint, &BuildingState), With<Building>>,
     wall_grid: Res<WallSpatialGrid>,
 ) {
     timer.0.tick(time.delta());
@@ -337,7 +332,12 @@ fn queue_path_requests(
     mut queue: ResMut<PathRequestQueue>,
     new_movers: Query<
         (Entity, &Transform, &MoveTarget),
-        (With<Unit>, Without<NavPath>, Without<NavDirect>, Without<NavPending>),
+        (
+            With<Unit>,
+            Without<NavPath>,
+            Without<NavDirect>,
+            Without<NavPending>,
+        ),
     >,
 ) {
     for (entity, tf, target) in &new_movers {
@@ -645,8 +645,8 @@ fn find_nearest_passable(nav_grid: &NavGrid, gx: usize, gz: usize) -> Option<usi
             for x in min_x..=max_x {
                 let idx = z * gs + x;
                 if nav_grid.costs[idx] > 0 {
-                    let dist = ((x as f32 - gx as f32).powi(2) + (z as f32 - gz as f32).powi(2))
-                        .sqrt();
+                    let dist =
+                        ((x as f32 - gx as f32).powi(2) + (z as f32 - gz as f32).powi(2)).sqrt();
                     if best.map_or(true, |(_, d)| dist < d) {
                         best = Some((idx, dist));
                     }

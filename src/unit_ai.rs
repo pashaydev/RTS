@@ -101,7 +101,10 @@ fn decision_priority_system(
         }
 
         // Skip units with manual orders or queued tasks
-        if *source == TaskSource::Manual || task_queue.current.is_some() || !task_queue.queue.is_empty() {
+        if *source == TaskSource::Manual
+            || task_queue.current.is_some()
+            || !task_queue.queue.is_empty()
+        {
             continue;
         }
 
@@ -356,9 +359,7 @@ pub fn task_queue_advance_system(
                         building,
                         phase: AssignedPhase::SeekingNode,
                     };
-                    commands
-                        .entity(entity)
-                        .insert(BuildingAssignment(building));
+                    commands.entity(entity).insert(BuildingAssignment(building));
                     // Add to building's AssignedWorkers
                     if let Ok(mut aw) = assigned_workers_q.get_mut(building) {
                         if !aw.workers.contains(&entity) {
@@ -415,7 +416,17 @@ pub fn unit_state_executor_system(
     let gather_range = 3.0;
     let build_range = 4.0;
 
-    for (entity, tf, mut state, mut source, mut task_queue, _kind, faction, move_target, attack_range) in &mut units
+    for (
+        entity,
+        tf,
+        mut state,
+        mut source,
+        mut task_queue,
+        _kind,
+        faction,
+        move_target,
+        attack_range,
+    ) in &mut units
     {
         // Client: only process local player's units; remote units are driven by host state sync
         if *net_role == NetRole::Client && *faction != active_player.0 {
@@ -520,9 +531,7 @@ pub fn unit_state_executor_system(
                             commands.entity(entity).remove::<MoveTarget>();
                             *state = UnitState::Building(building);
                         } else {
-                            commands
-                                .entity(entity)
-                                .insert(MoveTarget(target_pos));
+                            commands.entity(entity).insert(MoveTarget(target_pos));
                         }
                     }
                 } else {
@@ -569,9 +578,7 @@ pub fn unit_state_executor_system(
                 // Check building still exists
                 if processors.get(building).is_err() {
                     // Building destroyed — unassign worker
-                    commands
-                        .entity(entity)
-                        .remove::<BuildingAssignment>();
+                    commands.entity(entity).remove::<BuildingAssignment>();
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;

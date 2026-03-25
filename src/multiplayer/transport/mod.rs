@@ -1,19 +1,19 @@
 //! Transport layer — legacy TCP/WS code (mostly unused) + LAN discovery + HTTP file server.
 #![allow(dead_code)]
 
-mod wire;
 mod discovery;
 mod ip;
 mod tcp;
+mod wire;
 
 pub use super::matchbox_transport::*;
 #[cfg(not(target_arch = "wasm32"))]
 pub use discovery::{discover_lan_hosts, discovery_listener_thread, DISCOVERY_PORT};
 #[cfg(not(target_arch = "wasm32"))]
-pub use ip::{detect_all_ips, detect_lan_ip};
-#[cfg(not(target_arch = "wasm32"))]
 #[allow(unused_imports)]
 pub use ip::DetectedIp;
+#[cfg(not(target_arch = "wasm32"))]
+pub use ip::{detect_all_ips, detect_lan_ip};
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(unused_imports)]
 pub use tcp::{
@@ -38,7 +38,9 @@ use std::io::{self, Read, Write};
 #[cfg(not(target_arch = "wasm32"))]
 use std::net::{TcpListener, TcpStream};
 #[cfg(not(target_arch = "wasm32"))]
-use wire::{decode_server_payload_bytes, encode_ws_server_payload, DecodedServerPayload, WsClientEncoding};
+use wire::{
+    decode_server_payload_bytes, encode_ws_server_payload, DecodedServerPayload, WsClientEncoding,
+};
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::debug_tap;
@@ -362,8 +364,8 @@ fn ws_client_handler(
             }
             Ok(_) => {}
             Err(tungstenite::Error::Io(ref e))
-                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
-            {}
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+            }
             Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
                 break;
             }

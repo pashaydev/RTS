@@ -158,7 +158,10 @@ fn spawn_all_players(
             ResourceType::Iron,
             (40.0 * config.starting_resources_mult) as u32,
         );
-        res.add(ResourceType::Stone, (30.0 * config.starting_resources_mult) as u32);
+        res.add(
+            ResourceType::Stone,
+            (30.0 * config.starting_resources_mult) as u32,
+        );
         all_resources.resources.insert(faction, res);
 
         // Spawn 2 workers near the starting settlement area.
@@ -228,7 +231,11 @@ fn steer_avoidance(
         let my_pos = transform.translation;
         let mut separation = Vec3::ZERO;
         let is_moving = move_target.is_some();
-        let effective_strength = if is_moving { unit_strength } else { idle_strength };
+        let effective_strength = if is_moving {
+            unit_strength
+        } else {
+            idle_strength
+        };
 
         // Determine which building (if any) this unit is trying to reach
         let my_target_building = target_building(unit_state, attack_target);

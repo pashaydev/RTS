@@ -13,7 +13,6 @@ use crate::water_material::{WaterMaterial, WaterSettings};
 pub const MAP_SIZE: f32 = 500.0;
 pub const HALF_MAP: f32 = 250.0;
 
-
 /// Pre-computed grid of terrain heights that matches the rendered mesh exactly.
 /// Use `sample(x, z)` for triangle-matched interpolation between grid vertices.
 #[derive(Resource)]
@@ -204,10 +203,8 @@ impl TerrainNoise {
             * WARP_AMP;
         let wz = self
             .warp_fbm
-            .get([
-                x as f64 * WARP_SCALE + 100.0,
-                z as f64 * WARP_SCALE + 100.0,
-            ]) as f32
+            .get([x as f64 * WARP_SCALE + 100.0, z as f64 * WARP_SCALE + 100.0])
+            as f32
             * WARP_AMP;
 
         let val = self
@@ -237,17 +234,17 @@ impl TerrainNoise {
             return height;
         }
 
-        let ridge_noise = self
-            .moisture_fbm
-            .get([x as f64 * 0.021 + 37.0, z as f64 * 0.021 - 19.0]) as f32;
+        let ridge_noise =
+            self.moisture_fbm
+                .get([x as f64 * 0.021 + 37.0, z as f64 * 0.021 - 19.0]) as f32;
         let ridge_variation = ridge_noise * 3.5;
 
         if edge_distance <= border.thickness {
             return height.max(AMPLITUDE * 0.62 + border.ridge_height + ridge_variation);
         }
 
-        let blend_t = 1.0
-            - ((edge_distance - border.thickness) / border.transition).clamp(0.0, 1.0);
+        let blend_t =
+            1.0 - ((edge_distance - border.thickness) / border.transition).clamp(0.0, 1.0);
         let smooth_t = blend_t * blend_t * (3.0 - 2.0 * blend_t);
         let transition_lift = border.ridge_height * 0.35;
         let ridge_target = AMPLITUDE * 0.55 + transition_lift * smooth_t + ridge_variation * 0.35;
@@ -366,11 +363,23 @@ fn biome_index(b: Biome) -> usize {
 }
 
 /// Sample biome at 9 nearby offsets and return a blended vertex color.
-fn blended_biome_color(noise: &TerrainNoise, x: f32, z: f32, half_map: f32, blend_radius: f32) -> [f32; 4] {
+fn blended_biome_color(
+    noise: &TerrainNoise,
+    x: f32,
+    z: f32,
+    half_map: f32,
+    blend_radius: f32,
+) -> [f32; 4] {
     let offsets: [(f32, f32); 9] = [
         (0.0, 0.0),
-        (-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0),
-        (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0),
+        (-1.0, 0.0),
+        (1.0, 0.0),
+        (0.0, -1.0),
+        (0.0, 1.0),
+        (-1.0, -1.0),
+        (1.0, -1.0),
+        (-1.0, 1.0),
+        (1.0, 1.0),
     ];
     let mut weights = [0.0f32; BIOME_COUNT];
     let mut height_norms = [0.0f32; BIOME_COUNT];
@@ -391,8 +400,13 @@ fn blended_biome_color(noise: &TerrainNoise, x: f32, z: f32, half_map: f32, blen
     let total: f32 = weights.iter().sum();
     let mut color = [0.0f32; 4];
     let all_biomes = [
-        Biome::Grassland, Biome::Forest, Biome::Desert,
-        Biome::Beach, Biome::Wetland, Biome::Water, Biome::Mountain,
+        Biome::Grassland,
+        Biome::Forest,
+        Biome::Desert,
+        Biome::Beach,
+        Biome::Wetland,
+        Biome::Water,
+        Biome::Mountain,
     ];
     for i in 0..BIOME_COUNT {
         if weights[i] > 0.0 {
@@ -433,8 +447,7 @@ impl Plugin for GroundPlugin {
             )
             .add_systems(
                 Update,
-                (update_water_time, update_terrain_lighting)
-                    .run_if(in_state(AppState::InGame)),
+                (update_water_time, update_terrain_lighting).run_if(in_state(AppState::InGame)),
             );
     }
 }

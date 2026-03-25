@@ -4,7 +4,10 @@ use bevy::light::cluster::{ClusterConfig, ClusterZConfig};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::components::{ActivePlayer, AppState, CameraZoomLevel, CursorOverUi, DragState, GameSetupConfig, GameWorld, MapSeed, RtsCamera, UiMode};
+use crate::components::{
+    ActivePlayer, AppState, CameraZoomLevel, CursorOverUi, DragState, GameSetupConfig, GameWorld,
+    MapSeed, RtsCamera, UiMode,
+};
 
 // ── Tuning constants ──
 
@@ -300,10 +303,7 @@ fn camera_smooth_update(time: Res<Time>, mut query: Query<(&mut RtsCamera, &mut 
     transform.look_at(cam.pivot, Vec3::Y);
 }
 
-fn track_last_selection(
-    ui_mode: Res<UiMode>,
-    mut last: ResMut<LastSelection>,
-) {
+fn track_last_selection(ui_mode: Res<UiMode>, mut last: ResMut<LastSelection>) {
     if let UiMode::SelectedUnits(ref entities) = *ui_mode {
         if !entities.is_empty() {
             last.entities = entities.clone();
@@ -355,10 +355,7 @@ fn camera_focus_selection(
     }
 }
 
-fn update_zoom_level(
-    camera_q: Query<&RtsCamera>,
-    mut zoom_level: ResMut<CameraZoomLevel>,
-) {
+fn update_zoom_level(camera_q: Query<&RtsCamera>, mut zoom_level: ResMut<CameraZoomLevel>) {
     if let Ok(cam) = camera_q.single() {
         *zoom_level = CameraZoomLevel::from_distance(cam.distance);
     }

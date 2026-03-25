@@ -5,14 +5,13 @@ use std::collections::BTreeMap;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::{
-    AiControlledFactions, AiFactionSettings, AppState, Faction, GameSetupConfig, Health,
-    RtsCamera, Selected, UiPressActive, UnitSpeed,
+    AiControlledFactions, AiFactionSettings, AppState, Faction, GameSetupConfig, Health, RtsCamera,
+    Selected, UiPressActive, UnitSpeed,
 };
 use crate::fog::FogTweakSettings;
 use crate::ground::HeightMap;
 use crate::lighting::{
-    DayCycle, EntityClusterLight, EntityLightConfig, EntityLightGrid,
-    LightingOverrides, SunLight,
+    DayCycle, EntityClusterLight, EntityLightConfig, EntityLightGrid, LightingOverrides, SunLight,
 };
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::theme;
@@ -265,7 +264,6 @@ impl DebugTweaks {
             self.set_float_if_changed(folder, "Color B", color.blue);
         }
     }
-
 }
 
 // ── Config serialization format: folder → { label → value } ──
@@ -981,7 +979,10 @@ fn update_tweak_visuals(
     mut fill_q: Query<(&TweakSliderFill, &mut Node), Without<TweakSliderKnob>>,
     mut knob_q: Query<(&TweakSliderKnob, &mut Node), Without<TweakSliderFill>>,
     mut val_text_q: Query<(&TweakSliderValueText, &mut Text), Without<TweakToggleText>>,
-    mut toggle_q: Query<(&TweakToggle, &Interaction, &mut BackgroundColor), Without<TweakSliderFill>>,
+    mut toggle_q: Query<
+        (&TweakToggle, &Interaction, &mut BackgroundColor),
+        Without<TweakSliderFill>,
+    >,
     mut toggle_text_q: Query<(&TweakToggleText, &mut Text), Without<TweakSliderValueText>>,
     mut readonly_q: Query<
         (&TweakReadOnlyText, &mut Text),
@@ -1536,10 +1537,7 @@ fn format_tweak_float(v: f32) -> String {
     }
 }
 
-fn initialize_debug_folder_defaults(
-    tweaks: Res<DebugTweaks>,
-    mut state: ResMut<DebugPanelState>,
-) {
+fn initialize_debug_folder_defaults(tweaks: Res<DebugTweaks>, mut state: ResMut<DebugPanelState>) {
     if tweaks.folders.is_empty() {
         return;
     }
@@ -1748,11 +1746,7 @@ fn sync_lighting_tweaks(
     sync_sky_color_tweaks(&mut tweaks, &active, &mut overrides, &clear);
 }
 
-fn sync_time_of_day_tweaks(
-    tweaks: &mut DebugTweaks,
-    active: &ActiveSlider,
-    cycle: &mut DayCycle,
-) {
+fn sync_time_of_day_tweaks(tweaks: &mut DebugTweaks, active: &ActiveSlider, cycle: &mut DayCycle) {
     if let Some(v) = tweaks.get_float("Visuals/Time of Day", "Cycle Duration") {
         if (cycle.cycle_duration - v).abs() > f32::EPSILON {
             cycle.cycle_duration = v;
@@ -2455,7 +2449,9 @@ fn sync_network_debug_tweaks(
         };
 
         let display = if visible {
-            stats.display_value(field.label, &role).unwrap_or_else(|| "--".to_string())
+            stats
+                .display_value(field.label, &role)
+                .unwrap_or_else(|| "--".to_string())
         } else {
             "--".to_string()
         };

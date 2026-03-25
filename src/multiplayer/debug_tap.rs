@@ -92,21 +92,11 @@ pub fn ensure_started() {
     }
 }
 
-pub fn record_tx(
-    lane: &str,
-    detail: impl Into<String>,
-    bytes: usize,
-    payload: Option<String>,
-) {
+pub fn record_tx(lane: &str, detail: impl Into<String>, bytes: usize, payload: Option<String>) {
     record("tx", lane, detail.into(), bytes, payload);
 }
 
-pub fn record_rx(
-    lane: &str,
-    detail: impl Into<String>,
-    bytes: usize,
-    payload: Option<String>,
-) {
+pub fn record_rx(lane: &str, detail: impl Into<String>, bytes: usize, payload: Option<String>) {
     record("rx", lane, detail.into(), bytes, payload);
 }
 
@@ -226,8 +216,13 @@ fn spawn_http_server(listener: TcpListener, state: Arc<DebugState>) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn handle_http_connection(stream: &mut std::net::TcpStream, state: &Arc<DebugState>) -> std::io::Result<()> {
-    stream.set_read_timeout(Some(Duration::from_millis(500))).ok();
+fn handle_http_connection(
+    stream: &mut std::net::TcpStream,
+    state: &Arc<DebugState>,
+) -> std::io::Result<()> {
+    stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .ok();
 
     let mut buf = [0u8; 8192];
     let n = stream.read(&mut buf)?;

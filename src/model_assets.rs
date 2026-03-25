@@ -115,11 +115,7 @@ fn load_gltf_scenes(asset_server: &AssetServer, names: &[&str]) -> Vec<Handle<Sc
         .collect()
 }
 
-fn load_scenes_from(
-    asset_server: &AssetServer,
-    base: &str,
-    names: &[&str],
-) -> Vec<Handle<Scene>> {
+fn load_scenes_from(asset_server: &AssetServer, base: &str, names: &[&str]) -> Vec<Handle<Scene>> {
     names
         .iter()
         .map(|name| asset_server.load(format!("{base}/{name}#Scene0")))
@@ -340,8 +336,7 @@ fn load_building_model_assets_eager(asset_server: &AssetServer) -> BuildingModel
     // TTP buildings have no level variants — same model for L1/L2/L3
     for kind in building_kinds {
         let glb = ttp_building_glb(kind);
-        let handle =
-            asset_server.load(format!("{TTP_BUILDINGS_PATH}/{glb}.glb#Scene0"));
+        let handle = asset_server.load(format!("{TTP_BUILDINGS_PATH}/{glb}.glb#Scene0"));
         for level in 1..=3u8 {
             scenes.insert((kind, level), vec![handle.clone()]);
         }
@@ -433,9 +428,8 @@ fn load_building_construction_assets(asset_server: &AssetServer) -> BuildingCons
     for kind in building_kinds {
         let glb = ttp_building_glb(kind);
         for stage in 0..=1u8 {
-            let handle = asset_server.load(format!(
-                "{TTP_CONSTRUCTION_PATH}/{glb}_{stage}.glb#Scene0"
-            ));
+            let handle =
+                asset_server.load(format!("{TTP_CONSTRUCTION_PATH}/{glb}_{stage}.glb#Scene0"));
             stages.insert((kind, stage), handle);
         }
     }
@@ -650,12 +644,15 @@ fn load_ttp_gltf_handles(asset_server: &AssetServer) -> TtpGltfHandles {
         (EntityKind::Skeleton, TTP_UNITS_PATH, "TT_Swordman.glb"),
         (EntityKind::Orc, TTP_UNITS_PATH, "TT_Commander.glb"),
         (EntityKind::Demon, TTP_UNITS_PATH, "TT_HighPriest.glb"),
-        (EntityKind::SkeletonMinion, TTP_UNITS_PATH, "TT_Light_Infantry.glb"),
+        (
+            EntityKind::SkeletonMinion,
+            TTP_UNITS_PATH,
+            "TT_Light_Infantry.glb",
+        ),
     ];
 
     for (kind, base_path, filename) in ttp_units {
-        let handle: Handle<bevy::gltf::Gltf> =
-            asset_server.load(format!("{base_path}/{filename}"));
+        let handle: Handle<bevy::gltf::Gltf> = asset_server.load(format!("{base_path}/{filename}"));
         units.insert(*kind, handle);
     }
 
@@ -768,8 +765,11 @@ fn extract_ttp_animations(
         }
 
         if node_indices.is_empty() {
-            warn!("No animations found for {:?}, named_animations keys: {:?}",
-                kind, gltf.named_animations.keys().collect::<Vec<_>>());
+            warn!(
+                "No animations found for {:?}, named_animations keys: {:?}",
+                kind,
+                gltf.named_animations.keys().collect::<Vec<_>>()
+            );
             continue;
         }
 
@@ -825,7 +825,9 @@ fn load_team_color_textures(asset_server: &AssetServer) -> TeamColorTextures {
     for (color, name) in color_names {
         unit_textures.insert(
             *color,
-            asset_server.load(format!("ToonyTinyPeople/textures/units/color/TT_RTS_Units_{name}.png")),
+            asset_server.load(format!(
+                "ToonyTinyPeople/textures/units/color/TT_RTS_Units_{name}.png"
+            )),
         );
         building_textures.insert(
             *color,
@@ -982,9 +984,7 @@ fn apply_color_recursive(
             return;
         };
 
-        commands
-            .entity(entity)
-            .insert(MeshMaterial3d(new_handle));
+        commands.entity(entity).insert(MeshMaterial3d(new_handle));
         *found_any = true;
     }
 

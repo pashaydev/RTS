@@ -15,8 +15,7 @@ impl Plugin for AgesPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(FactionAges::default()).add_systems(
             Update,
-            age_research_system
-                .run_if(in_state(AppState::InGame)),
+            age_research_system.run_if(in_state(AppState::InGame)),
         );
     }
 }
@@ -168,9 +167,9 @@ fn age_research_system(
         research.timer.tick(time.delta());
 
         // Check if the researching base still exists and is complete
-        let base_valid = buildings
-            .iter()
-            .any(|(k, f, s)| *k == EntityKind::Base && *f == *faction && *s == BuildingState::Complete);
+        let base_valid = buildings.iter().any(|(k, f, s)| {
+            *k == EntityKind::Base && *f == *faction && *s == BuildingState::Complete
+        });
 
         if !base_valid {
             // Base destroyed — research cancelled (will be removed below)

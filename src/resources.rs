@@ -326,11 +326,7 @@ fn random_tree(rng: &mut impl Rng, assets: &ModelAssets) -> Option<(Handle<Scene
         None
     } else {
         let idx = rng.random_range(0..assets.trees.len());
-        let base_scale = assets
-            .tree_base_scales
-            .get(idx)
-            .copied()
-            .unwrap_or(1.0);
+        let base_scale = assets.tree_base_scales.get(idx).copied().unwrap_or(1.0);
         Some((assets.trees[idx].clone(), base_scale))
     }
 }
@@ -410,14 +406,21 @@ fn spawn_resource_nodes(
                 }
 
                 if let Some((rt, amount, mesh, mat, half_h)) = primary_resource_for(
-                    biome, &wood_mesh, &ore_mesh, &gold_mesh, &oil_mesh, &stone_mesh, &node_mats,
+                    biome,
+                    &wood_mesh,
+                    &ore_mesh,
+                    &gold_mesh,
+                    &oil_mesh,
+                    &stone_mesh,
+                    &node_mats,
                 ) {
                     let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
                     let scale_factor = rng.random_range(0.8_f32..1.2);
 
                     // Wood nodes → tree models
                     if rt == ResourceType::Wood && has_tree_models {
-                        let (scene_handle, base_scale) = random_tree(&mut rng, &model_assets).unwrap();
+                        let (scene_handle, base_scale) =
+                            random_tree(&mut rng, &model_assets).unwrap();
                         let tree_scale = scale_factor * base_scale;
                         commands.spawn((
                             GameWorld,
@@ -429,15 +432,23 @@ fn spawn_resource_nodes(
                             FogHideable::Object,
                             PickRadius(3.0 * scale_factor),
                             SceneRoot(scene_handle),
-                            Transform::from_translation(terrain_translation(&height_map, x, z, 0.0))
-                                .with_rotation(Quat::from_rotation_y(y_rotation))
-                                .with_scale(Vec3::splat(tree_scale)),
+                            Transform::from_translation(terrain_translation(
+                                &height_map,
+                                x,
+                                z,
+                                0.0,
+                            ))
+                            .with_rotation(Quat::from_rotation_y(y_rotation))
+                            .with_scale(Vec3::splat(tree_scale)),
                         ));
                     }
                     // Ore/Stone nodes → rock models
                     else if matches!(
                         rt,
-                        ResourceType::Copper | ResourceType::Iron | ResourceType::Gold | ResourceType::Stone
+                        ResourceType::Copper
+                            | ResourceType::Iron
+                            | ResourceType::Gold
+                            | ResourceType::Stone
                     ) && has_rock_models
                     {
                         let scene_handle = random_model(&mut rng, &model_assets.rocks).unwrap();
@@ -450,9 +461,14 @@ fn spawn_resource_nodes(
                             FogHideable::Object,
                             PickRadius(1.8 * scale_factor),
                             SceneRoot(scene_handle),
-                            Transform::from_translation(terrain_translation(&height_map, x, z, 0.0))
-                                .with_rotation(Quat::from_rotation_y(y_rotation))
-                                .with_scale(Vec3::splat(scale_factor)),
+                            Transform::from_translation(terrain_translation(
+                                &height_map,
+                                x,
+                                z,
+                                0.0,
+                            ))
+                            .with_rotation(Quat::from_rotation_y(y_rotation))
+                            .with_scale(Vec3::splat(scale_factor)),
                         ));
                     }
                     // Oil + fallbacks → primitive mesh
@@ -486,12 +502,7 @@ fn spawn_resource_nodes(
                     }
 
                     if let Some((rt, amount, mesh, mat, half_h)) = secondary_resource_for(
-                        biome,
-                        tier,
-                        &wood_mesh,
-                        &ore_mesh,
-                        &gold_mesh,
-                        &node_mats,
+                        biome, tier, &wood_mesh, &ore_mesh, &gold_mesh, &node_mats,
                     ) {
                         let offset_x = x + 3.0 + tier as f32 * 2.5;
                         let offset_z = z + 2.0 - tier as f32 * 2.0;
@@ -1610,12 +1621,21 @@ fn resource_processor_system(
     unit_factions: Query<&Faction, With<Unit>>,
 ) {
     // Pre-compute unit counts per faction for upkeep modifier
-    let mut faction_unit_counts: std::collections::HashMap<Faction, u32> = std::collections::HashMap::new();
+    let mut faction_unit_counts: std::collections::HashMap<Faction, u32> =
+        std::collections::HashMap::new();
     for f in &unit_factions {
         *faction_unit_counts.entry(*f).or_default() += 1;
     }
-    for (_building_entity, building_tf, mut processor, state, faction, storage, assigned_workers, paused) in
-        &mut processors
+    for (
+        _building_entity,
+        building_tf,
+        mut processor,
+        state,
+        faction,
+        storage,
+        assigned_workers,
+        paused,
+    ) in &mut processors
     {
         if *state != BuildingState::Complete {
             continue;
@@ -1639,9 +1659,8 @@ fn resource_processor_system(
         let base_rate = processor.harvest_rate * trickle_fraction
             + (worker_count * processor.harvest_rate * processor.worker_rate_bonus);
         // Apply population upkeep modifier
-        let upkeep = income_modifier_for_population(
-            faction_unit_counts.get(faction).copied().unwrap_or(0),
-        );
+        let upkeep =
+            income_modifier_for_population(faction_unit_counts.get(faction).copied().unwrap_or(0));
         let effective_rate = base_rate * upkeep;
         processor.harvest_accumulator += effective_rate;
         let amount = processor.harvest_accumulator as u32;
@@ -1728,7 +1747,18 @@ fn production_chain_system(
     >,
     vfx_assets: Option<Res<VfxAssets>>,
 ) {
-    for (_entity, building_tf, mut production, state, level, faction, mut storage, building_kind, paused) in &mut producers {
+    for (
+        _entity,
+        building_tf,
+        mut production,
+        state,
+        level,
+        faction,
+        mut storage,
+        building_kind,
+        paused,
+    ) in &mut producers
+    {
         if *state != BuildingState::Complete {
             continue;
         }
@@ -1944,10 +1974,7 @@ fn find_nearest_node(
     node_data_q: &Query<(&Transform, &mut ResourceNode), Without<Unit>>,
     faction: Option<&Faction>,
     deposit_points: Option<
-        &Query<
-            (Entity, &Transform, &BuildingState, &Faction),
-            (With<DepositPoint>, Without<Unit>),
-        >,
+        &Query<(Entity, &Transform, &BuildingState, &Faction), (With<DepositPoint>, Without<Unit>)>,
     >,
     inventories: Option<
         &Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>,
@@ -2411,17 +2438,17 @@ fn processor_worker_visual_system(
     vfx_assets: Option<Res<VfxAssets>>,
     net_role: Res<crate::multiplayer::NetRole>,
     active_player: Res<ActivePlayer>,
-    mut workers: Query<
+    mut workers: Query<(Entity, &Transform, &mut UnitState, &mut Carrying, &Faction), With<Unit>>,
+    processors: Query<
         (
             Entity,
             &Transform,
-            &mut UnitState,
-            &mut Carrying,
-            &Faction,
+            &ResourceProcessor,
+            &BuildingState,
+            Option<&BuildingPaused>,
         ),
-        With<Unit>,
+        With<Building>,
     >,
-    processors: Query<(Entity, &Transform, &ResourceProcessor, &BuildingState, Option<&BuildingPaused>), With<Building>>,
     nodes: Query<(Entity, &Transform, &ResourceNode), Without<Unit>>,
 ) {
     // Collect nodes targeted by other workers to avoid clustering
@@ -2442,11 +2469,16 @@ fn processor_worker_visual_system(
         if *net_role == crate::multiplayer::NetRole::Client && *faction != active_player.0 {
             continue;
         }
-        let UnitState::AssignedGathering { building: building_entity, ref mut phase } = *unit_state else {
+        let UnitState::AssignedGathering {
+            building: building_entity,
+            ref mut phase,
+        } = *unit_state
+        else {
             continue;
         };
 
-        let Ok((_, building_tf, processor, building_state, building_paused)) = processors.get(building_entity)
+        let Ok((_, building_tf, processor, building_state, building_paused)) =
+            processors.get(building_entity)
         else {
             // Building gone — handled by unit_state_executor
             continue;
@@ -2489,7 +2521,9 @@ fn processor_worker_visual_system(
                 if let Some((node, _)) = best {
                     // Set MoveTarget so the worker physically walks to the node
                     if let Ok((_, node_tf, _)) = nodes.get(node) {
-                        commands.entity(entity).insert(MoveTarget(node_tf.translation));
+                        commands
+                            .entity(entity)
+                            .insert(MoveTarget(node_tf.translation));
                     }
                     *phase = AssignedPhase::MovingToNode(node);
                 }
@@ -2533,7 +2567,9 @@ fn processor_worker_visual_system(
                 *timer_secs += time.delta_secs();
                 if *timer_secs >= 2.5 {
                     // Walk back to building
-                    commands.entity(entity).insert(MoveTarget(building_tf.translation));
+                    commands
+                        .entity(entity)
+                        .insert(MoveTarget(building_tf.translation));
                     *phase = AssignedPhase::ReturningToBuilding;
                 }
             }
@@ -2727,8 +2763,13 @@ fn resource_respawn_system(
                             FogHideable::Object,
                             Mesh3d(mesh),
                             MeshMaterial3d(mat),
-                            Transform::from_translation(terrain_translation(&height_map, x, z, 0.6))
-                                .with_scale(Vec3::splat(0.1)),
+                            Transform::from_translation(terrain_translation(
+                                &height_map,
+                                x,
+                                z,
+                                0.6,
+                            ))
+                            .with_scale(Vec3::splat(0.1)),
                         ));
                     }
                 }
@@ -2763,13 +2804,8 @@ fn grow_resource_system(
             ResourceType::Oil => 0.6,
             _ => 0.0,
         };
-        tf.translation.y = terrain_translation(
-            &height_map,
-            tf.translation.x,
-            tf.translation.z,
-            y_offset,
-        )
-        .y;
+        tf.translation.y =
+            terrain_translation(&height_map, tf.translation.x, tf.translation.z, y_offset).y;
 
         if res.timer.is_finished() {
             commands.entity(entity).remove::<GrowingResource>();
@@ -2793,12 +2829,23 @@ fn auto_assign_workers_system(
     mut timer: Local<Option<Timer>>,
     net_role: Res<crate::multiplayer::NetRole>,
     mut processors: Query<
-        (Entity, &Transform, &ResourceProcessor, &BuildingState, &Faction, &mut AssignedWorkers),
+        (
+            Entity,
+            &Transform,
+            &ResourceProcessor,
+            &BuildingState,
+            &Faction,
+            &mut AssignedWorkers,
+        ),
         With<Building>,
     >,
     workers: Query<
         (Entity, &Transform, &UnitState, &Faction, &TaskSource),
-        (With<Unit>, With<crate::blueprints::EntityKind>, Without<BuildingAssignment>),
+        (
+            With<Unit>,
+            With<crate::blueprints::EntityKind>,
+            Without<BuildingAssignment>,
+        ),
     >,
     kinds: Query<&crate::blueprints::EntityKind>,
 ) {

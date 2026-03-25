@@ -166,7 +166,10 @@ pub fn handle_train_buttons(
         Query<&mut TrainingQueue>,
     )>,
     all_units: Query<&Faction, With<Unit>>,
-    all_buildings_for_cap: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
+    all_buildings_for_cap: Query<
+        (&Faction, &EntityKind, &BuildingState, &BuildingLevel),
+        With<Building>,
+    >,
     registry: Res<BlueprintRegistry>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
@@ -1152,7 +1155,10 @@ pub fn update_train_cost_colors(
     registry: Res<BlueprintRegistry>,
     all_units: Query<&Faction, With<Unit>>,
     all_training_queues: Query<(&Faction, &TrainingQueue), With<Building>>,
-    all_buildings_for_cap: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
+    all_buildings_for_cap: Query<
+        (&Faction, &EntityKind, &BuildingState, &BuildingLevel),
+        With<Building>,
+    >,
     mut cost_texts: Query<(&TrainCostText, &mut TextColor)>,
 ) {
     let player_res = all_resources.get(&active_player.0);
@@ -1474,7 +1480,11 @@ pub fn handle_hold_position_button(
                 .insert(TaskSource::Manual);
             if let Ok(mut queue) = task_queues.get_mut(entity) {
                 queue.clear_queued();
-                crate::orders::set_current_task(&mut queue, &mut next_task_id, QueuedTask::HoldPosition);
+                crate::orders::set_current_task(
+                    &mut queue,
+                    &mut next_task_id,
+                    QueuedTask::HoldPosition,
+                );
             }
         }
     }

@@ -114,7 +114,6 @@ impl SquadRole {
                 | SquadRole::GatherOil
         )
     }
-
 }
 
 // ── Data Structs ──

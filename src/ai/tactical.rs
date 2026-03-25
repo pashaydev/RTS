@@ -25,7 +25,14 @@ pub fn ai_tactical_system(
         Or<(With<Unit>, With<Building>)>,
     >,
     enemy_units_q: Query<
-        (Entity, &Faction, &EntityKind, &Transform, &Health, Option<&AttackDamage>),
+        (
+            Entity,
+            &Faction,
+            &EntityKind,
+            &Transform,
+            &Health,
+            Option<&AttackDamage>,
+        ),
         Or<(With<Unit>, With<Mob>)>,
     >,
     buildings_q: Query<(&Faction, &Transform), With<Building>>,
@@ -218,7 +225,14 @@ pub fn ai_tactical_system(
 fn detect_threats_near_ally(
     brain: &mut AiFactionBrain,
     enemy_units_q: &Query<
-        (Entity, &Faction, &EntityKind, &Transform, &Health, Option<&AttackDamage>),
+        (
+            Entity,
+            &Faction,
+            &EntityKind,
+            &Transform,
+            &Health,
+            Option<&AttackDamage>,
+        ),
         Or<(With<Unit>, With<Mob>)>,
     >,
     teams: &TeamConfig,
@@ -251,7 +265,12 @@ fn detect_threats_near_ally(
 }
 
 /// Recall defense and attack squads to own base threat center.
-fn defend_own_base(commands: &mut Commands, brain: &AiFactionBrain, threat_center: Vec3, alive: &HashSet<Entity>) {
+fn defend_own_base(
+    commands: &mut Commands,
+    brain: &AiFactionBrain,
+    threat_center: Vec3,
+    alive: &HashSet<Entity>,
+) {
     let mut recall_entities: Vec<Entity> = Vec::new();
     if let Some(squad) = brain.get_squad(SquadRole::DefenseSquad) {
         recall_entities.extend(&squad.members);

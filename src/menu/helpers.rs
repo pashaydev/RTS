@@ -396,7 +396,11 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Enti
 
 // ── Color Picker ──
 
-pub fn spawn_color_picker(commands: &mut Commands, selected: usize, field: SelectorField) -> Entity {
+pub fn spawn_color_picker(
+    commands: &mut Commands,
+    selected: usize,
+    field: SelectorField,
+) -> Entity {
     let colors = [
         Faction::Player1.color(),
         Faction::Player2.color(),
@@ -437,10 +441,7 @@ pub fn spawn_color_picker(commands: &mut Commands, selected: usize, field: Selec
                 let border_width = if is_selected { 3.0 } else { 2.0 };
 
                 let mut dot = parent.spawn((
-                    MenuSelector {
-                        field,
-                        index: i,
-                    },
+                    MenuSelector { field, index: i },
                     Button,
                     Node {
                         width: Val::Px(size),

@@ -112,7 +112,6 @@ fn register_lighting_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
     tweaks.add_float("Visuals/Entity Lights", "Night Factor", 1.0, 0.0, 1.0, 0.05);
     tweaks.add_float("Visuals/Entity Lights", "Day Factor", 0.3, 0.0, 1.0, 0.05);
     tweaks.add_readonly("Visuals/Entity Lights", "Active Lights", "0");
-
 }
 
 // ── Day/Night Cycle ──

@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
+use super::core::hud::MainHudRoot;
 use crate::components::*;
 use crate::theme;
-use super::core::hud::HudReady;
 
 pub struct NotificationsWidgetPlugin;
 
@@ -12,7 +12,7 @@ impl Plugin for NotificationsWidgetPlugin {
             Update,
             spawn_notification_widget
                 .run_if(in_state(AppState::InGame))
-                .run_if(resource_added::<HudReady>),
+                .run_if(any_with_component::<MainHudRoot>),
         )
         .add_systems(
             Update,
@@ -22,11 +22,11 @@ impl Plugin for NotificationsWidgetPlugin {
     }
 }
 
-fn spawn_notification_widget(
-    mut commands: Commands,
-    hud_ready: Res<HudReady>,
-) {
-    spawn_notification_container(&mut commands, hud_ready.hud_root);
+fn spawn_notification_widget(mut commands: Commands, root_q: Query<Entity, Added<MainHudRoot>>) {
+    let Ok(hud_root) = root_q.single() else {
+        return;
+    };
+    spawn_notification_container(&mut commands, hud_root);
 }
 
 #[derive(Component)]

@@ -24,9 +24,9 @@ use bevy::prelude::*;
 
 use crate::components::*;
 
-use core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use core::fonts::UiFonts;
-use core::hud::HudReady;
+use core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use core::hud::MainHudRoot;
 
 /// UI plugin group that composes all UI sub-plugins.
 ///
@@ -63,7 +63,7 @@ impl Plugin for ExternalWidgetFramesPlugin {
             Update,
             spawn_external_widget_frames
                 .run_if(in_state(AppState::InGame))
-                .run_if(resource_added::<HudReady>),
+                .run_if(any_with_component::<MainHudRoot>),
         );
     }
 }
@@ -72,9 +72,11 @@ fn spawn_external_widget_frames(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
-    hud_ready: Res<HudReady>,
+    root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
-    let hud_root = hud_ready.hud_root;
+    let Ok(hud_root) = root_q.single() else {
+        return;
+    };
 
     // Minimap widget (content populated by MinimapPlugin)
     let minimap_content = spawn_widget_frame(

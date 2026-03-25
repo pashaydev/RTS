@@ -106,7 +106,10 @@ pub fn ai_strategy_system(
         brain.pending_builds = under_construction;
 
         let unit_cap = UnitCapStats {
-            used: count_faction_units(faction, units_q.iter().map(|(unit_faction, _)| unit_faction)),
+            used: count_faction_units(
+                faction,
+                units_q.iter().map(|(unit_faction, _)| unit_faction),
+            ),
             queued: count_faction_queued_units(faction, training_queues_q.iter()),
             cap: faction_unit_cap(
                 faction,
@@ -336,58 +339,56 @@ fn plan_builds_for_state(
                 }
             }
         }
-        AiTopState::Expanding => {
-            match brain.personality {
-                AiPersonality::Balanced => {
-                    push_if_missing(brain, tc, EntityKind::Workshop, 1, 0);
-                    push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
-                    push_if_missing(brain, tc, EntityKind::GuardTower, 2, 2);
-                    push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
-                    push_if_missing(brain, tc, EntityKind::Smelter, 1, 4);
-                }
-                AiPersonality::Aggressive => {
-                    push_if_missing(brain, tc, EntityKind::Barracks, 2, 0);
-                    push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
-                    push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
-                    push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
-                    push_if_missing(brain, tc, EntityKind::Smelter, 1, 4);
-                }
-                AiPersonality::Defensive => {
-                    push_if_missing(brain, tc, EntityKind::GuardTower, 3, 0);
-                    push_if_missing(brain, tc, EntityKind::Mine, 1, 1);
-                    push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
-                    push_if_missing(brain, tc, EntityKind::MageTower, 1, 3);
-                    push_if_missing(brain, tc, EntityKind::Smelter, 1, 4);
-                }
-                AiPersonality::Economic => {
-                    push_if_missing(brain, tc, EntityKind::Mine, 1, 0);
-                    push_if_missing(brain, tc, EntityKind::Storage, 2, 1);
-                    push_if_missing(brain, tc, EntityKind::Sawmill, 2, 1);
-                    push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
-                    push_if_missing(brain, tc, EntityKind::Smelter, 1, 3);
-                    push_if_missing(brain, tc, EntityKind::Stable, 1, 4);
-                }
-                AiPersonality::Supportive => {
-                    if let Some(pb) = player_buildings {
-                        let player_has_barracks =
-                            pb.get(&EntityKind::Barracks).copied().unwrap_or(0) >= 2;
-                        let player_has_workshop =
-                            pb.get(&EntityKind::Workshop).copied().unwrap_or(0) > 0;
-                        if player_has_barracks {
-                            push_if_missing(brain, tc, EntityKind::Workshop, 1, 0);
-                            push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
-                        } else {
-                            push_if_missing(brain, tc, EntityKind::Barracks, 2, 0);
-                        }
-                        if !player_has_workshop {
-                            push_if_missing(brain, tc, EntityKind::Workshop, 1, 1);
-                        }
-                    }
-                    push_if_missing(brain, tc, EntityKind::GuardTower, 2, 2);
-                    push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
-                }
+        AiTopState::Expanding => match brain.personality {
+            AiPersonality::Balanced => {
+                push_if_missing(brain, tc, EntityKind::Workshop, 1, 0);
+                push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
+                push_if_missing(brain, tc, EntityKind::GuardTower, 2, 2);
+                push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
+                push_if_missing(brain, tc, EntityKind::Smelter, 1, 4);
             }
-        }
+            AiPersonality::Aggressive => {
+                push_if_missing(brain, tc, EntityKind::Barracks, 2, 0);
+                push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
+                push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
+                push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
+                push_if_missing(brain, tc, EntityKind::Smelter, 1, 4);
+            }
+            AiPersonality::Defensive => {
+                push_if_missing(brain, tc, EntityKind::GuardTower, 3, 0);
+                push_if_missing(brain, tc, EntityKind::Mine, 1, 1);
+                push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
+                push_if_missing(brain, tc, EntityKind::MageTower, 1, 3);
+                push_if_missing(brain, tc, EntityKind::Smelter, 1, 4);
+            }
+            AiPersonality::Economic => {
+                push_if_missing(brain, tc, EntityKind::Mine, 1, 0);
+                push_if_missing(brain, tc, EntityKind::Storage, 2, 1);
+                push_if_missing(brain, tc, EntityKind::Sawmill, 2, 1);
+                push_if_missing(brain, tc, EntityKind::Workshop, 1, 2);
+                push_if_missing(brain, tc, EntityKind::Smelter, 1, 3);
+                push_if_missing(brain, tc, EntityKind::Stable, 1, 4);
+            }
+            AiPersonality::Supportive => {
+                if let Some(pb) = player_buildings {
+                    let player_has_barracks =
+                        pb.get(&EntityKind::Barracks).copied().unwrap_or(0) >= 2;
+                    let player_has_workshop =
+                        pb.get(&EntityKind::Workshop).copied().unwrap_or(0) > 0;
+                    if player_has_barracks {
+                        push_if_missing(brain, tc, EntityKind::Workshop, 1, 0);
+                        push_if_missing(brain, tc, EntityKind::Stable, 1, 1);
+                    } else {
+                        push_if_missing(brain, tc, EntityKind::Barracks, 2, 0);
+                    }
+                    if !player_has_workshop {
+                        push_if_missing(brain, tc, EntityKind::Workshop, 1, 1);
+                    }
+                }
+                push_if_missing(brain, tc, EntityKind::GuardTower, 2, 2);
+                push_if_missing(brain, tc, EntityKind::Mine, 1, 3);
+            }
+        },
         AiTopState::Attacking => {
             // Don't queue new buildings during attack
         }

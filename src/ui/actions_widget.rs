@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 
-use super::core::shared::{format_cost, widget_content_stack, widget_wrap_row};
-use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::fonts::UiFonts;
-use super::core::hud::HudReady;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::hud::MainHudRoot;
+use super::core::shared::{format_cost, widget_content_stack, widget_wrap_row};
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::components::*;
 use crate::theme;
@@ -20,7 +20,7 @@ impl Plugin for ActionsWidgetPlugin {
                 Update,
                 spawn_actions_widget
                     .run_if(in_state(AppState::InGame))
-                    .run_if(resource_added::<HudReady>),
+                    .run_if(any_with_component::<MainHudRoot>),
             )
             // Actions widget update
             .add_systems(
@@ -100,11 +100,14 @@ fn spawn_actions_widget(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
-    hud_ready: Res<HudReady>,
+    root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
+    let Ok(hud_root) = root_q.single() else {
+        return;
+    };
     let actions_content = spawn_widget_frame(
         &mut commands,
-        hud_ready.hud_root,
+        hud_root,
         WidgetId::Actions,
         registry.slots.get(&WidgetId::Actions).unwrap(),
         registry.is_visible(WidgetId::Actions),
@@ -380,7 +383,9 @@ pub fn update_action_bar(
         }
         UiMode::SelectedUnits(_) => {
             let founded = base_state.is_founded(&active_player.0);
-            let has_workers = selected_units.iter().any(|(k, ..)| *k == EntityKind::Worker);
+            let has_workers = selected_units
+                .iter()
+                .any(|(k, ..)| *k == EntityKind::Worker);
             if !founded && has_workers {
                 is_building_grid = true;
                 let player_res = all_resources.get(&active_player.0);
@@ -1486,11 +1491,13 @@ fn spawn_building_action_bar(
                 commands.entity(prod_col).add_child(recipe_row);
 
                 // Recipe name + cycle time
-                let status = if is_active { "Active" } else { "Click to start" };
-                let header_text = format!(
-                    "{}  ({:.0}s) [{}]",
-                    recipe.name, recipe.cycle_secs, status
-                );
+                let status = if is_active {
+                    "Active"
+                } else {
+                    "Click to start"
+                };
+                let header_text =
+                    format!("{}  ({:.0}s) [{}]", recipe.name, recipe.cycle_secs, status);
                 let header = commands
                     .spawn((
                         Text::new(header_text),

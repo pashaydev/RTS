@@ -90,8 +90,12 @@ pub fn animated_button_chrome_system(
                     ButtonStyle::Destructive => Color::srgba(0.95, 0.45, 0.45, 0.24),
                 },
                 UiInteractPhase::Idle | UiInteractPhase::Disabled => match style {
-                    ButtonStyle::Filled => Color::srgba(0.35, 0.48, 0.65, 0.14 + 0.10 * state.click_flash),
-                    ButtonStyle::Ghost => Color::srgba(0.29, 0.62, 1.0, 0.10 + 0.12 * state.click_flash),
+                    ButtonStyle::Filled => {
+                        Color::srgba(0.35, 0.48, 0.65, 0.14 + 0.10 * state.click_flash)
+                    }
+                    ButtonStyle::Ghost => {
+                        Color::srgba(0.29, 0.62, 1.0, 0.10 + 0.12 * state.click_flash)
+                    }
                     ButtonStyle::Destructive => {
                         Color::srgba(0.85, 0.32, 0.32, 0.10 + 0.12 * state.click_flash)
                     }
@@ -107,22 +111,18 @@ pub fn animated_button_chrome_system(
                     1.0,
                 ),
                 UiInteractPhase::Hovered => (0.20, 14.0, 4.0),
-                UiInteractPhase::Idle | UiInteractPhase::Disabled => {
-                    (0.10 + 0.18 * state.click_flash, 10.0 + 6.0 * state.click_flash, 2.0)
-                }
+                UiInteractPhase::Idle | UiInteractPhase::Disabled => (
+                    0.10 + 0.18 * state.click_flash,
+                    10.0 + 6.0 * state.click_flash,
+                    2.0,
+                ),
             };
 
             let tint = match style {
                 ButtonStyle::Filled | ButtonStyle::Ghost => Color::srgba(0.29, 0.62, 1.0, alpha),
                 ButtonStyle::Destructive => Color::srgba(0.85, 0.32, 0.32, alpha),
             };
-            *shadow = BoxShadow::new(
-                tint,
-                Val::Px(0.0),
-                Val::Px(y),
-                Val::Px(0.0),
-                Val::Px(blur),
-            );
+            *shadow = BoxShadow::new(tint, Val::Px(0.0), Val::Px(y), Val::Px(0.0), Val::Px(blur));
         }
     }
 }
@@ -175,8 +175,7 @@ pub fn animated_button_hover_system(
                         anim.bg_target = [0.29, 0.62, 1.0, lerp(0.18, 0.28, state.hold_progress)];
                     }
                     ButtonStyle::Destructive => {
-                        anim.bg_target =
-                            [0.80, 0.27, 0.27, lerp(0.18, 0.28, state.hold_progress)];
+                        anim.bg_target = [0.80, 0.27, 0.27, lerp(0.18, 0.28, state.hold_progress)];
                     }
                 }
             }

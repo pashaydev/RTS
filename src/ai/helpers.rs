@@ -21,11 +21,26 @@ pub fn pick_goal_aware_resource(
     if let Some(goal) = goal {
         // Compute deficit per resource type
         let deficits = [
-            (ResourceType::Wood, goal.wood.saturating_sub(res.get(ResourceType::Wood)) as f32),
-            (ResourceType::Copper, goal.copper.saturating_sub(res.get(ResourceType::Copper)) as f32),
-            (ResourceType::Iron, goal.iron.saturating_sub(res.get(ResourceType::Iron)) as f32),
-            (ResourceType::Gold, goal.gold.saturating_sub(res.get(ResourceType::Gold)) as f32),
-            (ResourceType::Oil, goal.oil.saturating_sub(res.get(ResourceType::Oil)) as f32),
+            (
+                ResourceType::Wood,
+                goal.wood.saturating_sub(res.get(ResourceType::Wood)) as f32,
+            ),
+            (
+                ResourceType::Copper,
+                goal.copper.saturating_sub(res.get(ResourceType::Copper)) as f32,
+            ),
+            (
+                ResourceType::Iron,
+                goal.iron.saturating_sub(res.get(ResourceType::Iron)) as f32,
+            ),
+            (
+                ResourceType::Gold,
+                goal.gold.saturating_sub(res.get(ResourceType::Gold)) as f32,
+            ),
+            (
+                ResourceType::Oil,
+                goal.oil.saturating_sub(res.get(ResourceType::Oil)) as f32,
+            ),
         ];
 
         let max_deficit = deficits.iter().map(|(_, d)| *d).fold(0.0f32, f32::max);
@@ -215,8 +230,7 @@ pub fn pick_strategic_target(
     let mut near_threats: Vec<&ThreatEntry> = threats
         .iter()
         .filter(|t| {
-            t.position.distance(base_pos) < BASE_THREAT_RADIUS * 3.0
-                && t.estimated_strength > 0.0
+            t.position.distance(base_pos) < BASE_THREAT_RADIUS * 3.0 && t.estimated_strength > 0.0
         })
         .collect();
     near_threats.sort_by(|a, b| {
@@ -285,7 +299,10 @@ pub fn try_train(
     unit_kind: EntityKind,
     registry: &BlueprintRegistry,
     unit_factions: &Query<&Faction, With<Unit>>,
-    building_levels: &Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
+    building_levels: &Query<
+        (&Faction, &EntityKind, &BuildingState, &BuildingLevel),
+        With<Building>,
+    >,
 ) -> bool {
     let queued = train_queues
         .iter_mut()
@@ -412,9 +429,17 @@ pub fn generate_wall_plan(base_pos: Vec3, personality: AiPersonality) -> WallPla
     // Leave a gate opening on the side facing map center
     let to_center = (Vec3::ZERO - base_pos).normalize_or_zero();
     let gate_side = if to_center.x.abs() > to_center.z.abs() {
-        if to_center.x > 0.0 { 1 } else { 3 }
+        if to_center.x > 0.0 {
+            1
+        } else {
+            3
+        }
     } else {
-        if to_center.z > 0.0 { 2 } else { 0 }
+        if to_center.z > 0.0 {
+            2
+        } else {
+            0
+        }
     };
 
     let sides = [

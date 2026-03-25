@@ -109,10 +109,7 @@ fn resolve_target(
     // For Attacking state (no MoveTarget), resolve position from AttackTarget entity
     if let UnitState::Attacking(_) = unit_state {
         if let Some(at) = attack_target {
-            return target_transforms
-                .get(at.0)
-                .ok()
-                .map(|tf| tf.translation);
+            return target_transforms.get(at.0).ok().map(|tf| tf.translation);
         }
     }
 
@@ -309,7 +306,17 @@ fn spawn_path_visualization(
     >,
     target_transforms: Query<&Transform, Without<Unit>>,
 ) {
-    for (entity, transform, faction, unit_state, move_target, attack_target, vis_entities, nav_path) in &mut units {
+    for (
+        entity,
+        transform,
+        faction,
+        unit_state,
+        move_target,
+        attack_target,
+        vis_entities,
+        nav_path,
+    ) in &mut units
+    {
         if *faction != active_player.0 {
             continue;
         }
@@ -318,7 +325,9 @@ fn spawn_path_visualization(
         let category = classify_unit_state(unit_state);
 
         // Resolve target position — may come from MoveTarget or AttackTarget entity
-        let Some(target) = resolve_target(unit_state, move_target, attack_target, &target_transforms) else {
+        let Some(target) =
+            resolve_target(unit_state, move_target, attack_target, &target_transforms)
+        else {
             // No valid target — if we had old vis, clean it up
             if let Some(ref state) = vis_entities {
                 for &e in &state.entities {
@@ -333,8 +342,7 @@ fn spawn_path_visualization(
 
         // Only rebuild when unit moved enough, target changed, or category changed
         if let Some(ref state) = vis_entities {
-            let pos_moved =
-                Vec2::new(pos.x - state.last_pos.x, pos.z - state.last_pos.z).length();
+            let pos_moved = Vec2::new(pos.x - state.last_pos.x, pos.z - state.last_pos.z).length();
             let target_moved =
                 Vec2::new(target.x - state.target.x, target.z - state.target.z).length();
             if pos_moved < 0.4 && target_moved < 0.1 && state.category == category {
@@ -469,24 +477,15 @@ fn animate_path_ring(time: Res<Time>, mut rings: Query<(&PathRing, &mut Transfor
         let (pulse, rot) = match ring.category {
             PathVisCategory::Attack => {
                 // Fast aggressive pulse + rotation
-                (
-                    1.0 + 0.2 * (t * 4.0).sin(),
-                    Quat::from_rotation_y(t * 2.0),
-                )
+                (1.0 + 0.2 * (t * 4.0).sin(), Quat::from_rotation_y(t * 2.0))
             }
             PathVisCategory::Patrol => {
                 // Gentle bounce
-                (
-                    1.0 + 0.1 * (t * 1.8).sin(),
-                    Quat::from_rotation_y(t * 0.5),
-                )
+                (1.0 + 0.1 * (t * 1.8).sin(), Quat::from_rotation_y(t * 0.5))
             }
             _ => {
                 // Standard gentle pulse + slow rotation
-                (
-                    1.0 + 0.12 * (t * 2.5).sin(),
-                    Quat::from_rotation_y(t * 0.8),
-                )
+                (1.0 + 0.12 * (t * 2.5).sin(), Quat::from_rotation_y(t * 0.8))
             }
         };
 

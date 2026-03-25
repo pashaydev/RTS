@@ -13,31 +13,31 @@ mod debug;
 mod fog;
 mod fog_material;
 mod ground;
-mod terrain_material;
-mod water_material;
 mod hover_material;
 mod lighting;
 mod menu;
 mod minimap;
-mod multiplayer;
-mod net_bridge;
 mod mobs;
 mod model_assets;
+mod multiplayer;
+mod net_bridge;
 mod orders;
 mod pathfinding;
-mod pause_menu;
 mod pathvis;
+mod pause_menu;
 mod resources;
 mod roads;
 mod save;
 mod selection;
 mod spatial;
+mod terrain_material;
 mod theme;
 mod ui;
 mod unit_ai;
 mod units;
 mod vfx;
 mod victory;
+mod water_material;
 
 use bevy::ecs::error;
 use bevy::prelude::*;
@@ -52,9 +52,7 @@ fn main() {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .filter(|d| {
-            !d.components().any(|c| c.as_os_str() == "target")
-        });
+        .filter(|d| !d.components().any(|c| c.as_os_str() == "target"));
 
     if let Some(ref dir) = exe_dir {
         let _ = std::env::set_current_dir(dir);

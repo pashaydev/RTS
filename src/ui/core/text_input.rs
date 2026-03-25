@@ -373,10 +373,8 @@ mod wasm_clipboard {
                     if let Some(dt) = e.clipboard_data() {
                         if let Ok(text) = dt.get_data("text/plain") {
                             if !text.is_empty() {
-                                if let Ok(mut buf) = PASTE_BUFFER
-                                    .get()
-                                    .expect("already init")
-                                    .lock()
+                                if let Ok(mut buf) =
+                                    PASTE_BUFFER.get().expect("already init").lock()
                                 {
                                     *buf = Some(text);
                                 }
@@ -384,7 +382,8 @@ mod wasm_clipboard {
                         }
                     }
                     e.prevent_default();
-                }) as Box<dyn FnMut(web_sys::ClipboardEvent)>);
+                })
+                    as Box<dyn FnMut(web_sys::ClipboardEvent)>);
                 let _ = doc.add_event_listener_with_callback("paste", cb.as_ref().unchecked_ref());
                 cb.forget();
             }

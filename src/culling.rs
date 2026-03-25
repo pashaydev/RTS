@@ -10,7 +10,11 @@ impl Plugin for CullingPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (sync_frustum_culling, pause_culled_animations, resume_unculled_animations)
+            (
+                sync_frustum_culling,
+                pause_culled_animations,
+                resume_unculled_animations,
+            )
                 .chain()
                 .run_if(in_state(AppState::InGame)),
         );

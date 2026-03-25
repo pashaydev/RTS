@@ -16,6 +16,19 @@ use crate::selection::SelectionSet;
 
 pub struct UiCorePlugin;
 
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum UiCoreSet {
+    Interactions,
+    Lifecycle,
+    Mode,
+    Overlay,
+    Framework,
+    Tooltips,
+    Visuals,
+    Animation,
+    Scale,
+}
+
 impl Plugin for UiCorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<RallyPointMode>()
@@ -28,6 +41,21 @@ impl Plugin for UiCorePlugin {
             .init_resource::<framework::WidgetDragState>()
             .init_resource::<framework::GridInteractionActive>()
             .init_resource::<ControlGroupState>()
+            .configure_sets(
+                Update,
+                (
+                    UiCoreSet::Interactions,
+                    UiCoreSet::Lifecycle,
+                    UiCoreSet::Mode,
+                    UiCoreSet::Overlay,
+                    UiCoreSet::Framework,
+                    UiCoreSet::Tooltips,
+                    UiCoreSet::Visuals,
+                    UiCoreSet::Animation,
+                    UiCoreSet::Scale,
+                )
+                    .chain(),
+            )
             .add_systems(
                 PreUpdate,
                 (
@@ -36,26 +64,27 @@ impl Plugin for UiCorePlugin {
                 ),
             )
             // HUD lifecycle
-            .add_systems(OnEnter(AppState::InGame), hud::mark_pending_ui_spawn)
             .add_systems(
-                Update,
-                (hud::spawn_hud_roots, framework::spawn_grid_overlay, hud::clear_pending_ui_spawn)
+                OnEnter(AppState::InGame),
+                (hud::spawn_hud_roots, framework::spawn_grid_overlay)
                     .chain()
-                    .run_if(in_state(AppState::InGame))
-                    .run_if(resource_exists::<hud::PendingUiSpawn>),
+                    .in_set(UiCoreSet::Lifecycle),
             )
             // Compute UI mode after selection
             .add_systems(
                 Update,
                 (ApplyDeferred, hud::compute_ui_mode)
                     .chain()
+                    .in_set(UiCoreSet::Mode)
                     .after(SelectionSet)
                     .run_if(in_state(AppState::InGame)),
             )
             // Placement hint
             .add_systems(
                 Update,
-                hud::update_placement_hint.run_if(in_state(AppState::InGame)),
+                hud::update_placement_hint
+                    .in_set(UiCoreSet::Overlay)
+                    .run_if(in_state(AppState::InGame)),
             )
             // Overlay adoption
             .add_systems(
@@ -66,6 +95,7 @@ impl Plugin for UiCorePlugin {
                     hud::adopt_front_overlay_items,
                 )
                     .chain()
+                    .in_set(UiCoreSet::Overlay)
                     .in_set(OverlayLifecycleSet::Adopt)
                     .after(OverlayLifecycleSet::Manage)
                     .run_if(in_state(AppState::InGame)),
@@ -82,6 +112,7 @@ impl Plugin for UiCorePlugin {
                     framework::update_resize_handle_visuals,
                     framework::toggle_grid_overlay,
                 )
+                    .in_set(UiCoreSet::Framework)
                     .run_if(in_state(AppState::InGame)),
             )
             // Tooltip systems
@@ -92,6 +123,7 @@ impl Plugin for UiCorePlugin {
                     tooltips::update_action_tooltip_positions,
                     tooltips::cleanup_action_tooltips,
                 )
+                    .in_set(UiCoreSet::Tooltips)
                     .run_if(in_state(AppState::InGame)),
             )
             // Button visuals run in ALL states (menu + game)
@@ -101,7 +133,8 @@ impl Plugin for UiCorePlugin {
                     button_visuals::button_hover_visual,
                     button_visuals::animated_button_chrome_system,
                     button_visuals::animated_button_hover_system,
-                ),
+                )
+                    .in_set(UiCoreSet::Visuals),
             )
             // Animation systems run in ALL states
             .add_systems(
@@ -114,10 +147,11 @@ impl Plugin for UiCorePlugin {
                     animations::menu_particle_system,
                     animations::title_shimmer_system,
                     animations::ui_glow_pulse_system,
-                ),
+                )
+                    .in_set(UiCoreSet::Animation),
             )
             // UI scale runs in ALL states
-            .add_systems(Update, hud::update_ui_scale)
+            .add_systems(Update, hud::update_ui_scale.in_set(UiCoreSet::Scale))
             // Font fallback in PostUpdate
             .add_systems(PostUpdate, fonts::apply_default_fonts);
     }

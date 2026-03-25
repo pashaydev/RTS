@@ -1,12 +1,12 @@
 use bevy::prelude::*;
 use std::collections::BTreeMap;
 
+use super::core::fonts::UiFonts;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::theme;
-use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
-use super::core::fonts::UiFonts;
-use super::core::hud::HudReady;
 
 pub struct ProductionQueueWidgetPlugin;
 
@@ -16,7 +16,7 @@ impl Plugin for ProductionQueueWidgetPlugin {
             Update,
             spawn_production_queue_widget
                 .run_if(in_state(AppState::InGame))
-                .run_if(resource_added::<HudReady>),
+                .run_if(any_with_component::<MainHudRoot>),
         )
         .add_systems(
             Update,
@@ -34,11 +34,14 @@ fn spawn_production_queue_widget(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
-    hud_ready: Res<HudReady>,
+    root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
+    let Ok(hud_root) = root_q.single() else {
+        return;
+    };
     spawn_widget_frame(
         &mut commands,
-        hud_ready.hud_root,
+        hud_root,
         WidgetId::ProductionQueue,
         registry.slots.get(&WidgetId::ProductionQueue).unwrap(),
         registry.is_visible(WidgetId::ProductionQueue),
@@ -158,7 +161,11 @@ pub fn update_production_queue(
                         } else {
                             None
                         },
-                        if group.count == 1 { Some(*task_id) } else { None },
+                        if group.count == 1 {
+                            Some(*task_id)
+                        } else {
+                            None
+                        },
                         false,
                         group.count == 1,
                     );
@@ -440,7 +447,11 @@ fn spawn_building_queue_card(
         let current_text = commands
             .spawn((
                 QueuePanelItem,
-                Text::new(format!("Training {}  {:.0}s", current.display_name(), remaining)),
+                Text::new(format!(
+                    "Training {}  {:.0}s",
+                    current.display_name(),
+                    remaining
+                )),
                 TextFont {
                     font_size: theme::FONT_SMALL,
                     ..default()
@@ -469,9 +480,12 @@ fn spawn_building_queue_card(
                 bg.spawn((
                     QueuePanelItem,
                     Node {
-                        width: Val::Percent(queue.timer.as_ref().map_or(0.0, |timer| {
-                            timer.fraction() * 100.0
-                        })),
+                        width: Val::Percent(
+                            queue
+                                .timer
+                                .as_ref()
+                                .map_or(0.0, |timer| timer.fraction() * 100.0),
+                        ),
                         height: Val::Percent(100.0),
                         border_radius: BorderRadius::all(Val::Px(3.0)),
                         ..default()
@@ -578,20 +592,32 @@ fn format_active_state(
         UnitState::Idle => "Idle".to_string(),
         UnitState::Moving(pos) => format!("Move to {}", format_position(pos)),
         UnitState::Attacking(target) => {
-            format!("Attack {}", format_target(target, kind_lookup, resource_nodes))
+            format!(
+                "Attack {}",
+                format_target(target, kind_lookup, resource_nodes)
+            )
         }
         UnitState::Gathering(target) => {
-            format!("Gather {}", format_target(target, kind_lookup, resource_nodes))
+            format!(
+                "Gather {}",
+                format_target(target, kind_lookup, resource_nodes)
+            )
         }
         UnitState::ReturningToDeposit { .. } => "Return to deposit".to_string(),
         UnitState::Depositing { .. } => "Deposit resources".to_string(),
         UnitState::WaitingForStorage { .. } => "Waiting for storage".to_string(),
         UnitState::MovingToPlot(pos) => format!("Plot building at {}", format_position(pos)),
         UnitState::MovingToBuild(target) => {
-            format!("Move to build {}", format_target(target, kind_lookup, resource_nodes))
+            format!(
+                "Move to build {}",
+                format_target(target, kind_lookup, resource_nodes)
+            )
         }
         UnitState::Building(target) => {
-            format!("Build {}", format_target(target, kind_lookup, resource_nodes))
+            format!(
+                "Build {}",
+                format_target(target, kind_lookup, resource_nodes)
+            )
         }
         UnitState::AssignedGathering { building, .. } => {
             format!(
@@ -614,13 +640,22 @@ fn format_task(
         QueuedTask::Move(pos) => format!("Move to {}", format_position(*pos)),
         QueuedTask::AttackMove(pos) => format!("Attack-move {}", format_position(*pos)),
         QueuedTask::Attack(target) => {
-            format!("Attack {}", format_target(*target, kind_lookup, resource_nodes))
+            format!(
+                "Attack {}",
+                format_target(*target, kind_lookup, resource_nodes)
+            )
         }
         QueuedTask::Gather(target) => {
-            format!("Gather {}", format_target(*target, kind_lookup, resource_nodes))
+            format!(
+                "Gather {}",
+                format_target(*target, kind_lookup, resource_nodes)
+            )
         }
         QueuedTask::Build(target) => {
-            format!("Build {}", format_target(*target, kind_lookup, resource_nodes))
+            format!(
+                "Build {}",
+                format_target(*target, kind_lookup, resource_nodes)
+            )
         }
         QueuedTask::Patrol(pos) => format!("Patrol {}", format_position(*pos)),
         QueuedTask::AssignToProcessor(target) => format!(
@@ -666,7 +701,12 @@ fn group_command_queues(
         let queued_labels: Vec<(String, u64)> = queue
             .queue
             .iter()
-            .map(|entry| (format_task(&entry.task, kind_lookup, resource_nodes), entry.id))
+            .map(|entry| {
+                (
+                    format_task(&entry.task, kind_lookup, resource_nodes),
+                    entry.id,
+                )
+            })
             .collect();
 
         let mut key = format!("{}|{}", kind.display_name(), active_label);

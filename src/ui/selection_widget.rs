@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 
-use super::group_hotkeys_widget::{group_color, ControlGroups};
-use super::core::shared::{hp_color, spawn_hp_bar};
-use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::fonts::UiFonts;
-use super::core::hud::HudReady;
+use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::hud::MainHudRoot;
+use super::core::shared::{hp_color, spawn_hp_bar};
+use super::group_hotkeys_widget::{group_color, ControlGroups};
 use crate::blueprints::EntityKind;
 use crate::components::*;
 use crate::theme;
@@ -17,7 +17,7 @@ impl Plugin for SelectionWidgetPlugin {
             Update,
             spawn_selection_widget
                 .run_if(in_state(AppState::InGame))
-                .run_if(resource_added::<HudReady>),
+                .run_if(any_with_component::<MainHudRoot>),
         )
         .add_systems(
             Update,
@@ -37,11 +37,14 @@ fn spawn_selection_widget(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
-    hud_ready: Res<HudReady>,
+    root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
+    let Ok(hud_root) = root_q.single() else {
+        return;
+    };
     let selection_content = spawn_widget_frame(
         &mut commands,
-        hud_ready.hud_root,
+        hud_root,
         WidgetId::Selection,
         registry.slots.get(&WidgetId::Selection).unwrap(),
         registry.is_visible(WidgetId::Selection),
@@ -309,7 +312,15 @@ pub fn rebuild_selection_panel(
                 commands.entity(grid_container).add_child(grid);
 
                 for (entity, health) in entities {
-                    spawn_unit_mini_card(&mut commands, grid, *entity, *kind, health, &icons, &control_groups);
+                    spawn_unit_mini_card(
+                        &mut commands,
+                        grid,
+                        *entity,
+                        *kind,
+                        health,
+                        &icons,
+                        &control_groups,
+                    );
                 }
             }
 
@@ -345,7 +356,15 @@ pub fn rebuild_selection_panel(
                 commands.entity(grid_container).add_child(grid);
 
                 for (entity, health) in entities {
-                    spawn_unit_mini_card(&mut commands, grid, *entity, *kind, health, &icons, &control_groups);
+                    spawn_unit_mini_card(
+                        &mut commands,
+                        grid,
+                        *entity,
+                        *kind,
+                        health,
+                        &icons,
+                        &control_groups,
+                    );
                 }
             }
         }
