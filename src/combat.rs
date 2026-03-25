@@ -22,6 +22,7 @@ impl Plugin for CombatPlugin {
                 tick_dying,
             )
                 .chain()
+                .in_set(GameFlowSet::Simulation)
                 .run_if(in_state(AppState::InGame)),
         );
     }

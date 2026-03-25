@@ -152,9 +152,10 @@ pub fn widget_toolbar_system(
 /// Update toolbar button visuals based on widget visibility
 pub fn update_toolbar_visuals(
     registry: Res<WidgetRegistry>,
+    added_buttons: Query<Entity, Added<WidgetToolbarButton>>,
     mut buttons: Query<(&WidgetToolbarButton, &mut BackgroundColor)>,
 ) {
-    if !registry.is_changed() {
+    if !registry.is_changed() && added_buttons.is_empty() {
         return;
     }
     for (btn, mut bg) in &mut buttons {

@@ -30,6 +30,7 @@ impl Plugin for UnitsPlugin {
                 Update,
                 (move_units, steer_avoidance)
                     .chain()
+                    .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(

@@ -1,10 +1,14 @@
+use std::collections::VecDeque;
+
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use rand::SeedableRng;
 
+use bevy::light::NotShadowCaster;
 use crate::components::{
-    AppState, Biome, BiomeMap, GameSetupConfig, GameWorld, Ground, MapSeed, ModelAssets, RtsCamera,
+    AppState, Biome, BiomeMap, Decoration, FogHideable, GameSetupConfig, GameWorld, Ground, MapSeed,
+    ModelAssets, RtsCamera,
 };
 use crate::lighting::SunLight;
 use crate::terrain_material::{TerrainMaterial, TerrainSettings};
@@ -129,6 +133,15 @@ const WARP_AMP: f32 = 35.0;
 
 const MOISTURE_SCALE: f64 = 0.005;
 const TEMPERATURE_SCALE: f64 = 0.004;
+const MOISTURE_MACRO_SCALE: f64 = 0.0017;
+const TEMPERATURE_MACRO_SCALE: f64 = 0.0014;
+const WATER_BIOME_MARGIN: f32 = 0.45;
+const BEACH_BIOME_MARGIN: f32 = 2.0;
+const MOUNTAIN_BIOME_HEIGHT_NORM: f32 = 0.76;
+
+fn height_to_norm(height: f32) -> f32 {
+    ((height / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0)
+}
 
 #[derive(Clone, Copy)]
 pub struct BorderSettings {
@@ -251,6 +264,46 @@ impl TerrainNoise {
         height + (ridge_target - height) * smooth_t
     }
 
+    fn sample_moisture(&self, x: f32, z: f32, half_map: f32) -> f32 {
+        let local = (self
+            .moisture_fbm
+            .get([x as f64 * MOISTURE_SCALE, z as f64 * MOISTURE_SCALE]) as f32
+            * 0.5
+            + 0.5)
+            .clamp(0.0, 1.0);
+        let macro_pattern = (self.moisture_fbm.get([
+            x as f64 * MOISTURE_MACRO_SCALE + 311.0,
+            z as f64 * MOISTURE_MACRO_SCALE - 173.0,
+        ]) as f32
+            * 0.5
+            + 0.5)
+            .clamp(0.0, 1.0);
+        let radial = (1.0 - ((x * x + z * z).sqrt() / half_map)).clamp(0.0, 1.0);
+
+        (local * 0.45 + macro_pattern * 0.4 + radial * 0.15).clamp(0.0, 1.0)
+    }
+
+    fn sample_temperature(&self, x: f32, z: f32, half_map: f32, height_norm: f32) -> f32 {
+        let local = (self
+            .temperature_fbm
+            .get([x as f64 * TEMPERATURE_SCALE, z as f64 * TEMPERATURE_SCALE])
+            as f32
+            * 0.5
+            + 0.5)
+            .clamp(0.0, 1.0);
+        let macro_pattern = (self.temperature_fbm.get([
+            x as f64 * TEMPERATURE_MACRO_SCALE - 251.0,
+            z as f64 * TEMPERATURE_MACRO_SCALE + 97.0,
+        ]) as f32
+            * 0.5
+            + 0.5)
+            .clamp(0.0, 1.0);
+        let latitude = 1.0 - (z.abs() / half_map).clamp(0.0, 1.0);
+        let elevation_cooling = ((height_norm - 0.52).max(0.0) * 0.45).clamp(0.0, 0.25);
+
+        (local * 0.35 + macro_pattern * 0.25 + latitude * 0.4 - elevation_cooling).clamp(0.0, 1.0)
+    }
+
     pub fn biome_at(&self, x: f32, z: f32, half_map: f32) -> Biome {
         let border = BorderSettings::from_map_size(half_map * 2.0);
         let edge_distance = edge_distance_to_square(x, z, half_map);
@@ -259,41 +312,27 @@ impl TerrainNoise {
         }
 
         let height = self.terrain_height(x, z, half_map);
-        let height_norm = ((height / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0);
+        let height_norm = height_to_norm(height);
+        let moisture = self.sample_moisture(x, z, half_map);
+        let temperature = self.sample_temperature(x, z, half_map, height_norm);
 
-        let moisture = (self
-            .moisture_fbm
-            .get([x as f64 * MOISTURE_SCALE, z as f64 * MOISTURE_SCALE])
-            as f32
-            * 0.5
-            + 0.5)
-            .clamp(0.0, 1.0);
-
-        let temperature = (self
-            .temperature_fbm
-            .get([x as f64 * TEMPERATURE_SCALE, z as f64 * TEMPERATURE_SCALE])
-            as f32
-            * 0.5
-            + 0.5)
-            .clamp(0.0, 1.0);
-
-        if height_norm < 0.28 {
+        if height <= WATER_LEVEL + WATER_BIOME_MARGIN {
             return Biome::Water;
         }
-        if height_norm < 0.33 {
+        if height <= WATER_LEVEL + BEACH_BIOME_MARGIN {
             return Biome::Beach;
         }
-        if height_norm > 0.75 {
+        if height_norm > MOUNTAIN_BIOME_HEIGHT_NORM {
             return Biome::Mountain;
         }
-        if temperature > 0.65 && moisture < 0.35 {
+        if height_norm < 0.54 && moisture > 0.67 {
+            return Biome::Wetland;
+        }
+        if temperature > 0.66 && moisture < 0.38 {
             return Biome::Desert;
         }
-        if moisture > 0.55 {
+        if moisture > 0.56 && temperature > 0.28 {
             return Biome::Forest;
-        }
-        if height_norm < 0.42 && moisture > 0.5 {
-            return Biome::Wetland;
         }
         Biome::Grassland
     }
@@ -624,6 +663,32 @@ pub fn spawn_ground(
         })),
         Transform::from_translation(Vec3::ZERO),
     ));
+    // ── Detect and spawn separate water bodies ──
+    let water_mat_handle = water_materials.add(WaterMaterial {
+        settings: WaterSettings::default(),
+    });
+
+    let water_bodies = find_water_bodies(&grid_heights, actual_grid_size, step, actual_half_map);
+
+    for body_cells in &water_bodies {
+        if let Some(mesh) = build_water_body_mesh(
+            body_cells,
+            &grid_heights,
+            actual_grid_size,
+            step,
+            actual_half_map,
+        ) {
+            commands.spawn((
+                GameWorld,
+                WaterPlane,
+                Mesh3d(meshes.add(mesh)),
+                MeshMaterial3d(water_mat_handle.clone()),
+                Transform::IDENTITY,
+            ));
+        }
+    }
+
+    // Insert HeightMap & BiomeMap resources
     commands.insert_resource(HeightMap {
         heights: grid_heights.clone(),
         natural_heights: grid_heights,
@@ -632,26 +697,141 @@ pub fn spawn_ground(
         map_size: actual_map_size,
         half_map: actual_half_map,
     });
-
-    // Insert BiomeMap resource
     commands.insert_resource(BiomeMap {
         data: biome_data,
         grid_size: actual_grid_size,
         map_size: actual_map_size,
     });
+}
 
-    // Spawn water plane
-    let water_level = WATER_LEVEL;
-    let water_mesh = Mesh::from(Plane3d::new(Vec3::Y, Vec2::splat(actual_half_map)));
-    commands.spawn((
-        GameWorld,
-        WaterPlane,
-        Mesh3d(meshes.add(water_mesh)),
-        MeshMaterial3d(water_materials.add(WaterMaterial {
-            settings: WaterSettings::default(),
-        })),
-        Transform::from_translation(Vec3::new(0.0, water_level, 0.0)),
-    ));
+/// Flood-fill on the grid-cell (quad) level to find connected water regions.
+/// A cell (ix, iz) is "wet" if any of its 4 corner vertices are below WATER_LEVEL.
+/// Returns a Vec of water bodies, each being a Vec of (ix, iz) cell coordinates.
+fn find_water_bodies(
+    heights: &[f32],
+    grid_size: usize,
+    _step: f32,
+    _half_map: f32,
+) -> Vec<Vec<(usize, usize)>> {
+    let cells = grid_size - 1;
+    let mut visited = vec![false; cells * cells];
+    let mut bodies = Vec::new();
+
+    let is_wet = |ix: usize, iz: usize| -> bool {
+        let tl = iz * grid_size + ix;
+        let tr = tl + 1;
+        let bl = tl + grid_size;
+        let br = bl + 1;
+        heights[tl] < WATER_LEVEL
+            || heights[tr] < WATER_LEVEL
+            || heights[bl] < WATER_LEVEL
+            || heights[br] < WATER_LEVEL
+    };
+
+    for sz in 0..cells {
+        for sx in 0..cells {
+            let idx = sz * cells + sx;
+            if visited[idx] || !is_wet(sx, sz) {
+                continue;
+            }
+            // BFS flood-fill
+            let mut body = Vec::new();
+            let mut queue = VecDeque::new();
+            visited[idx] = true;
+            queue.push_back((sx, sz));
+            while let Some((cx, cz)) = queue.pop_front() {
+                body.push((cx, cz));
+                for (dx, dz) in [(-1i32, 0), (1, 0), (0, -1), (0, 1)] {
+                    let nx = cx as i32 + dx;
+                    let nz = cz as i32 + dz;
+                    if nx < 0 || nz < 0 || nx >= cells as i32 || nz >= cells as i32 {
+                        continue;
+                    }
+                    let (nx, nz) = (nx as usize, nz as usize);
+                    let ni = nz * cells + nx;
+                    if !visited[ni] && is_wet(nx, nz) {
+                        visited[ni] = true;
+                        queue.push_back((nx, nz));
+                    }
+                }
+            }
+            if body.len() >= 4 {
+                // Skip tiny 1-3 cell puddles
+                bodies.push(body);
+            }
+        }
+    }
+    bodies
+}
+
+/// Build a mesh for a single water body from its constituent grid cells.
+/// The mesh sits at WATER_LEVEL and clips to the terrain boundary where terrain
+/// meets the water surface.
+fn build_water_body_mesh(
+    cells: &[(usize, usize)],
+    heights: &[f32],
+    grid_size: usize,
+    step: f32,
+    half_map: f32,
+) -> Option<Mesh> {
+    if cells.is_empty() {
+        return None;
+    }
+
+    // Collect unique vertex indices used by these cells, and remap them for the mesh.
+    use std::collections::HashMap;
+    let mut vert_remap: HashMap<usize, u32> = HashMap::new();
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut uvs: Vec<[f32; 2]> = Vec::new();
+
+    let mut get_or_insert = |vi: usize| -> u32 {
+        if let Some(&idx) = vert_remap.get(&vi) {
+            return idx;
+        }
+        let iz = vi / grid_size;
+        let ix = vi % grid_size;
+        let x = -half_map + ix as f32 * step;
+        let z = -half_map + iz as f32 * step;
+        let idx = positions.len() as u32;
+
+        positions.push([x, WATER_LEVEL, z]);
+        normals.push([0.0, 1.0, 0.0]);
+        uvs.push([
+            ix as f32 / (grid_size - 1) as f32,
+            iz as f32 / (grid_size - 1) as f32,
+        ]);
+        vert_remap.insert(vi, idx);
+        idx
+    };
+
+    let mut indices: Vec<u32> = Vec::with_capacity(cells.len() * 6);
+
+    for &(cx, cz) in cells {
+        let tl = cz * grid_size + cx;
+        let tr = tl + 1;
+        let bl = tl + grid_size;
+        let br = bl + 1;
+
+        let i_tl = get_or_insert(tl);
+        let i_tr = get_or_insert(tr);
+        let i_bl = get_or_insert(bl);
+        let i_br = get_or_insert(br);
+
+        indices.push(i_tl);
+        indices.push(i_bl);
+        indices.push(i_tr);
+        indices.push(i_tr);
+        indices.push(i_bl);
+        indices.push(i_br);
+    }
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(Indices::U32(indices));
+    Some(mesh)
 }
 
 fn spawn_mountain_border(
@@ -738,6 +918,9 @@ fn spawn_border_mountain(
 
     commands.spawn((
         GameWorld,
+        Decoration,
+        FogHideable::Object,
+        NotShadowCaster,
         SceneRoot(scene),
         Transform::from_translation(Vec3::new(x, y - 0.5, z))
             .with_rotation(Quat::from_rotation_y(

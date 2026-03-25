@@ -24,14 +24,21 @@ impl Plugin for AiPlugin {
                 Update,
                 (strategy::ai_strategy_system, economy::ai_economy_system)
                     .chain()
+                    .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
                 (military::ai_military_system, tactical::ai_tactical_system)
+                    .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),
             )
-            .add_systems(Update, sync_ai_settings.run_if(in_state(AppState::InGame)));
+            .add_systems(
+                Update,
+                sync_ai_settings
+                    .in_set(GameFlowSet::Diagnostics)
+                    .run_if(in_state(AppState::InGame)),
+            );
     }
 }
 

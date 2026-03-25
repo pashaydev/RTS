@@ -3,6 +3,10 @@ use bevy::prelude::*;
 
 use crate::components::*;
 
+/// Maximum number of simultaneous VFX particle entities (dust, flashes, gather particles).
+/// Prevents frame drops during massive battles by capping short-lived particle spawns.
+const MAX_VFX_PARTICLES: usize = 512;
+
 pub struct VfxPlugin;
 
 impl Plugin for VfxPlugin {
@@ -268,6 +272,8 @@ fn footstep_dust_spawner(
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
     zoom_level: Res<CameraZoomLevel>,
+    existing_dust: Query<(), With<FootstepDust>>,
+    existing_flashes: Query<(), With<VfxFlash>>,
     mut workers: Query<
         (
             &Transform,
@@ -280,6 +286,11 @@ fn footstep_dust_spawner(
 ) {
     // Skip dust particles when zoomed far out
     if zoom_level.detail == DetailLevel::Far {
+        return;
+    }
+    // Cap total VFX particles to prevent frame drops in large battles
+    let total_particles = existing_dust.iter().count() + existing_flashes.iter().count();
+    if total_particles >= MAX_VFX_PARTICLES {
         return;
     }
     let Some(vfx) = vfx_assets else { return };

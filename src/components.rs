@@ -24,6 +24,17 @@ pub enum OverlayLifecycleSet {
     Adopt,
 }
 
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum GameFlowSet {
+    Input,
+    NetworkReceive,
+    Simulation,
+    NetworkBroadcast,
+    Ui,
+    Presentation,
+    Diagnostics,
+}
+
 // ── Game Setup Config ──
 
 /// What occupies a faction slot.
@@ -1098,6 +1109,50 @@ pub struct GrassInstanceAssets {
     pub mesh: Handle<Mesh>,
     pub material: Handle<StandardMaterial>,
 }
+
+// ── Decoration chunk instancing ──
+
+/// Raw GLTF handles for decoration models, used by extraction system.
+#[derive(Resource)]
+pub struct DecoGltfHandles {
+    pub bushes: Vec<Handle<bevy::gltf::Gltf>>,
+    pub rocks: Vec<Handle<bevy::gltf::Gltf>>,
+    pub grass: Vec<Handle<bevy::gltf::Gltf>>,
+    pub mountains: Vec<Handle<bevy::gltf::Gltf>>,
+}
+
+/// Extracted mesh+material per decoration variant, ready for CPU vertex merging.
+#[derive(Resource, Default)]
+pub struct DecorationInstanceAssets {
+    pub bushes: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    pub rocks: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    pub grass: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    pub mountains: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+}
+
+/// Chunk of merged decoration geometry, analogous to GrassChunk.
+#[derive(Component)]
+pub struct DecoChunk {
+    pub chunk_x: i32,
+    pub chunk_z: i32,
+}
+
+/// Maps chunk coords to decoration chunk entities.
+#[derive(Resource, Default)]
+pub struct DecoChunkMap(pub std::collections::HashMap<(i32, i32), Vec<Entity>>);
+
+/// Pending decoration placements collected at spawn time, consumed once assets are extracted.
+#[derive(Resource)]
+pub struct PendingDecorationPlacements {
+    /// (variant_index, world_pos, scale, y_rotation) per decoration kind
+    pub bushes: Vec<(usize, Vec3, f32, f32)>,
+    pub rocks: Vec<(usize, Vec3, f32, f32)>,
+    pub grass: Vec<(usize, Vec3, f32, f32)>,
+}
+
+/// Pending mountain placements collected at spawn time.
+#[derive(Resource)]
+pub struct PendingMountainPlacements(pub Vec<(usize, Vec3, f32, f32)>);
 
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ExplosiveProp {

@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 #[cfg(not(target_arch = "wasm32"))]
 use bevy::light::VolumetricLight;
+use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
 
 use crate::components::{
@@ -257,6 +258,22 @@ fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
     });
     commands.insert_resource(LightingOverrides::default());
 
+    // Reduce shadow map resolution for performance (default is 2048).
+    // 1024 is sufficient for an RTS camera distance.
+    commands.insert_resource(DirectionalLightShadowMap { size: 2048 });
+
+    // Shadow cascade config: limit shadow distance to 150 units with 3 cascades.
+    // RTS cameras are typically 40-80 units above ground; shadows beyond 150 are
+    // wasted and the GPU culls far fewer shadow casters with a tighter bound.
+    let cascade_shadow_config: CascadeShadowConfig = CascadeShadowConfigBuilder {
+        num_cascades: 3,
+        minimum_distance: 1.0,
+        maximum_distance: 150.0,
+        first_cascade_far_bound: 15.0,
+        overlap_proportion: 0.15,
+    }
+    .into();
+
     // Directional light (sun)
     #[cfg(not(target_arch = "wasm32"))]
     commands.spawn((
@@ -268,6 +285,7 @@ fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
             color: Color::srgb(0.85, 0.8, 0.7),
             ..default()
         },
+        cascade_shadow_config.clone(),
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, SUN_YAW, 0.0)),
         VolumetricLight,
     ));
@@ -281,6 +299,7 @@ fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
             color: Color::srgb(0.85, 0.8, 0.7),
             ..default()
         },
+        cascade_shadow_config,
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, SUN_YAW, 0.0)),
     ));
 

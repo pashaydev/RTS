@@ -44,6 +44,7 @@ impl Plugin for SelectionPlugin {
                 (track_drag, update_selection_box_visual)
                     .chain()
                     .in_set(SelectionSet)
+                    .in_set(GameFlowSet::Input)
                     .after(MinimapSet)
                     .run_if(in_state(AppState::InGame))
                     .run_if(player_can_command),
@@ -55,6 +56,7 @@ impl Plugin for SelectionPlugin {
                     handle_click_select.after(update_hover),
                 )
                     .in_set(SelectionSet)
+                    .in_set(GameFlowSet::Input)
                     .after(MinimapSet)
                     .run_if(in_state(AppState::InGame))
                     .run_if(player_can_command),
@@ -63,18 +65,21 @@ impl Plugin for SelectionPlugin {
             .add_systems(
                 Update,
                 handle_right_click_move
+                    .in_set(GameFlowSet::Input)
                     .run_if(in_state(AppState::InGame))
                     .run_if(player_can_command),
             )
             .add_systems(
                 Update,
                 handle_unit_command_hotkeys
+                    .in_set(GameFlowSet::Input)
                     .run_if(in_state(AppState::InGame))
                     .run_if(player_can_command),
             )
             .add_systems(
                 Update,
                 (update_hover_ring, update_hover_tooltip)
+                    .in_set(GameFlowSet::Presentation)
                     .after(SelectionSet)
                     .run_if(in_state(AppState::InGame)),
             )
@@ -85,6 +90,7 @@ impl Plugin for SelectionPlugin {
                     reset_subgroup_on_selection_change,
                 )
                     .chain()
+                    .in_set(GameFlowSet::Input)
                     .after(SelectionSet)
                     .run_if(in_state(AppState::InGame))
                     .run_if(player_can_command),

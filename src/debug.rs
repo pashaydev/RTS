@@ -1,11 +1,14 @@
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
+use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
+use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::{
-    AiControlledFactions, AiFactionSettings, AppState, Faction, GameSetupConfig, Health, RtsCamera,
+    AiControlledFactions, AiFactionSettings, AllyNotifications, AllyNotifyKind, AppState,
+    AttackTarget, Faction, GameFlowSet, GameSetupConfig, Health, MoveTarget, RtsCamera,
     Selected, UiPressActive, UnitSpeed,
 };
 use crate::fog::FogTweakSettings;
@@ -14,7 +17,10 @@ use crate::lighting::{
     DayCycle, EntityClusterLight, EntityLightConfig, EntityLightGrid, LightingOverrides, SunLight,
 };
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
+use crate::pathfinding::{NavPath, PathRequestQueue};
 use crate::theme;
+use crate::ui::core::hud::MainHudRoot;
+use crate::ui::fonts::UiFonts;
 use bevy::window::PrimaryWindow;
 
 const DEBUG_CONFIG_PATH: &str = "config/debug_tweaks.json";
@@ -23,6 +29,20 @@ pub struct DebugPlugin;
 
 impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
+        let mut fps_overlay_config = FpsOverlayConfig::default();
+        fps_overlay_config.enabled = false;
+        fps_overlay_config.frame_time_graph_config.enabled = false;
+
+        app.add_plugins((
+            FrameTimeDiagnosticsPlugin::default(),
+            FpsOverlayPlugin {
+                config: fps_overlay_config,
+            },
+        ))
+            .init_resource::<DebugViewState>()
+            .add_systems(Update, toggle_debug_views)
+            .add_systems(Update, apply_debug_view_state.in_set(GameFlowSet::Diagnostics));
+
         app.init_resource::<DebugTweaks>()
             .init_resource::<DebugPanelState>()
             .init_resource::<FpsTracker>()
@@ -59,6 +79,8 @@ impl Plugin for DebugPlugin {
             .add_systems(
                 Update,
                 (
+                    sync_debug_view_tweaks,
+                    sync_debug_flow_tweaks,
                     sync_entity_spawn_tweaks,
                     sync_entity_selected_tweaks,
                     sync_runtime_debug_tweaks,
@@ -69,8 +91,46 @@ impl Plugin for DebugPlugin {
                     rebuild_tweak_panel,
                     update_tweak_visuals,
                 )
+                    .in_set(GameFlowSet::Diagnostics)
                     .run_if(in_state(AppState::InGame)),
             );
+
+        app.add_systems(
+            Update,
+            draw_debug_gizmos
+                .in_set(GameFlowSet::Diagnostics)
+                .run_if(in_state(AppState::InGame)),
+        )
+        .add_systems(
+            Update,
+            spawn_inspector_overlay
+                .in_set(GameFlowSet::Diagnostics)
+                .run_if(in_state(AppState::InGame))
+                .run_if(any_with_component::<MainHudRoot>),
+        )
+        .add_systems(
+            Update,
+            update_inspector_overlay
+                .in_set(GameFlowSet::Diagnostics)
+                .run_if(in_state(AppState::InGame)),
+        );
+    }
+}
+
+#[derive(Resource)]
+struct DebugViewState {
+    fps_overlay: bool,
+    inspector: bool,
+    gizmos: bool,
+}
+
+impl Default for DebugViewState {
+    fn default() -> Self {
+        Self {
+            fps_overlay: false,
+            inspector: false,
+            gizmos: true,
+        }
     }
 }
 
@@ -237,6 +297,16 @@ impl DebugTweaks {
             if let TweakValue::ReadOnly(ref old) = entry.value {
                 if old != new_text {
                     entry.value = TweakValue::ReadOnly(new_text.to_string());
+                }
+            }
+        }
+    }
+
+    fn set_bool_if_changed(&mut self, folder: &str, label: &str, new_value: bool) {
+        if let Some(entry) = self.get_mut(folder, label) {
+            if let TweakValue::Bool(value) = &mut entry.value {
+                if *value != new_value {
+                    *value = new_value;
                 }
             }
         }
@@ -417,6 +487,12 @@ struct DebugEntityCountText;
 
 #[derive(Component)]
 struct DebugDayCycleText;
+
+#[derive(Component)]
+struct DebugInspectorOverlay;
+
+#[derive(Component)]
+struct DebugInspectorText;
 
 #[derive(Component)]
 struct DebugTweakPanel;
@@ -1896,6 +1972,9 @@ fn sync_fog_tweaks(tweaks: Res<DebugTweaks>, mut fog_settings: ResMut<FogTweakSe
     // Only sync gameplay settings here.
 
     // ── FoW Gameplay folder → FogTweakSettings ──
+    if let Some(v) = tweaks.get_bool("Visuals/FoW Gameplay", "Reveal Full Map") {
+        fog_settings.reveal_all = v;
+    }
     if let Some(v) = tweaks.get_float("Visuals/FoW Gameplay", "Mob Threshold") {
         fog_settings.mob_threshold = v;
     }
@@ -1992,6 +2071,7 @@ pub struct DebugSpawnState {
 const SPAWN_FOLDER: &str = "Entities/Spawn";
 const SELECTED_FOLDER: &str = "Entities/Selected";
 const RUNTIME_FOLDER: &str = "Game/Runtime";
+const FLOW_FOLDER: &str = "Game/Flow";
 const AI_FOLDER: &str = "Game/AI Settings";
 const SAVE_FOLDER: &str = "Game/Save & Load";
 const NET_CONN_FOLDER: &str = "Network/Connection";
@@ -2033,6 +2113,21 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_readonly(RUNTIME_FOLDER, "Camera Distance", "--");
     tweaks.add_readonly(RUNTIME_FOLDER, "Cursor World", "--");
     tweaks.add_readonly(RUNTIME_FOLDER, "UI Capture", "--");
+    tweaks.add_readonly(
+        RUNTIME_FOLDER,
+        "Debug Hotkeys",
+        "Ctrl+[ FPS | Ctrl+\\ Gizmos | Ctrl+] Inspector",
+    );
+    tweaks.add_bool(RUNTIME_FOLDER, "FPS Overlay", false);
+    tweaks.add_bool(RUNTIME_FOLDER, "World Inspector", false);
+    tweaks.add_bool(RUNTIME_FOLDER, "Selection Gizmos", true);
+
+    tweaks.add_readonly(FLOW_FOLDER, "Pipeline", "Input > Net Rx > Sim > Net Tx > UI > Present");
+    tweaks.add_readonly(FLOW_FOLDER, "Bindings", "--");
+    tweaks.add_readonly(FLOW_FOLDER, "Selected Units", "0");
+    tweaks.add_readonly(FLOW_FOLDER, "Move Targets", "0");
+    tweaks.add_readonly(FLOW_FOLDER, "Attack Targets", "0");
+    tweaks.add_readonly(FLOW_FOLDER, "Queued Paths", "0");
 
     // AI Settings folder
     for prefix in ["P2", "P3", "P4"] {
@@ -2096,6 +2191,344 @@ fn get_selected_kind_and_faction(tweaks: &DebugTweaks) -> (EntityKind, Faction) 
 
 fn format_debug_vec3(v: Vec3) -> String {
     format!("{:.1}, {:.1}, {:.1}", v.x, v.y, v.z)
+}
+
+fn toggle_debug_views(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut state: ResMut<DebugViewState>,
+    time: Res<Time>,
+    mut notifications: Option<ResMut<AllyNotifications>>,
+    tweaks: Option<ResMut<DebugTweaks>>,
+) {
+    let ctrl = keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
+    let mut changed = false;
+    if ctrl && keys.just_pressed(KeyCode::BracketLeft) {
+        state.fps_overlay = !state.fps_overlay;
+        info!(
+            "Debug FPS overlay {}",
+            if state.fps_overlay { "enabled" } else { "disabled" }
+        );
+        if let Some(notifications) = notifications.as_mut() {
+            notifications.push(
+                AllyNotifyKind::UnderAttack,
+                format!(
+                    "FPS overlay {}",
+                    if state.fps_overlay { "enabled" } else { "disabled" }
+                ),
+                None,
+                time.elapsed_secs(),
+            );
+        }
+        changed = true;
+    }
+    if ctrl && keys.just_pressed(KeyCode::Backslash) {
+        state.gizmos = !state.gizmos;
+        info!(
+            "Debug gizmos {}",
+            if state.gizmos { "enabled" } else { "disabled" }
+        );
+        if let Some(notifications) = notifications.as_mut() {
+            notifications.push(
+                AllyNotifyKind::Attacking,
+                format!(
+                    "Debug gizmos {}",
+                    if state.gizmos { "enabled" } else { "disabled" }
+                ),
+                None,
+                time.elapsed_secs(),
+            );
+        }
+        changed = true;
+    }
+    if ctrl && keys.just_pressed(KeyCode::BracketRight) {
+        state.inspector = !state.inspector;
+        info!(
+            "World inspector {}",
+            if state.inspector { "enabled" } else { "disabled" }
+        );
+        if let Some(notifications) = notifications.as_mut() {
+            notifications.push(
+                AllyNotifyKind::ReadyToAttack,
+                format!(
+                    "World inspector {}",
+                    if state.inspector { "enabled" } else { "disabled" }
+                ),
+                None,
+                time.elapsed_secs(),
+            );
+        }
+        changed = true;
+    }
+
+    if changed {
+        if let Some(mut tweaks) = tweaks {
+            tweaks.set_bool_if_changed(RUNTIME_FOLDER, "FPS Overlay", state.fps_overlay);
+            tweaks.set_bool_if_changed(RUNTIME_FOLDER, "World Inspector", state.inspector);
+            tweaks.set_bool_if_changed(RUNTIME_FOLDER, "Selection Gizmos", state.gizmos);
+        }
+    }
+}
+
+fn apply_debug_view_state(
+    state: Res<DebugViewState>,
+    mut fps_overlay: ResMut<FpsOverlayConfig>,
+) {
+    fps_overlay.enabled = state.fps_overlay;
+    fps_overlay.frame_time_graph_config.enabled = state.fps_overlay;
+}
+
+fn spawn_inspector_overlay(
+    mut commands: Commands,
+    fonts: Res<UiFonts>,
+    root_q: Query<Entity, Added<MainHudRoot>>,
+) {
+    let Ok(hud_root) = root_q.single() else {
+        return;
+    };
+
+    let panel = commands
+        .spawn((
+            DebugInspectorOverlay,
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(12.0),
+                top: Val::Px(12.0),
+                width: Val::Px(320.0),
+                max_height: Val::Px(420.0),
+                padding: UiRect::all(Val::Px(10.0)),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.04, 0.05, 0.07, 0.94)),
+            Visibility::Hidden,
+        ))
+        .insert(BorderColor::all(Color::srgba(0.35, 0.6, 0.95, 0.75)))
+        .insert(GlobalZIndex(95))
+        .insert(Pickable::IGNORE)
+        .with_children(|parent| {
+            parent.spawn((
+                Text::new("Inspector"),
+                TextFont {
+                    font: fonts.heading.clone(),
+                    font_size: 18.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.85, 0.92, 1.0)),
+            ));
+            parent.spawn((
+                DebugInspectorText,
+                Text::new(""),
+                TextFont {
+                    font: fonts.body.clone(),
+                    font_size: 13.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(0.86, 0.88, 0.9)),
+            ));
+        })
+        .id();
+
+    commands.entity(hud_root).add_child(panel);
+}
+
+fn update_inspector_overlay(
+    state: Res<DebugViewState>,
+    mut overlay_q: Query<&mut Visibility, With<DebugInspectorOverlay>>,
+    mut text_q: Query<&mut Text, With<DebugInspectorText>>,
+    entities: Query<Entity>,
+    selected_q: Query<(Entity, &EntityKind, Option<&Health>), With<Selected>>,
+    move_targets: Query<(), With<MoveTarget>>,
+    attack_targets: Query<(), With<AttackTarget>>,
+    path_queue: Option<Res<PathRequestQueue>>,
+    role: Res<crate::multiplayer::NetRole>,
+    lobby: Option<Res<crate::multiplayer::LobbyState>>,
+    active_player: Option<Res<crate::components::ActivePlayer>>,
+) {
+    let Ok(mut visibility) = overlay_q.single_mut() else {
+        return;
+    };
+    *visibility = if state.inspector {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+
+    if !state.inspector {
+        return;
+    }
+
+    let selected_count = selected_q.iter().count();
+    let selected_summary = selected_q
+        .iter()
+        .take(6)
+        .map(|(entity, kind, health)| {
+            let hp = health
+                .map(|hp| format!("{:.0}/{:.0}", hp.current, hp.max))
+                .unwrap_or_else(|| "--".to_string());
+            format!("#{:?} {} hp {}", entity, kind.display_name(), hp)
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let lobby_status = lobby
+        .as_ref()
+        .map(|l| format!("{:?}", l.status))
+        .unwrap_or_else(|| "--".to_string());
+    let active_player = active_player
+        .as_ref()
+        .map(|p| format!("{:?}", p.0))
+        .unwrap_or_else(|| "--".to_string());
+
+    if let Ok(mut text) = text_q.single_mut() {
+        **text = format!(
+            "Ctrl+] toggles this panel\n\nEntities: {}\nSelected: {}\nMove targets: {}\nAttack targets: {}\nQueued paths: {}\nNet role: {:?}\nLobby: {}\nActive player: {}\n\n{}",
+            entities.iter().count(),
+            selected_count,
+            move_targets.iter().count(),
+            attack_targets.iter().count(),
+            path_queue.as_ref().map(|q| q.requests.len()).unwrap_or_default(),
+            *role,
+            lobby_status,
+            active_player,
+            if selected_summary.is_empty() {
+                "No selected entities".to_string()
+            } else {
+                format!("Selected details:\n{}", selected_summary)
+            }
+        );
+    }
+}
+
+fn sync_debug_view_tweaks(tweaks: ResMut<DebugTweaks>, mut state: ResMut<DebugViewState>) {
+    if let Some(enabled) = tweaks.get_bool(RUNTIME_FOLDER, "FPS Overlay") {
+        state.fps_overlay = enabled;
+    }
+    if let Some(enabled) = tweaks.get_bool(RUNTIME_FOLDER, "World Inspector") {
+        state.inspector = enabled;
+    }
+    if let Some(enabled) = tweaks.get_bool(RUNTIME_FOLDER, "Selection Gizmos") {
+        state.gizmos = enabled;
+    }
+}
+
+fn sync_debug_flow_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    path_queue: Option<Res<PathRequestQueue>>,
+    selected_units: Query<Entity, (With<Selected>, With<crate::components::Unit>)>,
+    move_targets: Query<Entity, With<MoveTarget>>,
+    attack_targets: Query<Entity, With<AttackTarget>>,
+) {
+    tweaks.set_readonly_if_changed(
+        FLOW_FOLDER,
+        "Bindings",
+        "Minimap/Selection=Input | NetSet=Net Rx/Tx | Units/Buildings/Resources/AI/Combat/Path=Sim | UI=UiCore",
+    );
+    tweaks.set_readonly_if_changed(
+        FLOW_FOLDER,
+        "Selected Units",
+        &selected_units.iter().count().to_string(),
+    );
+    tweaks.set_readonly_if_changed(
+        FLOW_FOLDER,
+        "Move Targets",
+        &move_targets.iter().count().to_string(),
+    );
+    tweaks.set_readonly_if_changed(
+        FLOW_FOLDER,
+        "Attack Targets",
+        &attack_targets.iter().count().to_string(),
+    );
+    tweaks.set_readonly_if_changed(
+        FLOW_FOLDER,
+        "Queued Paths",
+        &path_queue
+            .as_ref()
+            .map(|queue| queue.requests.len())
+            .unwrap_or_default()
+            .to_string(),
+    );
+}
+
+fn draw_debug_gizmos(
+    state: Res<DebugViewState>,
+    mut gizmos: Gizmos,
+    camera_q: Query<&RtsCamera>,
+    cam_query: Query<(&Camera, &GlobalTransform)>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    selected: Query<
+        (
+            &GlobalTransform,
+            Option<&MoveTarget>,
+            Option<&NavPath>,
+            Option<&AttackTarget>,
+        ),
+        With<Selected>,
+    >,
+    targets: Query<&GlobalTransform>,
+) {
+    if !state.gizmos {
+        return;
+    }
+
+    if let Ok(camera) = camera_q.single() {
+        let pivot = camera.pivot + Vec3::Y * 0.15;
+        gizmos.circle(pivot, 1.2, Color::srgb(1.0, 0.45, 0.1));
+        gizmos.line(
+            pivot + Vec3::X * 1.4,
+            pivot - Vec3::X * 1.4,
+            Color::srgb(1.0, 0.45, 0.1),
+        );
+        gizmos.line(
+            pivot + Vec3::Z * 1.4,
+            pivot - Vec3::Z * 1.4,
+            Color::srgb(1.0, 0.45, 0.1),
+        );
+    }
+
+    if let Some(cursor) = cursor_ground_pos(&cam_query, &windows) {
+        let cursor = cursor + Vec3::Y * 0.08;
+        gizmos.circle(cursor, 0.5, Color::srgb(0.25, 1.0, 0.4));
+        gizmos.line(
+            cursor + Vec3::X * 0.7,
+            cursor - Vec3::X * 0.7,
+            Color::srgb(0.25, 1.0, 0.4),
+        );
+        gizmos.line(
+            cursor + Vec3::Z * 0.7,
+            cursor - Vec3::Z * 0.7,
+            Color::srgb(0.25, 1.0, 0.4),
+        );
+    }
+
+    for (transform, move_target, nav_path, attack_target) in &selected {
+        let origin = transform.translation() + Vec3::Y * 0.15;
+        gizmos.circle(origin, 0.9, Color::srgb(0.2, 0.95, 0.8));
+
+        if let Some(move_target) = move_target {
+            let destination = move_target.0 + Vec3::Y * 0.1;
+            gizmos.line(origin, destination, Color::srgb(0.95, 0.85, 0.2));
+            gizmos.cross(destination, 0.45, Color::srgb(0.95, 0.85, 0.2));
+        }
+
+        if let Some(nav_path) = nav_path {
+            let mut previous = origin;
+            for point in nav_path.waypoints.iter().skip(nav_path.current_index) {
+                let next = *point + Vec3::Y * 0.12;
+                gizmos.line(previous, next, Color::srgb(0.2, 0.75, 1.0));
+                previous = next;
+            }
+        }
+
+        if let Some(attack_target) = attack_target {
+            if let Ok(target) = targets.get(attack_target.0) {
+                gizmos.line(
+                    origin,
+                    target.translation() + Vec3::Y * 0.2,
+                    Color::srgb(1.0, 0.25, 0.25),
+                );
+            }
+        }
+    }
 }
 
 fn sync_entity_spawn_tweaks(

@@ -1,32 +1,18 @@
 pub mod core;
 pub mod widgets;
 
-pub mod actions_widget;
-pub mod army_overview_widget;
-pub mod buttons;
-pub mod event_log_widget;
-pub mod group_hotkeys_widget;
-pub mod hints_widget;
-pub mod notifications;
-pub mod production_queue_widget;
-pub mod resources_widget;
-pub mod selection_widget;
-pub mod tech_tree_widget;
-pub mod widget_toolbar;
-
-// Re-export from core so existing `crate::ui::*` paths keep working
-pub use core::fonts;
-pub use core::framework as widget_framework;
-pub use core::shared;
+// Compatibility re-exports keep existing `crate::ui::*` paths working
+#[allow(unused_imports)]
+pub use core::{fonts, framework as widget_framework, shared};
+#[allow(unused_imports)]
+pub use widgets::{
+    actions_widget, army_overview_widget, event_log_widget, group_hotkeys_widget, hints_widget,
+    notifications, production_queue_widget, resources_widget, selection_widget,
+    tech_tree_widget, widget_toolbar,
+};
 
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
-
-use crate::components::*;
-
-use core::fonts::UiFonts;
-use core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
-use core::hud::MainHudRoot;
 
 /// UI plugin group that composes all UI sub-plugins.
 ///
@@ -38,67 +24,6 @@ impl PluginGroup for UiPlugin {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
             .add(core::UiCorePlugin)
-            .add(resources_widget::ResourcesWidgetPlugin)
-            .add(army_overview_widget::ArmyOverviewWidgetPlugin)
-            .add(tech_tree_widget::TechTreeWidgetPlugin)
-            .add(hints_widget::HintsWidgetPlugin)
-            .add(notifications::NotificationsWidgetPlugin)
-            .add(widget_toolbar::WidgetToolbarPlugin)
-            .add(event_log_widget::EventLogWidgetPlugin)
-            .add(group_hotkeys_widget::GroupHotkeysWidgetPlugin)
-            .add(production_queue_widget::ProductionQueueWidgetPlugin)
-            .add(selection_widget::SelectionWidgetPlugin)
-            .add(actions_widget::ActionsWidgetPlugin)
-            .add(ExternalWidgetFramesPlugin)
+            .add(widgets::WidgetsPlugin)
     }
-}
-
-/// Spawns widget frames for widgets whose content is owned by external plugins
-/// (minimap, debug). These plugins populate the content themselves.
-struct ExternalWidgetFramesPlugin;
-
-impl Plugin for ExternalWidgetFramesPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            spawn_external_widget_frames
-                .run_if(in_state(AppState::InGame))
-                .run_if(any_with_component::<MainHudRoot>),
-        );
-    }
-}
-
-fn spawn_external_widget_frames(
-    mut commands: Commands,
-    registry: Res<WidgetRegistry>,
-    fonts: Res<UiFonts>,
-    root_q: Query<Entity, Added<MainHudRoot>>,
-) {
-    let Ok(hud_root) = root_q.single() else {
-        return;
-    };
-
-    // Minimap widget (content populated by MinimapPlugin)
-    let minimap_content = spawn_widget_frame(
-        &mut commands,
-        hud_root,
-        WidgetId::Minimap,
-        registry.slots.get(&WidgetId::Minimap).unwrap(),
-        registry.is_visible(WidgetId::Minimap),
-        &fonts,
-    );
-    commands
-        .entity(minimap_content)
-        .insert(crate::minimap::MinimapWidgetContent);
-
-    // Debug widget
-    let debug_content = spawn_widget_frame(
-        &mut commands,
-        hud_root,
-        WidgetId::Debug,
-        registry.slots.get(&WidgetId::Debug).unwrap(),
-        registry.is_visible(WidgetId::Debug),
-        &fonts,
-    );
-    crate::debug::spawn_debug_content(&mut commands, debug_content);
 }

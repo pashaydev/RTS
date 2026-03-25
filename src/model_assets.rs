@@ -5,8 +5,8 @@ use std::hash::{Hash, Hasher};
 
 use crate::blueprints::EntityKind;
 use crate::components::{
-    AnimState, AttentionIconAssets, GrassGltfHandle, GrassInstanceAssets, IconAssets, ModelAssets,
-    TeamColor,
+    AnimState, AttentionIconAssets, DecoGltfHandles, DecorationInstanceAssets, GrassGltfHandle,
+    GrassInstanceAssets, IconAssets, ModelAssets, TeamColor,
 };
 
 pub struct ModelAssetsPlugin;
@@ -99,6 +99,7 @@ impl Plugin for ModelAssetsPlugin {
                 Update,
                 (
                     extract_grass_instance_assets,
+                    extract_decoration_instance_assets,
                     extract_ttp_animations,
                     apply_team_color_textures,
                 ),
@@ -119,6 +120,23 @@ fn load_scenes_from(asset_server: &AssetServer, base: &str, names: &[&str]) -> V
     names
         .iter()
         .map(|name| asset_server.load(format!("{base}/{name}#Scene0")))
+        .collect()
+}
+
+fn load_gltf_handles(asset_server: &AssetServer, names: &[&str]) -> Vec<Handle<bevy::gltf::Gltf>> {
+    names
+        .iter()
+        .map(|name| asset_server.load(format!("{BASE_PATH}/{name}")))
+        .collect()
+}
+
+fn load_gltf_handles_from(
+    asset_server: &AssetServer,
+    paths: &[&str],
+) -> Vec<Handle<bevy::gltf::Gltf>> {
+    paths
+        .iter()
+        .map(|path| asset_server.load(path.to_string()))
         .collect()
 }
 
@@ -229,6 +247,62 @@ fn load_model_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
         bushes,
         grass,
         mountains,
+    });
+
+    // Load GLTF handles for decoration chunk instancing (mesh/material extraction).
+    // These are the same files as above but loaded as Gltf (not Scene) so we can
+    // access mesh primitives for CPU vertex merging.
+    let deco_bush_gltfs = load_gltf_handles(
+        &asset_server,
+        &[
+            "Bush_1_A_Color1.gltf",
+            "Bush_1_B_Color1.gltf",
+            "Bush_1_C_Color1.gltf",
+            "Bush_2_A_Color1.gltf",
+            "Bush_2_B_Color1.gltf",
+            "Bush_2_C_Color1.gltf",
+            "Bush_3_A_Color1.gltf",
+            "Bush_3_B_Color1.gltf",
+        ],
+    );
+    let deco_rock_gltfs = load_gltf_handles(
+        &asset_server,
+        &[
+            "Rock_1_A_Color1.gltf",
+            "Rock_1_B_Color1.gltf",
+            "Rock_1_C_Color1.gltf",
+            "Rock_1_D_Color1.gltf",
+            "Rock_1_E_Color1.gltf",
+            "Rock_2_A_Color1.gltf",
+            "Rock_2_B_Color1.gltf",
+            "Rock_2_C_Color1.gltf",
+            "Rock_3_A_Color1.gltf",
+            "Rock_3_B_Color1.gltf",
+        ],
+    );
+    let deco_grass_gltfs = load_gltf_handles(
+        &asset_server,
+        &[
+            "Grass_1_A_Color1.gltf",
+            "Grass_1_B_Color1.gltf",
+            "Grass_1_C_Color1.gltf",
+            "Grass_1_D_Color1.gltf",
+        ],
+    );
+    let deco_mountain_gltfs = load_gltf_handles_from(
+        &asset_server,
+        &[
+            "UltimateFantasyRTS/glTF/Mountain_Group_1.gltf",
+            "UltimateFantasyRTS/glTF/Mountain_Group_2.gltf",
+            "UltimateFantasyRTS/glTF/MountainLarge_Single.gltf",
+            "UltimateFantasyRTS/glTF/Mountain_Single.gltf",
+        ],
+    );
+    commands.insert_resource(DecoGltfHandles {
+        bushes: deco_bush_gltfs,
+        rocks: deco_rock_gltfs,
+        grass: deco_grass_gltfs,
+        mountains: deco_mountain_gltfs,
     });
 }
 
@@ -877,6 +951,72 @@ fn extract_grass_instance_assets(
         material: primitive.material.clone().unwrap_or_default(),
     });
     info!("Extracted grass instance assets for dense rendering");
+}
+
+/// Extracts mesh + material from decoration GLTF handles for chunk instancing.
+/// Runs every frame until all handles are loaded, then inserts `DecorationInstanceAssets`.
+fn extract_decoration_instance_assets(
+    mut commands: Commands,
+    handles: Option<Res<DecoGltfHandles>>,
+    gltf_assets: Res<Assets<bevy::gltf::Gltf>>,
+    gltf_meshes: Res<Assets<bevy::gltf::GltfMesh>>,
+    existing: Option<Res<DecorationInstanceAssets>>,
+) {
+    if existing.is_some() {
+        return;
+    }
+    let Some(handles) = handles else { return };
+
+    // Try to extract all categories. If any handle isn't loaded yet, bail and retry next frame.
+    let Some(bushes) = extract_gltf_primitives(&handles.bushes, &gltf_assets, &gltf_meshes) else {
+        return;
+    };
+    let Some(rocks) = extract_gltf_primitives(&handles.rocks, &gltf_assets, &gltf_meshes) else {
+        return;
+    };
+    let Some(grass) = extract_gltf_primitives(&handles.grass, &gltf_assets, &gltf_meshes) else {
+        return;
+    };
+    let Some(mountains) =
+        extract_gltf_primitives(&handles.mountains, &gltf_assets, &gltf_meshes)
+    else {
+        return;
+    };
+
+    info!(
+        "Extracted decoration instance assets: {} bushes, {} rocks, {} grass, {} mountains",
+        bushes.len(),
+        rocks.len(),
+        grass.len(),
+        mountains.len()
+    );
+    commands.insert_resource(DecorationInstanceAssets {
+        bushes,
+        rocks,
+        grass,
+        mountains,
+    });
+}
+
+/// Extract (mesh, material) from each GLTF handle's first mesh primitive.
+/// Returns None if any handle isn't loaded yet.
+fn extract_gltf_primitives(
+    handles: &[Handle<bevy::gltf::Gltf>],
+    gltf_assets: &Assets<bevy::gltf::Gltf>,
+    gltf_meshes: &Assets<bevy::gltf::GltfMesh>,
+) -> Option<Vec<(Handle<Mesh>, Handle<StandardMaterial>)>> {
+    let mut result = Vec::with_capacity(handles.len());
+    for handle in handles {
+        let gltf = gltf_assets.get(handle)?;
+        let gltf_mesh_handle = gltf.meshes.first()?;
+        let gltf_mesh = gltf_meshes.get(gltf_mesh_handle)?;
+        let primitive = gltf_mesh.primitives.first()?;
+        result.push((
+            primitive.mesh.clone(),
+            primitive.material.clone().unwrap_or_default(),
+        ));
+    }
+    Some(result)
 }
 
 // ── Team Color Texture Application ──

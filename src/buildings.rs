@@ -317,6 +317,7 @@ impl Plugin for BuildingsPlugin {
                     cancel_placement,
                 )
                     .chain()
+                    .in_set(GameFlowSet::Input)
                     .run_if(in_state(AppState::InGame))
                     .run_if(player_can_command),
             )
@@ -332,6 +333,7 @@ impl Plugin for BuildingsPlugin {
                     update_completed_buildings_tracker,
                 )
                     .chain()
+                    .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
@@ -345,6 +347,7 @@ impl Plugin for BuildingsPlugin {
                     sync_storage_on_spend,
                     update_storage_piles,
                 )
+                    .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),
             );
     }

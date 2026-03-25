@@ -7,6 +7,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
 
 use crate::components::*;
+use crate::fog::FogTweakSettings;
 use crate::ui::core::hud::MainHudRoot;
 
 const MINIMAP_TEX_SIZE: usize = 200;
@@ -55,6 +56,7 @@ impl Plugin for MinimapPlugin {
                 )
                     .chain()
                     .in_set(MinimapSet)
+                    .in_set(GameFlowSet::Input)
                     .run_if(in_state(AppState::InGame))
                     .run_if(resource_exists::<MinimapTexture>),
             )
@@ -229,6 +231,7 @@ fn update_minimap_texture(
     minimap_tex: Res<MinimapTexture>,
     mut images: ResMut<Assets<Image>>,
     fog_map: Option<Res<FogOfWarMap>>,
+    fog_settings: Res<FogTweakSettings>,
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
     units: Query<(&Transform, &Faction), With<Unit>>,
@@ -253,80 +256,84 @@ fn update_minimap_texture(
     buf.copy_from_slice(&minimap_tex.base_pixels);
 
     // Apply fog of war with color blending (matching in-game fog aesthetic)
-    if let Some(ref fog) = fog_map {
+    if !fog_settings.reveal_all {
+        if let Some(ref fog) = fog_map {
         // Fog colors matching the in-game FogSettings
-        let fog_color: [f32; 3] = [0.02, 0.02, 0.06]; // dark navy for unexplored
-        let explored_tint: [f32; 3] = [0.12, 0.10, 0.18]; // muted purple for explored
+            let fog_color: [f32; 3] = [0.02, 0.02, 0.06]; // dark navy for unexplored
+            let explored_tint: [f32; 3] = [0.12, 0.10, 0.18]; // muted purple for explored
 
-        for py in 0..MINIMAP_TEX_SIZE {
-            for px in 0..MINIMAP_TEX_SIZE {
-                let (wx, wz) = minimap_to_world(
-                    px as f32 + 0.5,
-                    py as f32 + 0.5,
-                    minimap_tex.map_size,
-                    minimap_tex.half_map,
-                );
-                let vis = fog.get_visibility(wx, wz);
-                let idx = py * MINIMAP_TEX_SIZE + px;
-                let base = [
-                    buf[idx][0] as f32 / 255.0,
-                    buf[idx][1] as f32 / 255.0,
-                    buf[idx][2] as f32 / 255.0,
-                ];
+            for py in 0..MINIMAP_TEX_SIZE {
+                for px in 0..MINIMAP_TEX_SIZE {
+                    let (wx, wz) = minimap_to_world(
+                        px as f32 + 0.5,
+                        py as f32 + 0.5,
+                        minimap_tex.map_size,
+                        minimap_tex.half_map,
+                    );
+                    let vis = fog.get_visibility(wx, wz);
+                    let idx = py * MINIMAP_TEX_SIZE + px;
+                    let base = [
+                        buf[idx][0] as f32 / 255.0,
+                        buf[idx][1] as f32 / 255.0,
+                        buf[idx][2] as f32 / 255.0,
+                    ];
 
-                let blended = if vis < 0.01 {
-                    // Unexplored: ~95% fog color overlay (nearly black)
-                    let t = 0.05;
-                    [
-                        base[0] * t + fog_color[0] * (1.0 - t),
-                        base[1] * t + fog_color[1] * (1.0 - t),
-                        base[2] * t + fog_color[2] * (1.0 - t),
-                    ]
-                } else if vis < 0.6 {
-                    // Explored but not visible: blend between fog-tinted and explored
-                    let t = vis / 0.6; // 0.0 at edge of explored, 1.0 near visible
-                    let tinted = [
-                        base[0] * 0.4 + explored_tint[0] * 0.6,
-                        base[1] * 0.4 + explored_tint[1] * 0.6,
-                        base[2] * 0.4 + explored_tint[2] * 0.6,
-                    ];
-                    let near_fog = [
-                        base[0] * 0.2 + fog_color[0] * 0.8,
-                        base[1] * 0.2 + fog_color[1] * 0.8,
-                        base[2] * 0.2 + fog_color[2] * 0.8,
-                    ];
-                    [
-                        near_fog[0] + (tinted[0] - near_fog[0]) * t,
-                        near_fog[1] + (tinted[1] - near_fog[1]) * t,
-                        near_fog[2] + (tinted[2] - near_fog[2]) * t,
-                    ]
-                } else {
-                    // Visible: smooth fade from explored tint to full color
-                    let t = ((vis - 0.6) / 0.4).min(1.0);
-                    let tinted = [
-                        base[0] * 0.4 + explored_tint[0] * 0.6,
-                        base[1] * 0.4 + explored_tint[1] * 0.6,
-                        base[2] * 0.4 + explored_tint[2] * 0.6,
-                    ];
-                    [
-                        tinted[0] + (base[0] - tinted[0]) * t,
-                        tinted[1] + (base[1] - tinted[1]) * t,
-                        tinted[2] + (base[2] - tinted[2]) * t,
-                    ]
-                };
+                    let blended = if vis < 0.01 {
+                        // Unexplored: ~95% fog color overlay (nearly black)
+                        let t = 0.05;
+                        [
+                            base[0] * t + fog_color[0] * (1.0 - t),
+                            base[1] * t + fog_color[1] * (1.0 - t),
+                            base[2] * t + fog_color[2] * (1.0 - t),
+                        ]
+                    } else if vis < 0.6 {
+                        // Explored but not visible: blend between fog-tinted and explored
+                        let t = vis / 0.6; // 0.0 at edge of explored, 1.0 near visible
+                        let tinted = [
+                            base[0] * 0.4 + explored_tint[0] * 0.6,
+                            base[1] * 0.4 + explored_tint[1] * 0.6,
+                            base[2] * 0.4 + explored_tint[2] * 0.6,
+                        ];
+                        let near_fog = [
+                            base[0] * 0.2 + fog_color[0] * 0.8,
+                            base[1] * 0.2 + fog_color[1] * 0.8,
+                            base[2] * 0.2 + fog_color[2] * 0.8,
+                        ];
+                        [
+                            near_fog[0] + (tinted[0] - near_fog[0]) * t,
+                            near_fog[1] + (tinted[1] - near_fog[1]) * t,
+                            near_fog[2] + (tinted[2] - near_fog[2]) * t,
+                        ]
+                    } else {
+                        // Visible: smooth fade from explored tint to full color
+                        let t = ((vis - 0.6) / 0.4).min(1.0);
+                        let tinted = [
+                            base[0] * 0.4 + explored_tint[0] * 0.6,
+                            base[1] * 0.4 + explored_tint[1] * 0.6,
+                            base[2] * 0.4 + explored_tint[2] * 0.6,
+                        ];
+                        [
+                            tinted[0] + (base[0] - tinted[0]) * t,
+                            tinted[1] + (base[1] - tinted[1]) * t,
+                            tinted[2] + (base[2] - tinted[2]) * t,
+                        ]
+                    };
 
-                buf[idx][0] = (blended[0] * 255.0).clamp(0.0, 255.0) as u8;
-                buf[idx][1] = (blended[1] * 255.0).clamp(0.0, 255.0) as u8;
-                buf[idx][2] = (blended[2] * 255.0).clamp(0.0, 255.0) as u8;
+                    buf[idx][0] = (blended[0] * 255.0).clamp(0.0, 255.0) as u8;
+                    buf[idx][1] = (blended[1] * 255.0).clamp(0.0, 255.0) as u8;
+                    buf[idx][2] = (blended[2] * 255.0).clamp(0.0, 255.0) as u8;
+                }
             }
         }
     }
 
     // Draw resource nodes (yellow, only if fog-visible)
     for tf in &resource_nodes {
-        if let Some(ref fog) = fog_map {
-            if fog.get_visibility(tf.translation.x, tf.translation.z) < 0.6 {
-                continue;
+        if !fog_settings.reveal_all {
+            if let Some(ref fog) = fog_map {
+                if fog.get_visibility(tf.translation.x, tf.translation.z) < 0.6 {
+                    continue;
+                }
             }
         }
         let (px, py) = world_to_minimap(
@@ -340,9 +347,11 @@ fn update_minimap_texture(
 
     // Draw mobs (red, only if fog-visible)
     for tf in &mobs {
-        if let Some(ref fog) = fog_map {
-            if fog.get_visibility(tf.translation.x, tf.translation.z) < 0.6 {
-                continue;
+        if !fog_settings.reveal_all {
+            if let Some(ref fog) = fog_map {
+                if fog.get_visibility(tf.translation.x, tf.translation.z) < 0.6 {
+                    continue;
+                }
             }
         }
         let (px, py) = world_to_minimap(
@@ -356,7 +365,7 @@ fn update_minimap_texture(
 
     // Draw buildings (allied = always visible, enemy = fog-check)
     for (tf, faction) in &buildings {
-        if !teams.is_allied(&active_player.0, faction) {
+        if !fog_settings.reveal_all && !teams.is_allied(&active_player.0, faction) {
             if let Some(ref fog) = fog_map {
                 if fog.get_visibility(tf.translation.x, tf.translation.z) < 0.6 {
                     continue;
@@ -381,7 +390,7 @@ fn update_minimap_texture(
 
     // Draw units (allied = always visible, enemy = fog-check)
     for (tf, faction) in &units {
-        if !teams.is_allied(&active_player.0, faction) {
+        if !fog_settings.reveal_all && !teams.is_allied(&active_player.0, faction) {
             if let Some(ref fog) = fog_map {
                 if fog.get_visibility(tf.translation.x, tf.translation.z) < 0.6 {
                     continue;

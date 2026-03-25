@@ -116,6 +116,7 @@ impl Plugin for PathfindingPlugin {
                     process_path_requests,
                 )
                     .chain()
+                    .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame))
                     .run_if(resource_exists::<NavGrid>),
             );

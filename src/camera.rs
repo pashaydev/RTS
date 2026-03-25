@@ -5,8 +5,8 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::components::{
-    ActivePlayer, AppState, CameraZoomLevel, CursorOverUi, DragState, GameSetupConfig, GameWorld,
-    MapSeed, RtsCamera, UiMode,
+    ActivePlayer, AppState, CameraZoomLevel, CursorOverUi, DragState, GameFlowSet,
+    GameSetupConfig, GameWorld, MapSeed, RtsCamera, UiMode,
 };
 
 // ── Tuning constants ──
@@ -55,6 +55,7 @@ impl Plugin for CameraPlugin {
                     update_zoom_level,
                 )
                     .chain()
+                    .in_set(GameFlowSet::Presentation)
                     .run_if(in_state(AppState::InGame)),
             );
     }

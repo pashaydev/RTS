@@ -75,6 +75,7 @@ pub fn update_ally_notifications(
         .iter()
         .filter(|(_, t)| elapsed - t.spawn_time < 5.0)
         .count();
+    let mut available_slots = 3usize.saturating_sub(visible_count);
 
     notifications.active.retain(|n| elapsed - n.timestamp < 5.0);
 
@@ -83,10 +84,14 @@ pub fn update_ally_notifications(
     };
 
     for notif in &notifications.active {
+        if available_slots == 0 {
+            break;
+        }
+
         let already_spawned = existing_toasts
             .iter()
             .any(|(_, t)| (t.spawn_time - notif.timestamp).abs() < 0.01);
-        if already_spawned || visible_count >= 3 {
+        if already_spawned {
             continue;
         }
 
@@ -122,6 +127,7 @@ pub fn update_ally_notifications(
                     ));
                 });
         });
+        available_slots -= 1;
     }
 }
 

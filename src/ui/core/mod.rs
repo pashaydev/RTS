@@ -76,6 +76,7 @@ impl Plugin for UiCorePlugin {
                 (ApplyDeferred, hud::compute_ui_mode)
                     .chain()
                     .in_set(UiCoreSet::Mode)
+                    .in_set(GameFlowSet::Ui)
                     .after(SelectionSet)
                     .run_if(in_state(AppState::InGame)),
             )
@@ -84,6 +85,7 @@ impl Plugin for UiCorePlugin {
                 Update,
                 hud::update_placement_hint
                     .in_set(UiCoreSet::Overlay)
+                    .in_set(GameFlowSet::Ui)
                     .run_if(in_state(AppState::InGame)),
             )
             // Overlay adoption
@@ -96,6 +98,7 @@ impl Plugin for UiCorePlugin {
                 )
                     .chain()
                     .in_set(UiCoreSet::Overlay)
+                    .in_set(GameFlowSet::Ui)
                     .in_set(OverlayLifecycleSet::Adopt)
                     .after(OverlayLifecycleSet::Manage)
                     .run_if(in_state(AppState::InGame)),
@@ -113,6 +116,7 @@ impl Plugin for UiCorePlugin {
                     framework::toggle_grid_overlay,
                 )
                     .in_set(UiCoreSet::Framework)
+                    .in_set(GameFlowSet::Ui)
                     .run_if(in_state(AppState::InGame)),
             )
             // Tooltip systems
@@ -124,6 +128,7 @@ impl Plugin for UiCorePlugin {
                     tooltips::cleanup_action_tooltips,
                 )
                     .in_set(UiCoreSet::Tooltips)
+                    .in_set(GameFlowSet::Ui)
                     .run_if(in_state(AppState::InGame)),
             )
             // Button visuals run in ALL states (menu + game)
@@ -134,7 +139,8 @@ impl Plugin for UiCorePlugin {
                     button_visuals::animated_button_chrome_system,
                     button_visuals::animated_button_hover_system,
                 )
-                    .in_set(UiCoreSet::Visuals),
+                    .in_set(UiCoreSet::Visuals)
+                    .in_set(GameFlowSet::Ui),
             )
             // Animation systems run in ALL states
             .add_systems(
@@ -148,10 +154,16 @@ impl Plugin for UiCorePlugin {
                     animations::title_shimmer_system,
                     animations::ui_glow_pulse_system,
                 )
-                    .in_set(UiCoreSet::Animation),
+                    .in_set(UiCoreSet::Animation)
+                    .in_set(GameFlowSet::Ui),
             )
             // UI scale runs in ALL states
-            .add_systems(Update, hud::update_ui_scale.in_set(UiCoreSet::Scale))
+            .add_systems(
+                Update,
+                hud::update_ui_scale
+                    .in_set(UiCoreSet::Scale)
+                    .in_set(GameFlowSet::Ui),
+            )
             // Font fallback in PostUpdate
             .add_systems(PostUpdate, fonts::apply_default_fonts);
     }

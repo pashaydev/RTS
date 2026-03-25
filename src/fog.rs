@@ -25,6 +25,7 @@ pub struct FogTweakSettings {
     pub object_threshold: f32,
     pub vfx_threshold: f32,
     pub transition_speed: f32,
+    pub reveal_all: bool,
     pub enable_los: bool,
     pub los_ray_count: usize,
 }
@@ -36,6 +37,7 @@ impl Default for FogTweakSettings {
             object_threshold: 0.4,
             vfx_threshold: 0.3,
             transition_speed: 4.0,
+            reveal_all: false,
             enable_los: true,
             los_ray_count: 48,
         }
@@ -64,6 +66,7 @@ impl Plugin for FogPlugin {
                     fog_hide_entities,
                 )
                     .chain()
+                    .after(crate::culling::CullingSet)
                     .run_if(in_state(AppState::InGame)),
             );
     }
@@ -293,6 +296,7 @@ fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
         20.0,
         0.5,
     );
+    tweaks.add_bool("Visuals/FoW Gameplay", "Reveal Full Map", t.reveal_all);
     tweaks.add_bool("Visuals/FoW Gameplay", "Enable LOS", t.enable_los);
     tweaks.add_float(
         "Visuals/FoW Gameplay",
@@ -422,6 +426,16 @@ fn update_fog_visibility(
     all_units: Query<(&Transform, &VisionRange, &Faction), With<Unit>>,
     all_buildings: Query<(&Transform, &VisionRange, &Faction), With<Building>>,
 ) {
+    if fog_settings.reveal_all {
+        for v in fog_map.visible.iter_mut() {
+            *v = 1.0;
+        }
+        for e in fog_map.explored.iter_mut() {
+            *e = true;
+        }
+        return;
+    }
+
     let grid_size = fog_map.grid_size;
     let step = fog_map.map_size / (grid_size - 1) as f32;
     let half_map = fog_map.map_size / 2.0;
@@ -560,6 +574,13 @@ fn update_fog_display(
     fog_settings: Res<FogTweakSettings>,
     time: Res<Time>,
 ) {
+    if fog_settings.reveal_all {
+        for v in fog_map.display.iter_mut() {
+            *v = 1.0;
+        }
+        return;
+    }
+
     let dt = time.delta_secs();
     let speed = fog_settings.transition_speed;
     let lerp_factor = (speed * dt).min(1.0);
@@ -708,18 +729,55 @@ fn fog_hide_entities(
     fog_settings: Res<FogTweakSettings>,
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
-    mut hideables: Query<(&Transform, &mut Visibility, &FogHideable)>,
+    mut hideables: Query<(
+        &Transform,
+        &mut Visibility,
+        &FogHideable,
+        Has<FrustumCulled>,
+    )>,
     mut enemy_units: Query<
-        (&Transform, &mut Visibility, &Faction, &UnitState),
+        (
+            &Transform,
+            &mut Visibility,
+            &Faction,
+            &UnitState,
+            Has<FrustumCulled>,
+        ),
         (With<Unit>, Without<FogHideable>),
     >,
     mut enemy_buildings: Query<
-        (&Transform, &mut Visibility, &Faction),
+        (&Transform, &mut Visibility, &Faction, Has<FrustumCulled>),
         (With<Building>, Without<FogHideable>, Without<Unit>),
     >,
 ) {
-    // Original FogHideable logic (mobs, objects, vfx)
-    for (tf, mut vis, hideable) in hideables.iter_mut() {
+    if fog_settings.reveal_all {
+        // When fog is disabled, restore visibility — but skip frustum-culled entities
+        // so we don't override the culling system's Visibility::Hidden.
+        for (_, mut vis, _, is_culled) in hideables.iter_mut() {
+            if !is_culled {
+                *vis = Visibility::Inherited;
+            }
+        }
+        for (_, mut vis, _, _, is_culled) in enemy_units.iter_mut() {
+            if !is_culled {
+                *vis = Visibility::Inherited;
+            }
+        }
+        for (_, mut vis, _, is_culled) in enemy_buildings.iter_mut() {
+            if !is_culled {
+                *vis = Visibility::Inherited;
+            }
+        }
+        return;
+    }
+
+    // FogHideable logic (mobs, objects, decorations, mountains, vfx)
+    for (tf, mut vis, hideable, is_culled) in hideables.iter_mut() {
+        // Frustum-culled entities are already hidden by culling — skip them.
+        if is_culled {
+            continue;
+        }
+
         let threshold = match hideable {
             FogHideable::Mob => fog_settings.mob_threshold,
             FogHideable::Object => fog_settings.object_threshold,
@@ -735,7 +793,10 @@ fn fog_hide_entities(
     }
 
     // Hide enemy player units outside fog vision
-    for (tf, mut vis, faction, _unit_state) in enemy_units.iter_mut() {
+    for (tf, mut vis, faction, _unit_state, is_culled) in enemy_units.iter_mut() {
+        if is_culled {
+            continue;
+        }
         if teams.is_allied(&active_player.0, faction) {
             *vis = Visibility::Inherited;
         } else {
@@ -749,7 +810,10 @@ fn fog_hide_entities(
     }
 
     // Hide enemy player buildings outside fog vision
-    for (tf, mut vis, faction) in enemy_buildings.iter_mut() {
+    for (tf, mut vis, faction, is_culled) in enemy_buildings.iter_mut() {
+        if is_culled {
+            continue;
+        }
         if teams.is_allied(&active_player.0, faction) {
             *vis = Visibility::Inherited;
         } else {

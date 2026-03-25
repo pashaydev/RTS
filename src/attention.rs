@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use crate::blueprints::EntityKind;
 use crate::components::*;
+use crate::fog::FogTweakSettings;
 use crate::theme;
 
 pub struct AttentionPlugin;
@@ -381,6 +382,7 @@ fn position_overlays(
     time: Res<Time>,
     camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     fog_map: Option<Res<FogOfWarMap>>,
+    fog_settings: Res<FogTweakSettings>,
     mut popups: Query<
         (&DamagePopup, &mut Node, &mut Visibility),
         (Without<AttentionIcon>, Without<ResourcePopup>),
@@ -405,10 +407,11 @@ fn position_overlays(
     for (popup, mut node, mut vis) in &mut popups {
         let rise = popup.timer.fraction() * POPUP_RISE_SPEED;
         if let Ok(vp) = camera.world_to_viewport(cam_gt, popup.world_pos) {
-            let fog_visible = fog_map
-                .as_ref()
-                .map(|f| f.get_visible(popup.world_pos.x, popup.world_pos.z) > 0.2)
-                .unwrap_or(true);
+            let fog_visible = fog_settings.reveal_all
+                || fog_map
+                    .as_ref()
+                    .map(|f| f.get_visible(popup.world_pos.x, popup.world_pos.z) > 0.2)
+                    .unwrap_or(true);
             if fog_visible {
                 node.left = Val::Px((vp.x + popup.offset_x) / scale);
                 node.top = Val::Px((vp.y - rise) / scale);
@@ -425,10 +428,11 @@ fn position_overlays(
     for (popup, mut node, mut vis) in &mut res_popups {
         let rise = popup.lifetime.fraction() * 30.0;
         if let Ok(vp) = camera.world_to_viewport(cam_gt, popup.world_pos) {
-            let fog_visible = fog_map
-                .as_ref()
-                .map(|f| f.get_visible(popup.world_pos.x, popup.world_pos.z) > 0.2)
-                .unwrap_or(true);
+            let fog_visible = fog_settings.reveal_all
+                || fog_map
+                    .as_ref()
+                    .map(|f| f.get_visible(popup.world_pos.x, popup.world_pos.z) > 0.2)
+                    .unwrap_or(true);
             if fog_visible {
                 node.left = Val::Px((vp.x - 15.0) / scale);
                 node.top = Val::Px((vp.y - rise) / scale);
@@ -450,10 +454,11 @@ fn position_overlays(
 
         let world_pos = owner_tf.translation + Vec3::Y * ICON_OFFSET_Y_WORLD;
 
-        let fog_visible = fog_map
-            .as_ref()
-            .map(|f| f.get_visible(world_pos.x, world_pos.z) > 0.2)
-            .unwrap_or(true);
+        let fog_visible = fog_settings.reveal_all
+            || fog_map
+                .as_ref()
+                .map(|f| f.get_visible(world_pos.x, world_pos.z) > 0.2)
+                .unwrap_or(true);
 
         if !fog_visible {
             *vis = Visibility::Hidden;
@@ -487,6 +492,7 @@ fn position_overlays(
 fn position_unit_labels(
     camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     fog_map: Option<Res<FogOfWarMap>>,
+    fog_settings: Res<FogTweakSettings>,
     transforms: Query<&Transform>,
     mut labels: Query<(&UnitLabel, &mut Node, &mut Visibility)>,
     ui_scale: Res<UiScale>,
@@ -503,10 +509,11 @@ fn position_unit_labels(
         };
 
         let world_pos = owner_tf.translation + Vec3::Y * UNIT_LABEL_OFFSET_Y_WORLD;
-        let fog_visible = fog_map
-            .as_ref()
-            .map(|f| f.get_visible(world_pos.x, world_pos.z) > 0.2)
-            .unwrap_or(true);
+        let fog_visible = fog_settings.reveal_all
+            || fog_map
+                .as_ref()
+                .map(|f| f.get_visible(world_pos.x, world_pos.z) > 0.2)
+                .unwrap_or(true);
 
         if !fog_visible {
             *vis = Visibility::Hidden;
@@ -664,6 +671,7 @@ fn update_worker_overlays(
 fn position_worker_overlays(
     camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     fog_map: Option<Res<FogOfWarMap>>,
+    fog_settings: Res<FogTweakSettings>,
     active_player: Res<ActivePlayer>,
     building_q: Query<(&Transform, &Faction), With<Building>>,
     mut overlays: Query<(&WorkerOverlay, &mut Node, &mut Visibility)>,
@@ -689,10 +697,11 @@ fn position_worker_overlays(
         let world_pos = building_tf.translation + Vec3::Y * OVERLAY_Y_OFFSET;
 
         // Fog check
-        let fog_visible = fog_map
-            .as_ref()
-            .map(|f| f.get_visible(world_pos.x, world_pos.z) > 0.2)
-            .unwrap_or(true);
+        let fog_visible = fog_settings.reveal_all
+            || fog_map
+                .as_ref()
+                .map(|f| f.get_visible(world_pos.x, world_pos.z) > 0.2)
+                .unwrap_or(true);
 
         if !fog_visible {
             *vis = Visibility::Hidden;

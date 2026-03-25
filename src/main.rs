@@ -43,7 +43,7 @@ use bevy::ecs::error;
 use bevy::prelude::*;
 use bevy_mod_outline::OutlinePlugin;
 
-use components::{AppState, GameSetupConfig, GraphicsSettings};
+use components::{AppState, GameFlowSet, GameSetupConfig, GraphicsSettings};
 
 fn main() {
     // Resolve the executable's directory so assets/config/saves are found
@@ -96,6 +96,19 @@ fn main() {
         )
         .add_plugins(OutlinePlugin)
         .init_state::<AppState>()
+        .configure_sets(
+            Update,
+            (
+                GameFlowSet::Input,
+                GameFlowSet::NetworkReceive,
+                GameFlowSet::Simulation,
+                GameFlowSet::NetworkBroadcast,
+                GameFlowSet::Ui,
+                GameFlowSet::Presentation,
+                GameFlowSet::Diagnostics,
+            )
+                .chain(),
+        )
         .insert_resource(GameSetupConfig::default())
         .insert_resource(graphics)
         .add_plugins(menu::MenuPlugin)

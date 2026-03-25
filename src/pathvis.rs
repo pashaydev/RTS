@@ -22,6 +22,7 @@ impl Plugin for PathVisPlugin {
                     cleanup_path_vis,
                     cleanup_orphaned_path_vis,
                 )
+                    .in_set(GameFlowSet::Presentation)
                     .run_if(in_state(AppState::InGame)),
             );
     }

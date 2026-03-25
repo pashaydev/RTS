@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
+use super::core::hud::MainHudRoot;
 use crate::components::*;
 
 pub struct HintsWidgetPlugin;
@@ -40,6 +41,9 @@ pub struct HintOverlay;
 #[derive(Component)]
 pub struct IdleWorkerButton;
 
+#[derive(Component)]
+pub struct IdleWorkerButtonText;
+
 const HINTS: &[(f32, u8, &str)] = &[
     (5.0, 0, "Train Workers at your Base to gather resources"),
     (30.0, 1, "Build a Sawmill near trees for wood production"),
@@ -53,6 +57,7 @@ pub fn hints_system(
     time: Res<Time>,
     mut hint_state: ResMut<HintState>,
     overlay: Query<Entity, With<HintOverlay>>,
+    root_q: Query<Entity, With<MainHudRoot>>,
 ) {
     let elapsed = time.elapsed_secs();
 
@@ -60,7 +65,7 @@ pub fn hints_system(
     if elapsed > 180.0 {
         // Clean up any existing overlay
         for entity in &overlay {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
         hint_state.active_hint = None;
         return;
@@ -75,11 +80,11 @@ pub fn hints_system(
 
             // Remove old overlay
             for entity in &overlay {
-                commands.entity(entity).despawn();
+                commands.entity(entity).try_despawn();
             }
 
             // Spawn hint overlay
-            commands
+            let hint_overlay = commands
                 .spawn((
                     HintOverlay,
                     Node {
@@ -104,7 +109,11 @@ pub fn hints_system(
                         },
                         TextColor(Color::srgb(0.9, 0.9, 0.5)),
                     ));
-                });
+                })
+                .id();
+            if let Ok(hud_root) = root_q.single() {
+                commands.entity(hud_root).add_child(hint_overlay);
+            }
             break;
         }
     }
@@ -115,7 +124,7 @@ pub fn hints_system(
         if hint_state.hint_timer.is_finished() {
             hint_state.active_hint = None;
             for entity in &overlay {
-                commands.entity(entity).despawn();
+                commands.entity(entity).try_despawn();
             }
         }
     }
@@ -125,7 +134,9 @@ pub fn idle_worker_notification_system(
     mut commands: Commands,
     idle_workers: Query<(Entity, &Faction, &UnitState), With<Unit>>,
     active_player: Res<ActivePlayer>,
-    existing_button: Query<Entity, With<IdleWorkerButton>>,
+    root_q: Query<Entity, With<MainHudRoot>>,
+    existing_button: Query<(Entity, &Children), With<IdleWorkerButton>>,
+    mut button_texts: Query<&mut Text, With<IdleWorkerButtonText>>,
 ) {
     let idle_count = idle_workers
         .iter()
@@ -134,18 +145,23 @@ pub fn idle_worker_notification_system(
 
     // Remove existing button if no idle workers
     if idle_count == 0 {
-        for entity in &existing_button {
-            commands.entity(entity).despawn();
+        for (entity, _) in &existing_button {
+            commands.entity(entity).try_despawn();
         }
         return;
     }
 
-    // Only spawn the button if it doesn't exist
-    if !existing_button.is_empty() {
+    if let Ok((_button, children)) = existing_button.single() {
+        for child in children.iter() {
+            if let Ok(mut text) = button_texts.get_mut(child) {
+                **text = format!("Idle Workers: {}", idle_count);
+                break;
+            }
+        }
         return;
     }
 
-    commands
+    let button = commands
         .spawn((
             IdleWorkerButton,
             Button,
@@ -162,6 +178,7 @@ pub fn idle_worker_notification_system(
         ))
         .with_children(|parent| {
             parent.spawn((
+                IdleWorkerButtonText,
                 Text::new(format!("Idle Workers: {}", idle_count)),
                 TextFont {
                     font_size: 14.0,
@@ -169,5 +186,9 @@ pub fn idle_worker_notification_system(
                 },
                 TextColor(Color::WHITE),
             ));
-        });
+        })
+        .id();
+    if let Ok(hud_root) = root_q.single() {
+        commands.entity(hud_root).add_child(button);
+    }
 }

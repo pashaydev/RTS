@@ -16,7 +16,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::components::{
-    ActivePlayer, AiControlledFactions, AppState, Faction, FactionColors, GameSetupConfig,
+    ActivePlayer, AiControlledFactions, AppState, Faction, FactionColors, GameFlowSet,
+    GameSetupConfig,
 };
 
 // ── Net Stats ───────────────────────────────────────────────────────────────
@@ -603,6 +604,7 @@ impl Plugin for MultiplayerPlugin {
                     .run_if(resource_exists::<bevy_matchbox::prelude::MatchboxSocket>)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_online)
+                    .in_set(GameFlowSet::NetworkReceive)
                     .before(NetSet::Receive),
             )
             // Host: receive commands
@@ -613,6 +615,7 @@ impl Plugin for MultiplayerPlugin {
                     server::input::host_handle_disconnects,
                 )
                     .in_set(NetSet::Receive)
+                    .in_set(GameFlowSet::NetworkReceive)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_host),
             )
@@ -630,6 +633,7 @@ impl Plugin for MultiplayerPlugin {
                     server::replication::host_broadcast_victory_events,
                 )
                     .in_set(NetSet::Broadcast)
+                    .in_set(GameFlowSet::NetworkBroadcast)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_host),
             )
@@ -638,6 +642,7 @@ impl Plugin for MultiplayerPlugin {
                 Update,
                 client::receive::client_receive_commands
                     .in_set(NetSet::Receive)
+                    .in_set(GameFlowSet::NetworkReceive)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_client),
             )
@@ -659,10 +664,16 @@ impl Plugin for MultiplayerPlugin {
                     client::receive::client_send_ping,
                 )
                     .in_set(NetSet::Broadcast)
+                    .in_set(GameFlowSet::NetworkBroadcast)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_client),
             )
-            .add_systems(Update, update_net_stats.run_if(in_state(AppState::InGame)))
+            .add_systems(
+                Update,
+                update_net_stats
+                    .in_set(GameFlowSet::Diagnostics)
+                    .run_if(in_state(AppState::InGame)),
+            )
             .add_systems(
                 OnEnter(AppState::InGame),
                 (
