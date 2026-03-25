@@ -356,7 +356,7 @@ pub enum ServerMessage {
     ResourceSync {
         seq: u32,
         /// Vec of (faction_index, resource_amounts).
-        factions: Vec<(u8, [u32; 10])>,
+        factions: Vec<(u8, [u32; 11])>,
     },
 
     /// Periodic authoritative day/night cycle sync.

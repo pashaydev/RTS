@@ -158,6 +158,7 @@ fn spawn_all_players(
             ResourceType::Iron,
             (40.0 * config.starting_resources_mult) as u32,
         );
+        res.add(ResourceType::Stone, (30.0 * config.starting_resources_mult) as u32);
         all_resources.resources.insert(faction, res);
 
         // Spawn 2 workers near the starting settlement area.

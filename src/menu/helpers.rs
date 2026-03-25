@@ -70,7 +70,7 @@ pub fn spawn_menu_panel(commands: &mut Commands) -> Entity {
                 Val::Px(0.0),
                 Val::Px(4.0),
                 Val::Px(0.0),
-                Val::Px(24.0),
+                Val::Px(8.0),
             ),
             UiFadeIn {
                 timer: Timer::from_seconds(0.3, TimerMode::Once),

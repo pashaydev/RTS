@@ -39,6 +39,10 @@ COPY assets/ToonyTinyPeople/textures/buildings/ assets/ToonyTinyPeople/textures/
 COPY assets/ToonyTinyPeople/textures/units/ assets/ToonyTinyPeople/textures/units/
 COPY assets/KayKit_Skeletons/characters/gltf/ assets/KayKit_Skeletons/characters/gltf/
 COPY assets/KayKit_Character_Animations/Animations/gltf/Rig_Medium/ assets/KayKit_Character_Animations/Animations/gltf/Rig_Medium/
+COPY assets/quaternius_tree/ assets/quaternius_tree/
+COPY assets/quaternius_pine_trees/ assets/quaternius_pine_trees/
+COPY assets/quaternius_trees/ assets/quaternius_trees/
+COPY assets/textures/ assets/textures/
 
 # Disable reference-types/externref to avoid browser failures in the
 # generated wasm-bindgen bootstrap on stricter WebAssembly runtimes.

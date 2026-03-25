@@ -98,7 +98,7 @@ pub fn uses_terrain_foundation(kind: EntityKind) -> bool {
 pub fn allowed_biomes(kind: EntityKind) -> Option<&'static [Biome]> {
     match kind {
         EntityKind::Sawmill => Some(&[Biome::Forest]),
-        EntityKind::Mine => Some(&[Biome::Mountain, Biome::Mud, Biome::Desert]),
+        EntityKind::Mine => Some(&[Biome::Mountain, Biome::Wetland, Biome::Desert]),
         EntityKind::OilRig => Some(&[Biome::Water]),
         _ => None,
     }
@@ -116,7 +116,7 @@ pub fn is_biome_valid_for(kind: EntityKind, biome: Biome) -> bool {
 pub fn biome_requirement_text(kind: EntityKind) -> Option<&'static str> {
     match kind {
         EntityKind::Sawmill => Some("Sawmill must be placed on Forest"),
-        EntityKind::Mine => Some("Mine must be placed on Mountain, Mud, or Desert"),
+        EntityKind::Mine => Some("Mine must be placed on Mountain, Wetland, or Desert"),
         EntityKind::OilRig => Some("Oil Rig must be placed on Water"),
         _ => Some("Cannot place on Water"),
     }
@@ -371,6 +371,7 @@ fn create_ghost_materials(mut commands: Commands, mut materials: ResMut<Assets<S
 fn cursor_ground_pos(
     camera_q: &Query<(&Camera, &GlobalTransform)>,
     windows: &Query<&Window, With<PrimaryWindow>>,
+    height_map: &HeightMap,
 ) -> Option<Vec3> {
     let Ok(window) = windows.single() else {
         return None;
@@ -382,8 +383,74 @@ fn cursor_ground_pos(
     let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
         return None;
     };
+    cursor_terrain_hit(ray, height_map)
+}
+
+fn cursor_terrain_hit(ray: Ray3d, height_map: &HeightMap) -> Option<Vec3> {
+    let half_map = height_map.half_map;
+    let max_dist = height_map.map_size * 4.0;
+    let step = height_map.step.max(1.0);
+
+    let in_bounds = |point: Vec3| point.x.abs() <= half_map && point.z.abs() <= half_map;
+    let terrain_delta = |point: Vec3| point.y - height_map.sample(point.x, point.z);
+
+    let mut prev_t = 0.0_f32;
+    let mut prev_delta = None;
+
+    let mut t = 0.0_f32;
+    while t <= max_dist {
+        let point = ray.get_point(t);
+        if in_bounds(point) {
+            let delta = terrain_delta(point);
+            if delta <= 0.0 {
+                let mut low_t = prev_t;
+                let mut high_t = t;
+
+                if prev_delta.is_none() {
+                    low_t = 0.0;
+                }
+
+                for _ in 0..12 {
+                    let mid_t = (low_t + high_t) * 0.5;
+                    let mid_point = ray.get_point(mid_t);
+                    let mid_delta = terrain_delta(mid_point);
+                    if mid_delta > 0.0 {
+                        low_t = mid_t;
+                    } else {
+                        high_t = mid_t;
+                    }
+                }
+
+                let hit = ray.get_point((low_t + high_t) * 0.5);
+                return Some(Vec3::new(
+                    hit.x,
+                    height_map.sample(hit.x, hit.z),
+                    hit.z,
+                ));
+            }
+
+            prev_t = t;
+            prev_delta = Some(delta);
+        } else if prev_delta.is_some() {
+            break;
+        } else {
+            prev_t = t;
+        }
+
+        t += step;
+    }
+
     let dist = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))?;
-    Some(ray.get_point(dist))
+    let fallback = ray.get_point(dist);
+    if in_bounds(fallback) {
+        Some(Vec3::new(
+            fallback.x,
+            height_map.sample(fallback.x, fallback.z),
+            fallback.z,
+        ))
+    } else {
+        None
+    }
 }
 
 fn is_pointer_over_ui(ui_interactions: &Query<&Interaction, With<Node>>) -> bool {
@@ -480,7 +547,7 @@ fn update_placement_preview(
     } else {
         bp.building.as_ref().map(|b| b.half_height).unwrap_or(1.0)
     };
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) else {
         return;
     };
     let new_footprint = footprint_for_kind(kind);
@@ -625,7 +692,7 @@ fn update_wall_plot_preview(
         }
     };
 
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) else {
         return;
     };
     let points = wall_layout_points(start, Vec3::new(world_pos.x, 0.0, world_pos.z));
@@ -745,12 +812,13 @@ fn update_gate_plot_preview(
         ),
     >,
     active_player: Res<ActivePlayer>,
+    height_map: Res<HeightMap>,
 ) {
     if placement.mode != PlacementMode::PlotGate {
         return;
     }
 
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) else {
         return;
     };
 
@@ -938,7 +1006,7 @@ fn confirm_placement(
         return;
     }
 
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) else {
         return;
     };
 
@@ -1164,7 +1232,7 @@ fn confirm_wall_plot(
 
     if let PlacementMode::PlotWall { start } = placement.mode {
         if start == Vec3::ZERO {
-            if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) {
+            if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) {
                 let first = Vec3::new(world_pos.x, 0.0, world_pos.z);
                 wall_preview.start = Some(first);
                 placement.mode = PlacementMode::PlotWall { start: first };
@@ -1273,7 +1341,7 @@ fn confirm_gate_plot(
         return;
     }
 
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows) else {
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) else {
         return;
     };
 

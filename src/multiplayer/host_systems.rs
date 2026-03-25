@@ -1179,7 +1179,7 @@ pub fn host_broadcast_resource_sync(
         return;
     }
 
-    let factions: Vec<(u8, [u32; 10])> = all_resources
+    let factions: Vec<(u8, [u32; 11])> = all_resources
         .resources
         .iter()
         .map(|(faction, pr)| (faction.to_net_index(), pr.amounts))

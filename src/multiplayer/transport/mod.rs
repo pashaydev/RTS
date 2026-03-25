@@ -7,22 +7,30 @@ mod ip;
 mod tcp;
 
 pub use super::matchbox_transport::*;
+#[cfg(not(target_arch = "wasm32"))]
 pub use discovery::{discover_lan_hosts, discovery_listener_thread, DISCOVERY_PORT};
+#[cfg(not(target_arch = "wasm32"))]
 pub use ip::{detect_all_ips, detect_lan_ip};
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(unused_imports)]
 pub use ip::DetectedIp;
+#[cfg(not(target_arch = "wasm32"))]
 #[allow(unused_imports)]
 pub use tcp::{
     client_reader_thread, client_writer_thread, client_writer_thread_fn, configure_keepalive,
     host_client_reader_thread, host_listener_thread, NewClientEvent,
 };
-pub use wire::{decode_server_messages_bytes, recv_framed, send_framed};
+pub use wire::decode_server_messages_bytes;
+#[cfg(not(target_arch = "wasm32"))]
+pub use wire::{recv_framed, send_framed};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
 use game_state::codec;
 use game_state::message::{ClientMessage, ServerMessage};
 #[cfg(not(target_arch = "wasm32"))]
@@ -34,6 +42,7 @@ use wire::{decode_server_payload_bytes, encode_ws_server_payload, DecodedServerP
 
 #[cfg(not(target_arch = "wasm32"))]
 use super::debug_tap;
+#[cfg(not(target_arch = "wasm32"))]
 use super::NET_TRAFFIC;
 
 /// WebSocket new client — reader/writer threads already spawned.

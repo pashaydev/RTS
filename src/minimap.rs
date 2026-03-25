@@ -54,16 +54,19 @@ impl Plugin for MinimapPlugin {
                 )
                     .chain()
                     .in_set(MinimapSet)
-                    .run_if(in_state(AppState::InGame)),
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(resource_exists::<MinimapTexture>),
             );
     }
 }
 
 fn biome_color(biome: Biome) -> [u8; 4] {
     match biome {
+        Biome::Grassland => [65, 140, 35, 255],
         Biome::Forest => [40, 130, 30, 255],
         Biome::Desert => [210, 190, 110, 255],
-        Biome::Mud => [120, 85, 50, 255],
+        Biome::Beach => [205, 190, 140, 255],
+        Biome::Wetland => [75, 105, 50, 255],
         Biome::Water => [30, 60, 150, 255],
         Biome::Mountain => [160, 155, 145, 255],
     }

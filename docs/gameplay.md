@@ -29,12 +29,12 @@ The tech tree is gated behind three ages, researched at the Base building:
 | Age | Cost | Research Time | Unlocks |
 |---|---|---|---|
 | I: Settlement | — (starting age) | — | Base, Barracks, Sawmill, Mine, Storage, House, WatchTower, Outpost, Walls |
-| II: Expansion | 150W 50Cu 80Fe | 45s | Workshop, Stable, Smelter, Guard Tower, Oil Rig, Gatehouse, Tower |
-| III: Conquest | 200W 100Cu 150Fe 50Go | 60s | Siege Works, Mage Tower, Temple, Alchemist, Ballista Tower, Bombard Tower |
+| II: Expansion | 150W 50Cu 80Fe 60Sn | 45s | Workshop, Stable, Smelter, Guard Tower, Oil Rig, Gatehouse, Tower |
+| III: Conquest | 200W 100Cu 150Fe 50Go 100Sn | 60s | Siege Works, Mage Tower, Temple, Alchemist, Ballista Tower, Bombard Tower |
 
 ### Economy
 
-- Raw resources: Wood, Copper, Iron, Gold, Oil
+- Raw resources: Wood, Copper, Iron, Gold, Oil, Stone
 - Processed resources: Planks, Charcoal, Bronze, Steel, Gunpowder
 - Workers can gather directly or be assigned to processor buildings
 - Buildings can run recipes, buffer resources, and scale throughput through upgrades and staffing
@@ -95,7 +95,7 @@ Clearing mob camps grants resources to the killing faction:
 
 ### World and Presentation
 
-- 500x500 default world with Forest, Desert, Mud, Water, and Mountain biomes
+- 500x500 default world with Grassland, Forest, Desert, Beach, Wetland, Water, and Mountain biomes
 - Skeletal animation with blend transitions and facing interpolation
 - Day/night cycle, sun and ambient lighting control, entity lights, VFX, and attention overlays
 - Frustum culling pauses off-screen animation work
@@ -269,38 +269,40 @@ Use `RTS_NET_DEBUG_PORT` to pin the port.
 
 | Biome | Terrain Color | Primary Resource | Secondary Resource |
 |---|---|---|---|
-| Forest | Green | Wood | Copper |
-| Desert | Sandy yellow | Copper | Gold |
-| Mud/Dirt | Brown | Iron | Copper |
+| Grassland | Green | Stone | Wood |
+| Forest | Dark Green | Wood | Copper |
+| Desert | Sandy yellow | Copper | Iron |
+| Beach | Sand | Stone | — |
+| Wetland | Olive green | Iron | Copper |
 | Water | Blue | Oil | — |
-| Mountain | Gray/white | Gold | Iron |
+| Mountain | Gray/white | Stone | Gold |
 
 ### Buildings
 
 | Type | Cost | Build Time | Requires | Age | Function |
 |---|---|---|---|---|---|
-| Base | 90W 15I | 15s | — | I | Anchor, trains Workers, researches Ages |
+| Base | 90W 15I 20Sn | 15s | — | I | Anchor, trains Workers, researches Ages |
 | Barracks | 75W 30I | 12s | Base | I | Trains Workers, Soldiers, Scouts |
-| Storage | 55W 15I | 8s | Base | I | Depot with gather aura |
+| Storage | 55W 15I 10Sn | 8s | Base | I | Depot with gather aura |
 | Sawmill | 50W 15I | 12s | Base | I | Produces Planks and Charcoal |
 | Mine | 70W 35I | 15s | Base | I | Ore processing and upgrades |
-| House | — | — | Base | I | Increases unit cap (+4/6/8 per level) |
-| Outpost | 20W 10I | 6s | Base | I | Vision and wall-control anchor |
-| Watch Tower | 35W 15I | 8s | Base | I | Early defense |
-| Wall Segment | 12W | 4s | Base | I | Plotted wall section |
-| Wall Post | 16W | 5s | Base | I | Wall endpoint or junction |
+| House | 10Sn | — | Base | I | Increases unit cap (+4/6/8 per level) |
+| Outpost | 20W 10I 8Sn | 6s | Base | I | Vision and wall-control anchor |
+| Watch Tower | 35W 15I 15Sn | 8s | Base | I | Early defense |
+| Wall Segment | 12W 8Sn | 4s | Base | I | Plotted wall section |
+| Wall Post | 16W 10Sn | 5s | Base | I | Wall endpoint or junction |
 | Workshop | 90W 25C 55I 15G 10Bronze | 18s | Mine | II | Tier 2 military tech |
 | Stable | 85W 30C 45I | 14s | Barracks | II | Cavalry production |
 | Smelter | 80W 20C 40I | 16s | Mine | II | Produces Bronze and Steel |
-| Guard Tower | 60W 20C 45I | 11s | Barracks | II | Durable general defense |
+| Guard Tower | 60W 20C 45I 25Sn | 11s | Barracks | II | Durable general defense |
 | Oil Rig | 75W 25C 35I | 14s | Workshop | II | Water-biome oil processing |
-| Gatehouse | 40W 10C 35I | 10s | Outpost | II | Replaces a wall segment |
+| Gatehouse | 40W 10C 35I 20Sn | 10s | Outpost | II | Replaces a wall segment |
 | Siege Works | 100W 35C 90I 30G | 20s | Workshop | III | Siege production |
 | Mage Tower | 80W 30C 40I 55G | 20s | Workshop | III | Mage and Priest production |
 | Temple | 90W 20C 40I 70G | 22s | Mage Tower | III | Priest training and healing aura |
 | Alchemist | 60W 30I 25G 15O | 18s | Smelter | III | Produces Gunpowder |
-| Ballista Tower | 70W 55C 80I | 14s | Siege Works | III | Anti-heavy tower |
-| Bombard Tower | 85W 45C 65I 35G | 15s | Mage Tower | III | Splash tower |
+| Ballista Tower | 70W 55C 80I 30Sn | 14s | Siege Works | III | Anti-heavy tower |
+| Bombard Tower | 85W 45C 65I 35G 25Sn | 15s | Mage Tower | III | Splash tower |
 
 ### Training Costs
 

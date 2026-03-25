@@ -1132,7 +1132,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 25.0 }),
-            cost: ResourceCost::new().with(ResourceType::Wood, 90).with(ResourceType::Iron, 15),
+            cost: ResourceCost::new().with(ResourceType::Wood, 90).with(ResourceType::Iron, 15).with(ResourceType::Stone, 20),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 15.0,
@@ -1352,7 +1352,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 18.0 }),
-            cost: ResourceCost::new().with(ResourceType::Wood, 35).with(ResourceType::Iron, 15),
+            cost: ResourceCost::new().with(ResourceType::Wood, 35).with(ResourceType::Iron, 15).with(ResourceType::Stone, 15),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 8.0,
@@ -1410,7 +1410,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 22.0 }),
-            cost: ResourceCost::new().with(ResourceType::Wood, 60).with(ResourceType::Copper, 20).with(ResourceType::Iron, 45),
+            cost: ResourceCost::new().with(ResourceType::Wood, 60).with(ResourceType::Copper, 20).with(ResourceType::Iron, 45).with(ResourceType::Stone, 25),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 11.0,
@@ -1468,7 +1468,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 24.0 }),
-            cost: ResourceCost::new().with(ResourceType::Wood, 70).with(ResourceType::Copper, 55).with(ResourceType::Iron, 80).with(ResourceType::Steel, 10),
+            cost: ResourceCost::new().with(ResourceType::Wood, 70).with(ResourceType::Copper, 55).with(ResourceType::Iron, 80).with(ResourceType::Steel, 10).with(ResourceType::Stone, 30),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 14.0,
@@ -1526,7 +1526,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 20.0 }),
-            cost: ResourceCost::new().with(ResourceType::Wood, 85).with(ResourceType::Copper, 45).with(ResourceType::Iron, 65).with(ResourceType::Gold, 35).with(ResourceType::Gunpowder, 5),
+            cost: ResourceCost::new().with(ResourceType::Wood, 85).with(ResourceType::Copper, 45).with(ResourceType::Iron, 65).with(ResourceType::Gold, 35).with(ResourceType::Gunpowder, 5).with(ResourceType::Stone, 25),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 15.0,
@@ -1584,7 +1584,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 30.0 }),
-            cost: ResourceCost::new().with(ResourceType::Wood, 20).with(ResourceType::Iron, 10),
+            cost: ResourceCost::new().with(ResourceType::Wood, 20).with(ResourceType::Iron, 10).with(ResourceType::Stone, 8),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 6.0,
@@ -1636,7 +1636,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 16.0 }),
-            cost: ResourceCost::new().with(ResourceType::Wood, 40).with(ResourceType::Copper, 10).with(ResourceType::Iron, 35),
+            cost: ResourceCost::new().with(ResourceType::Wood, 40).with(ResourceType::Copper, 10).with(ResourceType::Iron, 35).with(ResourceType::Stone, 20),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 10.0,
@@ -1675,7 +1675,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 8.0 }),
-            cost: ResourceCost::new().with(ResourceType::Wood, 12),
+            cost: ResourceCost::new().with(ResourceType::Wood, 12).with(ResourceType::Stone, 8),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 4.0,
@@ -1718,7 +1718,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
-            cost: ResourceCost::new().with(ResourceType::Wood, 16),
+            cost: ResourceCost::new().with(ResourceType::Wood, 16).with(ResourceType::Stone, 10),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 5.0,
@@ -1761,7 +1761,7 @@ pub fn build_registry() -> BlueprintRegistry {
             movement: None,
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
-            cost: ResourceCost::new().with(ResourceType::Wood, 55).with(ResourceType::Iron, 15),
+            cost: ResourceCost::new().with(ResourceType::Wood, 55).with(ResourceType::Iron, 15).with(ResourceType::Stone, 10),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 8.0,
@@ -1821,7 +1821,8 @@ pub fn build_registry() -> BlueprintRegistry {
             vision: Some(VisionStats { range: 10.0 }),
             cost: ResourceCost::new()
                 .with(ResourceType::Wood, 45)
-                .with(ResourceType::Iron, 10),
+                .with(ResourceType::Iron, 10)
+                .with(ResourceType::Stone, 10),
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 7.0,
@@ -2862,7 +2863,7 @@ pub fn spawn_from_blueprint_with_faction(
                 entity_cmds.insert((
                     DepositPoint,
                     StorageInventory {
-                        caps: [500, 80, 120, 0, 0, 0, 0, 0, 0, 0],
+                        caps: [500, 80, 120, 0, 0, 0, 0, 0, 0, 0, 0],
                         ..default()
                     },
                 ));
@@ -2870,7 +2871,7 @@ pub fn spawn_from_blueprint_with_faction(
                 entity_cmds.insert((
                     DepositPoint,
                     StorageInventory {
-                        caps: [300, 300, 300, 300, 200, 100, 50, 100, 100, 50],
+                        caps: [300, 300, 300, 300, 200, 300, 100, 50, 100, 100, 50],
                         ..default()
                     },
                 ));
@@ -2881,7 +2882,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory {
-                            caps: [3000, 0, 0, 0, 0, 500, 200, 0, 0, 0],
+                            caps: [3000, 0, 0, 0, 0, 0, 500, 200, 0, 0, 0],
                             ..default()
                         },
                         AssignedWorkers::default(),
@@ -2925,7 +2926,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory {
-                            caps: [0, 1000, 1000, 0, 0, 0, 0, 0, 0, 0],
+                            caps: [0, 1000, 1000, 0, 0, 0, 0, 0, 0, 0, 0],
                             ..default()
                         },
                         AssignedWorkers::default(),
@@ -2953,7 +2954,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory {
-                            caps: [0, 0, 0, 0, 500, 0, 0, 0, 0, 0],
+                            caps: [0, 0, 0, 0, 500, 0, 0, 0, 0, 0, 0],
                             ..default()
                         },
                         AssignedWorkers::default(),
@@ -2981,7 +2982,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory {
-                            caps: [0, 200, 200, 0, 0, 0, 0, 200, 200, 0],
+                            caps: [0, 200, 200, 0, 0, 0, 0, 0, 200, 200, 0],
                             ..default()
                         },
                         AssignedWorkers::default(),
@@ -3013,7 +3014,7 @@ pub fn spawn_from_blueprint_with_faction(
                     entity_cmds.insert((
                         DepositPoint,
                         StorageInventory {
-                            caps: [0, 0, 0, 0, 100, 0, 100, 0, 0, 200],
+                            caps: [0, 0, 0, 0, 100, 0, 0, 100, 0, 0, 200],
                             ..default()
                         },
                         AssignedWorkers::default(),

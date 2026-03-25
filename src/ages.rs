@@ -61,12 +61,14 @@ impl Age {
             Age::Expansion => ResourceCost::new()
                 .with(ResourceType::Wood, 150)
                 .with(ResourceType::Copper, 50)
-                .with(ResourceType::Iron, 80),
+                .with(ResourceType::Iron, 80)
+                .with(ResourceType::Stone, 60),
             Age::Conquest => ResourceCost::new()
                 .with(ResourceType::Wood, 200)
                 .with(ResourceType::Copper, 100)
                 .with(ResourceType::Iron, 150)
-                .with(ResourceType::Gold, 50),
+                .with(ResourceType::Gold, 50)
+                .with(ResourceType::Stone, 100),
         }
     }
 

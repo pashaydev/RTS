@@ -7,7 +7,9 @@ use crate::multiplayer::{
     matchbox_transport::{self, MatchboxInbox, PeerMap, SIGNALING_PORT},
 };
 use super::super::*;
-use super::{DEFAULT_PORT, JoinDiscoveryScan, JoinTarget, PendingGameStart, WEB_SESSION_WS_PATH_PREFIX};
+#[cfg(not(target_arch = "wasm32"))]
+use super::JoinDiscoveryScan;
+use super::{DEFAULT_PORT, JoinTarget, PendingGameStart, WEB_SESSION_WS_PATH_PREFIX};
 
 // ── Network Cleanup ──
 

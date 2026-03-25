@@ -263,13 +263,14 @@ impl GraphicsSettings {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
 pub enum ResourceType {
-    // Raw (0-4)
+    // Raw (0-5)
     Wood,
     Copper,
     Iron,
     Gold,
     Oil,
-    // Processed (5-9)
+    Stone,
+    // Processed (6-10)
     Planks,
     Charcoal,
     Bronze,
@@ -278,12 +279,13 @@ pub enum ResourceType {
 }
 
 impl ResourceType {
-    pub const RAW: [ResourceType; 5] = [
+    pub const RAW: [ResourceType; 6] = [
         ResourceType::Wood,
         ResourceType::Copper,
         ResourceType::Iron,
         ResourceType::Gold,
         ResourceType::Oil,
+        ResourceType::Stone,
     ];
 
     pub const PROCESSED: [ResourceType; 5] = [
@@ -294,12 +296,13 @@ impl ResourceType {
         ResourceType::Gunpowder,
     ];
 
-    pub const ALL: [ResourceType; 10] = [
+    pub const ALL: [ResourceType; 11] = [
         ResourceType::Wood,
         ResourceType::Copper,
         ResourceType::Iron,
         ResourceType::Gold,
         ResourceType::Oil,
+        ResourceType::Stone,
         ResourceType::Planks,
         ResourceType::Charcoal,
         ResourceType::Bronze,
@@ -307,7 +310,7 @@ impl ResourceType {
         ResourceType::Gunpowder,
     ];
 
-    pub const COUNT: usize = 10;
+    pub const COUNT: usize = 11;
 
     pub fn index(self) -> usize {
         match self {
@@ -316,17 +319,18 @@ impl ResourceType {
             Self::Iron => 2,
             Self::Gold => 3,
             Self::Oil => 4,
-            Self::Planks => 5,
-            Self::Charcoal => 6,
-            Self::Bronze => 7,
-            Self::Steel => 8,
-            Self::Gunpowder => 9,
+            Self::Stone => 5,
+            Self::Planks => 6,
+            Self::Charcoal => 7,
+            Self::Bronze => 8,
+            Self::Steel => 9,
+            Self::Gunpowder => 10,
         }
     }
 
     #[allow(dead_code)]
     pub fn is_processed(self) -> bool {
-        self.index() >= 5
+        self.index() >= 6
     }
 
     pub fn display_name(self) -> &'static str {
@@ -336,6 +340,7 @@ impl ResourceType {
             Self::Iron => "Iron",
             Self::Gold => "Gold",
             Self::Oil => "Oil",
+            Self::Stone => "Stone",
             Self::Planks => "Planks",
             Self::Charcoal => "Charcoal",
             Self::Bronze => "Bronze",
@@ -352,6 +357,7 @@ impl ResourceType {
             Self::Iron => "I",
             Self::Gold => "G",
             Self::Oil => "O",
+            Self::Stone => "Sn",
             Self::Planks => "Pk",
             Self::Charcoal => "Ch",
             Self::Bronze => "Bz",
@@ -367,6 +373,7 @@ impl ResourceType {
             Self::Iron => 2.0,
             Self::Gold => 2.5,
             Self::Oil => 1.2,
+            Self::Stone => 2.0,
             Self::Planks => 1.2,
             Self::Charcoal => 0.8,
             Self::Bronze => 2.5,
@@ -384,6 +391,7 @@ impl ResourceType {
             Self::Iron => 0.65,
             Self::Gold => 0.45,
             Self::Oil => 0.85,
+            Self::Stone => 0.75,
             // Processed resources are not gatherable from nodes
             Self::Planks | Self::Charcoal | Self::Bronze | Self::Steel | Self::Gunpowder => 0.0,
         }
@@ -396,6 +404,7 @@ impl ResourceType {
             Self::Iron => Color::srgb(0.55, 0.55, 0.58),
             Self::Gold => Color::srgb(0.95, 0.8, 0.2),
             Self::Oil => Color::srgb(0.08, 0.08, 0.1),
+            Self::Stone => Color::srgb(0.60, 0.60, 0.58),
             Self::Planks => Color::srgb(0.76, 0.60, 0.35),
             Self::Charcoal => Color::srgb(0.25, 0.25, 0.25),
             Self::Bronze => Color::srgb(0.80, 0.50, 0.20),
@@ -1061,6 +1070,9 @@ impl PlayerResources {
 #[derive(Resource, Default)]
 pub struct ModelAssets {
     pub trees: Vec<Handle<Scene>>,
+    /// Per-tree base scale multiplier (same length as `trees`).
+    /// KayKit trees use 1.0, Kenney trees use ~3.0 to match KayKit size.
+    pub tree_base_scales: Vec<f32>,
     pub dead_trees: Vec<Handle<Scene>>,
     pub rocks: Vec<Handle<Scene>>,
     pub bushes: Vec<Handle<Scene>>,
@@ -1105,6 +1117,7 @@ pub struct ResourceNodeMaterials {
     pub iron: Handle<StandardMaterial>,
     pub gold: Handle<StandardMaterial>,
     pub oil: Handle<StandardMaterial>,
+    pub stone: Handle<StandardMaterial>,
 }
 
 // ── Path visualization ──
@@ -1260,9 +1273,11 @@ pub struct Ground;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
 pub enum Biome {
+    Grassland,
     Forest,
     Desert,
-    Mud,
+    Beach,
+    Wetland,
     Water,
     Mountain,
 }
@@ -2258,6 +2273,7 @@ pub struct IconAssets {
     pub iron: Handle<Image>,
     pub gold: Handle<Image>,
     pub oil: Handle<Image>,
+    pub stone: Handle<Image>,
     // Processed resources
     pub planks: Handle<Image>,
     pub charcoal: Handle<Image>,
@@ -2310,6 +2326,7 @@ impl IconAssets {
             ResourceType::Iron => self.iron.clone(),
             ResourceType::Gold => self.gold.clone(),
             ResourceType::Oil => self.oil.clone(),
+            ResourceType::Stone => self.stone.clone(),
             // Processed resources
             ResourceType::Planks => self.planks.clone(),
             ResourceType::Charcoal => self.charcoal.clone(),

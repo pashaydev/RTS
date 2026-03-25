@@ -252,7 +252,7 @@ fn save_game(
     mut status: ResMut<SaveLoadStatus>,
     id_counter: Res<GameIdCounter>,
     player_resources: Option<Res<PlayerResources>>,
-    fog: Res<FogOfWarMap>,
+    fog: Option<Res<FogOfWarMap>>,
     // Entity query — split into multiple queries to stay under tuple limit
     entity_q: Query<
         (
@@ -296,6 +296,13 @@ fn save_game(
     let Some(player_resources) = player_resources else {
         warn!("Cannot save: PlayerResources resource does not exist");
         status.message = "Save failed: missing PlayerResources".to_string();
+        status.timer = 5.0;
+        return;
+    };
+
+    let Some(fog) = fog else {
+        warn!("Cannot save: FogOfWarMap resource does not exist");
+        status.message = "Save failed: missing FogOfWarMap".to_string();
         status.timer = 5.0;
         return;
     };
@@ -571,7 +578,7 @@ fn load_game(
     mut load_req: ResMut<LoadRequested>,
     mut commands: Commands,
     player_resources: Option<ResMut<PlayerResources>>,
-    mut fog: ResMut<FogOfWarMap>,
+    mut fog: Option<ResMut<FogOfWarMap>>,
     mut id_counter: ResMut<GameIdCounter>,
     mut status: ResMut<SaveLoadStatus>,
     mut pending: ResMut<PendingLoadOverrides>,
@@ -633,8 +640,10 @@ fn load_game(
         // 2. Restore global resources
         *player_resources = (&save.player_resources).into();
         id_counter.0 = save.id_counter;
-        if save.fog_explored.len() == fog.explored.len() {
-            fog.explored.copy_from_slice(&save.fog_explored);
+        if let Some(ref mut fog) = fog {
+            if save.fog_explored.len() == fog.explored.len() {
+                fog.explored.copy_from_slice(&save.fog_explored);
+            }
         }
 
         // 3. Spawn all entities via blueprint

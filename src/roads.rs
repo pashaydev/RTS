@@ -65,9 +65,11 @@ pub struct MeshUpdateTimer(pub Timer);
 
 fn road_color_for_biome(biome: Biome) -> Option<[f32; 4]> {
     match biome {
+        Biome::Grassland => Some([0.32, 0.28, 0.16, 1.0]),
         Biome::Forest => Some([0.35, 0.30, 0.18, 1.0]),
         Biome::Desert => Some([0.78, 0.70, 0.50, 1.0]),
-        Biome::Mud => Some([0.28, 0.20, 0.12, 1.0]),
+        Biome::Beach => Some([0.72, 0.65, 0.45, 1.0]),
+        Biome::Wetland => Some([0.25, 0.20, 0.12, 1.0]),
         Biome::Mountain => Some([0.55, 0.52, 0.48, 1.0]),
         Biome::Water => None,
     }
@@ -369,7 +371,8 @@ fn update_terrain_mesh(
     let mut new_heights = vec![0.0f32; vertex_count];
     for i in 0..vertex_count {
         let t = traffic.intensity[i];
-        let h = foundation_terrain.heights[i] - t * MAX_DEPRESSION;
+        let h = (foundation_terrain.heights[i] - t * MAX_DEPRESSION)
+            .max(crate::ground::WATER_LEVEL + 0.1);
         new_heights[i] = h;
         positions[i][1] = h;
     }
@@ -408,18 +411,17 @@ fn update_terrain_mesh(
     for iz in 0..gs {
         for ix in 0..gs {
             let idx = iz * gs + ix;
-            let hx0 = if ix > 0 { new_heights[iz * gs + ix - 1] } else { new_heights[idx] };
-            let hx1 = if ix < gs - 1 {
-                new_heights[iz * gs + ix + 1]
-            } else {
-                new_heights[idx]
-            };
-            let hz0 = if iz > 0 { new_heights[(iz - 1) * gs + ix] } else { new_heights[idx] };
-            let hz1 = if iz < gs - 1 {
-                new_heights[(iz + 1) * gs + ix]
-            } else {
-                new_heights[idx]
-            };
+            let h_self = new_heights[idx];
+            let h_left = if ix > 0 { new_heights[iz * gs + ix - 1] } else { h_self };
+            let h_right = if ix < gs - 1 { new_heights[iz * gs + ix + 1] } else { h_self };
+            let h_up = if iz > 0 { new_heights[(iz - 1) * gs + ix] } else { h_self };
+            let h_down = if iz < gs - 1 { new_heights[(iz + 1) * gs + ix] } else { h_self };
+
+            // Extrapolate missing neighbors at edges (mirrors slope from the other side)
+            let hx0 = if ix > 0 { h_left } else { 2.0 * h_self - h_right };
+            let hx1 = if ix < gs - 1 { h_right } else { 2.0 * h_self - h_left };
+            let hz0 = if iz > 0 { h_up } else { 2.0 * h_self - h_down };
+            let hz1 = if iz < gs - 1 { h_down } else { 2.0 * h_self - h_up };
 
             let dx_span = if ix > 0 && ix < gs - 1 { 2.0 * step } else { step };
             let dz_span = if iz > 0 && iz < gs - 1 { 2.0 * step } else { step };

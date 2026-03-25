@@ -112,17 +112,32 @@ fn create_resource_node_materials(
             base_color: Color::srgb(0.08, 0.08, 0.1),
             ..default()
         }),
+        stone: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.62, 0.60, 0.56),
+            ..default()
+        }),
     });
 }
 
 fn biome_spawn_threshold(biome: Biome) -> f32 {
     match biome {
+        Biome::Grassland => 0.22,
         Biome::Forest => 0.1,
-        Biome::Desert => 0.14,
-        Biome::Mud => 0.28,
+        Biome::Desert => 0.11,
+        Biome::Beach => 0.35,
+        Biome::Wetland => 0.24,
         Biome::Water => 0.4,
         Biome::Mountain => 0.35,
     }
+}
+
+fn secondary_spawn_bonus(biome: Biome, tier: usize) -> f32 {
+    let base = match biome {
+        Biome::Desert | Biome::Wetland => 0.14,
+        Biome::Forest => 0.16,
+        _ => 0.2,
+    };
+    base + tier as f32 * 0.12
 }
 
 fn primary_resource_for(
@@ -131,6 +146,7 @@ fn primary_resource_for(
     ore_mesh: &Handle<Mesh>,
     gold_mesh: &Handle<Mesh>,
     oil_mesh: &Handle<Mesh>,
+    stone_mesh: &Handle<Mesh>,
     mats: &ResourceNodeMaterials,
 ) -> Option<(
     ResourceType,
@@ -140,6 +156,13 @@ fn primary_resource_for(
     f32,
 )> {
     match biome {
+        Biome::Grassland => Some((
+            ResourceType::Stone,
+            350,
+            stone_mesh.clone(),
+            mats.stone.clone(),
+            0.6,
+        )),
         Biome::Forest => Some((
             ResourceType::Wood,
             300,
@@ -149,14 +172,21 @@ fn primary_resource_for(
         )),
         Biome::Desert => Some((
             ResourceType::Copper,
-            650,
+            760,
             ore_mesh.clone(),
             mats.copper.clone(),
             0.4,
         )),
-        Biome::Mud => Some((
+        Biome::Beach => Some((
+            ResourceType::Stone,
+            250,
+            stone_mesh.clone(),
+            mats.stone.clone(),
+            0.4,
+        )),
+        Biome::Wetland => Some((
             ResourceType::Iron,
-            500,
+            620,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.4,
@@ -169,17 +199,19 @@ fn primary_resource_for(
             0.6,
         )),
         Biome::Mountain => Some((
-            ResourceType::Gold,
-            600,
-            gold_mesh.clone(),
-            mats.gold.clone(),
-            0.4,
+            ResourceType::Stone,
+            500,
+            stone_mesh.clone(),
+            mats.stone.clone(),
+            0.5,
         )),
     }
 }
 
 fn secondary_resource_for(
     biome: Biome,
+    tier: usize,
+    wood_mesh: &Handle<Mesh>,
     ore_mesh: &Handle<Mesh>,
     gold_mesh: &Handle<Mesh>,
     mats: &ResourceNodeMaterials,
@@ -190,31 +222,87 @@ fn secondary_resource_for(
     Handle<StandardMaterial>,
     f32,
 )> {
-    match biome {
-        Biome::Desert => Some((
-            ResourceType::Gold,
-            600,
-            gold_mesh.clone(),
-            mats.gold.clone(),
-            0.4,
-        )),
-        Biome::Mud => Some((
+    match (biome, tier) {
+        (Biome::Grassland, 0) => Some((
             ResourceType::Copper,
-            420,
+            360,
+            ore_mesh.clone(),
+            mats.copper.clone(),
+            0.5,
+        )),
+        (Biome::Grassland, 1) => Some((
+            ResourceType::Iron,
+            320,
+            ore_mesh.clone(),
+            mats.iron.clone(),
+            0.45,
+        )),
+        (Biome::Forest, 0) => Some((
+            ResourceType::Copper,
+            380,
             ore_mesh.clone(),
             mats.copper.clone(),
             0.4,
         )),
-        Biome::Mountain => Some((
+        (Biome::Forest, 1) => Some((
+            ResourceType::Stone,
+            260,
+            ore_mesh.clone(),
+            mats.stone.clone(),
+            0.45,
+        )),
+        (Biome::Desert, 0) => Some((
             ResourceType::Iron,
-            400,
+            480,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.4,
         )),
-        Biome::Forest => Some((
+        (Biome::Desert, 1) => Some((
+            ResourceType::Stone,
+            280,
+            ore_mesh.clone(),
+            mats.stone.clone(),
+            0.45,
+        )),
+        (Biome::Beach, 0) => Some((
             ResourceType::Copper,
-            320,
+            260,
+            ore_mesh.clone(),
+            mats.copper.clone(),
+            0.45,
+        )),
+        (Biome::Beach, 1) => Some((
+            ResourceType::Iron,
+            220,
+            ore_mesh.clone(),
+            mats.iron.clone(),
+            0.45,
+        )),
+        (Biome::Wetland, 0) => Some((
+            ResourceType::Copper,
+            500,
+            ore_mesh.clone(),
+            mats.copper.clone(),
+            0.4,
+        )),
+        (Biome::Wetland, 1) => Some((
+            ResourceType::Stone,
+            260,
+            ore_mesh.clone(),
+            mats.stone.clone(),
+            0.45,
+        )),
+        (Biome::Mountain, 0) => Some((
+            ResourceType::Iron,
+            520,
+            ore_mesh.clone(),
+            mats.iron.clone(),
+            0.4,
+        )),
+        (Biome::Mountain, 1) => Some((
+            ResourceType::Copper,
+            360,
             ore_mesh.clone(),
             mats.copper.clone(),
             0.4,
@@ -232,6 +320,25 @@ fn random_model(rng: &mut impl Rng, models: &[Handle<Scene>]) -> Option<Handle<S
     }
 }
 
+/// Pick a random tree model and return (scene_handle, base_scale).
+fn random_tree(rng: &mut impl Rng, assets: &ModelAssets) -> Option<(Handle<Scene>, f32)> {
+    if assets.trees.is_empty() {
+        None
+    } else {
+        let idx = rng.random_range(0..assets.trees.len());
+        let base_scale = assets
+            .tree_base_scales
+            .get(idx)
+            .copied()
+            .unwrap_or(1.0);
+        Some((assets.trees[idx].clone(), base_scale))
+    }
+}
+
+fn terrain_translation(height_map: &HeightMap, x: f32, z: f32, y_offset: f32) -> Vec3 {
+    Vec3::new(x, height_map.sample(x, z) + y_offset, z)
+}
+
 fn spawn_resource_nodes(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -246,6 +353,7 @@ fn spawn_resource_nodes(
     let ore_mesh = meshes.add(Cuboid::new(1.0, 0.8, 1.0));
     let gold_mesh = meshes.add(Cuboid::new(0.8, 0.8, 0.8));
     let oil_mesh = meshes.add(Cylinder::new(0.5, 1.2));
+    let stone_mesh = meshes.add(Cuboid::new(0.9, 0.7, 0.9));
 
     let has_tree_models = !model_assets.trees.is_empty();
     let has_rock_models = !model_assets.rocks.is_empty();
@@ -302,14 +410,15 @@ fn spawn_resource_nodes(
                 }
 
                 if let Some((rt, amount, mesh, mat, half_h)) = primary_resource_for(
-                    biome, &wood_mesh, &ore_mesh, &gold_mesh, &oil_mesh, &node_mats,
+                    biome, &wood_mesh, &ore_mesh, &gold_mesh, &oil_mesh, &stone_mesh, &node_mats,
                 ) {
                     let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
                     let scale_factor = rng.random_range(0.8_f32..1.2);
 
                     // Wood nodes → tree models
                     if rt == ResourceType::Wood && has_tree_models {
-                        let scene_handle = random_model(&mut rng, &model_assets.trees).unwrap();
+                        let (scene_handle, base_scale) = random_tree(&mut rng, &model_assets).unwrap();
+                        let tree_scale = scale_factor * base_scale;
                         commands.spawn((
                             GameWorld,
                             ResourceNode {
@@ -320,15 +429,15 @@ fn spawn_resource_nodes(
                             FogHideable::Object,
                             PickRadius(3.0 * scale_factor),
                             SceneRoot(scene_handle),
-                            Transform::from_translation(Vec3::new(x, height_map.sample(x, z), z))
+                            Transform::from_translation(terrain_translation(&height_map, x, z, 0.0))
                                 .with_rotation(Quat::from_rotation_y(y_rotation))
-                                .with_scale(Vec3::splat(scale_factor)),
+                                .with_scale(Vec3::splat(tree_scale)),
                         ));
                     }
-                    // Ore nodes (Copper/Iron/Gold) → rock models
+                    // Ore/Stone nodes → rock models
                     else if matches!(
                         rt,
-                        ResourceType::Copper | ResourceType::Iron | ResourceType::Gold
+                        ResourceType::Copper | ResourceType::Iron | ResourceType::Gold | ResourceType::Stone
                     ) && has_rock_models
                     {
                         let scene_handle = random_model(&mut rng, &model_assets.rocks).unwrap();
@@ -341,14 +450,14 @@ fn spawn_resource_nodes(
                             FogHideable::Object,
                             PickRadius(1.8 * scale_factor),
                             SceneRoot(scene_handle),
-                            Transform::from_translation(Vec3::new(x, height_map.sample(x, z), z))
+                            Transform::from_translation(terrain_translation(&height_map, x, z, 0.0))
                                 .with_rotation(Quat::from_rotation_y(y_rotation))
                                 .with_scale(Vec3::splat(scale_factor)),
                         ));
                     }
                     // Oil + fallbacks → primitive mesh
                     else {
-                        let y = height_map.sample(x, z) + half_h;
+                        let y = terrain_translation(&height_map, x, z, half_h).y;
                         commands.spawn((
                             GameWorld,
                             ResourceNode {
@@ -364,20 +473,56 @@ fn spawn_resource_nodes(
                     }
                 }
 
-                // Secondary resource (lower probability)
-                let secondary_noise =
-                    placement_noise.get([x as f64 * 0.13 + 50.0, z as f64 * 0.13 + 50.0]) as f32;
-                if secondary_noise > threshold + 0.2 / density_mult {
-                    if let Some((rt, amount, mesh, mat, half_h)) =
-                        secondary_resource_for(biome, &ore_mesh, &gold_mesh, &node_mats)
+                // Secondary resources: two lower-probability biome-specific rolls.
+                for tier in 0..2 {
+                    let secondary_noise = placement_noise.get([
+                        x as f64 * (0.13 + tier as f64 * 0.017) + 50.0 + tier as f64 * 37.0,
+                        z as f64 * (0.13 + tier as f64 * 0.019) + 50.0 + tier as f64 * 41.0,
+                    ]) as f32;
+                    if secondary_noise
+                        <= threshold + secondary_spawn_bonus(biome, tier) / density_mult
                     {
-                        let offset_x = x + 3.0;
-                        let offset_z = z + 2.0;
+                        continue;
+                    }
 
-                        if has_rock_models {
+                    if let Some((rt, amount, mesh, mat, half_h)) = secondary_resource_for(
+                        biome,
+                        tier,
+                        &wood_mesh,
+                        &ore_mesh,
+                        &gold_mesh,
+                        &node_mats,
+                    ) {
+                        let offset_x = x + 3.0 + tier as f32 * 2.5;
+                        let offset_z = z + 2.0 - tier as f32 * 2.0;
+                        let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
+                        let scale_factor = rng.random_range(0.8_f32..1.2);
+
+                        if rt == ResourceType::Wood && has_tree_models {
+                            let (scene_handle, base_scale) =
+                                random_tree(&mut rng, &model_assets).unwrap();
+                            let tree_scale = scale_factor * base_scale;
+                            commands.spawn((
+                                GameWorld,
+                                ResourceNode {
+                                    resource_type: rt,
+                                    amount_remaining: amount,
+                                },
+                                MatureTree,
+                                FogHideable::Object,
+                                PickRadius(3.0 * scale_factor),
+                                SceneRoot(scene_handle),
+                                Transform::from_translation(terrain_translation(
+                                    &height_map,
+                                    offset_x,
+                                    offset_z,
+                                    0.0,
+                                ))
+                                .with_rotation(Quat::from_rotation_y(y_rotation))
+                                .with_scale(Vec3::splat(tree_scale)),
+                            ));
+                        } else if has_rock_models {
                             let scene_handle = random_model(&mut rng, &model_assets.rocks).unwrap();
-                            let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
-                            let scale_factor = rng.random_range(0.8_f32..1.2);
                             commands.spawn((
                                 GameWorld,
                                 ResourceNode {
@@ -387,16 +532,17 @@ fn spawn_resource_nodes(
                                 FogHideable::Object,
                                 PickRadius(1.8 * scale_factor),
                                 SceneRoot(scene_handle),
-                                Transform::from_translation(Vec3::new(
+                                Transform::from_translation(terrain_translation(
+                                    &height_map,
                                     offset_x,
-                                    height_map.sample(offset_x, offset_z),
                                     offset_z,
+                                    0.0,
                                 ))
                                 .with_rotation(Quat::from_rotation_y(y_rotation))
                                 .with_scale(Vec3::splat(scale_factor)),
                             ));
                         } else {
-                            let y = height_map.sample(offset_x, offset_z) + half_h;
+                            let y = terrain_translation(&height_map, offset_x, offset_z, half_h).y;
                             commands.spawn((
                                 GameWorld,
                                 ResourceNode {
@@ -426,11 +572,13 @@ fn spawn_resource_nodes(
 /// Weights control relative probability; 0 means none.
 fn biome_decoration_weights(biome: Biome) -> (f32, f32, f32, f32) {
     match biome {
+        Biome::Grassland => (0.3, 0.25, 0.0, 0.0),
         // Forest grass weight 0 — dense grass handled separately via GPU instancing
-        Biome::Forest => (0.0, 0.35, 0.1, 0.0),
-        Biome::Desert => (0.0, 0.0, 0.5, 0.3),
-        Biome::Mud => (0.35, 0.35, 0.0, 0.0),
-        Biome::Mountain => (0.0, 0.0, 0.6, 0.15),
+        Biome::Forest => (0.0, 0.35, 0.0, 0.0),
+        Biome::Desert => (0.0, 0.0, 0.0, 0.3),
+        Biome::Beach => (0.0, 0.0, 0.0, 0.0),
+        Biome::Wetland => (0.35, 0.35, 0.0, 0.0),
+        Biome::Mountain => (0.0, 0.0, 0.0, 0.15),
         Biome::Water => (0.0, 0.0, 0.0, 0.0),
     }
 }
@@ -600,7 +748,7 @@ fn spawn_decorations(
                 // Small random offset so decorations don't align to a grid
                 let ox = x + rng.random_range(-2.0_f32..2.0);
                 let oz = z + rng.random_range(-2.0_f32..2.0);
-                let y = height_map.sample(ox, oz);
+                let y = terrain_translation(&height_map, ox, oz, 0.0).y;
                 let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
                 let scale = rng.random_range(scale_min..scale_max);
 
@@ -738,7 +886,7 @@ fn spawn_dense_grass(
                 continue;
             }
 
-            let y = height_map.sample(jx, jz);
+            let y = terrain_translation(&height_map, jx, jz, 0.0).y;
             let scale = rng.random_range(0.5_f32..1.2);
             let y_rot = rng.random_range(0.0..std::f32::consts::TAU);
 
@@ -2157,11 +2305,10 @@ fn spawn_saplings_system(
             continue;
         }
 
-        let scene_handle =
-            model_assets.trees[rng.random_range(0..model_assets.trees.len())].clone();
+        let (scene_handle, base_scale) = random_tree(&mut rng, &model_assets).unwrap();
         let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
-        let target_scale = rng.random_range(0.8_f32..1.2);
-        let initial_scale = 0.15;
+        let target_scale = rng.random_range(0.8_f32..1.2) * base_scale;
+        let initial_scale = 0.15 * base_scale;
 
         commands.spawn((
             GameWorld,
@@ -2171,7 +2318,7 @@ fn spawn_saplings_system(
             },
             FogHideable::Object,
             SceneRoot(scene_handle),
-            Transform::from_translation(Vec3::new(x, height_map.sample(x, z), z))
+            Transform::from_translation(terrain_translation(&height_map, x, z, 0.0))
                 .with_rotation(Quat::from_rotation_y(y_rotation))
                 .with_scale(Vec3::splat(initial_scale)),
         ));
@@ -2192,8 +2339,10 @@ fn grow_saplings_system(
     for (entity, mut sapling, mut tf) in &mut saplings {
         sapling.timer.tick(time.delta());
         let progress = sapling.timer.fraction();
-        // Lerp scale from 0.15 to 0.4
-        let scale = 0.15 + progress * 0.25;
+        // Lerp scale from ~15% to ~40% of target
+        let start = sapling.target_scale * 0.15;
+        let end = sapling.target_scale * 0.4;
+        let scale = start + progress * (end - start);
         tf.scale = Vec3::splat(scale);
 
         if sapling.timer.is_finished() {
@@ -2222,11 +2371,12 @@ fn grow_trees_system(
         tree.timer.tick(time.delta());
         let progress = tree.timer.fraction();
 
-        // Stage scale ranges: 0→(0.4..0.6), 1→(0.6..0.8), 2→(0.8..target)
+        // Stage scale ranges as fractions of target: 0→(40%..60%), 1→(60%..80%), 2→(80%..100%)
+        let ts = tree.target_scale;
         let (from, to) = match tree.stage {
-            0 => (0.4, 0.6),
-            1 => (0.6, 0.8),
-            _ => (0.8, tree.target_scale),
+            0 => (ts * 0.4, ts * 0.6),
+            1 => (ts * 0.6, ts * 0.8),
+            _ => (ts * 0.8, ts),
         };
         let scale = from + progress * (to - from);
         tf.scale = Vec3::splat(scale);
@@ -2241,7 +2391,7 @@ fn grow_trees_system(
                         resource_type: ResourceType::Wood,
                         amount_remaining: config.mature_wood_amount,
                     },
-                    PickRadius(3.0 * tree.target_scale),
+                    PickRadius(3.0),
                 ));
             } else {
                 tree.stage += 1;
@@ -2511,16 +2661,13 @@ fn resource_respawn_system(
                     continue;
                 }
 
-                let y = height_map.sample(x, z);
+                let terrain_pos = terrain_translation(&height_map, x, z, 0.0);
 
                 if rt == ResourceType::Wood {
                     // Reuse sapling system — spawn a Sapling
-                    if !model_assets.trees.is_empty() {
-                        let scene_handle = model_assets.trees
-                            [rng.random_range(0..model_assets.trees.len())]
-                        .clone();
+                    if let Some((scene_handle, base_scale)) = random_tree(&mut rng, &model_assets) {
                         let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
-                        let target_scale = rng.random_range(0.8_f32..1.2);
+                        let target_scale = rng.random_range(0.8_f32..1.2) * base_scale;
 
                         commands.spawn((
                             Sapling {
@@ -2529,9 +2676,9 @@ fn resource_respawn_system(
                             },
                             FogHideable::Object,
                             SceneRoot(scene_handle),
-                            Transform::from_translation(Vec3::new(x, y, z))
+                            Transform::from_translation(terrain_pos)
                                 .with_rotation(Quat::from_rotation_y(y_rotation))
-                                .with_scale(Vec3::splat(0.15)),
+                                .with_scale(Vec3::splat(0.15 * base_scale)),
                         ));
                     }
                 } else {
@@ -2562,7 +2709,7 @@ fn resource_respawn_system(
                             },
                             FogHideable::Object,
                             SceneRoot(scene_handle),
-                            Transform::from_translation(Vec3::new(x, y - 0.5, z))
+                            Transform::from_translation(terrain_pos)
                                 .with_rotation(Quat::from_rotation_y(y_rotation))
                                 .with_scale(Vec3::splat(0.1)),
                         ));
@@ -2580,7 +2727,7 @@ fn resource_respawn_system(
                             FogHideable::Object,
                             Mesh3d(mesh),
                             MeshMaterial3d(mat),
-                            Transform::from_translation(Vec3::new(x, y, z))
+                            Transform::from_translation(terrain_translation(&height_map, x, z, 0.6))
                                 .with_scale(Vec3::splat(0.1)),
                         ));
                     }
@@ -2598,6 +2745,7 @@ fn grow_resource_system(
     mut commands: Commands,
     time: Res<Time>,
     net_role: Res<crate::multiplayer::NetRole>,
+    height_map: Res<HeightMap>,
     mut growing: Query<(Entity, &mut GrowingResource, &mut Transform), Without<FrustumCulled>>,
 ) {
     if *net_role == crate::multiplayer::NetRole::Client {
@@ -2611,8 +2759,17 @@ fn grow_resource_system(
         // Scale from 0.1 to target_scale, with slight upward translation
         let scale = 0.1 + progress * (res.target_scale - 0.1);
         tf.scale = Vec3::splat(scale);
-        // Slight emergence effect
-        tf.translation.y += time.delta_secs() * 0.02 * (1.0 - progress);
+        let y_offset = match res.resource_type {
+            ResourceType::Oil => 0.6,
+            _ => 0.0,
+        };
+        tf.translation.y = terrain_translation(
+            &height_map,
+            tf.translation.x,
+            tf.translation.z,
+            y_offset,
+        )
+        .y;
 
         if res.timer.is_finished() {
             commands.entity(entity).remove::<GrowingResource>();

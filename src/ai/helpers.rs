@@ -128,7 +128,7 @@ pub fn find_resource_biome_pos(
 ) -> Option<Vec3> {
     let target_biome = match kind {
         EntityKind::Sawmill => Some(Biome::Forest),
-        EntityKind::Mine => Some(Biome::Mud),
+        EntityKind::Mine => Some(Biome::Wetland),
         EntityKind::OilRig => Some(Biome::Water),
         _ => None,
     };

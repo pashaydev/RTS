@@ -4,8 +4,11 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use rand::SeedableRng;
 
 use crate::components::{
-    AppState, Biome, BiomeMap, GameSetupConfig, GameWorld, Ground, MapSeed, ModelAssets,
+    AppState, Biome, BiomeMap, GameSetupConfig, GameWorld, Ground, MapSeed, ModelAssets, RtsCamera,
 };
+use crate::lighting::SunLight;
+use crate::terrain_material::{TerrainMaterial, TerrainSettings};
+use crate::water_material::{WaterMaterial, WaterSettings};
 
 pub const MAP_SIZE: f32 = 500.0;
 pub const HALF_MAP: f32 = 250.0;
@@ -119,8 +122,11 @@ pub fn foundation_radii(footprint: f32, step: f32) -> (f32, f32) {
     let outer = inner + footprint * 0.35 + step * 2.0;
     (inner, outer)
 }
-const NOISE_SCALE: f64 = 0.008;
-const AMPLITUDE: f32 = 10.0;
+const NOISE_SCALE: f64 = 0.006;
+const AMPLITUDE: f32 = 18.0;
+pub const WATER_LEVEL: f32 = AMPLITUDE * -0.18;
+const WARP_SCALE: f64 = 0.003;
+const WARP_AMP: f32 = 35.0;
 
 const MOISTURE_SCALE: f64 = 0.005;
 const TEMPERATURE_SCALE: f64 = 0.004;
@@ -171,6 +177,7 @@ pub fn is_in_mountain_border(x: f32, z: f32, half_map: f32, settings: BorderSett
 /// Holds seed-derived noise generators for terrain generation.
 pub struct TerrainNoise {
     height_fbm: Fbm<Perlin>,
+    warp_fbm: Fbm<Perlin>,
     moisture_fbm: Fbm<Perlin>,
     temperature_fbm: Fbm<Perlin>,
 }
@@ -180,45 +187,71 @@ impl TerrainNoise {
         let s0 = seed as u32;
         let s1 = (seed >> 16) as u32;
         let s2 = (seed >> 32) as u32;
+        let s3 = seed.wrapping_mul(7919) as u32;
         Self {
-            height_fbm: Fbm::<Perlin>::new(s0).set_octaves(4),
+            height_fbm: Fbm::<Perlin>::new(s0).set_octaves(6),
+            warp_fbm: Fbm::<Perlin>::new(s3).set_octaves(4),
             moisture_fbm: Fbm::<Perlin>::new(s1).set_octaves(3),
             temperature_fbm: Fbm::<Perlin>::new(s2).set_octaves(3),
         }
     }
 
     fn base_terrain_height(&self, x: f32, z: f32) -> f32 {
+        // Domain warping for organic landforms
+        let wx = self
+            .warp_fbm
+            .get([x as f64 * WARP_SCALE, z as f64 * WARP_SCALE]) as f32
+            * WARP_AMP;
+        let wz = self
+            .warp_fbm
+            .get([
+                x as f64 * WARP_SCALE + 100.0,
+                z as f64 * WARP_SCALE + 100.0,
+            ]) as f32
+            * WARP_AMP;
+
         let val = self
             .height_fbm
-            .get([x as f64 * NOISE_SCALE, z as f64 * NOISE_SCALE]) as f32;
+            .get([(x + wx) as f64 * NOISE_SCALE, (z + wz) as f64 * NOISE_SCALE])
+            as f32;
         val * AMPLITUDE
     }
 
     pub fn terrain_height(&self, x: f32, z: f32, half_map: f32) -> f32 {
-        let base_height = self.base_terrain_height(x, z);
+        let mut height = self.base_terrain_height(x, z);
+
+        // Continental shaping: gentle bowl that raises center, lowers edges
+        let center_dist = (x * x + z * z).sqrt() / half_map;
+        let continent_mask = 1.0 - (center_dist * 0.65).powi(2);
+        height = height * continent_mask + AMPLITUDE * 0.25;
+
+        // Soft terracing for sculpted plateau look
+        let terrace_scale = 0.25;
+        let terraced = (height * terrace_scale).round() / terrace_scale;
+        height = height * 0.7 + terraced * 0.3;
+
         let border = BorderSettings::from_map_size(half_map * 2.0);
         let edge_distance = edge_distance_to_square(x, z, half_map);
 
         if edge_distance > border.thickness + border.transition {
-            return base_height;
+            return height;
         }
 
         let ridge_noise = self
             .moisture_fbm
             .get([x as f64 * 0.021 + 37.0, z as f64 * 0.021 - 19.0]) as f32;
-        let ridge_variation = ridge_noise * 2.5;
+        let ridge_variation = ridge_noise * 3.5;
 
         if edge_distance <= border.thickness {
-            return base_height.max(AMPLITUDE * 0.62 + border.ridge_height + ridge_variation);
+            return height.max(AMPLITUDE * 0.62 + border.ridge_height + ridge_variation);
         }
 
         let blend_t = 1.0
             - ((edge_distance - border.thickness) / border.transition).clamp(0.0, 1.0);
         let smooth_t = blend_t * blend_t * (3.0 - 2.0 * blend_t);
-        // Keep the pre-mountain ramp lower than the ridge itself.
         let transition_lift = border.ridge_height * 0.35;
         let ridge_target = AMPLITUDE * 0.55 + transition_lift * smooth_t + ridge_variation * 0.35;
-        base_height + (ridge_target - base_height) * smooth_t
+        height + (ridge_target - height) * smooth_t
     }
 
     pub fn biome_at(&self, x: f32, z: f32, half_map: f32) -> Biome {
@@ -247,19 +280,25 @@ impl TerrainNoise {
             + 0.5)
             .clamp(0.0, 1.0);
 
-        if height_norm < 0.3 {
+        if height_norm < 0.28 {
             return Biome::Water;
+        }
+        if height_norm < 0.33 {
+            return Biome::Beach;
         }
         if height_norm > 0.75 {
             return Biome::Mountain;
         }
-        if temperature > 0.6 && moisture < 0.4 {
+        if temperature > 0.65 && moisture < 0.35 {
             return Biome::Desert;
         }
-        if moisture > 0.6 && temperature < 0.6 {
+        if moisture > 0.55 {
             return Biome::Forest;
         }
-        Biome::Mud
+        if height_norm < 0.42 && moisture > 0.5 {
+            return Biome::Wetland;
+        }
+        Biome::Grassland
     }
 }
 
@@ -276,61 +315,216 @@ pub fn resolve_map_seed(mut commands: Commands, config: Res<GameSetupConfig>) {
 
 fn biome_color(biome: Biome, height_norm: f32) -> [f32; 4] {
     match biome {
-        Biome::Forest => {
-            let t = ((height_norm - 0.3) / 0.45).clamp(0.0, 1.0);
-            [0.1 + t * 0.1, 0.45 + t * 0.2, 0.08 + t * 0.07, 1.0]
+        Biome::Grassland => {
+            let t = ((height_norm - 0.33) / 0.42).clamp(0.0, 1.0);
+            [0.22 + t * 0.12, 0.50 + t * 0.15, 0.10 + t * 0.08, 1.0]
         }
-        Biome::Desert => [
-            0.85 + height_norm * 0.1,
-            0.75 + height_norm * 0.1,
-            0.45,
-            1.0,
-        ],
-        Biome::Mud => [
-            0.35 + height_norm * 0.15,
-            0.25 + height_norm * 0.1,
-            0.12 + height_norm * 0.08,
-            1.0,
-        ],
+        Biome::Forest => {
+            let t = ((height_norm - 0.33) / 0.42).clamp(0.0, 1.0);
+            [0.10 + t * 0.08, 0.35 + t * 0.13, 0.06 + t * 0.04, 1.0]
+        }
+        Biome::Desert => {
+            let t = ((height_norm - 0.33) / 0.42).clamp(0.0, 1.0);
+            [0.82 + t * 0.10, 0.74 + t * 0.08, 0.48 + t * 0.06, 1.0]
+        }
+        Biome::Beach => {
+            let t = ((height_norm - 0.28) / 0.05).clamp(0.0, 1.0);
+            [0.80 + t * 0.08, 0.73 + t * 0.07, 0.50 + t * 0.08, 1.0]
+        }
+        Biome::Wetland => {
+            let t = ((height_norm - 0.33) / 0.09).clamp(0.0, 1.0);
+            [0.25 + t * 0.08, 0.38 + t * 0.08, 0.16 + t * 0.06, 1.0]
+        }
         Biome::Water => {
             let depth = 1.0 - height_norm;
             [
-                0.05 + depth * 0.1,
-                0.15 + depth * 0.2,
-                0.5 + depth * 0.2,
+                0.03 + depth * 0.08,
+                0.10 + depth * 0.15,
+                0.40 + depth * 0.25,
                 1.0,
             ]
         }
         Biome::Mountain => {
             let t = ((height_norm - 0.75) / 0.25).clamp(0.0, 1.0);
-            [0.5 + t * 0.35, 0.48 + t * 0.35, 0.45 + t * 0.35, 1.0]
+            [0.48 + t * 0.40, 0.46 + t * 0.40, 0.43 + t * 0.42, 1.0]
         }
     }
 }
 
+const BIOME_COUNT: usize = 7;
+
+fn biome_index(b: Biome) -> usize {
+    match b {
+        Biome::Grassland => 0,
+        Biome::Forest => 1,
+        Biome::Desert => 2,
+        Biome::Beach => 3,
+        Biome::Wetland => 4,
+        Biome::Water => 5,
+        Biome::Mountain => 6,
+    }
+}
+
+/// Sample biome at 9 nearby offsets and return a blended vertex color.
+fn blended_biome_color(noise: &TerrainNoise, x: f32, z: f32, half_map: f32, blend_radius: f32) -> [f32; 4] {
+    let offsets: [(f32, f32); 9] = [
+        (0.0, 0.0),
+        (-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0),
+        (-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0),
+    ];
+    let mut weights = [0.0f32; BIOME_COUNT];
+    let mut height_norms = [0.0f32; BIOME_COUNT];
+    let mut weight_counts = [0.0f32; BIOME_COUNT];
+
+    for &(dx, dz) in &offsets {
+        let sx = x + dx * blend_radius;
+        let sz = z + dz * blend_radius;
+        let h = noise.terrain_height(sx, sz, half_map);
+        let hn = ((h / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0);
+        let b = noise.biome_at(sx, sz, half_map);
+        let idx = biome_index(b);
+        weights[idx] += 1.0;
+        height_norms[idx] += hn;
+        weight_counts[idx] += 1.0;
+    }
+
+    let total: f32 = weights.iter().sum();
+    let mut color = [0.0f32; 4];
+    let all_biomes = [
+        Biome::Grassland, Biome::Forest, Biome::Desert,
+        Biome::Beach, Biome::Wetland, Biome::Water, Biome::Mountain,
+    ];
+    for i in 0..BIOME_COUNT {
+        if weights[i] > 0.0 {
+            let avg_hn = height_norms[i] / weight_counts[i];
+            let w = weights[i] / total;
+            let bc = biome_color(all_biomes[i], avg_hn);
+            color[0] += bc[0] * w;
+            color[1] += bc[1] * w;
+            color[2] += bc[2] * w;
+            color[3] += bc[3] * w;
+        }
+    }
+    color
+}
+
+#[derive(Resource)]
+pub struct TerrainTextures {
+    pub grass: Handle<Image>,
+    pub rock: Handle<Image>,
+    pub sand: Handle<Image>,
+    pub snow: Handle<Image>,
+}
+
 pub struct GroundPlugin;
+
+/// Marker for the water plane entity.
+#[derive(Component)]
+pub struct WaterPlane;
 
 impl Plugin for GroundPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            OnEnter(AppState::InGame),
-            (resolve_map_seed, spawn_ground, spawn_mountain_border).chain(),
-        );
+        app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
+            .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
+            .add_systems(Startup, load_terrain_textures)
+            .add_systems(
+                OnEnter(AppState::InGame),
+                (resolve_map_seed, spawn_ground, spawn_mountain_border).chain(),
+            )
+            .add_systems(
+                Update,
+                (update_water_time, update_terrain_lighting)
+                    .run_if(in_state(AppState::InGame)),
+            );
+    }
+}
+
+fn update_terrain_lighting(
+    mut materials: ResMut<Assets<TerrainMaterial>>,
+    terrain_q: Query<&MeshMaterial3d<TerrainMaterial>, With<Ground>>,
+    sun_q: Query<(&DirectionalLight, &Transform), With<SunLight>>,
+    ambient: Res<GlobalAmbientLight>,
+) {
+    let Ok(mat_handle) = terrain_q.single() else {
+        return;
+    };
+    let Some(mat) = materials.get_mut(&mat_handle.0) else {
+        return;
+    };
+
+    // Sync sun direction, color, intensity from scene DirectionalLight
+    if let Ok((sun_light, sun_tf)) = sun_q.single() {
+        let sun_dir = sun_tf.forward().as_vec3();
+        // DirectionalLight forward points *toward* what it illuminates,
+        // but in lighting math we want the direction *from* the surface to the light
+        mat.settings.sun_direction = Vec4::new(-sun_dir.x, -sun_dir.y, -sun_dir.z, 0.0);
+        let c = sun_light.color.to_srgba();
+        mat.settings.sun_color = Vec4::new(c.red, c.green, c.blue, 1.0);
+        // Normalize illuminance: peak sun ~6000 lux in this game's day cycle
+        mat.settings.sun_intensity = (sun_light.illuminance / 6000.0).clamp(0.0, 2.0);
+    }
+
+    // Sync ambient light — normalize brightness (peaks at ~300 in day cycle)
+    let ac = ambient.color.to_srgba();
+    mat.settings.ambient_color = Vec4::new(ac.red, ac.green, ac.blue, 1.0);
+    mat.settings.ambient_brightness = (ambient.brightness / 300.0).clamp(0.0, 1.0) * 0.5;
+}
+
+fn load_terrain_textures(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.insert_resource(TerrainTextures {
+        grass: asset_server.load("textures/terrain/grass.png"),
+        rock: asset_server.load("textures/terrain/rock.png"),
+        sand: asset_server.load("textures/terrain/sand.png"),
+        snow: asset_server.load("textures/terrain/snow.png"),
+    });
+}
+
+fn update_water_time(
+    time: Res<Time>,
+    mut materials: ResMut<Assets<WaterMaterial>>,
+    query: Query<&MeshMaterial3d<WaterMaterial>, With<WaterPlane>>,
+    camera_q: Query<&Transform, With<RtsCamera>>,
+    sun_q: Query<&Transform, (With<SunLight>, Without<RtsCamera>)>,
+) {
+    let cam_pos = camera_q
+        .iter()
+        .next()
+        .map(|t| t.translation)
+        .unwrap_or(Vec3::new(0.0, 50.0, 0.0));
+
+    // Get sun direction from scene light (negate forward = direction toward light)
+    let sun_dir = sun_q
+        .iter()
+        .next()
+        .map(|t| {
+            let fwd = t.forward().as_vec3();
+            Vec4::new(-fwd.x, -fwd.y, -fwd.z, 0.0)
+        })
+        .unwrap_or(Vec4::new(0.5, 0.7, 0.3, 0.0));
+
+    for mat_handle in &query {
+        if let Some(mat) = materials.get_mut(&mat_handle.0) {
+            mat.settings.time = time.elapsed_secs();
+            mat.settings.camera_position = Vec4::new(cam_pos.x, cam_pos.y, cam_pos.z, 0.0);
+            mat.settings.sun_direction = sun_dir;
+        }
     }
 }
 
 pub fn spawn_ground(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut terrain_materials: ResMut<Assets<TerrainMaterial>>,
+    mut water_materials: ResMut<Assets<WaterMaterial>>,
     config: Res<GameSetupConfig>,
     map_seed: Res<MapSeed>,
+    terrain_textures: Res<TerrainTextures>,
 ) {
     let noise = TerrainNoise::from_seed(map_seed.0);
 
     let actual_map_size = config.map_size.world_size();
     let actual_half_map = actual_map_size / 2.0;
-    let actual_grid_size = (actual_map_size / 2.5) as usize + 1;
+    let actual_grid_size = ((actual_map_size / 1.5) as usize + 1).min(351);
 
     // Generate terrain mesh
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(actual_grid_size * actual_grid_size);
@@ -347,7 +541,6 @@ pub fn spawn_ground(
             let x = -actual_half_map + ix as f32 * step;
             let z = -actual_half_map + iz as f32 * step;
             let y = noise.terrain_height(x, z, actual_half_map);
-            let height_norm = ((y / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0);
 
             let biome = noise.biome_at(x, z, actual_half_map);
             biome_data.push(biome);
@@ -357,7 +550,7 @@ pub fn spawn_ground(
                 ix as f32 / (actual_grid_size - 1) as f32,
                 iz as f32 / (actual_grid_size - 1) as f32,
             ]);
-            colors.push(biome_color(biome, height_norm));
+            colors.push(blended_biome_color(&noise, x, z, actual_half_map, step));
 
             // Central-difference normals
             let h_l = noise.terrain_height(x - eps, z, actual_half_map);
@@ -406,10 +599,15 @@ pub fn spawn_ground(
         GameWorld,
         Ground,
         Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            perceptual_roughness: 0.9,
-            ..default()
+        MeshMaterial3d(terrain_materials.add(TerrainMaterial {
+            settings: TerrainSettings {
+                amplitude: AMPLITUDE,
+                ..default()
+            },
+            grass_texture: Some(terrain_textures.grass.clone()),
+            rock_texture: Some(terrain_textures.rock.clone()),
+            sand_texture: Some(terrain_textures.sand.clone()),
+            snow_texture: Some(terrain_textures.snow.clone()),
         })),
         Transform::from_translation(Vec3::ZERO),
     ));
@@ -428,6 +626,19 @@ pub fn spawn_ground(
         grid_size: actual_grid_size,
         map_size: actual_map_size,
     });
+
+    // Spawn water plane
+    let water_level = WATER_LEVEL;
+    let water_mesh = Mesh::from(Plane3d::new(Vec3::Y, Vec2::splat(actual_half_map)));
+    commands.spawn((
+        GameWorld,
+        WaterPlane,
+        Mesh3d(meshes.add(water_mesh)),
+        MeshMaterial3d(water_materials.add(WaterMaterial {
+            settings: WaterSettings::default(),
+        })),
+        Transform::from_translation(Vec3::new(0.0, water_level, 0.0)),
+    ));
 }
 
 fn spawn_mountain_border(

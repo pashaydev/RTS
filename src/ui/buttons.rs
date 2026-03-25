@@ -1263,7 +1263,7 @@ pub fn show_action_tooltips(
                             Val::Px(0.0),
                             Val::Px(2.0),
                             Val::Px(0.0),
-                            Val::Px(8.0),
+                            Val::Px(4.0),
                         ),
                         GlobalZIndex(100),
                     ))

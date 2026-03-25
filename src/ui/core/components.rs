@@ -52,9 +52,9 @@ pub fn filled_button_chrome(tone: UiTone) -> UiButtonChrome {
         BoxShadow::new(
             tone_shadow(tone, if tone == UiTone::Neutral { 0.18 } else { 0.22 }),
             Val::Px(0.0),
-            Val::Px(3.0),
             Val::Px(0.0),
-            Val::Px(10.0),
+            Val::Px(0.0),
+            Val::Px(0.0),
         ),
     )
 }
@@ -75,9 +75,9 @@ pub fn ghost_button_chrome(tone: UiTone) -> UiButtonChrome {
         BoxShadow::new(
             tone_shadow(UiTone::Neutral, 0.16),
             Val::Px(0.0),
-            Val::Px(2.0),
             Val::Px(0.0),
-            Val::Px(6.0),
+            Val::Px(0.0),
+            Val::Px(0.0),
         ),
     )
 }
@@ -144,7 +144,7 @@ pub fn input_chrome() -> (BackgroundColor, BorderColor, BoxShadow) {
             Val::Px(0.0),
             Val::Px(2.0),
             Val::Px(0.0),
-            Val::Px(7.0),
+            Val::Px(0.0),
         ),
     )
 }
@@ -169,9 +169,9 @@ pub fn card_chrome(border: Color) -> (BackgroundColor, BorderColor, BoxShadow) {
         BoxShadow::new(
             Color::srgba(0.0, 0.0, 0.0, 0.18),
             Val::Px(0.0),
-            Val::Px(3.0),
             Val::Px(0.0),
-            Val::Px(10.0),
+            Val::Px(0.0),
+            Val::Px(0.0),
         ),
     )
 }
@@ -180,16 +180,6 @@ pub fn badge_node(size: f32, radius: f32) -> Node {
     Node {
         width: Val::Px(size),
         height: Val::Px(size),
-        border_radius: BorderRadius::all(Val::Px(radius)),
-        justify_content: JustifyContent::Center,
-        align_items: AlignItems::Center,
-        ..default()
-    }
-}
-
-pub fn pill_badge_node(pad_x: f32, pad_y: f32, radius: f32) -> Node {
-    Node {
-        padding: UiRect::axes(Val::Px(pad_x), Val::Px(pad_y)),
         border_radius: BorderRadius::all(Val::Px(radius)),
         justify_content: JustifyContent::Center,
         align_items: AlignItems::Center,

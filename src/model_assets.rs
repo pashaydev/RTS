@@ -22,6 +22,7 @@ impl Plugin for ModelAssetsPlugin {
             iron: asset_server.load("icons/resources/iron.png"),
             gold: asset_server.load("icons/resources/gold.png"),
             oil: asset_server.load("icons/resources/oil.png"),
+            stone: asset_server.load("icons/resources/stone.png"),
             planks: asset_server.load("icons/resources/planks.png"),
             charcoal: asset_server.load("icons/resources/charcoal.png"),
             bronze: asset_server.load("icons/resources/bronze.png"),
@@ -114,26 +115,53 @@ fn load_gltf_scenes(asset_server: &AssetServer, names: &[&str]) -> Vec<Handle<Sc
         .collect()
 }
 
+fn load_scenes_from(
+    asset_server: &AssetServer,
+    base: &str,
+    names: &[&str],
+) -> Vec<Handle<Scene>> {
+    names
+        .iter()
+        .map(|name| asset_server.load(format!("{base}/{name}#Scene0")))
+        .collect()
+}
+
+// Quaternius tree packs (CC0, by Quaternius)
+const QUAT_TREE_PATH: &str = "quaternius_tree";
+const QUAT_PINE_PATH: &str = "quaternius_pine_trees";
+const QUAT_TREES_PATH: &str = "quaternius_trees";
+
+// Base scales — tune visually so trees look proportional to buildings/units.
+// Tree.glb is ~6.5 units tall at scale 1.0; Pine/Nature meshes are tiny (cm units)
+// but have node-level scale=100, making them ~1 unit tall — need extra scaling.
+const QUAT_TREE_SCALE: f32 = 0.8;
+const QUAT_PINE_SCALE: f32 = 5.0;
+const QUAT_NATURE_SCALE: f32 = 5.0;
+
 fn load_model_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
-    let trees = load_gltf_scenes(
+    // Quaternius deciduous tree
+    let mut trees = load_scenes_from(&asset_server, QUAT_TREE_PATH, &["Tree.glb"]);
+    let mut tree_base_scales = vec![QUAT_TREE_SCALE; trees.len()];
+
+    // Quaternius pine trees
+    let pine = load_scenes_from(&asset_server, QUAT_PINE_PATH, &["Pine Trees.glb"]);
+    tree_base_scales.extend(vec![QUAT_PINE_SCALE; pine.len()]);
+    trees.extend(pine);
+
+    // Quaternius nature trees (5 variants, split from Trees.glb)
+    let nature = load_scenes_from(
         &asset_server,
+        QUAT_TREES_PATH,
         &[
-            "Tree_1_A_Color1.gltf",
-            "Tree_1_B_Color1.gltf",
-            "Tree_1_C_Color1.gltf",
-            "Tree_2_A_Color1.gltf",
-            "Tree_2_B_Color1.gltf",
-            "Tree_2_C_Color1.gltf",
-            "Tree_2_D_Color1.gltf",
-            "Tree_2_E_Color1.gltf",
-            "Tree_3_A_Color1.gltf",
-            "Tree_3_B_Color1.gltf",
-            "Tree_3_C_Color1.gltf",
-            "Tree_4_A_Color1.gltf",
-            "Tree_4_B_Color1.gltf",
-            "Tree_4_C_Color1.gltf",
+            "NormalTree_1.glb",
+            "NormalTree_2.glb",
+            "NormalTree_3.glb",
+            "NormalTree_4.glb",
+            "NormalTree_5.glb",
         ],
     );
+    tree_base_scales.extend(vec![QUAT_NATURE_SCALE; nature.len()]);
+    trees.extend(nature);
 
     let dead_trees = load_gltf_scenes(
         &asset_server,
@@ -199,6 +227,7 @@ fn load_model_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
 
     commands.insert_resource(ModelAssets {
         trees,
+        tree_base_scales,
         dead_trees,
         rocks,
         bushes,

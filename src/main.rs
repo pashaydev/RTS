@@ -13,6 +13,8 @@ mod debug;
 mod fog;
 mod fog_material;
 mod ground;
+mod terrain_material;
+mod water_material;
 mod hover_material;
 mod lighting;
 mod menu;

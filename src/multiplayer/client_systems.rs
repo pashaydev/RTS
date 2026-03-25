@@ -61,7 +61,7 @@ pub struct PendingBuildingSync {
 
 #[derive(Resource, Default)]
 pub struct PendingResourceSync {
-    pub factions: Vec<(u8, [u32; 10])>,
+    pub factions: Vec<(u8, [u32; 11])>,
 }
 
 #[derive(Resource, Default)]
