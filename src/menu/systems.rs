@@ -258,6 +258,24 @@ fn rebuild_menu(commands: &mut Commands, roots: &Query<Entity, With<MenuRoot>>) 
     }
 }
 
+/// Rebuild only the slot cards inside their wrapper, avoiding a full page rebuild
+/// (which would replay panel fade-in / section-divider animations).
+fn rebuild_slot_cards(
+    commands: &mut Commands,
+    slots_q: &Query<(Entity, &Children), With<SlotCardsContainer>>,
+    config: &GameSetupConfig,
+    is_multiplayer: bool,
+) {
+    if let Ok((container, children)) = slots_q.single() {
+        for child in children.iter() {
+            commands.entity(child).try_despawn();
+        }
+        for i in 0..4 {
+            pages::spawn_slot_card(commands, container, i, config, is_multiplayer);
+        }
+    }
+}
+
 // ── Selector Clicks ──
 
 pub(crate) fn handle_selector_clicks(
@@ -268,7 +286,7 @@ pub(crate) fn handle_selector_clicks(
     host_state: Option<Res<HostNetState>>,
     page: Res<MenuPage>,
     mut commands: Commands,
-    roots: Query<Entity, With<MenuRoot>>,
+    slots_container: Query<(Entity, &Children), With<SlotCardsContainer>>,
 ) {
     for (interaction, selector) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -322,8 +340,13 @@ pub(crate) fn handle_selector_clicks(
                         }
                     }
 
-                    // Rebuild the menu page to reflect structural changes (difficulty row)
-                    rebuild_menu(&mut commands, &roots);
+                    // Rebuild only the slot cards (difficulty row may appear/disappear)
+                    rebuild_slot_cards(
+                        &mut commands,
+                        &slots_container,
+                        &config,
+                        *page == MenuPage::HostLobby,
+                    );
                 }
             }
             SelectorField::SlotDifficulty(slot_idx) => {
@@ -351,7 +374,7 @@ pub(crate) fn handle_selector_clicks(
                         multiplayer::broadcast_lobby_update(lobby, host, &config);
                         commands.insert_resource(multiplayer::PendingLobbyBroadcast);
                     }
-                    rebuild_menu(&mut commands, &roots);
+                    // Visuals handled by update_selector_visuals — no rebuild needed
                 }
             }
             SelectorField::TeamMode => {
@@ -371,8 +394,7 @@ pub(crate) fn handle_selector_clicks(
                     multiplayer::broadcast_lobby_update(lobby, host, &config);
                     commands.insert_resource(multiplayer::PendingLobbyBroadcast);
                 }
-                // Rebuild to update team buttons
-                rebuild_menu(&mut commands, &roots);
+                // Visuals handled by update_selector_visuals — no rebuild needed
             }
             SelectorField::MapSize => {
                 config.map_size = match selector.index {
@@ -441,7 +463,7 @@ pub(crate) fn handle_selector_clicks(
 pub(crate) fn update_selector_visuals(
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
-    lobby: Option<Res<crate::multiplayer::LobbyState>>,
+    page: Res<MenuPage>,
     preferred_faction: Option<Res<super::PreferredFaction>>,
     mut selectors: Query<(
         &MenuSelector,
@@ -455,7 +477,7 @@ pub(crate) fn update_selector_visuals(
     mut commands: Commands,
 ) {
     for (selector, mut bg, children, entity, was_selected, anim_state) in &mut selectors {
-        let is_multiplayer = lobby.is_some();
+        let is_multiplayer = matches!(*page, MenuPage::HostLobby | MenuPage::JoinLobby);
         let should_be_selected = match selector.field {
             SelectorField::SlotType(slot_idx) => {
                 if slot_idx < 4 {

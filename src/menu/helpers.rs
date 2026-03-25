@@ -45,6 +45,11 @@ pub struct SeedDisplay;
 #[derive(Component)]
 pub struct RandomizeSeedButton;
 
+/// Wrapper around the 4 slot cards so they can be rebuilt without
+/// tearing down the entire menu page (avoids replaying panel animations).
+#[derive(Component)]
+pub struct SlotCardsContainer;
+
 // ── Panel ──
 
 pub fn spawn_menu_panel(commands: &mut Commands) -> Entity {

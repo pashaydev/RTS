@@ -1008,30 +1008,32 @@ pub fn animated_button_hover_system(
     for (interaction, mut anim, style, mut bg, mut transform) in &mut query {
         match interaction {
             Interaction::Hovered => {
-                anim.scale_target = 1.04;
+                anim.scale_target = 1.02;
                 match style {
                     ButtonStyle::Filled => {
-                        anim.bg_target = [0.25, 0.25, 0.25, 0.94];
+                        // Subtle light tint
+                        anim.bg_target = [0.30, 0.35, 0.45, 0.25];
                     }
                     ButtonStyle::Ghost => {
-                        anim.bg_target = [0.29, 0.62, 1.0, 0.08];
+                        anim.bg_target = [0.29, 0.62, 1.0, 0.10];
                     }
                     ButtonStyle::Destructive => {
-                        anim.bg_target = [0.80, 0.27, 0.27, 0.08];
+                        anim.bg_target = [0.80, 0.27, 0.27, 0.10];
                     }
                 }
             }
             Interaction::Pressed => {
-                anim.scale_target = 0.96;
+                anim.scale_target = 0.97;
                 match style {
                     ButtonStyle::Filled => {
-                        anim.bg_target = [0.12, 0.12, 0.12, 0.94];
+                        // Brighter tint on press
+                        anim.bg_target = [0.35, 0.45, 0.60, 0.35];
                     }
                     ButtonStyle::Ghost => {
-                        anim.bg_target = [0.29, 0.62, 1.0, 0.14];
+                        anim.bg_target = [0.29, 0.62, 1.0, 0.18];
                     }
                     ButtonStyle::Destructive => {
-                        anim.bg_target = [0.80, 0.27, 0.27, 0.14];
+                        anim.bg_target = [0.80, 0.27, 0.27, 0.18];
                     }
                 }
             }
@@ -1039,7 +1041,7 @@ pub fn animated_button_hover_system(
                 anim.scale_target = 1.0;
                 match style {
                     ButtonStyle::Filled => {
-                        anim.bg_target = [0.17, 0.17, 0.17, 0.94];
+                        anim.bg_target = [0.15, 0.15, 0.15, 0.0];
                     }
                     ButtonStyle::Ghost | ButtonStyle::Destructive => {
                         anim.bg_target = [0.0, 0.0, 0.0, 0.0];

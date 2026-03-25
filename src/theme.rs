@@ -23,7 +23,7 @@ pub const SEPARATOR: Color = Color::srgb(0.20, 0.20, 0.20);
 pub const BORDER_SUBTLE: Color = Color::srgb(0.33, 0.33, 0.33);
 
 // ── Buttons ──
-pub const BTN_PRIMARY: Color = Color::srgba(0.17, 0.17, 0.17, 0.94);
+pub const BTN_PRIMARY: Color = Color::srgba(0.15, 0.15, 0.15, 0.0);
 pub const BTN_HOVER: Color = Color::srgba(0.22, 0.22, 0.22, 0.94);
 pub const BTN_PRESSED: Color = Color::srgba(0.10, 0.10, 0.10, 0.94);
 

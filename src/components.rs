@@ -2973,6 +2973,8 @@ pub struct ButtonAnimState {
     pub scale_target: f32,
     pub lift_current: f32,
     pub lift_target: f32,
+    pub shadow_current: f32,
+    pub shadow_target: f32,
 }
 
 impl ButtonAnimState {
@@ -2984,6 +2986,8 @@ impl ButtonAnimState {
             scale_target: 1.0,
             lift_current: 0.0,
             lift_target: 0.0,
+            shadow_current: 0.0,
+            shadow_target: 0.0,
         }
     }
 }

@@ -102,8 +102,20 @@ pub(crate) fn spawn_new_game_page(
 
     spawn_animated_section_divider(commands, container, "FACTIONS", fonts);
 
+    let slots_wrap = commands
+        .spawn((
+            SlotCardsContainer,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(container).add_child(slots_wrap);
+
     for i in 0..4 {
-        spawn_slot_card(commands, container, i, config, false);
+        spawn_slot_card(commands, slots_wrap, i, config, false);
     }
 
     let team_idx = match config.team_mode {

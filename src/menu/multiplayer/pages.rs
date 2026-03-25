@@ -194,8 +194,20 @@ pub(crate) fn spawn_host_lobby_page(
 
     spawn_animated_section_divider(commands, container, "FACTIONS", fonts);
 
+    let slots_wrap = commands
+        .spawn((
+            SlotCardsContainer,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(container).add_child(slots_wrap);
+
     for i in 0..4 {
-        pages::spawn_slot_card(commands, container, i, config, true);
+        pages::spawn_slot_card(commands, slots_wrap, i, config, true);
     }
 
     // ── World Settings ──

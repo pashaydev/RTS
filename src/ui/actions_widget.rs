@@ -432,7 +432,10 @@ pub fn update_action_bar(
         }
     }
 
-    if !is_building_grid {
+    // Only play entrance animations when the UI mode structurally changed
+    // (e.g. switching from idle→building selected), not on data-only refreshes
+    // like resource ticks or queue length updates.
+    if !is_building_grid && mode_changed {
         if let Ok(children) = children_q_readonly.get(bar_entity) {
             for child in children.iter() {
                 commands.entity(child).try_insert((

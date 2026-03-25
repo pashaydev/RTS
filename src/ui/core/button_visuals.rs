@@ -145,38 +145,38 @@ pub fn animated_button_hover_system(
     for (state, mut anim, style, mut bg, mut transform) in &mut query {
         match state.phase {
             UiInteractPhase::Hovered => {
-                anim.scale_target = 1.04;
-                anim.lift_target = 2.0;
+                anim.scale_target = 1.02;
+                anim.lift_target = 1.5;
                 match style {
                     ButtonStyle::Filled => {
-                        anim.bg_target = [0.25, 0.25, 0.25, 0.94];
+                        anim.bg_target = [0.30, 0.35, 0.45, 0.25];
                     }
                     ButtonStyle::Ghost => {
-                        anim.bg_target = [0.29, 0.62, 1.0, 0.08];
+                        anim.bg_target = [0.29, 0.62, 1.0, 0.10];
                     }
                     ButtonStyle::Destructive => {
-                        anim.bg_target = [0.80, 0.27, 0.27, 0.08];
+                        anim.bg_target = [0.80, 0.27, 0.27, 0.10];
                     }
                 }
             }
             UiInteractPhase::Pressed => {
-                anim.scale_target = 0.96 + 0.02 * state.hold_progress;
+                anim.scale_target = 0.97 + 0.02 * state.hold_progress;
                 anim.lift_target = 0.0;
                 match style {
                     ButtonStyle::Filled => {
                         anim.bg_target = [
-                            lerp(0.12, 0.18, state.hold_progress),
-                            lerp(0.12, 0.18, state.hold_progress),
-                            lerp(0.12, 0.22, state.hold_progress),
-                            0.94,
+                            lerp(0.35, 0.40, state.hold_progress),
+                            lerp(0.45, 0.50, state.hold_progress),
+                            lerp(0.60, 0.65, state.hold_progress),
+                            0.35,
                         ];
                     }
                     ButtonStyle::Ghost => {
-                        anim.bg_target = [0.29, 0.62, 1.0, lerp(0.14, 0.24, state.hold_progress)];
+                        anim.bg_target = [0.29, 0.62, 1.0, lerp(0.18, 0.28, state.hold_progress)];
                     }
                     ButtonStyle::Destructive => {
                         anim.bg_target =
-                            [0.80, 0.27, 0.27, lerp(0.14, 0.24, state.hold_progress)];
+                            [0.80, 0.27, 0.27, lerp(0.18, 0.28, state.hold_progress)];
                     }
                 }
             }
@@ -185,7 +185,7 @@ pub fn animated_button_hover_system(
                 anim.lift_target = 1.5 * state.click_flash;
                 match style {
                     ButtonStyle::Filled => {
-                        anim.bg_target = [0.17, 0.17, 0.17, 0.94];
+                        anim.bg_target = [0.15, 0.15, 0.15, 0.0];
                     }
                     ButtonStyle::Ghost | ButtonStyle::Destructive => {
                         anim.bg_target = [0.0, 0.0, 0.0, 0.0];

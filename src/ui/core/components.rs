@@ -8,7 +8,6 @@ pub type UiButtonChrome = (
     ButtonStyle,
     BackgroundColor,
     BorderColor,
-    BoxShadow,
 );
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,14 +47,7 @@ pub fn filled_button_chrome(tone: UiTone) -> UiButtonChrome {
         ButtonAnimState::new(bg.to_srgba().to_f32_array()),
         ButtonStyle::Filled,
         BackgroundColor(bg),
-        BorderColor::all(tone_border(tone)),
-        BoxShadow::new(
-            tone_shadow(tone, if tone == UiTone::Neutral { 0.18 } else { 0.22 }),
-            Val::Px(0.0),
-            Val::Px(0.0),
-            Val::Px(0.0),
-            Val::Px(0.0),
-        ),
+        BorderColor::all(Color::NONE),
     )
 }
 
@@ -67,18 +59,15 @@ pub fn ghost_button_chrome(tone: UiTone) -> UiButtonChrome {
             UiTone::Neutral | UiTone::Accent => ButtonStyle::Ghost,
         },
         BackgroundColor(Color::NONE),
-        BorderColor::all(match tone {
-            UiTone::Neutral => Color::srgba(0.30, 0.52, 0.82, 0.10),
-            UiTone::Accent => Color::srgba(0.35, 0.68, 1.0, 0.14),
-            UiTone::Destructive => Color::srgba(0.88, 0.40, 0.40, 0.14),
-        }),
-        BoxShadow::new(
-            tone_shadow(UiTone::Neutral, 0.16),
-            Val::Px(0.0),
-            Val::Px(0.0),
-            Val::Px(0.0),
-            Val::Px(0.0),
-        ),
+        BorderColor::all(Color::NONE),
+    )
+}
+
+/// Shadow color for a button tone at the given opacity (used on hover/press).
+pub fn tone_hover_shadow(tone: UiTone) -> Color {
+    tone_shadow(
+        tone,
+        if tone == UiTone::Neutral { 0.25 } else { 0.35 },
     )
 }
 
@@ -89,7 +78,6 @@ pub fn button_node(width: f32, height: f32) -> Node {
         justify_content: JustifyContent::Center,
         align_items: AlignItems::Center,
         margin: UiRect::vertical(Val::Px(4.0)),
-        border: UiRect::all(Val::Px(1.0)),
         border_radius: BorderRadius::all(Val::Px(8.0)),
         ..default()
     }
@@ -98,7 +86,6 @@ pub fn button_node(width: f32, height: f32) -> Node {
 pub fn compact_button_node(pad_x: f32, pad_y: f32) -> Node {
     Node {
         padding: UiRect::axes(Val::Px(pad_x), Val::Px(pad_y)),
-        border: UiRect::all(Val::Px(1.0)),
         border_radius: BorderRadius::all(Val::Px(6.0)),
         ..default()
     }
@@ -116,7 +103,6 @@ pub fn icon_button_node(size: f32) -> Node {
         height: Val::Px(size),
         justify_content: JustifyContent::Center,
         align_items: AlignItems::Center,
-        border: UiRect::all(Val::Px(1.0)),
         border_radius: BorderRadius::all(Val::Px(6.0)),
         ..default()
     }
