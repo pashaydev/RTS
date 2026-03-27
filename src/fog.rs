@@ -25,6 +25,24 @@ struct FogTextureUploadState {
     explored_dirty: bool,
 }
 
+/// Controls fog update frequency. Heavy systems only run on tick frames.
+#[derive(Resource)]
+struct FogTickTimer {
+    timer: Timer,
+    accumulated_dt: f32,
+    ticked_this_frame: bool,
+}
+
+impl Default for FogTickTimer {
+    fn default() -> Self {
+        Self {
+            timer: Timer::from_seconds(1.0 / 12.0, TimerMode::Repeating),
+            accumulated_dt: 0.0,
+            ticked_this_frame: false,
+        }
+    }
+}
+
 /// Tweakable gameplay thresholds for fog of war.
 #[derive(Resource)]
 pub struct FogTweakSettings {
@@ -35,6 +53,13 @@ pub struct FogTweakSettings {
     pub reveal_all: bool,
     pub enable_los: bool,
     pub los_ray_count: usize,
+    // Performance toggles
+    pub enable_visibility_update: bool,
+    pub enable_display_lerp: bool,
+    pub enable_texture_upload: bool,
+    pub enable_entity_hiding: bool,
+    pub tick_rate_hz: f32,
+    pub shader_quality: f32,
 }
 
 impl Default for FogTweakSettings {
@@ -47,6 +72,12 @@ impl Default for FogTweakSettings {
             reveal_all: false,
             enable_los: true,
             los_ray_count: 48,
+            enable_visibility_update: true,
+            enable_display_lerp: true,
+            enable_texture_upload: true,
+            enable_entity_hiding: true,
+            tick_rate_hz: 12.0,
+            shader_quality: 2.0,
         }
     }
 }
@@ -59,6 +90,7 @@ impl Plugin for FogPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<FogOfWarMaterial>::default())
             .init_resource::<FogTweakSettings>()
+            .init_resource::<FogTickTimer>()
             .add_systems(
                 OnEnter(AppState::InGame),
                 (spawn_fog_overlay, register_fog_tweaks).after(crate::ground::spawn_ground),
@@ -66,6 +98,8 @@ impl Plugin for FogPlugin {
             .add_systems(
                 Update,
                 (
+                    tick_fog_timer,
+                    update_fog_overlay_visibility,
                     update_fog_visibility,
                     update_fog_display,
                     update_fog_textures,
@@ -313,6 +347,42 @@ fn register_fog_tweaks(mut tweaks: ResMut<crate::debug::DebugTweaks>) {
         128.0,
         8.0,
     );
+    tweaks.add_bool(
+        "Visuals/FoW Performance",
+        "Visibility Update",
+        t.enable_visibility_update,
+    );
+    tweaks.add_bool(
+        "Visuals/FoW Performance",
+        "Display Lerp",
+        t.enable_display_lerp,
+    );
+    tweaks.add_bool(
+        "Visuals/FoW Performance",
+        "Texture Upload",
+        t.enable_texture_upload,
+    );
+    tweaks.add_bool(
+        "Visuals/FoW Performance",
+        "Entity Hiding",
+        t.enable_entity_hiding,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Performance",
+        "Tick Rate Hz",
+        t.tick_rate_hz,
+        4.0,
+        60.0,
+        1.0,
+    );
+    tweaks.add_float(
+        "Visuals/FoW Performance",
+        "Shader Quality",
+        t.shader_quality,
+        0.0,
+        2.0,
+        1.0,
+    );
 }
 
 // ── Texture Creation ──
@@ -344,6 +414,12 @@ fn spawn_fog_overlay(
     mut images: ResMut<Assets<Image>>,
     height_map: Res<HeightMap>,
 ) {
+    // Fog data grid uses a coarser resolution than the terrain grid.
+    // GPU bilinear texture sampling smooths the visual result.
+    let fog_step = height_map.step * 2.0;
+    let fog_grid_size = ((height_map.map_size / fog_step).ceil() as usize + 1).min(256);
+
+    // Overlay mesh uses the terrain grid with its own vertex stride
     let grid_size = height_map.grid_size;
     let step = height_map.step;
     let half_map = height_map.half_map;
@@ -394,8 +470,8 @@ fn spawn_fog_overlay(
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_indices(Indices::U32(indices));
 
-    let vis_handle = create_r8_texture(&mut images, grid_size);
-    let exp_handle = create_r8_texture(&mut images, grid_size);
+    let vis_handle = create_r8_texture(&mut images, fog_grid_size);
+    let exp_handle = create_r8_texture(&mut images, fog_grid_size);
 
     let material = fog_materials.add(FogOfWarMaterial {
         settings: FogSettings::default(),
@@ -421,13 +497,13 @@ fn spawn_fog_overlay(
         explored_dirty: true,
     });
 
-    let total = grid_size * grid_size;
+    let total = fog_grid_size * fog_grid_size;
     commands.insert_resource(FogOfWarMap {
         visible: vec![0.0; total],
         explored: vec![0; total],
         display: vec![0.0; total],
-        grid_size,
-        step,
+        grid_size: fog_grid_size,
+        step: fog_step,
         half_map,
     });
 }
@@ -443,11 +519,53 @@ fn reveal_fog_cell(fog_map: &mut FogOfWarMap, idx: usize, vis: f32, explored_dir
     }
 }
 
+// ── Tick Timer ──
+
+fn tick_fog_timer(
+    mut fog_timer: ResMut<FogTickTimer>,
+    fog_settings: Res<FogTweakSettings>,
+    time: Res<Time>,
+) {
+    // Sync tick rate from tweaks
+    let desired_duration = std::time::Duration::from_secs_f32(1.0 / fog_settings.tick_rate_hz.max(1.0));
+    if fog_timer.timer.duration() != desired_duration {
+        fog_timer.timer.set_duration(desired_duration);
+    }
+
+    fog_timer.accumulated_dt += time.delta_secs();
+    fog_timer.timer.tick(time.delta());
+    fog_timer.ticked_this_frame = fog_timer.timer.just_finished();
+}
+
+// ── Overlay Visibility ──
+
+fn update_fog_overlay_visibility(
+    fog_settings: Res<FogTweakSettings>,
+    mut fog_overlay: Query<&mut Visibility, With<FogOverlay>>,
+) {
+    let should_hide = fog_settings.reveal_all
+        || (!fog_settings.enable_visibility_update
+            && !fog_settings.enable_display_lerp
+            && !fog_settings.enable_texture_upload);
+
+    if let Ok(mut vis) = fog_overlay.single_mut() {
+        let target = if should_hide {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        if *vis != target {
+            *vis = target;
+        }
+    }
+}
+
 // ── Visibility Update (with terrain LOS) ──
 
 fn update_fog_visibility(
     mut fog_map: ResMut<FogOfWarMap>,
     fog_settings: Res<FogTweakSettings>,
+    fog_timer: Res<FogTickTimer>,
     mut upload_state: ResMut<FogTextureUploadState>,
     height_map: Res<HeightMap>,
     active_player: Res<ActivePlayer>,
@@ -456,6 +574,10 @@ fn update_fog_visibility(
     all_buildings: Query<(&Transform, &VisionRange, &Faction), With<Building>>,
     mut viewers: Local<Vec<(Vec3, f32)>>,
 ) {
+    if !fog_settings.enable_visibility_update || !fog_timer.ticked_this_frame {
+        return;
+    }
+
     if fog_settings.reveal_all {
         fog_map.visible.fill(1.0);
         if fog_map.explored.iter().any(|&v| v == 0) {
@@ -490,7 +612,10 @@ fn update_fog_visibility(
 
     let enable_los = fog_settings.enable_los;
     let ray_count = fog_settings.los_ray_count;
+    // Terrain height sampling uses the terrain grid (finer resolution)
     let terrain_heights = &height_map.heights;
+    let terrain_step = height_map.step;
+    let terrain_grid_size = height_map.grid_size;
 
     for (pos, range) in &*viewers {
         let range_sq = range * range;
@@ -507,8 +632,8 @@ fn update_fog_visibility(
 
         if enable_los {
             // Terrain-aware LOS using elevation angle raycasting.
-            // For each angular sector, cast a ray outward tracking max elevation angle.
-            // Cells whose angle is below the running max are occluded by terrain.
+            // Ray steps use fog grid step (coarser = fewer iterations).
+            // Terrain height is sampled from the finer terrain grid for accuracy.
             let max_steps = (*range / step).ceil() as usize + 1;
 
             for ray_i in 0..ray_count {
@@ -527,7 +652,7 @@ fn update_fog_visibility(
                     let wx = pos.x + dir_x * dist;
                     let wz = pos.z + dir_z * dist;
 
-                    // Convert to grid indices
+                    // Fog grid index (coarser)
                     let fix = ((wx + half_map) / step).round();
                     let fiz = ((wz + half_map) / step).round();
                     if fix < 0.0 || fiz < 0.0 {
@@ -539,20 +664,27 @@ fn update_fog_visibility(
                         break;
                     }
 
-                    let idx = iz * grid_size + ix;
-                    let terrain_h = terrain_heights[idx];
+                    // Terrain height from the finer terrain grid
+                    let tix = ((wx + half_map) / terrain_step)
+                        .round()
+                        .clamp(0.0, (terrain_grid_size - 1) as f32)
+                        as usize;
+                    let tiz = ((wz + half_map) / terrain_step)
+                        .round()
+                        .clamp(0.0, (terrain_grid_size - 1) as f32)
+                        as usize;
+                    let terrain_h = terrain_heights[tiz * terrain_grid_size + tix];
                     let elevation_angle = (terrain_h - viewer_height) / dist;
 
                     if elevation_angle > max_angle {
                         max_angle = elevation_angle;
 
-                        // This cell is visible — compute edge fade
                         let t = dist / range;
                         let edge_fade = 1.0 - t * t;
                         let vis = 0.5 + 0.5 * edge_fade;
-                        reveal_fog_cell(&mut fog_map, idx, vis, &mut explored_dirty);
+                        let fog_idx = iz * grid_size + ix;
+                        reveal_fog_cell(&mut fog_map, fog_idx, vis, &mut explored_dirty);
                     }
-                    // If angle <= max_angle, terrain occludes this cell — skip it
                 }
             }
 
@@ -568,7 +700,7 @@ fn update_fog_visibility(
                 );
             }
         } else {
-            // Simple radial distance (no terrain occlusion) — original behavior
+            // Simple radial distance (no terrain occlusion)
             for iz in min_z..=max_z {
                 for ix in min_x..=max_x {
                     let wx = -half_map + ix as f32 * step;
@@ -598,28 +730,32 @@ fn update_fog_visibility(
 fn update_fog_display(
     mut fog_map: ResMut<FogOfWarMap>,
     fog_settings: Res<FogTweakSettings>,
-    time: Res<Time>,
+    mut fog_timer: ResMut<FogTickTimer>,
 ) {
+    if !fog_settings.enable_display_lerp || !fog_timer.ticked_this_frame {
+        return;
+    }
+
     if fog_settings.reveal_all {
         for v in fog_map.display.iter_mut() {
             *v = 1.0;
         }
+        fog_timer.accumulated_dt = 0.0;
         return;
     }
 
-    let dt = time.delta_secs();
+    // Use accumulated dt since last tick for correct lerp compensation
+    let dt = fog_timer.accumulated_dt;
+    fog_timer.accumulated_dt = 0.0;
     let speed = fog_settings.transition_speed;
     let lerp_factor = (speed * dt).min(1.0);
 
     for i in 0..fog_map.visible.len() {
         let target = if fog_map.visible[i] > 0.01 {
-            // Currently visible: use the raw visible value (0.5–1.0 range)
             fog_map.visible[i]
         } else if fog_map.explored[i] != 0 {
-            // Explored but not currently visible
             0.35
         } else {
-            // Never seen
             0.0
         };
 
@@ -633,9 +769,15 @@ fn update_fog_display(
 fn update_fog_textures(
     fog_map: Res<FogOfWarMap>,
     fog_tex: Res<FogTextures>,
+    fog_settings: Res<FogTweakSettings>,
+    fog_timer: Res<FogTickTimer>,
     mut upload_state: ResMut<FogTextureUploadState>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    if !fog_settings.enable_texture_upload || !fog_timer.ticked_this_frame {
+        return;
+    }
+
     // Upload visible layer (smooth display values)
     if let Some(image) = images.get_mut(&fog_tex.visible) {
         if let Some(ref mut data) = image.data {
@@ -663,6 +805,7 @@ fn update_fog_textures(
 fn update_fog_material_time(
     time: Res<Time>,
     tweaks: Res<crate::debug::DebugTweaks>,
+    fog_settings: Res<FogTweakSettings>,
     fog_overlay: Query<&MeshMaterial3d<FogOfWarMaterial>, With<FogOverlay>>,
     mut materials: ResMut<Assets<FogOfWarMaterial>>,
 ) {
@@ -746,6 +889,9 @@ fn update_fog_material_time(
     if let Some(v) = tweaks.get_float("Visuals/FoW Shader", "Warp Speed") {
         mat.settings.fog_warp_speed = v;
     }
+
+    // Shader quality from performance tweaks
+    mat.settings.quality_level = fog_settings.shader_quality;
 }
 
 // ── Unified Entity Hiding ──
@@ -801,6 +947,10 @@ fn fog_hide_entities(
         (With<Building>, Without<FogHideable>, Without<Unit>),
     >,
 ) {
+    if !fog_settings.enable_entity_hiding {
+        return;
+    }
+
     if fog_settings.reveal_all {
         // When fog is disabled, restore visibility — but skip frustum-culled entities
         // so we don't override the culling system's Visibility::Hidden.

@@ -4,7 +4,6 @@ use bevy::prelude::*;
 pub struct DebugViewState {
     pub fps_overlay: bool,
     pub inspector: bool,
-    pub gizmos: bool,
     pub frustum_culling: bool,
 }
 
@@ -13,7 +12,6 @@ impl Default for DebugViewState {
         Self {
             fps_overlay: false,
             inspector: false,
-            gizmos: true,
             frustum_culling: false,
         }
     }

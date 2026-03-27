@@ -162,14 +162,14 @@ impl Default for WidgetRegistry {
         let mut slots = HashMap::new();
         slots.insert(WidgetId::Resources, GridSlot::new(0, 0, 1, 2));
         slots.insert(WidgetId::ArmyOverview, GridSlot::new(0, 2, 1, 2));
-        slots.insert(WidgetId::GroupHotkeys, GridSlot::new(0, 4, 1, 3));
+        slots.insert(WidgetId::GroupHotkeys, GridSlot::new(0, 4, 2, 3));
         slots.insert(WidgetId::Selection, GridSlot::new(0, 7, 2, 5));
         slots.insert(WidgetId::Actions, GridSlot::new(2, 7, 2, 5));
         slots.insert(WidgetId::ProductionQueue, GridSlot::new(7, 7, 2, 5));
         slots.insert(WidgetId::Minimap, GridSlot::new(9, 7, 3, 5));
         slots.insert(WidgetId::EventLog, GridSlot::new(10, 0, 2, 2));
         slots.insert(WidgetId::TechTree, GridSlot::new(3, 4, 6, 4));
-        slots.insert(WidgetId::Debug, GridSlot::new(10, 0, 4, 6));
+        slots.insert(WidgetId::Debug, GridSlot::new(10, 0, 3, 4));
 
         let mut visibility = HashMap::new();
         visibility.insert(WidgetId::Resources, true);
@@ -247,13 +247,6 @@ pub fn spawn_widget_frame(
             node,
             BackgroundColor(theme::BG_PANEL),
             BorderColor::all(theme::SEPARATOR),
-            BoxShadow::new(
-                Color::srgba(0.0, 0.0, 0.0, 0.5),
-                Val::Px(0.0),
-                Val::Px(2.0),
-                Val::Px(0.0),
-                Val::Px(8.0),
-            ),
             if visible {
                 Visibility::Inherited
             } else {

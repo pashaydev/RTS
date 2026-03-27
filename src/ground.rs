@@ -236,10 +236,10 @@ impl TerrainNoise {
         let continent_mask = 1.0 - (center_dist * 0.65).powi(2);
         height = height * continent_mask + AMPLITUDE * 0.25;
 
-        // Soft terracing for sculpted plateau look
+        // Soft terracing for sculpted plateau look (subtle to avoid visible seams)
         let terrace_scale = 0.25;
         let terraced = (height * terrace_scale).round() / terrace_scale;
-        height = height * 0.7 + terraced * 0.3;
+        height = height * 0.85 + terraced * 0.15;
 
         let border = BorderSettings::from_map_size(half_map * 2.0);
         let edge_distance = edge_distance_to_square(x, z, half_map);
@@ -403,39 +403,44 @@ fn biome_index(b: Biome) -> usize {
     }
 }
 
-/// Sample biome at 9 nearby offsets and return a blended vertex color.
+/// Sample biome at many nearby offsets with Gaussian-like distance weighting
+/// and return a smoothly blended vertex color.
 fn blended_biome_color(
     noise: &TerrainNoise,
     x: f32,
     z: f32,
     half_map: f32,
-    blend_radius: f32,
+    step: f32,
 ) -> [f32; 4] {
-    let offsets: [(f32, f32); 9] = [
-        (0.0, 0.0),
-        (-1.0, 0.0),
-        (1.0, 0.0),
-        (0.0, -1.0),
-        (0.0, 1.0),
-        (-1.0, -1.0),
-        (1.0, -1.0),
-        (-1.0, 1.0),
-        (1.0, 1.0),
-    ];
+    // Use a wider blend radius (3× grid step) with more samples for smooth transitions
+    let blend_radius = step * 3.0;
+    // 5×5 grid of sample points (25 samples) for much smoother blending
+    const SAMPLE_STEPS: i32 = 2; // -2..=2 → 5 steps per axis
     let mut weights = [0.0f32; BIOME_COUNT];
     let mut height_norms = [0.0f32; BIOME_COUNT];
-    let mut weight_counts = [0.0f32; BIOME_COUNT];
 
-    for &(dx, dz) in &offsets {
-        let sx = x + dx * blend_radius;
-        let sz = z + dz * blend_radius;
-        let h = noise.terrain_height(sx, sz, half_map);
-        let hn = ((h / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0);
-        let b = noise.biome_at(sx, sz, half_map);
-        let idx = biome_index(b);
-        weights[idx] += 1.0;
-        height_norms[idx] += hn;
-        weight_counts[idx] += 1.0;
+    let inv_sigma_sq = 1.0 / (blend_radius * blend_radius * 0.5);
+
+    for dzi in -SAMPLE_STEPS..=SAMPLE_STEPS {
+        for dxi in -SAMPLE_STEPS..=SAMPLE_STEPS {
+            let frac_x = dxi as f32 / SAMPLE_STEPS as f32;
+            let frac_z = dzi as f32 / SAMPLE_STEPS as f32;
+            let dx = frac_x * blend_radius;
+            let dz = frac_z * blend_radius;
+
+            // Gaussian-like weight: samples closer to center matter more
+            let dist_sq = dx * dx + dz * dz;
+            let w = (-dist_sq * inv_sigma_sq).exp();
+
+            let sx = x + dx;
+            let sz = z + dz;
+            let h = noise.terrain_height(sx, sz, half_map);
+            let hn = ((h / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0);
+            let b = noise.biome_at(sx, sz, half_map);
+            let idx = biome_index(b);
+            weights[idx] += w;
+            height_norms[idx] += hn * w;
+        }
     }
 
     let total: f32 = weights.iter().sum();
@@ -451,7 +456,7 @@ fn blended_biome_color(
     ];
     for i in 0..BIOME_COUNT {
         if weights[i] > 0.0 {
-            let avg_hn = height_norms[i] / weight_counts[i];
+            let avg_hn = height_norms[i] / weights[i];
             let w = weights[i] / total;
             let bc = biome_color(all_biomes[i], avg_hn);
             color[0] += bc[0] * w;

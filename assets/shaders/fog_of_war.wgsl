@@ -17,6 +17,8 @@ struct FogSettings {
     fog_tendril_scale: f32,
     fog_tendril_strength: f32,
     fog_warp_speed: f32,
+    // 0 = Low (flat), 1 = Medium (single noise), 2 = High (full)
+    quality_level: f32,
 };
 
 @group(3) @binding(0) var<uniform> settings: FogSettings;
@@ -79,6 +81,61 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     // explored_tex: permanent binary (0=never seen, 1=explored)
     let explored = textureSample(explored_tex, explored_sampler, uv).r;
 
+    // ════════════════════════════════════════════════════════════
+    // LOW quality: flat zones, no noise, no FBM — cheapest path
+    // ════════════════════════════════════════════════════════════
+    if settings.quality_level < 0.5 {
+        let unexplored_factor = 1.0 - smoothstep(0.0, 0.15, explored);
+        let explored_only = smoothstep(0.0, 0.15, explored) * (1.0 - smoothstep(0.3, 0.9, vis));
+        let alpha = unexplored_factor * settings.fog_color.a
+                  + explored_only * settings.explored_tint.a;
+        if alpha < 0.005 { discard; }
+        let zone = explored_only / max(unexplored_factor + explored_only, 0.001);
+        let color = mix(settings.fog_color.rgb, settings.explored_tint.rgb, zone);
+        return vec4<f32>(color, alpha);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // MEDIUM quality: single simplex noise, no FBM/tendrils/glow
+    // ════════════════════════════════════════════════════════════
+    if settings.quality_level < 1.5 {
+        // Deep unexplored
+        if explored < 0.02 && vis < 0.02 {
+            let coarse = simplex2d(uv * (settings.fog_noise_scale * 0.55)
+                + vec2<f32>(time * settings.fog_noise_speed, time * settings.fog_noise_speed * 0.7));
+            let darken = 1.0 - settings.fog_noise_contrast * 0.8 * (1.0 - (coarse * 0.5 + 0.5));
+            return vec4<f32>(settings.fog_color.rgb * darken, settings.fog_color.a);
+        }
+        // Explored-only
+        if explored > 0.98 && vis < 0.08 {
+            let pulse = 0.85 + 0.15 * sin(time * 0.5 + uv.x * 3.0 + uv.y * 2.0);
+            let alpha = settings.explored_tint.a * pulse;
+            if alpha < 0.005 { discard; }
+            return vec4<f32>(settings.explored_tint.rgb, alpha);
+        }
+        // Boundary — single simplex instead of FBM
+        let unexplored_factor = 1.0 - smoothstep(0.0, 0.15, explored);
+        let explored_only = smoothstep(0.0, 0.15, explored) * (1.0 - smoothstep(0.4, 0.7, vis));
+        let pulse = 0.85 + 0.15 * sin(time * 0.5 + uv.x * 3.0 + uv.y * 2.0);
+        let alpha = unexplored_factor * settings.fog_color.a
+                  + explored_only * settings.explored_tint.a * pulse;
+        if alpha < 0.005 { discard; }
+        let zone = explored_only / max(unexplored_factor + explored_only, 0.001);
+        var fog_rgb = mix(settings.fog_color.rgb, settings.explored_tint.rgb, zone);
+        // Single noise pass for unexplored areas
+        if unexplored_factor > 0.01 {
+            let noise = simplex2d(uv * settings.fog_noise_scale + time * settings.fog_noise_speed);
+            let combined = noise * 0.5 + 0.5;
+            let darken = 1.0 - settings.fog_noise_contrast * (1.0 - combined);
+            fog_rgb = fog_rgb * darken;
+        }
+        return vec4<f32>(fog_rgb, alpha);
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // HIGH quality: full shader (FBM + tendrils + edge glow)
+    // ════════════════════════════════════════════════════════════
+
     // Deep unexplored interior covers large areas and should stay cheap.
     if explored < 0.02 && vis < 0.02 {
         let coarse =
@@ -110,15 +167,10 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // ── Three-zone classification ──
-    // Zone 1: Unexplored (never seen)
     let unexplored_factor = 1.0 - smoothstep(0.0, 0.15, explored);
-    // Zone 2: Explored but not currently visible
     let explored_only = smoothstep(0.0, 0.15, explored) * (1.0 - smoothstep(0.4, 0.7, distorted_vis));
-    // Zone 3: Currently visible (clear)
-    // (visible_factor used implicitly as alpha goes to 0)
 
     // ── Alpha per zone ──
-    // Unexplored = opaque fog, explored = subtle darkening, visible = transparent
     let explored_pulse = 0.85 + 0.15 * sin(time * 0.5 + uv.x * 3.0 + uv.y * 2.0);
     let alpha = unexplored_factor * settings.fog_color.a
               + explored_only * settings.explored_tint.a * explored_pulse;
@@ -134,7 +186,6 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     // ── Animated swirling in unexplored fog ──
     let octaves = i32(clamp(settings.fog_noise_octaves, 1.0, 6.0));
     if unexplored_factor > 0.01 {
-        // Use a cheaper interior pattern and only spend extra work near edges.
         let base_uv = uv * settings.fog_noise_scale + time * settings.fog_noise_speed;
         let swirl = fbm(base_uv, min(octaves, 2));
         var combined = swirl * 0.5 + 0.5;
@@ -149,16 +200,14 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
             combined = mix(combined, detail_n, 0.35);
         }
 
-        // Multiplicative darkening: carve dark channels into the fog
         let darken = 1.0 - settings.fog_noise_contrast * (1.0 - combined);
         fog_rgb = fog_rgb * darken;
 
-        // Additive glow highlights: bright wisps using glow_color
         let highlights = pow(combined, 2.5) * settings.fog_noise_contrast * 1.5;
         fog_rgb = fog_rgb + settings.glow_color.rgb * highlights * unexplored_factor;
     }
 
-    // ── Mist tendrils at explored/unexplored boundary (simplified) ──
+    // ── Mist tendrils at explored/unexplored boundary ──
     if explore_boundary > 0.1 {
         let tendril_uv = uv * settings.fog_tendril_scale + time * 0.015;
         let tendril = fbm(tendril_uv, 2);

@@ -40,6 +40,8 @@ pub struct FogSettings {
     pub fog_tendril_scale: f32,
     pub fog_tendril_strength: f32,
     pub fog_warp_speed: f32,
+    /// 0 = Low (flat), 1 = Medium (single noise), 2 = High (full FBM + tendrils)
+    pub quality_level: f32,
 }
 
 impl Material for FogOfWarMaterial {
@@ -70,6 +72,7 @@ impl Default for FogSettings {
             fog_tendril_scale: 6.0,
             fog_tendril_strength: 0.3,
             fog_warp_speed: 0.5,
+            quality_level: 2.0,
         }
     }
 }

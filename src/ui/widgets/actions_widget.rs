@@ -1752,13 +1752,13 @@ fn spawn_building_action_bar(
                                                 ..default()
                                             },
                                             BackgroundColor(theme::ACCENT),
-                                            BoxShadow::new(
-                                                Color::srgba(0.29, 0.62, 1.0, 0.4),
-                                                Val::Px(0.0),
-                                                Val::Px(0.0),
-                                                Val::Px(0.0),
-                                                Val::Px(3.0),
-                                            ),
+                                            // BoxShadow::new(
+                                            //     Color::srgba(0.29, 0.62, 1.0, 0.4),
+                                            //     Val::Px(0.0),
+                                            //     Val::Px(0.0),
+                                            //     Val::Px(0.0),
+                                            //     Val::Px(3.0),
+                                            // ),
                                         ));
                                     });
                                 bar_row.spawn((

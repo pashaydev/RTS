@@ -190,4 +190,37 @@ pub fn update_army_overview(
         ))
         .id();
     commands.entity(content).add_child(total_text);
+
+    // Idle workers warning
+    let idle_count: u32 = counts
+        .iter()
+        .filter(|(k, _, _)| *k == EntityKind::Worker)
+        .map(|(_, _, idle)| idle)
+        .sum();
+    if idle_count > 0 {
+        let idle_row = commands
+            .spawn((
+                ArmyOverviewContent,
+                Node {
+                    width: Val::Percent(100.0),
+                    padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                    margin: UiRect::top(Val::Px(2.0)),
+                    border_radius: BorderRadius::all(Val::Px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.8, 0.6, 0.1, 0.25)),
+            ))
+            .with_children(|parent| {
+                parent.spawn((
+                    Text::new(format!("⚠ {} idle worker{}", idle_count, if idle_count == 1 { "" } else { "s" })),
+                    TextFont {
+                        font_size: theme::FONT_CAPTION,
+                        ..default()
+                    },
+                    TextColor(theme::WARNING),
+                ));
+            })
+            .id();
+        commands.entity(content).add_child(idle_row);
+    }
 }

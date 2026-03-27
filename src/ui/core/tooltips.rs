@@ -20,8 +20,11 @@ pub fn show_action_tooltips(
                     continue;
                 }
 
+                // Estimate height based on line count for positioning
+                let line_count = trigger.text.split('\n').filter(|l| !l.is_empty()).count();
+                let estimated_h = 20.0 + line_count as f32 * 18.0;
                 let (left, top) =
-                    tooltip_anchor_under_cursor(windows.single().ok(), ui_scale.0, 176.0, 110.0);
+                    tooltip_anchor_under_cursor(windows.single().ok(), ui_scale.0, 176.0, estimated_h);
 
                 commands
                     .spawn((
@@ -36,8 +39,7 @@ pub fn show_action_tooltips(
                             row_gap: Val::Px(1.0),
                             border_radius: BorderRadius::all(Val::Px(5.0)),
                             border: UiRect::all(Val::Px(1.0)),
-                            max_width: Val::Px(176.0),
-                            min_width: Val::Px(116.0),
+                            width: Val::Px(176.0),
                             ..default()
                         },
                         BackgroundColor(Color::srgba(0.05, 0.05, 0.07, 0.96)),
@@ -70,7 +72,7 @@ pub fn show_action_tooltips(
 pub fn update_action_tooltip_positions(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui_scale: Res<UiScale>,
-    mut tooltips: Query<&mut Node, With<ActionTooltip>>,
+    mut tooltips: Query<(&mut Node, &ComputedNode), With<ActionTooltip>>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -79,8 +81,10 @@ pub fn update_action_tooltip_positions(
         return;
     }
 
-    let (left, top) = tooltip_anchor_under_cursor(Some(window), ui_scale.0, 176.0, 110.0);
-    for mut node in &mut tooltips {
+    for (mut node, computed) in &mut tooltips {
+        let actual_h = computed.size().y / ui_scale.0.max(0.001);
+        let h = if actual_h > 1.0 { actual_h } else { 160.0 };
+        let (left, top) = tooltip_anchor_under_cursor(Some(window), ui_scale.0, 176.0, h);
         node.left = Val::Px(left);
         node.top = Val::Px(top);
     }

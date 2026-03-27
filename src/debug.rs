@@ -120,25 +120,7 @@ impl Plugin for DebugPlugin {
                     .run_if(in_state(AppState::InGame)),
             );
 
-        app.add_systems(
-            Update,
-            draw_debug_gizmos
-                .in_set(GameFlowSet::Diagnostics)
-                .run_if(in_state(AppState::InGame)),
-        )
-        .add_systems(
-            Update,
-            spawn_inspector_overlay
-                .in_set(GameFlowSet::Diagnostics)
-                .run_if(in_state(AppState::InGame))
-                .run_if(any_with_component::<MainHudRoot>),
-        )
-        .add_systems(
-            Update,
-            update_inspector_overlay
-                .in_set(GameFlowSet::Diagnostics)
-                .run_if(in_state(AppState::InGame)),
-        );
+
     }
 }
 
@@ -354,6 +336,26 @@ fn sync_fog_tweaks(tweaks: Res<DebugTweaks>, mut fog_settings: ResMut<FogTweakSe
     if let Some(v) = tweaks.get_float("Visuals/FoW Gameplay", "LOS Ray Count") {
         fog_settings.los_ray_count = v as usize;
     }
+
+    // ── FoW Performance folder ──
+    if let Some(v) = tweaks.get_bool("Visuals/FoW Performance", "Visibility Update") {
+        fog_settings.enable_visibility_update = v;
+    }
+    if let Some(v) = tweaks.get_bool("Visuals/FoW Performance", "Display Lerp") {
+        fog_settings.enable_display_lerp = v;
+    }
+    if let Some(v) = tweaks.get_bool("Visuals/FoW Performance", "Texture Upload") {
+        fog_settings.enable_texture_upload = v;
+    }
+    if let Some(v) = tweaks.get_bool("Visuals/FoW Performance", "Entity Hiding") {
+        fog_settings.enable_entity_hiding = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Performance", "Tick Rate Hz") {
+        fog_settings.tick_rate_hz = v;
+    }
+    if let Some(v) = tweaks.get_float("Visuals/FoW Performance", "Shader Quality") {
+        fog_settings.shader_quality = v;
+    }
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -410,11 +412,10 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_readonly(
         RUNTIME_FOLDER,
         "Debug Hotkeys",
-        "Ctrl+[ FPS | Ctrl+\\ Gizmos | Ctrl+] Inspector",
+        "Ctrl+[ FPS | Ctrl+\\] Inspector",
     );
     tweaks.add_bool(RUNTIME_FOLDER, "FPS Overlay", false);
     tweaks.add_bool(RUNTIME_FOLDER, "World Inspector", false);
-    tweaks.add_bool(RUNTIME_FOLDER, "Selection Gizmos", true);
     // Frustum debug folder
     tweaks.add_bool(FRUSTUM_FOLDER, "Enabled", false);
     tweaks.add_bool(FRUSTUM_FOLDER, "Freeze Main Camera", true);
@@ -508,38 +509,6 @@ fn format_debug_vec3(v: Vec3) -> String {
     format!("{:.1}, {:.1}, {:.1}", v.x, v.y, v.z)
 }
 
-fn viewport_ground_hit(
-    camera: &Camera,
-    cam_gt: &GlobalTransform,
-    viewport_pos: Vec2,
-) -> Option<Vec3> {
-    let ray = camera.viewport_to_world(cam_gt, viewport_pos).ok()?;
-    let dist = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))?;
-    Some(ray.get_point(dist))
-}
-
-fn camera_ground_corners(
-    camera: &Camera,
-    cam_gt: &GlobalTransform,
-    window: &Window,
-) -> Option<[Vec3; 4]> {
-    let rect = camera.logical_viewport_rect().unwrap_or(Rect {
-        min: Vec2::ZERO,
-        max: Vec2::new(window.width(), window.height()),
-    });
-    let corners = [
-        rect.min,
-        Vec2::new(rect.max.x, rect.min.y),
-        rect.max,
-        Vec2::new(rect.min.x, rect.max.y),
-    ];
-    Some([
-        viewport_ground_hit(camera, cam_gt, corners[0])?,
-        viewport_ground_hit(camera, cam_gt, corners[1])?,
-        viewport_ground_hit(camera, cam_gt, corners[2])?,
-        viewport_ground_hit(camera, cam_gt, corners[3])?,
-    ])
-}
 
 fn toggle_debug_views(
     keys: Res<ButtonInput<KeyCode>>,
@@ -570,25 +539,6 @@ fn toggle_debug_views(
                     } else {
                         "disabled"
                     }
-                ),
-                None,
-                time.elapsed_secs(),
-            );
-        }
-        changed = true;
-    }
-    if ctrl && keys.just_pressed(KeyCode::Backslash) {
-        state.gizmos = !state.gizmos;
-        info!(
-            "Debug gizmos {}",
-            if state.gizmos { "enabled" } else { "disabled" }
-        );
-        if let Some(notifications) = notifications.as_mut() {
-            notifications.push(
-                AllyNotifyKind::Attacking,
-                format!(
-                    "Debug gizmos {}",
-                    if state.gizmos { "enabled" } else { "disabled" }
                 ),
                 None,
                 time.elapsed_secs(),
@@ -628,7 +578,6 @@ fn toggle_debug_views(
         if let Some(mut tweaks) = tweaks {
             tweaks.set_bool_if_changed(RUNTIME_FOLDER, "FPS Overlay", state.fps_overlay);
             tweaks.set_bool_if_changed(RUNTIME_FOLDER, "World Inspector", state.inspector);
-            tweaks.set_bool_if_changed(RUNTIME_FOLDER, "Selection Gizmos", state.gizmos);
         }
     }
 }
@@ -766,9 +715,6 @@ fn sync_debug_view_tweaks(tweaks: ResMut<DebugTweaks>, mut state: ResMut<DebugVi
     }
     if let Some(enabled) = tweaks.get_bool(RUNTIME_FOLDER, "World Inspector") {
         state.inspector = enabled;
-    }
-    if let Some(enabled) = tweaks.get_bool(RUNTIME_FOLDER, "Selection Gizmos") {
-        state.gizmos = enabled;
     }
     if let Some(enabled) = tweaks.get_bool(FRUSTUM_FOLDER, "Enabled") {
         state.frustum_culling = enabled;
@@ -1116,209 +1062,6 @@ fn sync_debug_flow_tweaks(
     );
 }
 
-fn draw_debug_gizmos(
-    state: Res<DebugViewState>,
-    _debug_mode: Res<FrustumDebugMode>,
-    mut gizmos: Gizmos,
-    camera_q: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
-    cam_query: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    selected: Query<
-        (
-            &GlobalTransform,
-            Option<&MoveTarget>,
-            Option<&NavPath>,
-            Option<&AttackTarget>,
-        ),
-        With<Selected>,
-    >,
-    targets: Query<&GlobalTransform>,
-    cullables: Query<
-        (
-            &GlobalTransform,
-            Has<FrustumCulled>,
-            Option<&CullReason>,
-            Option<&CullingBounds>,
-        ),
-        Or<(
-            With<crate::components::Unit>,
-            With<crate::components::Mob>,
-            With<crate::components::Building>,
-            With<crate::components::ResourceNode>,
-            With<crate::components::Decoration>,
-            With<crate::components::Sapling>,
-            With<crate::components::GrowingTree>,
-            With<crate::components::GrowingResource>,
-        )>,
-    >,
-) {
-    if !state.gizmos && !state.frustum_culling {
-        return;
-    }
-
-    if let Ok((main_camera, main_cam_gt, camera)) = camera_q.single() {
-        let pivot = camera.pivot + Vec3::Y * 0.15;
-        if state.gizmos {
-            gizmos.circle(pivot, 1.2, Color::srgb(1.0, 0.45, 0.1));
-            gizmos.line(
-                pivot + Vec3::X * 1.4,
-                pivot - Vec3::X * 1.4,
-                Color::srgb(1.0, 0.45, 0.1),
-            );
-            gizmos.line(
-                pivot + Vec3::Z * 1.4,
-                pivot - Vec3::Z * 1.4,
-                Color::srgb(1.0, 0.45, 0.1),
-            );
-        }
-
-        if state.frustum_culling {
-            let cam_pos = main_cam_gt.translation();
-            // Main camera position sphere (orange)
-            gizmos.sphere(cam_pos, 1.2, Color::srgb(1.0, 0.55, 0.2));
-
-            if let Ok(window) = windows.single() {
-                // 3D frustum wireframe: near plane corners projected to world
-                if let Some(corners) = camera_ground_corners(main_camera, main_cam_gt, window) {
-                    // Lines from camera to ground corners (frustum edges)
-                    let frustum_color = Color::srgba(1.0, 0.65, 0.2, 0.7);
-                    for corner in corners {
-                        gizmos.line(cam_pos, corner + Vec3::Y * 0.2, frustum_color);
-                    }
-                    // Ground footprint quad (cyan)
-                    let footprint_color = Color::srgb(0.15, 0.85, 1.0);
-                    for edge in 0..corners.len() {
-                        gizmos.line(
-                            corners[edge] + Vec3::Y * 0.18,
-                            corners[(edge + 1) % corners.len()] + Vec3::Y * 0.18,
-                            footprint_color,
-                        );
-                    }
-
-                    // Draw an elevated near-plane wireframe for 3D frustum visualization
-                    let near_corners: Vec<Vec3> = corners
-                        .iter()
-                        .map(|c| {
-                            let dir = (*c - cam_pos).normalize_or_zero();
-                            cam_pos + dir * 15.0 + Vec3::Y * 0.1
-                        })
-                        .collect();
-                    let near_color = Color::srgba(0.9, 0.9, 0.2, 0.6);
-                    for i in 0..near_corners.len() {
-                        gizmos.line(
-                            near_corners[i],
-                            near_corners[(i + 1) % near_corners.len()],
-                            near_color,
-                        );
-                    }
-
-                    // Draw a mid-plane wireframe
-                    let mid_corners: Vec<Vec3> = corners
-                        .iter()
-                        .map(|c| {
-                            let mid = cam_pos.lerp(*c, 0.5);
-                            mid + Vec3::Y * 0.1
-                        })
-                        .collect();
-                    let mid_color = Color::srgba(0.5, 0.7, 1.0, 0.3);
-                    for i in 0..mid_corners.len() {
-                        gizmos.line(
-                            mid_corners[i],
-                            mid_corners[(i + 1) % mid_corners.len()],
-                            mid_color,
-                        );
-                    }
-                }
-            }
-
-            // Color-coded entity markers by cull reason:
-            // green = visible, red = frustum-culled, yellow = distance-hidden, blue = fog-hidden
-            let color_visible = Color::srgba(0.2, 1.0, 0.45, 0.35);
-            let color_frustum = Color::srgb(1.0, 0.2, 0.2);
-            let color_distance = Color::srgb(1.0, 0.85, 0.15);
-            let color_fog = Color::srgb(0.3, 0.5, 1.0);
-
-            for (gtf, is_culled, cull_reason, bounds) in &cullables {
-                let pos = gtf.translation() + Vec3::Y * 0.35;
-                let reason = cull_reason.copied().unwrap_or(if is_culled {
-                    CullReason::Frustum
-                } else {
-                    CullReason::Visible
-                });
-
-                match reason {
-                    CullReason::Visible => {
-                        gizmos.circle(pos, 0.35, color_visible);
-                    }
-                    CullReason::Frustum => {
-                        gizmos.cross(pos, 1.4, color_frustum);
-                    }
-                    CullReason::Distance => {
-                        gizmos.cross(pos, 1.0, color_distance);
-                    }
-                    CullReason::Fog => {
-                        gizmos.cross(pos, 1.0, color_fog);
-                    }
-                }
-
-                // Show bounding radius for entities with CullingBounds
-                if let Some(b) = bounds {
-                    let center = gtf.translation() + b.center_offset + Vec3::Y * 0.1;
-                    gizmos.circle(center, b.radius, Color::srgba(0.8, 0.8, 0.2, 0.2));
-                }
-            }
-        }
-    }
-
-    if state.gizmos {
-        if let Some(cursor) = cursor_ground_pos(&cam_query, &windows) {
-            let cursor = cursor + Vec3::Y * 0.08;
-            gizmos.circle(cursor, 0.5, Color::srgb(0.25, 1.0, 0.4));
-            gizmos.line(
-                cursor + Vec3::X * 0.7,
-                cursor - Vec3::X * 0.7,
-                Color::srgb(0.25, 1.0, 0.4),
-            );
-            gizmos.line(
-                cursor + Vec3::Z * 0.7,
-                cursor - Vec3::Z * 0.7,
-                Color::srgb(0.25, 1.0, 0.4),
-            );
-        }
-    }
-
-    if state.gizmos {
-        for (transform, move_target, nav_path, attack_target) in &selected {
-            let origin = transform.translation() + Vec3::Y * 0.15;
-            gizmos.circle(origin, 0.9, Color::srgb(0.2, 0.95, 0.8));
-
-            if let Some(move_target) = move_target {
-                let destination = move_target.0 + Vec3::Y * 0.1;
-                gizmos.line(origin, destination, Color::srgb(0.95, 0.85, 0.2));
-                gizmos.cross(destination, 0.45, Color::srgb(0.95, 0.85, 0.2));
-            }
-
-            if let Some(nav_path) = nav_path {
-                let mut previous = origin;
-                for point in nav_path.waypoints.iter().skip(nav_path.current_index) {
-                    let next = *point + Vec3::Y * 0.12;
-                    gizmos.line(previous, next, Color::srgb(0.2, 0.75, 1.0));
-                    previous = next;
-                }
-            }
-
-            if let Some(attack_target) = attack_target {
-                if let Ok(target) = targets.get(attack_target.0) {
-                    gizmos.line(
-                        origin,
-                        target.translation() + Vec3::Y * 0.2,
-                        Color::srgb(1.0, 0.25, 0.25),
-                    );
-                }
-            }
-        }
-    }
-}
 
 fn sync_entity_spawn_tweaks(
     mut commands: Commands,
