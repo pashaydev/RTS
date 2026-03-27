@@ -10,6 +10,16 @@ const WATER_SHADER_PATH: &str = "shaders/water.wgsl";
 pub struct WaterMaterial {
     #[uniform(0)]
     pub settings: WaterSettings,
+
+    /// Fog of war visible (smoothed display) texture — injected after fog spawns.
+    #[texture(1)]
+    #[sampler(2)]
+    pub fog_visible_texture: Option<Handle<Image>>,
+
+    /// Fog of war explored (binary) texture.
+    #[texture(3)]
+    #[sampler(4)]
+    pub fog_explored_texture: Option<Handle<Image>>,
 }
 
 #[derive(ShaderType, Debug, Clone)]

@@ -66,7 +66,7 @@ impl Default for FogSettings {
             fog_noise_speed: 0.01,
             fog_noise_warp: 0.8,
             fog_noise_contrast: 0.2,
-            fog_noise_octaves: 4.0,
+            fog_noise_octaves: 2.0,
             fog_tendril_scale: 6.0,
             fog_tendril_strength: 0.3,
             fog_warp_speed: 0.5,

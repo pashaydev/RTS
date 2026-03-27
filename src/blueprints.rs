@@ -2816,6 +2816,8 @@ pub fn spawn_from_blueprint_with_faction(
 
     let pick_radius = bp.visual.mesh_kind.pick_radius() * bp.visual.scale;
 
+    let culling_bounds = CullingBounds::new(pick_radius.max(2.0));
+
     let mut entity_cmds = if is_gltf {
         // GLTF buildings/characters: no Mesh3d/MeshMaterial3d on parent
         commands.spawn((
@@ -2823,6 +2825,8 @@ pub fn spawn_from_blueprint_with_faction(
             kind,
             faction,
             PickRadius(pick_radius),
+            culling_bounds,
+            CullReason::default(),
             Transform::from_translation(Vec3::new(pos.x, y, pos.z))
                 .with_scale(Vec3::splat(bp.visual.scale)),
             Visibility::default(),
@@ -2839,6 +2843,8 @@ pub fn spawn_from_blueprint_with_faction(
             kind,
             faction,
             PickRadius(pick_radius),
+            culling_bounds,
+            CullReason::default(),
             Mesh3d(mesh_handle),
             MeshMaterial3d(mat_handle),
             Transform::from_translation(Vec3::new(pos.x, y, pos.z))

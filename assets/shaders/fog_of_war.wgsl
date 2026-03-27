@@ -60,14 +60,6 @@ fn fbm(p: vec2<f32>, octaves: i32) -> f32 {
     return value;
 }
 
-fn domain_warp(p: vec2<f32>, t: f32) -> vec2<f32> {
-    let q = vec2<f32>(fbm(p + t * 0.02, 2), fbm(p + vec2<f32>(5.2, 1.3) + t * 0.015, 2));
-    return vec2<f32>(
-        fbm(p + 4.0 * q + vec2<f32>(1.7, 9.2) + t * 0.01, 2),
-        fbm(p + 4.0 * q + vec2<f32>(8.3, 2.8) + t * 0.008, 2)
-    );
-}
-
 // ── Fragment ──
 
 @fragment
@@ -75,25 +67,47 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let uv = mesh.uv;
     let time = settings.time;
 
-    // Sample two independent layers
     // visible_tex: smoothed display (0=hidden, ~0.35=explored-only, 0.5-1.0=visible)
-    // explored_tex: permanent binary (0=never seen, 1=explored)
     let vis = textureSample(visible_tex, visible_sampler, uv).r;
-    let explored = textureSample(explored_tex, explored_sampler, uv).r;
 
-    // Early-out for fully visible pixels — skip all noise computation
-    if vis > 0.9 && explored > 0.9 {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    // Most of the overlay becomes transparent over revealed terrain.
+    // Discarding here avoids the rest of the shader and blend/write work.
+    if vis > 0.92 {
+        discard;
     }
 
-    // ── Noise distortion at boundaries for organic edges ──
-    let noise_uv = uv * settings.noise_scale + time * 0.03;
-    let noise_val = fbm(noise_uv, 2);
+    // explored_tex: permanent binary (0=never seen, 1=explored)
+    let explored = textureSample(explored_tex, explored_sampler, uv).r;
+
+    // Deep unexplored interior covers large areas and should stay cheap.
+    if explored < 0.02 && vis < 0.02 {
+        let coarse =
+            simplex2d(uv * (settings.fog_noise_scale * 0.55)
+                + vec2<f32>(time * settings.fog_noise_speed, time * settings.fog_noise_speed * 0.7));
+        let coarse_n = coarse * 0.5 + 0.5;
+        let darken = 1.0 - settings.fog_noise_contrast * 0.8 * (1.0 - coarse_n);
+        let fog_rgb = settings.fog_color.rgb * darken;
+        return vec4<f32>(fog_rgb, settings.fog_color.a);
+    }
+
+    if explored > 0.98 && vis < 0.08 {
+        let explored_pulse = 0.85 + 0.15 * sin(time * 0.5 + uv.x * 3.0 + uv.y * 2.0);
+        let alpha = settings.explored_tint.a * explored_pulse;
+        if alpha < 0.005 {
+            discard;
+        }
+        return vec4<f32>(settings.explored_tint.rgb, alpha);
+    }
 
     let vis_boundary = smoothstep(0.0, 0.15, vis) * (1.0 - smoothstep(0.7, 1.0, vis));
     let explore_boundary = smoothstep(0.0, 0.1, explored) * (1.0 - smoothstep(0.8, 1.0, explored));
     let boundary = max(vis_boundary, explore_boundary);
-    let distorted_vis = clamp(vis + noise_val * 0.12 * boundary, 0.0, 1.0);
+    var distorted_vis = vis;
+    if boundary > 0.01 {
+        let noise_uv = uv * settings.noise_scale + time * 0.03;
+        let noise_val = fbm(noise_uv, 2);
+        distorted_vis = clamp(vis + noise_val * 0.12 * boundary, 0.0, 1.0);
+    }
 
     // ── Three-zone classification ──
     // Zone 1: Unexplored (never seen)
@@ -110,7 +124,7 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
               + explored_only * settings.explored_tint.a * explored_pulse;
 
     if alpha < 0.005 {
-        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        discard;
     }
 
     // ── Color blending ──
@@ -120,20 +134,20 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     // ── Animated swirling in unexplored fog ──
     let octaves = i32(clamp(settings.fog_noise_octaves, 1.0, 6.0));
     if unexplored_factor > 0.01 {
-        // Domain warp for organic flowing patterns
-        let warp_uv = uv * (settings.fog_noise_scale * 0.6);
-        let warp = domain_warp(warp_uv, time * settings.fog_warp_speed);
+        // Use a cheaper interior pattern and only spend extra work near edges.
+        let base_uv = uv * settings.fog_noise_scale + time * settings.fog_noise_speed;
+        let swirl = fbm(base_uv, min(octaves, 2));
+        var combined = swirl * 0.5 + 0.5;
 
-        // Primary swirl noise
-        let swirl_uv = uv * settings.fog_noise_scale + warp * settings.fog_noise_warp + time * settings.fog_noise_speed;
-        let swirl = fbm(swirl_uv, octaves);              // range ~[-1, 1]
-        let swirl_n = swirl * 0.5 + 0.5;                  // normalize to [0, 1]
-
-        // Secondary layer at different scale for depth
-        let detail = fbm(uv * settings.fog_noise_scale * 1.7 + warp * 0.3 + time * settings.fog_noise_speed * 0.6, max(octaves - 1, 1));
-        let detail_n = detail * 0.5 + 0.5;
-
-        let combined = mix(swirl_n, detail_n, 0.3);
+        if explore_boundary > 0.05 || boundary > 0.05 {
+            let detail = fbm(
+                uv * settings.fog_noise_scale * (1.2 + settings.fog_noise_warp * 0.15)
+                    + vec2<f32>(time * settings.fog_warp_speed * 0.05, time * settings.fog_noise_speed * 0.6),
+                min(max(octaves, 2), 3)
+            );
+            let detail_n = detail * 0.5 + 0.5;
+            combined = mix(combined, detail_n, 0.35);
+        }
 
         // Multiplicative darkening: carve dark channels into the fog
         let darken = 1.0 - settings.fog_noise_contrast * (1.0 - combined);
@@ -154,11 +168,13 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // ── Edge glow at visible boundary ──
-    let glow_center = 0.55;
-    let glow_dist = (distorted_vis - glow_center) / max(settings.edge_glow_width, 0.001);
-    let glow_factor = exp(-glow_dist * glow_dist);
-    let glow_strength = glow_factor * settings.edge_glow_intensity * settings.glow_color.a;
-    fog_rgb = fog_rgb + settings.glow_color.rgb * glow_strength;
+    if vis > 0.05 && vis < 0.95 {
+        let glow_center = 0.55;
+        let glow_dist = (distorted_vis - glow_center) / max(settings.edge_glow_width, 0.001);
+        let glow_factor = exp(-glow_dist * glow_dist);
+        let glow_strength = glow_factor * settings.edge_glow_intensity * settings.glow_color.a;
+        fog_rgb = fog_rgb + settings.glow_color.rgb * glow_strength;
+    }
 
     return vec4<f32>(fog_rgb, alpha);
 }

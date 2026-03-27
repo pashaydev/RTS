@@ -1302,6 +1302,84 @@ pub struct PathVisAssets {
 #[derive(Component)]
 pub struct FrustumCulled;
 
+/// Marker for the camera whose frustum drives culling decisions.
+/// Decoupled from `RtsCamera` so that a debug observer camera doesn't affect culling.
+#[derive(Component)]
+pub struct CullingSourceCamera;
+
+/// Per-entity bounding sphere for frustum culling.
+/// When present, the culling system uses this radius instead of the global padding constant.
+#[derive(Component)]
+pub struct CullingBounds {
+    pub radius: f32,
+    pub center_offset: Vec3,
+}
+
+impl CullingBounds {
+    pub fn new(radius: f32) -> Self {
+        Self {
+            radius,
+            center_offset: Vec3::ZERO,
+        }
+    }
+
+    pub fn with_offset(radius: f32, center_offset: Vec3) -> Self {
+        Self {
+            radius,
+            center_offset,
+        }
+    }
+}
+
+/// Tracks the reason an entity is hidden, for debug inspection.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CullReason {
+    Visible,
+    Frustum,
+    Distance,
+    Fog,
+}
+
+impl Default for CullReason {
+    fn default() -> Self {
+        Self::Visible
+    }
+}
+
+/// Resource controlling frustum debug mode.
+#[derive(Resource)]
+pub struct FrustumDebugMode {
+    pub enabled: bool,
+    pub freeze_main_camera: bool,
+    /// Frozen frustum data from the main camera (stored when freeze is activated).
+    pub frozen_pivot: Vec3,
+    pub frozen_distance: f32,
+    pub frozen_angle: f32,
+    pub frozen_pitch: f32,
+    /// Observer fly-camera state.
+    pub observer_pos: Vec3,
+    pub observer_yaw: f32,
+    pub observer_pitch: f32,
+    pub observer_speed: f32,
+}
+
+impl Default for FrustumDebugMode {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            freeze_main_camera: true,
+            frozen_pivot: Vec3::ZERO,
+            frozen_distance: 60.0,
+            frozen_angle: 0.0,
+            frozen_pitch: 0.8,
+            observer_pos: Vec3::new(0.0, 80.0, 0.0),
+            observer_yaw: 0.0,
+            observer_pitch: -std::f32::consts::FRAC_PI_4,
+            observer_speed: 40.0,
+        }
+    }
+}
+
 // ── Camera ──
 
 #[derive(Component)]
@@ -1881,20 +1959,20 @@ pub struct VisionRange(pub f32);
 pub struct FogOfWarMap {
     /// Currently visible intensity per cell (0.0–1.0). Cleared each frame.
     pub visible: Vec<f32>,
-    /// Permanent explored flag per cell. Once `true`, never reverts.
-    pub explored: Vec<bool>,
+    /// Permanent explored flag per cell. Stored as bytes so it can be copied
+    /// directly into the explored texture without per-frame conversion.
+    pub explored: Vec<u8>,
     /// Smoothly interpolated display value for rendering/entity hiding.
     pub display: Vec<f32>,
     pub grid_size: usize,
-    pub map_size: f32,
+    pub step: f32,
+    pub half_map: f32,
 }
 
 impl FogOfWarMap {
     fn world_to_idx(&self, x: f32, z: f32) -> Option<usize> {
-        let half = self.map_size / 2.0;
-        let step = self.map_size / (self.grid_size - 1) as f32;
-        let ix = ((x + half) / step).round() as usize;
-        let iz = ((z + half) / step).round() as usize;
+        let ix = ((x + self.half_map) / self.step).round() as usize;
+        let iz = ((z + self.half_map) / self.step).round() as usize;
         if ix >= self.grid_size || iz >= self.grid_size {
             return None;
         }
@@ -1911,7 +1989,7 @@ impl FogOfWarMap {
     /// Has this cell ever been seen?
     pub fn is_explored(&self, x: f32, z: f32) -> bool {
         self.world_to_idx(x, z)
-            .map(|i| self.explored[i])
+            .map(|i| self.explored[i] != 0)
             .unwrap_or(false)
     }
 
@@ -1921,7 +1999,7 @@ impl FogOfWarMap {
             .map(|i| {
                 if self.visible[i] > 0.01 {
                     0.5 + 0.5 * self.visible[i]
-                } else if self.explored[i] {
+                } else if self.explored[i] != 0 {
                     0.5
                 } else {
                     0.0
@@ -2461,6 +2539,10 @@ pub struct GrowingTree {
 
 #[derive(Component)]
 pub struct MatureTree;
+
+/// Marker: tree scene materials have been converted from Blend→Mask.
+#[derive(Component)]
+pub struct TreeAlphaFixed;
 
 #[derive(Resource)]
 pub struct TreeGrowthConfig {

@@ -11,11 +11,18 @@ use crate::ground::HeightMap;
 
 // ── Resources ──
 
+const FOG_OVERLAY_VERTEX_STRIDE: usize = 4;
+
 /// Handles to the two GPU textures (visible + explored).
 #[derive(Resource)]
 pub struct FogTextures {
     pub visible: Handle<Image>,
     pub explored: Handle<Image>,
+}
+
+#[derive(Resource, Default)]
+struct FogTextureUploadState {
+    explored_dirty: bool,
 }
 
 /// Tweakable gameplay thresholds for fog of war.
@@ -340,31 +347,37 @@ fn spawn_fog_overlay(
     let grid_size = height_map.grid_size;
     let step = height_map.step;
     let half_map = height_map.half_map;
+    let overlay_cells = (grid_size - 1).div_ceil(FOG_OVERLAY_VERTEX_STRIDE);
+    let overlay_grid_size = overlay_cells + 1;
 
-    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(grid_size * grid_size);
-    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(grid_size * grid_size);
-    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(grid_size * grid_size);
+    let mut positions: Vec<[f32; 3]> =
+        Vec::with_capacity(overlay_grid_size * overlay_grid_size);
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(overlay_grid_size * overlay_grid_size);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(overlay_grid_size * overlay_grid_size);
 
-    for iz in 0..grid_size {
-        for ix in 0..grid_size {
-            let x = -half_map + ix as f32 * step;
-            let z = -half_map + iz as f32 * step;
+    for iz in 0..overlay_grid_size {
+        for ix in 0..overlay_grid_size {
+            let src_ix = (ix * FOG_OVERLAY_VERTEX_STRIDE).min(grid_size - 1);
+            let src_iz = (iz * FOG_OVERLAY_VERTEX_STRIDE).min(grid_size - 1);
+            let x = -half_map + src_ix as f32 * step;
+            let z = -half_map + src_iz as f32 * step;
             let y = height_map.sample(x, z) + 1.5;
             positions.push([x, y, z]);
             normals.push([0.0, 1.0, 0.0]);
             uvs.push([
-                ix as f32 / (grid_size - 1) as f32,
-                iz as f32 / (grid_size - 1) as f32,
+                src_ix as f32 / (grid_size - 1) as f32,
+                src_iz as f32 / (grid_size - 1) as f32,
             ]);
         }
     }
 
-    let mut indices: Vec<u32> = Vec::with_capacity((grid_size - 1) * (grid_size - 1) * 6);
-    for iz in 0..(grid_size - 1) {
-        for ix in 0..(grid_size - 1) {
-            let tl = (iz * grid_size + ix) as u32;
+    let mut indices: Vec<u32> =
+        Vec::with_capacity((overlay_grid_size - 1) * (overlay_grid_size - 1) * 6);
+    for iz in 0..(overlay_grid_size - 1) {
+        for ix in 0..(overlay_grid_size - 1) {
+            let tl = (iz * overlay_grid_size + ix) as u32;
             let tr = tl + 1;
-            let bl = tl + grid_size as u32;
+            let bl = tl + overlay_grid_size as u32;
             let br = bl + 1;
             indices.push(tl);
             indices.push(bl);
@@ -404,15 +417,30 @@ fn spawn_fog_overlay(
         visible: vis_handle,
         explored: exp_handle,
     });
+    commands.insert_resource(FogTextureUploadState {
+        explored_dirty: true,
+    });
 
     let total = grid_size * grid_size;
     commands.insert_resource(FogOfWarMap {
         visible: vec![0.0; total],
-        explored: vec![false; total],
+        explored: vec![0; total],
         display: vec![0.0; total],
         grid_size,
-        map_size: height_map.map_size,
+        step,
+        half_map,
     });
+}
+
+#[inline]
+fn reveal_fog_cell(fog_map: &mut FogOfWarMap, idx: usize, vis: f32, explored_dirty: &mut bool) {
+    if vis > fog_map.visible[idx] {
+        fog_map.visible[idx] = vis;
+    }
+    if fog_map.explored[idx] == 0 {
+        fog_map.explored[idx] = u8::MAX;
+        *explored_dirty = true;
+    }
 }
 
 // ── Visibility Update (with terrain LOS) ──
@@ -420,34 +448,35 @@ fn spawn_fog_overlay(
 fn update_fog_visibility(
     mut fog_map: ResMut<FogOfWarMap>,
     fog_settings: Res<FogTweakSettings>,
+    mut upload_state: ResMut<FogTextureUploadState>,
     height_map: Res<HeightMap>,
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
     all_units: Query<(&Transform, &VisionRange, &Faction), With<Unit>>,
     all_buildings: Query<(&Transform, &VisionRange, &Faction), With<Building>>,
+    mut viewers: Local<Vec<(Vec3, f32)>>,
 ) {
     if fog_settings.reveal_all {
-        for v in fog_map.visible.iter_mut() {
-            *v = 1.0;
-        }
-        for e in fog_map.explored.iter_mut() {
-            *e = true;
+        fog_map.visible.fill(1.0);
+        if fog_map.explored.iter().any(|&v| v == 0) {
+            fog_map.explored.fill(u8::MAX);
+            upload_state.explored_dirty = true;
         }
         return;
     }
 
     let grid_size = fog_map.grid_size;
-    let step = fog_map.map_size / (grid_size - 1) as f32;
-    let half_map = fog_map.map_size / 2.0;
+    let step = fog_map.step;
+    let half_map = fog_map.half_map;
+    let mut explored_dirty = false;
 
     // Clear visible layer each frame
-    for v in fog_map.visible.iter_mut() {
-        *v = 0.0;
-    }
+    fog_map.visible.fill(0.0);
 
     // Collect viewers for the active player's team (own + allied factions)
     let active_faction = active_player.0;
-    let mut viewers: Vec<(Vec3, f32)> = Vec::new();
+    viewers.clear();
+    viewers.reserve(all_units.iter().len() + all_buildings.iter().len());
     for (tf, vr, faction) in all_units.iter() {
         if teams.is_allied(&active_faction, faction) {
             viewers.push((tf.translation, vr.0));
@@ -461,8 +490,9 @@ fn update_fog_visibility(
 
     let enable_los = fog_settings.enable_los;
     let ray_count = fog_settings.los_ray_count;
+    let terrain_heights = &height_map.heights;
 
-    for (pos, range) in &viewers {
+    for (pos, range) in &*viewers {
         let range_sq = range * range;
         let viewer_height = pos.y + 2.0; // eye height above ground
 
@@ -509,7 +539,8 @@ fn update_fog_visibility(
                         break;
                     }
 
-                    let terrain_h = height_map.sample(wx, wz);
+                    let idx = iz * grid_size + ix;
+                    let terrain_h = terrain_heights[idx];
                     let elevation_angle = (terrain_h - viewer_height) / dist;
 
                     if elevation_angle > max_angle {
@@ -519,11 +550,7 @@ fn update_fog_visibility(
                         let t = dist / range;
                         let edge_fade = 1.0 - t * t;
                         let vis = 0.5 + 0.5 * edge_fade;
-
-                        let idx = iz * grid_size + ix;
-                        if vis > fog_map.visible[idx] {
-                            fog_map.visible[idx] = vis;
-                        }
+                        reveal_fog_cell(&mut fog_map, idx, vis, &mut explored_dirty);
                     }
                     // If angle <= max_angle, terrain occludes this cell — skip it
                 }
@@ -533,7 +560,12 @@ fn update_fog_visibility(
             let vix = ((pos.x + half_map) / step).round() as usize;
             let viz = ((pos.z + half_map) / step).round() as usize;
             if vix < grid_size && viz < grid_size {
-                fog_map.visible[viz * grid_size + vix] = 1.0;
+                reveal_fog_cell(
+                    &mut fog_map,
+                    viz * grid_size + vix,
+                    1.0,
+                    &mut explored_dirty,
+                );
             }
         } else {
             // Simple radial distance (no terrain occlusion) — original behavior
@@ -550,20 +582,14 @@ fn update_fog_visibility(
                         let edge_fade = 1.0 - t * t;
                         let vis = 0.5 + 0.5 * edge_fade;
                         let idx = iz * grid_size + ix;
-                        if vis > fog_map.visible[idx] {
-                            fog_map.visible[idx] = vis;
-                        }
+                        reveal_fog_cell(&mut fog_map, idx, vis, &mut explored_dirty);
                     }
                 }
             }
         }
     }
-
-    // Update explored layer (permanent, write-once)
-    for i in 0..fog_map.visible.len() {
-        if fog_map.visible[i] > 0.01 {
-            fog_map.explored[i] = true;
-        }
+    if explored_dirty {
+        upload_state.explored_dirty = true;
     }
 }
 
@@ -589,7 +615,7 @@ fn update_fog_display(
         let target = if fog_map.visible[i] > 0.01 {
             // Currently visible: use the raw visible value (0.5–1.0 range)
             fog_map.visible[i]
-        } else if fog_map.explored[i] {
+        } else if fog_map.explored[i] != 0 {
             // Explored but not currently visible
             0.35
         } else {
@@ -607,26 +633,26 @@ fn update_fog_display(
 fn update_fog_textures(
     fog_map: Res<FogOfWarMap>,
     fog_tex: Res<FogTextures>,
+    mut upload_state: ResMut<FogTextureUploadState>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let total = fog_map.grid_size * fog_map.grid_size;
-
     // Upload visible layer (smooth display values)
     if let Some(image) = images.get_mut(&fog_tex.visible) {
         if let Some(ref mut data) = image.data {
-            for i in 0..total {
-                data[i] = (fog_map.display[i].clamp(0.0, 1.0) * 255.0) as u8;
+            for (dst, src) in data.iter_mut().zip(fog_map.display.iter()) {
+                *dst = (src.clamp(0.0, 1.0) * 255.0) as u8;
             }
         }
     }
 
-    // Upload explored layer
-    if let Some(image) = images.get_mut(&fog_tex.explored) {
-        if let Some(ref mut data) = image.data {
-            for i in 0..total {
-                data[i] = if fog_map.explored[i] { 255 } else { 0 };
+    // Upload explored layer only when new cells are discovered.
+    if upload_state.explored_dirty {
+        if let Some(image) = images.get_mut(&fog_tex.explored) {
+            if let Some(ref mut data) = image.data {
+                data[..fog_map.explored.len()].copy_from_slice(&fog_map.explored);
             }
         }
+        upload_state.explored_dirty = false;
     }
 }
 
@@ -724,6 +750,23 @@ fn update_fog_material_time(
 
 // ── Unified Entity Hiding ──
 
+#[inline]
+fn set_visibility_if_needed(
+    vis: &mut Visibility,
+    cull_reason: Option<Mut<CullReason>>,
+    target: Visibility,
+    reason: CullReason,
+) {
+    if *vis != target {
+        *vis = target;
+    }
+    if let Some(mut current_reason) = cull_reason {
+        if *current_reason != reason {
+            *current_reason = reason;
+        }
+    }
+}
+
 fn fog_hide_entities(
     fog_map: Res<FogOfWarMap>,
     fog_settings: Res<FogTweakSettings>,
@@ -734,6 +777,7 @@ fn fog_hide_entities(
         &mut Visibility,
         &FogHideable,
         Has<FrustumCulled>,
+        Option<&mut CullReason>,
     )>,
     mut enemy_units: Query<
         (
@@ -742,37 +786,59 @@ fn fog_hide_entities(
             &Faction,
             &UnitState,
             Has<FrustumCulled>,
+            Option<&mut CullReason>,
         ),
         (With<Unit>, Without<FogHideable>),
     >,
     mut enemy_buildings: Query<
-        (&Transform, &mut Visibility, &Faction, Has<FrustumCulled>),
+        (
+            &Transform,
+            &mut Visibility,
+            &Faction,
+            Has<FrustumCulled>,
+            Option<&mut CullReason>,
+        ),
         (With<Building>, Without<FogHideable>, Without<Unit>),
     >,
 ) {
     if fog_settings.reveal_all {
         // When fog is disabled, restore visibility — but skip frustum-culled entities
         // so we don't override the culling system's Visibility::Hidden.
-        for (_, mut vis, _, is_culled) in hideables.iter_mut() {
+        for (_, mut vis, _, is_culled, cull_reason) in hideables.iter_mut() {
             if !is_culled {
-                *vis = Visibility::Inherited;
+                set_visibility_if_needed(
+                    &mut vis,
+                    cull_reason,
+                    Visibility::Inherited,
+                    CullReason::Visible,
+                );
             }
         }
-        for (_, mut vis, _, _, is_culled) in enemy_units.iter_mut() {
+        for (_, mut vis, _, _, is_culled, cull_reason) in enemy_units.iter_mut() {
             if !is_culled {
-                *vis = Visibility::Inherited;
+                set_visibility_if_needed(
+                    &mut vis,
+                    cull_reason,
+                    Visibility::Inherited,
+                    CullReason::Visible,
+                );
             }
         }
-        for (_, mut vis, _, is_culled) in enemy_buildings.iter_mut() {
+        for (_, mut vis, _, is_culled, cull_reason) in enemy_buildings.iter_mut() {
             if !is_culled {
-                *vis = Visibility::Inherited;
+                set_visibility_if_needed(
+                    &mut vis,
+                    cull_reason,
+                    Visibility::Inherited,
+                    CullReason::Visible,
+                );
             }
         }
         return;
     }
 
     // FogHideable logic (mobs, objects, decorations, mountains, vfx)
-    for (tf, mut vis, hideable, is_culled) in hideables.iter_mut() {
+    for (tf, mut vis, hideable, is_culled, cull_reason) in hideables.iter_mut() {
         // Frustum-culled entities are already hidden by culling — skip them.
         if is_culled {
             continue;
@@ -785,44 +851,44 @@ fn fog_hide_entities(
         };
 
         let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
-        *vis = if v >= threshold {
-            Visibility::Inherited
+        if v >= threshold {
+            set_visibility_if_needed(&mut vis, cull_reason, Visibility::Inherited, CullReason::Visible);
         } else {
-            Visibility::Hidden
-        };
+            set_visibility_if_needed(&mut vis, cull_reason, Visibility::Hidden, CullReason::Fog);
+        }
     }
 
     // Hide enemy player units outside fog vision
-    for (tf, mut vis, faction, _unit_state, is_culled) in enemy_units.iter_mut() {
+    for (tf, mut vis, faction, _unit_state, is_culled, cull_reason) in enemy_units.iter_mut() {
         if is_culled {
             continue;
         }
         if teams.is_allied(&active_player.0, faction) {
-            *vis = Visibility::Inherited;
+            set_visibility_if_needed(&mut vis, cull_reason, Visibility::Inherited, CullReason::Visible);
         } else {
             let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
-            *vis = if v >= fog_settings.mob_threshold {
-                Visibility::Inherited
+            if v >= fog_settings.mob_threshold {
+                set_visibility_if_needed(&mut vis, cull_reason, Visibility::Inherited, CullReason::Visible);
             } else {
-                Visibility::Hidden
-            };
+                set_visibility_if_needed(&mut vis, cull_reason, Visibility::Hidden, CullReason::Fog);
+            }
         }
     }
 
     // Hide enemy player buildings outside fog vision
-    for (tf, mut vis, faction, is_culled) in enemy_buildings.iter_mut() {
+    for (tf, mut vis, faction, is_culled, cull_reason) in enemy_buildings.iter_mut() {
         if is_culled {
             continue;
         }
         if teams.is_allied(&active_player.0, faction) {
-            *vis = Visibility::Inherited;
+            set_visibility_if_needed(&mut vis, cull_reason, Visibility::Inherited, CullReason::Visible);
         } else {
             let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
-            *vis = if v >= fog_settings.mob_threshold {
-                Visibility::Inherited
+            if v >= fog_settings.mob_threshold {
+                set_visibility_if_needed(&mut vis, cull_reason, Visibility::Inherited, CullReason::Visible);
             } else {
-                Visibility::Hidden
-            };
+                set_visibility_if_needed(&mut vis, cull_reason, Visibility::Hidden, CullReason::Fog);
+            }
         }
     }
 }

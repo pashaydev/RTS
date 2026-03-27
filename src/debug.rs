@@ -1,15 +1,18 @@
-use bevy::ecs::hierarchy::ChildSpawnerCommands;
-use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
-use bevy::prelude::*;
+mod config;
+mod model;
+mod state;
+mod ui;
+
 use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
-use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
+use bevy::light::cluster::{ClusterConfig, ClusterZConfig};
+use bevy::prelude::*;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::{
     AiControlledFactions, AiFactionSettings, AllyNotifications, AllyNotifyKind, AppState,
-    AttackTarget, Faction, GameFlowSet, GameSetupConfig, Health, MoveTarget, RtsCamera,
-    Selected, UiPressActive, UnitSpeed,
+    AttackTarget, CullReason, CullingBounds, Faction, FrustumCulled, FrustumDebugMode, GameFlowSet,
+    GameSetupConfig, GameWorld, Health, MoveTarget, RtsCamera, Selected, UiPressActive, UnitSpeed,
 };
 use crate::fog::FogTweakSettings;
 use crate::ground::HeightMap;
@@ -18,12 +21,24 @@ use crate::lighting::{
 };
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::pathfinding::{NavPath, PathRequestQueue};
-use crate::theme;
 use crate::ui::core::hud::MainHudRoot;
 use crate::ui::fonts::UiFonts;
 use bevy::window::PrimaryWindow;
+pub use model::DebugTweaks;
+pub use ui::build::spawn_debug_content;
 
-const DEBUG_CONFIG_PATH: &str = "config/debug_tweaks.json";
+use config::apply_saved_config;
+use state::{
+    ActiveSlider, DebugButtonPressed, DebugPanelState, DebugSpawnState, DebugViewState, FpsTracker,
+    SaveConfigFeedback, TweakStructureVersion,
+};
+use ui::build::rebuild_tweak_panel;
+use ui::interactions::{
+    handle_button_click, handle_cycle_click, handle_expand_button, handle_folder_collapse,
+    handle_save_config_click, handle_slider_interaction, handle_toggle_click,
+    initialize_debug_folder_defaults,
+};
+use ui::update::{update_debug_texts, update_save_button_feedback, update_tweak_visuals};
 
 pub struct DebugPlugin;
 
@@ -39,9 +54,12 @@ impl Plugin for DebugPlugin {
                 config: fps_overlay_config,
             },
         ))
-            .init_resource::<DebugViewState>()
-            .add_systems(Update, toggle_debug_views)
-            .add_systems(Update, apply_debug_view_state.in_set(GameFlowSet::Diagnostics));
+        .init_resource::<DebugViewState>()
+        .add_systems(Update, toggle_debug_views)
+        .add_systems(
+            Update,
+            apply_debug_view_state.in_set(GameFlowSet::Diagnostics),
+        );
 
         app.init_resource::<DebugTweaks>()
             .init_resource::<DebugPanelState>()
@@ -79,12 +97,19 @@ impl Plugin for DebugPlugin {
             .add_systems(
                 Update,
                 (
-                    sync_debug_view_tweaks,
+                    // Frustum debug chain: tweak sync → camera spawn → fly input → viewport update
+                    (
+                        sync_debug_view_tweaks,
+                        sync_frustum_debug_camera,
+                        frustum_debug_fly_camera,
+                        update_frustum_debug_camera,
+                        sync_frustum_debug_tweaks,
+                    )
+                        .chain(),
                     sync_debug_flow_tweaks,
                     sync_entity_spawn_tweaks,
                     sync_entity_selected_tweaks,
                     sync_runtime_debug_tweaks,
-                    sync_save_load_tweaks,
                     sync_ai_debug_tweaks,
                     sync_network_debug_tweaks,
                     initialize_debug_folder_defaults,
@@ -117,377 +142,6 @@ impl Plugin for DebugPlugin {
     }
 }
 
-#[derive(Resource)]
-struct DebugViewState {
-    fps_overlay: bool,
-    inspector: bool,
-    gizmos: bool,
-}
-
-impl Default for DebugViewState {
-    fn default() -> Self {
-        Self {
-            fps_overlay: false,
-            inspector: false,
-            gizmos: true,
-        }
-    }
-}
-
-// ── Tweak value types ──
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum TweakValue {
-    Float {
-        value: f32,
-        min: f32,
-        max: f32,
-        step: f32,
-    },
-    Bool(bool),
-    ReadOnly(String),
-    #[serde(skip)]
-    CycleEnum {
-        options: Vec<String>,
-        selected: usize,
-    },
-    #[serde(skip)]
-    Button {
-        text: String,
-    },
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TweakEntry {
-    pub label: String,
-    pub value: TweakValue,
-}
-
-// ── Central tweak registry ──
-
-#[derive(Resource, Default)]
-pub struct DebugTweaks {
-    pub folders: BTreeMap<String, Vec<TweakEntry>>,
-}
-
-impl DebugTweaks {
-    pub fn add_float(
-        &mut self,
-        folder: &str,
-        label: &str,
-        value: f32,
-        min: f32,
-        max: f32,
-        step: f32,
-    ) {
-        self.folders
-            .entry(folder.to_string())
-            .or_default()
-            .push(TweakEntry {
-                label: label.to_string(),
-                value: TweakValue::Float {
-                    value,
-                    min,
-                    max,
-                    step,
-                },
-            });
-    }
-
-    pub fn add_bool(&mut self, folder: &str, label: &str, value: bool) {
-        self.folders
-            .entry(folder.to_string())
-            .or_default()
-            .push(TweakEntry {
-                label: label.to_string(),
-                value: TweakValue::Bool(value),
-            });
-    }
-
-    pub fn add_readonly(&mut self, folder: &str, label: &str, text: &str) {
-        self.folders
-            .entry(folder.to_string())
-            .or_default()
-            .push(TweakEntry {
-                label: label.to_string(),
-                value: TweakValue::ReadOnly(text.to_string()),
-            });
-    }
-
-    pub fn add_cycle_enum(
-        &mut self,
-        folder: &str,
-        label: &str,
-        options: Vec<String>,
-        selected: usize,
-    ) {
-        self.folders
-            .entry(folder.to_string())
-            .or_default()
-            .push(TweakEntry {
-                label: label.to_string(),
-                value: TweakValue::CycleEnum { options, selected },
-            });
-    }
-
-    pub fn add_button(&mut self, folder: &str, label: &str) {
-        self.folders
-            .entry(folder.to_string())
-            .or_default()
-            .push(TweakEntry {
-                label: label.to_string(),
-                value: TweakValue::Button {
-                    text: label.to_string(),
-                },
-            });
-    }
-
-    pub fn get_cycle_selected(&self, folder: &str, label: &str) -> Option<usize> {
-        self.folders.get(folder)?.iter().find_map(|e| {
-            if e.label == label {
-                if let TweakValue::CycleEnum { selected, .. } = &e.value {
-                    return Some(*selected);
-                }
-            }
-            None
-        })
-    }
-
-    pub fn get_float(&self, folder: &str, label: &str) -> Option<f32> {
-        self.folders.get(folder)?.iter().find_map(|e| {
-            if e.label == label {
-                if let TweakValue::Float { value, .. } = &e.value {
-                    return Some(*value);
-                }
-            }
-            None
-        })
-    }
-
-    pub fn get_bool(&self, folder: &str, label: &str) -> Option<bool> {
-        self.folders.get(folder)?.iter().find_map(|e| {
-            if e.label == label {
-                if let TweakValue::Bool(v) = &e.value {
-                    return Some(*v);
-                }
-            }
-            None
-        })
-    }
-
-    pub fn get_mut(&mut self, folder: &str, label: &str) -> Option<&mut TweakEntry> {
-        self.folders
-            .get_mut(folder)?
-            .iter_mut()
-            .find(|e| e.label == label)
-    }
-
-    fn set_float_if_changed(&mut self, folder: &str, label: &str, new_val: f32) {
-        if let Some(entry) = self.get_mut(folder, label) {
-            if let TweakValue::Float { value, .. } = &mut entry.value {
-                if (*value - new_val).abs() > f32::EPSILON {
-                    *value = new_val;
-                }
-            }
-        }
-    }
-
-    fn set_readonly_if_changed(&mut self, folder: &str, label: &str, new_text: &str) {
-        if let Some(entry) = self.get_mut(folder, label) {
-            if let TweakValue::ReadOnly(ref old) = entry.value {
-                if old != new_text {
-                    entry.value = TweakValue::ReadOnly(new_text.to_string());
-                }
-            }
-        }
-    }
-
-    fn set_bool_if_changed(&mut self, folder: &str, label: &str, new_value: bool) {
-        if let Some(entry) = self.get_mut(folder, label) {
-            if let TweakValue::Bool(value) = &mut entry.value {
-                if *value != new_value {
-                    *value = new_value;
-                }
-            }
-        }
-    }
-
-    fn get_color_rgb(&self, folder: &str) -> Option<[f32; 3]> {
-        match (
-            self.get_float(folder, "Color R"),
-            self.get_float(folder, "Color G"),
-            self.get_float(folder, "Color B"),
-        ) {
-            (Some(r), Some(g), Some(b)) => Some([r, g, b]),
-            _ => None,
-        }
-    }
-
-    fn sync_color_rgb_back(&mut self, folder: &str, color: &Srgba, active: &ActiveSlider) {
-        if !active.is_dragging(folder, "Color R") {
-            self.set_float_if_changed(folder, "Color R", color.red);
-        }
-        if !active.is_dragging(folder, "Color G") {
-            self.set_float_if_changed(folder, "Color G", color.green);
-        }
-        if !active.is_dragging(folder, "Color B") {
-            self.set_float_if_changed(folder, "Color B", color.blue);
-        }
-    }
-}
-
-// ── Config serialization format: folder → { label → value } ──
-// Only saves Float values and Bool values. ReadOnly entries are skipped.
-// Min/max/step metadata stays in code only.
-
-#[derive(Serialize, Deserialize)]
-#[serde(untagged)]
-enum ConfigValue {
-    Float(f32),
-    Bool(bool),
-}
-
-type ConfigMap = BTreeMap<String, BTreeMap<String, ConfigValue>>;
-
-fn save_debug_config(_tweaks: &DebugTweaks) {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let mut map: ConfigMap = BTreeMap::new();
-        for (folder, entries) in &_tweaks.folders {
-            let folder_map = map.entry(folder.clone()).or_default();
-            for entry in entries {
-                match &entry.value {
-                    TweakValue::Float { value, .. } => {
-                        folder_map.insert(entry.label.clone(), ConfigValue::Float(*value));
-                    }
-                    TweakValue::Bool(v) => {
-                        folder_map.insert(entry.label.clone(), ConfigValue::Bool(*v));
-                    }
-                    TweakValue::ReadOnly(_) => {}
-                    TweakValue::CycleEnum { .. } => {}
-                    TweakValue::Button { .. } => {}
-                }
-            }
-        }
-
-        if let Some(parent) = std::path::Path::new(DEBUG_CONFIG_PATH).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        match serde_json::to_string_pretty(&map) {
-            Ok(json) => {
-                if let Err(e) = std::fs::write(DEBUG_CONFIG_PATH, json) {
-                    warn!("Failed to save debug config: {}", e);
-                }
-            }
-            Err(e) => warn!("Failed to serialize debug config: {}", e),
-        }
-    }
-}
-
-fn load_debug_config() -> Option<ConfigMap> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let data = std::fs::read_to_string(DEBUG_CONFIG_PATH).ok()?;
-        serde_json::from_str(&data).ok()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        None
-    }
-}
-
-fn apply_config_to_tweaks(tweaks: &mut DebugTweaks, config: &ConfigMap) {
-    for (folder, entries) in config {
-        if let Some(tweak_entries) = tweaks.folders.get_mut(folder) {
-            for entry in tweak_entries.iter_mut() {
-                if let Some(saved) = entries.get(&entry.label) {
-                    match (&mut entry.value, saved) {
-                        (
-                            TweakValue::Float {
-                                value, min, max, ..
-                            },
-                            ConfigValue::Float(v),
-                        ) => {
-                            *value = v.clamp(*min, *max);
-                        }
-                        (TweakValue::Bool(ref mut b), ConfigValue::Bool(v)) => {
-                            *b = *v;
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-}
-
-// ── Panel state ──
-
-#[derive(Resource, Default)]
-pub struct DebugPanelState {
-    pub tweaks_expanded: bool,
-    pub collapsed_folders: Vec<String>,
-    pub seen_folders: Vec<String>,
-}
-
-// ── FPS tracker ──
-
-#[derive(Resource)]
-pub struct FpsTracker {
-    pub frame_count: u32,
-    pub elapsed: f32,
-    pub fps: f32,
-    pub frame_time_ms: f32,
-}
-
-impl Default for FpsTracker {
-    fn default() -> Self {
-        Self {
-            frame_count: 0,
-            elapsed: 0.0,
-            fps: 0.0,
-            frame_time_ms: 0.0,
-        }
-    }
-}
-
-// ── Structural version: only incremented when folders/entries are added/removed ──
-
-#[derive(Resource, Default)]
-struct TweakStructureVersion {
-    version: u64,
-    last_folder_count: usize,
-    last_entry_counts: Vec<usize>,
-}
-
-// ── Active slider drag state ──
-
-#[derive(Resource, Default)]
-struct ActiveSlider {
-    folder: Option<String>,
-    label: Option<String>,
-}
-
-impl ActiveSlider {
-    fn is_dragging(&self, folder: &str, label: &str) -> bool {
-        self.folder.as_deref() == Some(folder) && self.label.as_deref() == Some(label)
-    }
-}
-
-// ── UI marker components ──
-
-#[derive(Component)]
-struct DebugExpandButton;
-
-#[derive(Component)]
-struct DebugFpsText;
-
-#[derive(Component)]
-struct DebugEntityCountText;
-
-#[derive(Component)]
-struct DebugDayCycleText;
-
 #[derive(Component)]
 struct DebugInspectorOverlay;
 
@@ -495,361 +149,10 @@ struct DebugInspectorOverlay;
 struct DebugInspectorText;
 
 #[derive(Component)]
-struct DebugTweakPanel;
+struct FrustumDebugObserverCamera;
 
 #[derive(Component)]
-struct TweakPanelBuiltVersion(u64);
-
-#[derive(Component)]
-struct FolderHeader(String);
-
-#[derive(Component)]
-struct TweakSlider {
-    folder: String,
-    label: String,
-}
-
-#[derive(Component)]
-struct TweakSliderFill {
-    folder: String,
-    label: String,
-}
-
-#[derive(Component)]
-struct TweakSliderKnob {
-    folder: String,
-    label: String,
-}
-
-#[derive(Component)]
-struct TweakSliderValueText {
-    folder: String,
-    label: String,
-}
-
-#[derive(Component)]
-struct TweakToggle {
-    folder: String,
-    label: String,
-}
-
-#[derive(Component)]
-struct TweakToggleText {
-    folder: String,
-    label: String,
-}
-
-#[derive(Component)]
-struct TweakReadOnlyText {
-    folder: String,
-    label: String,
-}
-
-#[derive(Component)]
-struct SaveConfigButton;
-
-#[derive(Component)]
-struct SaveConfigButtonText;
-
-#[derive(Resource)]
-struct SaveConfigFeedback(Timer);
-
-/// Color preview swatch — shows combined RGB from 3 sibling sliders.
-#[derive(Component)]
-struct ColorPreview {
-    folder: String,
-    prefix: String, // e.g. "color" matches "color R", "color G", "color B"
-}
-
-#[derive(Component)]
-struct TweakCycleEnum {
-    folder: String,
-    label: String,
-}
-
-#[derive(Component)]
-struct TweakCycleText {
-    folder: String,
-    label: String,
-}
-
-#[derive(Component)]
-struct TweakButton {
-    folder: String,
-    label: String,
-}
-
-fn debug_control_surface() -> Color {
-    Color::srgba(0.06, 0.06, 0.06, 0.96)
-}
-
-fn debug_control_border() -> Color {
-    Color::srgba(1.0, 1.0, 1.0, 0.14)
-}
-
-fn debug_hover_surface() -> Color {
-    Color::srgba(0.12, 0.12, 0.12, 0.98)
-}
-
-fn debug_pressed_surface() -> Color {
-    Color::srgba(0.18, 0.18, 0.18, 0.98)
-}
-
-fn debug_active_surface() -> Color {
-    Color::srgba(1.0, 1.0, 1.0, 0.14)
-}
-
-fn debug_slider_fill() -> Color {
-    Color::srgba(0.92, 0.92, 0.92, 0.96)
-}
-
-fn debug_text_primary() -> Color {
-    Color::srgb(0.94, 0.94, 0.94)
-}
-
-fn debug_text_secondary() -> Color {
-    Color::srgb(0.64, 0.64, 0.64)
-}
-
-fn debug_inverse_text() -> Color {
-    Color::srgb(0.05, 0.05, 0.05)
-}
-
-fn debug_separator() -> Color {
-    Color::srgba(1.0, 1.0, 1.0, 0.10)
-}
-
-fn debug_emphasis_border() -> Color {
-    Color::srgba(1.0, 1.0, 1.0, 0.30)
-}
-
-fn debug_card_node() -> Node {
-    Node {
-        flex_direction: FlexDirection::Column,
-        row_gap: Val::Px(4.0),
-        width: Val::Percent(100.0),
-        padding: UiRect::all(Val::Px(6.0)),
-        border: UiRect::all(Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(4.0)),
-        ..default()
-    }
-}
-
-fn debug_row_node() -> Node {
-    Node {
-        flex_direction: FlexDirection::Row,
-        align_items: AlignItems::Center,
-        justify_content: JustifyContent::SpaceBetween,
-        column_gap: Val::Px(10.0),
-        width: Val::Percent(100.0),
-        padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
-        border: UiRect::all(Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(4.0)),
-        ..default()
-    }
-}
-
-fn debug_pill_node() -> Node {
-    Node {
-        padding: UiRect::axes(Val::Px(6.0), Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(999.0)),
-        border: UiRect::all(Val::Px(1.0)),
-        ..default()
-    }
-}
-
-/// Tracks which buttons were pressed this frame.
-#[derive(Resource, Default)]
-pub struct DebugButtonPressed {
-    pub pressed: Vec<(String, String)>, // (folder, label)
-}
-
-// ── Populate the debug widget content area ──
-
-pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
-    let stats_header = commands
-        .spawn((
-            Text::new("RUNTIME"),
-            TextFont {
-                font_size: theme::FONT_SMALL,
-                ..default()
-            },
-            TextColor(debug_text_secondary()),
-        ))
-        .id();
-    commands.entity(parent).add_child(stats_header);
-
-    let fps = commands
-        .spawn((
-            DebugFpsText,
-            Text::new("FPS: --"),
-            TextFont {
-                font_size: theme::FONT_BODY,
-                ..default()
-            },
-            TextColor(debug_text_primary()),
-            Node {
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(debug_control_surface()),
-            BorderColor::all(debug_control_border()),
-        ))
-        .id();
-    commands.entity(parent).add_child(fps);
-
-    let ent_count = commands
-        .spawn((
-            DebugEntityCountText,
-            Text::new("Entities: --"),
-            TextFont {
-                font_size: theme::FONT_BODY,
-                ..default()
-            },
-            TextColor(debug_text_primary()),
-            Node {
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(debug_control_surface()),
-            BorderColor::all(debug_control_border()),
-        ))
-        .id();
-    commands.entity(parent).add_child(ent_count);
-
-    let day_cycle = commands
-        .spawn((
-            DebugDayCycleText,
-            Text::new("Day: --"),
-            TextFont {
-                font_size: theme::FONT_BODY,
-                ..default()
-            },
-            TextColor(debug_text_primary()),
-            Node {
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(debug_control_surface()),
-            BorderColor::all(debug_control_border()),
-        ))
-        .id();
-    commands.entity(parent).add_child(day_cycle);
-
-    // Separator
-    let sep = commands
-        .spawn((
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Px(1.0),
-                margin: UiRect::axes(Val::ZERO, Val::Px(6.0)),
-                ..default()
-            },
-            BackgroundColor(debug_separator()),
-        ))
-        .id();
-    commands.entity(parent).add_child(sep);
-
-    // Button row: Expand/Collapse + Save Config
-    let btn_row = commands
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(4.0),
-            width: Val::Percent(100.0),
-            ..default()
-        })
-        .id();
-    commands.entity(parent).add_child(btn_row);
-
-    // Expand/Collapse tweaks button
-    let expand_btn = commands
-        .spawn((
-            DebugExpandButton,
-            Interaction::default(),
-            Button,
-            Node {
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                flex_grow: 1.0,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(debug_control_surface()),
-            BorderColor::all(debug_control_border()),
-        ))
-        .id();
-    let expand_text = commands
-        .spawn((
-            Pickable::IGNORE,
-            Text::new("Inspect"),
-            TextFont {
-                font_size: theme::FONT_BODY,
-                ..default()
-            },
-            TextColor(debug_text_primary()),
-        ))
-        .id();
-    commands.entity(expand_btn).add_child(expand_text);
-    commands.entity(btn_row).add_child(expand_btn);
-
-    // Save config button
-    let save_btn = commands
-        .spawn((
-            SaveConfigButton,
-            Interaction::default(),
-            Button,
-            Node {
-                padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(debug_control_surface()),
-            BorderColor::all(debug_control_border()),
-        ))
-        .id();
-    let save_text = commands
-        .spawn((
-            SaveConfigButtonText,
-            Pickable::IGNORE,
-            Text::new("Save"),
-            TextFont {
-                font_size: theme::FONT_BODY,
-                ..default()
-            },
-            TextColor(debug_text_primary()),
-        ))
-        .id();
-    commands.entity(save_btn).add_child(save_text);
-    commands.entity(btn_row).add_child(save_btn);
-
-    // Tweak panel container (hidden by default, expanded via F3)
-    let tweak_panel = commands
-        .spawn((
-            DebugTweakPanel,
-            TweakPanelBuiltVersion(0),
-            Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(4.0),
-                width: Val::Percent(100.0),
-                ..default()
-            },
-            Visibility::Hidden,
-        ))
-        .id();
-    commands.entity(parent).add_child(tweak_panel);
-}
-
+struct FrustumDebugLabel;
 // ── FPS tracking ──
 
 fn update_fps_tracker(mut tracker: ResMut<FpsTracker>, time: Res<Time>) {
@@ -860,948 +163,6 @@ fn update_fps_tracker(mut tracker: ResMut<FpsTracker>, time: Res<Time>) {
         tracker.frame_time_ms = tracker.elapsed * 1000.0 / tracker.frame_count as f32;
         tracker.frame_count = 0;
         tracker.elapsed = 0.0;
-    }
-}
-
-// ── Update metric text nodes ──
-
-fn update_debug_texts(
-    tracker: Res<FpsTracker>,
-    cycle: Res<DayCycle>,
-    entities: Query<Entity>,
-    mut fps_q: Query<
-        &mut Text,
-        (
-            With<DebugFpsText>,
-            Without<DebugEntityCountText>,
-            Without<DebugDayCycleText>,
-        ),
-    >,
-    mut ent_q: Query<
-        &mut Text,
-        (
-            With<DebugEntityCountText>,
-            Without<DebugFpsText>,
-            Without<DebugDayCycleText>,
-        ),
-    >,
-    mut day_q: Query<
-        &mut Text,
-        (
-            With<DebugDayCycleText>,
-            Without<DebugFpsText>,
-            Without<DebugEntityCountText>,
-        ),
-    >,
-) {
-    if let Ok(mut t) = fps_q.single_mut() {
-        let warning = if tracker.fps >= 55.0 {
-            ""
-        } else if tracker.fps >= 30.0 {
-            " (!)"
-        } else {
-            " (!!)"
-        };
-        **t = format!(
-            "FPS: {:.0}  |  {:.1}ms{}",
-            tracker.fps, tracker.frame_time_ms, warning
-        );
-    }
-
-    if let Ok(mut t) = ent_q.single_mut() {
-        **t = format!("Entities: {}", entities.iter().count());
-    }
-
-    if let Ok(mut t) = day_q.single_mut() {
-        **t = format!(
-            "Day: {:.3} ({:?})  |  {:.0}s cycle",
-            cycle.time, cycle.phase, cycle.cycle_duration
-        );
-    }
-}
-
-// ── Rebuild tweak panel ONLY on structural changes ──
-
-fn rebuild_tweak_panel(
-    tweaks: Res<DebugTweaks>,
-    panel_state: Res<DebugPanelState>,
-    mut structure: ResMut<TweakStructureVersion>,
-    mut commands: Commands,
-    mut panel_q: Query<
-        (Entity, &mut TweakPanelBuiltVersion, &mut Visibility),
-        With<DebugTweakPanel>,
-    >,
-    children_q: Query<&Children>,
-) {
-    let Ok((panel_entity, mut built_ver, mut panel_vis)) = panel_q.single_mut() else {
-        return;
-    };
-
-    // Toggle visibility based on expanded state
-    let target_vis = if panel_state.tweaks_expanded {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    };
-    if *panel_vis != target_vis {
-        *panel_vis = target_vis;
-    }
-
-    if !panel_state.tweaks_expanded {
-        return;
-    }
-
-    // Detect structural changes: folder count or entry counts changed
-    let folder_count = tweaks.folders.len();
-    let entry_counts: Vec<usize> = tweaks.folders.values().map(|v| v.len()).collect();
-    let structure_changed = folder_count != structure.last_folder_count
-        || entry_counts != structure.last_entry_counts
-        || panel_state.is_changed();
-
-    if !structure_changed {
-        return;
-    }
-
-    structure.last_folder_count = folder_count;
-    structure.last_entry_counts = entry_counts;
-    structure.version += 1;
-    built_ver.0 = structure.version;
-
-    // Despawn old children
-    if let Ok(children) = children_q.get(panel_entity) {
-        for child in children {
-            commands.entity(*child).despawn();
-        }
-    }
-
-    // Rebuild
-    commands.entity(panel_entity).with_children(|panel| {
-        let mut current_section: Option<String> = None;
-        for (folder_name, entries) in &tweaks.folders {
-            // Detect section prefix (e.g., "Visuals/Sunlight" → section "Visuals")
-            let (section, display_name) = if let Some(idx) = folder_name.find('/') {
-                (Some(&folder_name[..idx]), &folder_name[idx + 1..])
-            } else {
-                (None, folder_name.as_str())
-            };
-
-            // Render section header when section changes
-            let section_str = section.map(|s| s.to_string());
-            if section_str != current_section {
-                if let Some(ref sec) = section_str {
-                    spawn_section_header(panel, sec);
-                }
-                current_section = section_str;
-            }
-
-            let collapsed = panel_state.collapsed_folders.contains(folder_name);
-            spawn_folder_header(panel, folder_name, display_name, collapsed);
-
-            if collapsed {
-                continue;
-            }
-
-            // Track if we have color R/G/B groups to add a preview after B
-            let mut color_prefix: Option<String> = None;
-
-            for entry in entries {
-                match &entry.value {
-                    TweakValue::Float {
-                        value, min, max, ..
-                    } => {
-                        spawn_slider_row(panel, folder_name, &entry.label, *value, *min, *max);
-
-                        // Detect color groups: "X R", "X G", "X B"
-                        if entry.label.ends_with(" R") {
-                            color_prefix = Some(entry.label.trim_end_matches(" R").to_string());
-                        } else if entry.label.ends_with(" B") {
-                            if let Some(ref prefix) = color_prefix {
-                                let expected_b = format!("{} B", prefix);
-                                if entry.label == expected_b {
-                                    spawn_color_preview(panel, folder_name, prefix);
-                                }
-                            }
-                            color_prefix = None;
-                        }
-                    }
-                    TweakValue::Bool(v) => {
-                        spawn_toggle_row(panel, folder_name, &entry.label, *v);
-                        color_prefix = None;
-                    }
-                    TweakValue::ReadOnly(text) => {
-                        spawn_readonly_row(panel, folder_name, &entry.label, text);
-                        color_prefix = None;
-                    }
-                    TweakValue::CycleEnum { options, selected } => {
-                        let display = options.get(*selected).map(|s| s.as_str()).unwrap_or("--");
-                        spawn_cycle_row(panel, folder_name, &entry.label, display);
-                        color_prefix = None;
-                    }
-                    TweakValue::Button { text } => {
-                        spawn_button_row(panel, folder_name, &entry.label, text);
-                        color_prefix = None;
-                    }
-                }
-            }
-        }
-    });
-}
-
-// ── Update visuals in-place (no rebuild needed) ──
-
-fn update_tweak_visuals(
-    state: Res<DebugPanelState>,
-    tweaks: Res<DebugTweaks>,
-    mut fill_q: Query<(&TweakSliderFill, &mut Node), Without<TweakSliderKnob>>,
-    mut knob_q: Query<(&TweakSliderKnob, &mut Node), Without<TweakSliderFill>>,
-    mut val_text_q: Query<(&TweakSliderValueText, &mut Text), Without<TweakToggleText>>,
-    mut toggle_q: Query<
-        (&TweakToggle, &Interaction, &mut BackgroundColor),
-        Without<TweakSliderFill>,
-    >,
-    mut toggle_text_q: Query<(&TweakToggleText, &mut Text), Without<TweakSliderValueText>>,
-    mut readonly_q: Query<
-        (&TweakReadOnlyText, &mut Text),
-        (Without<TweakSliderValueText>, Without<TweakToggleText>),
-    >,
-    mut color_q: Query<(&ColorPreview, &mut BackgroundColor), Without<TweakToggle>>,
-    mut cycle_text_q: Query<
-        (&TweakCycleText, &mut Text),
-        (
-            Without<TweakSliderValueText>,
-            Without<TweakToggleText>,
-            Without<TweakReadOnlyText>,
-        ),
-    >,
-) {
-    if !state.tweaks_expanded {
-        return;
-    }
-
-    // Update cycle enum texts
-    for (ct, mut text) in &mut cycle_text_q {
-        if let Some(entries) = tweaks.folders.get(&ct.folder) {
-            if let Some(entry) = entries.iter().find(|e| e.label == ct.label) {
-                if let TweakValue::CycleEnum { options, selected } = &entry.value {
-                    let new_text = options.get(*selected).map(|s| s.as_str()).unwrap_or("--");
-                    if **text != new_text {
-                        **text = new_text.to_string();
-                    }
-                }
-            }
-        }
-    }
-
-    // Update slider fills
-    for (fill, mut node) in &mut fill_q {
-        if let Some(entries) = tweaks.folders.get(&fill.folder) {
-            if let Some(entry) = entries.iter().find(|e| e.label == fill.label) {
-                if let TweakValue::Float {
-                    value, min, max, ..
-                } = &entry.value
-                {
-                    let pct = ((value - min) / (max - min)).clamp(0.0, 1.0) * 100.0;
-                    node.width = Val::Percent(pct);
-                }
-            }
-        }
-    }
-
-    for (knob, mut node) in &mut knob_q {
-        if let Some(entries) = tweaks.folders.get(&knob.folder) {
-            if let Some(entry) = entries.iter().find(|e| e.label == knob.label) {
-                if let TweakValue::Float {
-                    value, min, max, ..
-                } = &entry.value
-                {
-                    let pct = ((value - min) / (max - min)).clamp(0.0, 1.0) * 100.0;
-                    node.left = Val::Percent(pct);
-                }
-            }
-        }
-    }
-
-    // Update slider value texts
-    for (vt, mut text) in &mut val_text_q {
-        if let Some(entries) = tweaks.folders.get(&vt.folder) {
-            if let Some(entry) = entries.iter().find(|e| e.label == vt.label) {
-                if let TweakValue::Float { value, .. } = &entry.value {
-                    let new_text = format_tweak_float(*value);
-                    if **text != new_text {
-                        **text = new_text;
-                    }
-                }
-            }
-        }
-    }
-
-    // Update toggle button colors
-    for (tog, interaction, mut bg) in &mut toggle_q {
-        if let Some(v) = tweaks.get_bool(&tog.folder, &tog.label) {
-            let target = match (*interaction, v) {
-                (Interaction::Pressed, true) => Color::srgba(1.0, 1.0, 1.0, 0.28),
-                (Interaction::Hovered, true) => Color::srgba(1.0, 1.0, 1.0, 0.22),
-                (_, true) => debug_active_surface(),
-                (Interaction::Pressed, false) => debug_pressed_surface(),
-                (Interaction::Hovered, false) => debug_hover_surface(),
-                (_, false) => debug_control_surface(),
-            };
-            bg.0 = target;
-        }
-    }
-
-    // Update toggle text
-    for (tog, mut text) in &mut toggle_text_q {
-        if let Some(v) = tweaks.get_bool(&tog.folder, &tog.label) {
-            let new_text = if v { "ON" } else { "OFF" };
-            if **text != new_text {
-                **text = new_text.to_string();
-            }
-        }
-    }
-
-    // Update readonly texts
-    for (ro, mut text) in &mut readonly_q {
-        if let Some(entries) = tweaks.folders.get(&ro.folder) {
-            if let Some(entry) = entries.iter().find(|e| e.label == ro.label) {
-                if let TweakValue::ReadOnly(ref new_text) = entry.value {
-                    if **text != *new_text {
-                        **text = new_text.clone();
-                    }
-                }
-            }
-        }
-    }
-
-    // Update color preview swatches
-    for (cp, mut bg) in &mut color_q {
-        let r = tweaks
-            .get_float(&cp.folder, &format!("{} R", cp.prefix))
-            .unwrap_or(0.0);
-        let g = tweaks
-            .get_float(&cp.folder, &format!("{} G", cp.prefix))
-            .unwrap_or(0.0);
-        let b = tweaks
-            .get_float(&cp.folder, &format!("{} B", cp.prefix))
-            .unwrap_or(0.0);
-        bg.0 = Color::srgb(r, g, b);
-    }
-}
-
-// ── UI spawn helpers ──
-
-fn spawn_section_header(parent: &mut ChildSpawnerCommands, section: &str) {
-    parent
-        .spawn((
-            Node {
-                padding: UiRect::new(Val::Px(6.0), Val::Px(6.0), Val::Px(8.0), Val::Px(3.0)),
-                margin: UiRect::top(Val::Px(8.0)),
-                width: Val::Percent(100.0),
-                border: UiRect::bottom(Val::Px(1.0)),
-                ..default()
-            },
-            BorderColor::all(debug_separator()),
-        ))
-        .with_children(|row| {
-            row.spawn((
-                Text::new(section.to_uppercase()),
-                TextFont {
-                    font_size: theme::FONT_SMALL,
-                    ..default()
-                },
-                TextColor(debug_text_secondary()),
-            ));
-        });
-}
-
-fn spawn_folder_header(
-    parent: &mut ChildSpawnerCommands,
-    key: &str,
-    display_name: &str,
-    collapsed: bool,
-) {
-    let arrow = if collapsed { ">" } else { "v" };
-    parent
-        .spawn((
-            FolderHeader(key.to_string()),
-            Interaction::default(),
-            Button,
-            Node {
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
-                margin: UiRect::top(Val::Px(4.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                width: Val::Percent(100.0),
-                justify_content: JustifyContent::FlexStart,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(debug_control_surface()),
-            BorderColor::all(if collapsed {
-                debug_control_border()
-            } else {
-                debug_emphasis_border()
-            }),
-        ))
-        .with_children(|header| {
-            header.spawn((
-                Text::new(format!("{} {}", arrow, display_name.to_uppercase())),
-                TextFont {
-                    font_size: theme::FONT_BODY,
-                    ..default()
-                },
-                TextColor(debug_text_primary()),
-            ));
-        });
-}
-
-fn spawn_slider_row(
-    parent: &mut ChildSpawnerCommands,
-    folder: &str,
-    label: &str,
-    value: f32,
-    min: f32,
-    max: f32,
-) {
-    let pct = ((value - min) / (max - min)).clamp(0.0, 1.0) * 100.0;
-
-    parent
-        .spawn((
-            debug_card_node(),
-            BackgroundColor(debug_control_surface()),
-            BorderColor::all(debug_control_border()),
-        ))
-        .with_children(|card| {
-            card.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::SpaceBetween,
-                align_items: AlignItems::Center,
-                width: Val::Percent(100.0),
-                ..default()
-            })
-            .with_children(|top| {
-                top.spawn((
-                    Text::new(label),
-                    TextFont {
-                        font_size: theme::FONT_BODY,
-                        ..default()
-                    },
-                    TextColor(debug_text_primary()),
-                ));
-
-                top.spawn((
-                    TweakSliderValueText {
-                        folder: folder.to_string(),
-                        label: label.to_string(),
-                    },
-                    Text::new(format_tweak_float(value)),
-                    TextFont {
-                        font_size: theme::FONT_BODY,
-                        ..default()
-                    },
-                    TextColor(debug_inverse_text()),
-                    debug_pill_node(),
-                    BackgroundColor(debug_slider_fill()),
-                    BorderColor::all(debug_slider_fill()),
-                ));
-            });
-
-            card.spawn((
-                TweakSlider {
-                    folder: folder.to_string(),
-                    label: label.to_string(),
-                },
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(12.0),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(999.0)),
-                    overflow: Overflow::clip(),
-                    align_items: AlignItems::Center,
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.06)),
-                BorderColor::all(debug_control_border()),
-            ))
-            .with_children(|track| {
-                track.spawn((
-                    TweakSliderFill {
-                        folder: folder.to_string(),
-                        label: label.to_string(),
-                    },
-                    Node {
-                        width: Val::Percent(pct),
-                        height: Val::Percent(100.0),
-                        border_radius: BorderRadius::all(Val::Px(999.0)),
-                        ..default()
-                    },
-                    BackgroundColor(debug_slider_fill()),
-                ));
-
-                track.spawn((
-                    TweakSliderKnob {
-                        folder: folder.to_string(),
-                        label: label.to_string(),
-                    },
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: Val::Percent(pct),
-                        width: Val::Px(12.0),
-                        height: Val::Px(12.0),
-                        margin: UiRect::left(Val::Px(-6.0)),
-                        border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(999.0)),
-                        ..default()
-                    },
-                    BackgroundColor(debug_text_primary()),
-                    BorderColor::all(Color::BLACK),
-                ));
-            });
-        });
-}
-
-fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, value: bool) {
-    parent
-        .spawn((
-            debug_row_node(),
-            BackgroundColor(debug_control_surface()),
-            BorderColor::all(debug_control_border()),
-        ))
-        .with_children(|row| {
-            row.spawn((
-                Text::new(label),
-                TextFont {
-                    font_size: theme::FONT_BODY,
-                    ..default()
-                },
-                TextColor(debug_text_primary()),
-                Node {
-                    flex_grow: 1.0,
-                    ..default()
-                },
-            ));
-
-            let bg = if value {
-                debug_active_surface()
-            } else {
-                debug_control_surface()
-            };
-            let text = if value { "ON" } else { "OFF" };
-
-            row.spawn((
-                TweakToggle {
-                    folder: folder.to_string(),
-                    label: label.to_string(),
-                },
-                Interaction::default(),
-                Button,
-                Node {
-                    min_width: Val::Px(56.0),
-                    padding: UiRect::axes(Val::Px(8.0), Val::Px(2.0)),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(999.0)),
-                    ..default()
-                },
-                BackgroundColor(bg),
-                BorderColor::all(if value {
-                    debug_emphasis_border()
-                } else {
-                    debug_control_border()
-                }),
-            ))
-            .with_children(|btn| {
-                btn.spawn((
-                    TweakToggleText {
-                        folder: folder.to_string(),
-                        label: label.to_string(),
-                    },
-                    Pickable::IGNORE,
-                    Text::new(text),
-                    TextFont {
-                        font_size: theme::FONT_BODY,
-                        ..default()
-                    },
-                    TextColor(debug_text_primary()),
-                ));
-            });
-        });
-}
-
-fn spawn_readonly_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, text: &str) {
-    parent
-        .spawn((
-            debug_row_node(),
-            BackgroundColor(debug_control_surface()),
-            BorderColor::all(debug_control_border()),
-        ))
-        .with_children(|row| {
-            row.spawn((
-                Text::new(label),
-                TextFont {
-                    font_size: theme::FONT_BODY,
-                    ..default()
-                },
-                TextColor(debug_text_secondary()),
-            ));
-
-            row.spawn((
-                TweakReadOnlyText {
-                    folder: folder.to_string(),
-                    label: label.to_string(),
-                },
-                Text::new(text),
-                TextFont {
-                    font_size: theme::FONT_BODY,
-                    ..default()
-                },
-                TextColor(debug_text_primary()),
-            ));
-        });
-}
-
-fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: &str) {
-    parent
-        .spawn((
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                justify_content: JustifyContent::SpaceBetween,
-                width: Val::Percent(100.0),
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(debug_control_surface()),
-            BorderColor::all(debug_control_border()),
-        ))
-        .with_children(|row| {
-            row.spawn((
-                Text::new("Preview"),
-                TextFont {
-                    font_size: theme::FONT_BODY,
-                    ..default()
-                },
-                TextColor(debug_text_secondary()),
-            ));
-
-            row.spawn((
-                ColorPreview {
-                    folder: folder.to_string(),
-                    prefix: prefix.to_string(),
-                },
-                Node {
-                    width: Val::Px(88.0),
-                    height: Val::Px(18.0),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(999.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgb(0.5, 0.5, 0.5)),
-                BorderColor::all(debug_control_border()),
-            ));
-        });
-}
-
-fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, display: &str) {
-    parent
-        .spawn((
-            debug_row_node(),
-            BackgroundColor(debug_control_surface()),
-            BorderColor::all(debug_control_border()),
-        ))
-        .with_children(|row| {
-            row.spawn((
-                Text::new(label),
-                TextFont {
-                    font_size: theme::FONT_BODY,
-                    ..default()
-                },
-                TextColor(debug_text_primary()),
-                Node {
-                    flex_grow: 1.0,
-                    ..default()
-                },
-            ));
-
-            row.spawn((
-                TweakCycleEnum {
-                    folder: folder.to_string(),
-                    label: label.to_string(),
-                },
-                Interaction::default(),
-                Button,
-                Node {
-                    min_width: Val::Px(124.0),
-                    padding: UiRect::axes(Val::Px(8.0), Val::Px(2.0)),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(999.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)),
-                BorderColor::all(debug_control_border()),
-            ))
-            .with_children(|btn| {
-                btn.spawn((
-                    TweakCycleText {
-                        folder: folder.to_string(),
-                        label: label.to_string(),
-                    },
-                    Pickable::IGNORE,
-                    Text::new(display),
-                    TextFont {
-                        font_size: theme::FONT_BODY,
-                        ..default()
-                    },
-                    TextColor(debug_text_primary()),
-                ));
-            });
-        });
-}
-
-fn spawn_button_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str, text: &str) {
-    parent
-        .spawn(Node {
-            width: Val::Percent(100.0),
-            ..default()
-        })
-        .with_children(|row| {
-            row.spawn((
-                TweakButton {
-                    folder: folder.to_string(),
-                    label: label.to_string(),
-                },
-                Interaction::default(),
-                Button,
-                Node {
-                    width: Val::Percent(100.0),
-                    padding: UiRect::axes(Val::Px(8.0), Val::Px(5.0)),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
-                    ..default()
-                },
-                BackgroundColor(debug_control_surface()),
-                BorderColor::all(debug_emphasis_border()),
-            ))
-            .with_children(|btn| {
-                btn.spawn((
-                    Pickable::IGNORE,
-                    Text::new(text.to_uppercase()),
-                    TextFont {
-                        font_size: theme::FONT_BODY,
-                        ..default()
-                    },
-                    TextColor(debug_text_primary()),
-                ));
-            });
-        });
-}
-
-fn format_tweak_float(v: f32) -> String {
-    if v.abs() >= 100.0 {
-        format!("{:.0}", v)
-    } else if v.abs() >= 10.0 {
-        format!("{:.1}", v)
-    } else {
-        format!("{:.3}", v)
-    }
-}
-
-fn initialize_debug_folder_defaults(tweaks: Res<DebugTweaks>, mut state: ResMut<DebugPanelState>) {
-    if tweaks.folders.is_empty() {
-        return;
-    }
-
-    let mut changed = false;
-    for folder in tweaks.folders.keys() {
-        if !state.seen_folders.iter().any(|seen| seen == folder) {
-            state.seen_folders.push(folder.clone());
-            state.collapsed_folders.push(folder.clone());
-            changed = true;
-        }
-    }
-
-    if !changed {
-        return;
-    }
-}
-
-// ── Interaction handlers ──
-
-fn handle_folder_collapse(
-    mut state: ResMut<DebugPanelState>,
-    folder_q: Query<(&FolderHeader, &Interaction), Changed<Interaction>>,
-) {
-    for (header, interaction) in &folder_q {
-        if *interaction == Interaction::Pressed {
-            if let Some(pos) = state.collapsed_folders.iter().position(|f| *f == header.0) {
-                state.collapsed_folders.remove(pos);
-            } else {
-                state.collapsed_folders.push(header.0.clone());
-            }
-        }
-    }
-}
-
-fn handle_expand_button(
-    mut state: ResMut<DebugPanelState>,
-    btn_q: Query<&Interaction, (Changed<Interaction>, With<DebugExpandButton>)>,
-) {
-    for interaction in &btn_q {
-        if *interaction == Interaction::Pressed {
-            state.tweaks_expanded = !state.tweaks_expanded;
-        }
-    }
-}
-
-fn handle_toggle_click(
-    mut tweaks: ResMut<DebugTweaks>,
-    toggle_q: Query<(&TweakToggle, &Interaction), Changed<Interaction>>,
-) {
-    for (toggle, interaction) in &toggle_q {
-        if *interaction == Interaction::Pressed {
-            if let Some(entry) = tweaks.get_mut(&toggle.folder, &toggle.label) {
-                if let TweakValue::Bool(ref mut v) = entry.value {
-                    *v = !*v;
-                }
-            }
-        }
-    }
-}
-
-fn handle_cycle_click(
-    mut tweaks: ResMut<DebugTweaks>,
-    cycle_q: Query<(&TweakCycleEnum, &Interaction), Changed<Interaction>>,
-) {
-    for (cycle, interaction) in &cycle_q {
-        if *interaction == Interaction::Pressed {
-            if let Some(entry) = tweaks.get_mut(&cycle.folder, &cycle.label) {
-                if let TweakValue::CycleEnum { options, selected } = &mut entry.value {
-                    if !options.is_empty() {
-                        *selected = (*selected + 1) % options.len();
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn handle_button_click(
-    mut pressed: ResMut<DebugButtonPressed>,
-    button_q: Query<(&TweakButton, &Interaction), Changed<Interaction>>,
-) {
-    pressed.pressed.clear();
-    for (button, interaction) in &button_q {
-        if *interaction == Interaction::Pressed {
-            pressed
-                .pressed
-                .push((button.folder.clone(), button.label.clone()));
-        }
-    }
-}
-
-fn handle_slider_interaction(
-    mut tweaks: ResMut<DebugTweaks>,
-    mut active: ResMut<ActiveSlider>,
-    mut ui_press: ResMut<UiPressActive>,
-    mouse: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window>,
-    slider_q: Query<(&TweakSlider, &ComputedNode, &UiGlobalTransform)>,
-) {
-    // Release when mouse not pressed
-    if !mouse.pressed(MouseButton::Left) {
-        if active.folder.is_some() {
-            active.folder = None;
-            active.label = None;
-            ui_press.0 = false;
-        }
-        return;
-    }
-
-    // Bevy's UI uses physical_cursor_position + UiGlobalTransform for hit-testing
-    let Some(cursor_phys) = windows
-        .single()
-        .ok()
-        .and_then(|w| w.physical_cursor_position())
-    else {
-        return;
-    };
-
-    // On fresh click, find which slider the cursor is over
-    if mouse.just_pressed(MouseButton::Left) {
-        for (slider, computed, ui_tf) in &slider_q {
-            if computed.contains_point(*ui_tf, cursor_phys) {
-                active.folder = Some(slider.folder.clone());
-                active.label = Some(slider.label.clone());
-                ui_press.0 = true;
-                break;
-            }
-        }
-    }
-
-    // Update the active slider's value
-    let (Some(ref folder), Some(ref label)) = (&active.folder, &active.label) else {
-        return;
-    };
-
-    for (slider, computed, ui_tf) in &slider_q {
-        if slider.folder != *folder || slider.label != *label {
-            continue;
-        }
-        // normalize_point returns (-0.5..0.5) centered, so shift to 0..1
-        let Some(norm) = computed.normalize_point(*ui_tf, cursor_phys) else {
-            // Cursor outside node during drag — clamp to edges
-            if let Some(inv) = ui_tf.try_inverse() {
-                let local = inv.transform_point2(cursor_phys);
-                let size = computed.size();
-                if size.x > 0.0 {
-                    let t = ((local.x / size.x) + 0.5).clamp(0.0, 1.0);
-                    if let Some(entry) = tweaks.get_mut(folder, label) {
-                        if let TweakValue::Float {
-                            value,
-                            min,
-                            max,
-                            step,
-                        } = &mut entry.value
-                        {
-                            let raw = *min + t * (*max - *min);
-                            *value = if *step > 0.0 {
-                                (*step * (raw / *step).round()).clamp(*min, *max)
-                            } else {
-                                raw.clamp(*min, *max)
-                            };
-                        }
-                    }
-                }
-            }
-            break;
-        };
-        let t = (norm.x + 0.5).clamp(0.0, 1.0);
-
-        if let Some(entry) = tweaks.get_mut(folder, label) {
-            if let TweakValue::Float {
-                value,
-                min,
-                max,
-                step,
-            } = &mut entry.value
-            {
-                let raw = *min + t * (*max - *min);
-                let snapped = if *step > 0.0 {
-                    (*step * (raw / *step).round()).clamp(*min, *max)
-                } else {
-                    raw.clamp(*min, *max)
-                };
-                *value = snapped;
-            }
-        }
-        break;
     }
 }
 
@@ -1995,78 +356,9 @@ fn sync_fog_tweaks(tweaks: Res<DebugTweaks>, mut fog_settings: ResMut<FogTweakSe
     }
 }
 
-// ── Apply saved config on startup (runs once) ──
-
-#[derive(Resource)]
-struct ConfigApplied;
-
-fn apply_saved_config(
-    mut commands: Commands,
-    mut tweaks: ResMut<DebugTweaks>,
-    applied: Option<Res<ConfigApplied>>,
-) {
-    if applied.is_some() {
-        return;
-    }
-    // Only run once all folders have been registered (not empty)
-    if tweaks.folders.is_empty() {
-        return;
-    }
-    commands.insert_resource(ConfigApplied);
-
-    if let Some(config) = load_debug_config() {
-        info!("Loaded debug config from {}", DEBUG_CONFIG_PATH);
-        apply_config_to_tweaks(&mut tweaks, &config);
-    } else {
-        info!(
-            "No debug config found, saving defaults to {}",
-            DEBUG_CONFIG_PATH
-        );
-        save_debug_config(&tweaks);
-    }
-}
-
-// ── Save config button click handler ──
-
-fn handle_save_config_click(
-    tweaks: Res<DebugTweaks>,
-    mut feedback: ResMut<SaveConfigFeedback>,
-    btn_q: Query<&Interaction, (Changed<Interaction>, With<SaveConfigButton>)>,
-    mut text_q: Query<&mut Text, With<SaveConfigButtonText>>,
-) {
-    for interaction in &btn_q {
-        if *interaction == Interaction::Pressed {
-            save_debug_config(&tweaks);
-            feedback.0 = Timer::from_seconds(1.0, TimerMode::Once);
-            if let Ok(mut text) = text_q.single_mut() {
-                **text = "Saved!".to_string();
-            }
-        }
-    }
-}
-
-fn update_save_button_feedback(
-    time: Res<Time>,
-    mut feedback: ResMut<SaveConfigFeedback>,
-    mut text_q: Query<&mut Text, With<SaveConfigButtonText>>,
-) {
-    if feedback.0.tick(time.delta()).just_finished() {
-        if let Ok(mut text) = text_q.single_mut() {
-            **text = "Save".to_string();
-        }
-    }
-}
-
 // ══════════════════════════════════════════════════════════════════════
 // Entity Debug Tool
 // ══════════════════════════════════════════════════════════════════════
-
-#[derive(Resource, Default)]
-pub struct DebugSpawnState {
-    pub click_to_spawn: bool,
-    pub status_text: String,
-    pub status_timer: f32,
-}
 
 const SPAWN_FOLDER: &str = "Entities/Spawn";
 const SELECTED_FOLDER: &str = "Entities/Selected";
@@ -2074,6 +366,7 @@ const RUNTIME_FOLDER: &str = "Game/Runtime";
 const FLOW_FOLDER: &str = "Game/Flow";
 const AI_FOLDER: &str = "Game/AI Settings";
 const SAVE_FOLDER: &str = "Game/Save & Load";
+const FRUSTUM_FOLDER: &str = "Game/Frustum Debug";
 const NET_CONN_FOLDER: &str = "Network/Connection";
 const NET_TRAFFIC_FOLDER: &str = "Network/Traffic";
 
@@ -2113,6 +406,7 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_readonly(RUNTIME_FOLDER, "Camera Distance", "--");
     tweaks.add_readonly(RUNTIME_FOLDER, "Cursor World", "--");
     tweaks.add_readonly(RUNTIME_FOLDER, "UI Capture", "--");
+    tweaks.add_readonly(RUNTIME_FOLDER, "Culled Entities", "0");
     tweaks.add_readonly(
         RUNTIME_FOLDER,
         "Debug Hotkeys",
@@ -2121,8 +415,29 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_bool(RUNTIME_FOLDER, "FPS Overlay", false);
     tweaks.add_bool(RUNTIME_FOLDER, "World Inspector", false);
     tweaks.add_bool(RUNTIME_FOLDER, "Selection Gizmos", true);
+    // Frustum debug folder
+    tweaks.add_bool(FRUSTUM_FOLDER, "Enabled", false);
+    tweaks.add_bool(FRUSTUM_FOLDER, "Freeze Main Camera", true);
+    tweaks.add_readonly(FRUSTUM_FOLDER, "Main Cam Pos", "--");
+    tweaks.add_readonly(FRUSTUM_FOLDER, "Main Cam Angle", "--");
+    tweaks.add_readonly(FRUSTUM_FOLDER, "Observer Pos", "--");
+    tweaks.add_readonly(FRUSTUM_FOLDER, "Observer Speed", "--");
+    tweaks.add_readonly(FRUSTUM_FOLDER, "Tracked Entities", "0");
+    tweaks.add_readonly(FRUSTUM_FOLDER, "Visible", "0");
+    tweaks.add_readonly(FRUSTUM_FOLDER, "Frustum Hidden", "0");
+    tweaks.add_readonly(FRUSTUM_FOLDER, "Distance Hidden", "0");
+    tweaks.add_readonly(FRUSTUM_FOLDER, "Fog Hidden", "0");
+    tweaks.add_readonly(
+        FRUSTUM_FOLDER,
+        "Controls",
+        "WASD=move | RMB=look | Scroll=speed | Space/Shift=up/down | F=focus",
+    );
 
-    tweaks.add_readonly(FLOW_FOLDER, "Pipeline", "Input > Net Rx > Sim > Net Tx > UI > Present");
+    tweaks.add_readonly(
+        FLOW_FOLDER,
+        "Pipeline",
+        "Input > Net Rx > Sim > Net Tx > UI > Present",
+    );
     tweaks.add_readonly(FLOW_FOLDER, "Bindings", "--");
     tweaks.add_readonly(FLOW_FOLDER, "Selected Units", "0");
     tweaks.add_readonly(FLOW_FOLDER, "Move Targets", "0");
@@ -2151,7 +466,7 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
 }
 
 fn cursor_ground_pos(
-    camera_q: &Query<(&Camera, &GlobalTransform)>,
+    camera_q: &Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: &Query<&Window, With<PrimaryWindow>>,
 ) -> Option<Vec3> {
     let Ok(window) = windows.single() else {
@@ -2193,6 +508,39 @@ fn format_debug_vec3(v: Vec3) -> String {
     format!("{:.1}, {:.1}, {:.1}", v.x, v.y, v.z)
 }
 
+fn viewport_ground_hit(
+    camera: &Camera,
+    cam_gt: &GlobalTransform,
+    viewport_pos: Vec2,
+) -> Option<Vec3> {
+    let ray = camera.viewport_to_world(cam_gt, viewport_pos).ok()?;
+    let dist = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))?;
+    Some(ray.get_point(dist))
+}
+
+fn camera_ground_corners(
+    camera: &Camera,
+    cam_gt: &GlobalTransform,
+    window: &Window,
+) -> Option<[Vec3; 4]> {
+    let rect = camera.logical_viewport_rect().unwrap_or(Rect {
+        min: Vec2::ZERO,
+        max: Vec2::new(window.width(), window.height()),
+    });
+    let corners = [
+        rect.min,
+        Vec2::new(rect.max.x, rect.min.y),
+        rect.max,
+        Vec2::new(rect.min.x, rect.max.y),
+    ];
+    Some([
+        viewport_ground_hit(camera, cam_gt, corners[0])?,
+        viewport_ground_hit(camera, cam_gt, corners[1])?,
+        viewport_ground_hit(camera, cam_gt, corners[2])?,
+        viewport_ground_hit(camera, cam_gt, corners[3])?,
+    ])
+}
+
 fn toggle_debug_views(
     keys: Res<ButtonInput<KeyCode>>,
     mut state: ResMut<DebugViewState>,
@@ -2206,14 +554,22 @@ fn toggle_debug_views(
         state.fps_overlay = !state.fps_overlay;
         info!(
             "Debug FPS overlay {}",
-            if state.fps_overlay { "enabled" } else { "disabled" }
+            if state.fps_overlay {
+                "enabled"
+            } else {
+                "disabled"
+            }
         );
         if let Some(notifications) = notifications.as_mut() {
             notifications.push(
                 AllyNotifyKind::UnderAttack,
                 format!(
                     "FPS overlay {}",
-                    if state.fps_overlay { "enabled" } else { "disabled" }
+                    if state.fps_overlay {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
                 ),
                 None,
                 time.elapsed_secs(),
@@ -2244,14 +600,22 @@ fn toggle_debug_views(
         state.inspector = !state.inspector;
         info!(
             "World inspector {}",
-            if state.inspector { "enabled" } else { "disabled" }
+            if state.inspector {
+                "enabled"
+            } else {
+                "disabled"
+            }
         );
         if let Some(notifications) = notifications.as_mut() {
             notifications.push(
                 AllyNotifyKind::ReadyToAttack,
                 format!(
                     "World inspector {}",
-                    if state.inspector { "enabled" } else { "disabled" }
+                    if state.inspector {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
                 ),
                 None,
                 time.elapsed_secs(),
@@ -2269,10 +633,7 @@ fn toggle_debug_views(
     }
 }
 
-fn apply_debug_view_state(
-    state: Res<DebugViewState>,
-    mut fps_overlay: ResMut<FpsOverlayConfig>,
-) {
+fn apply_debug_view_state(state: Res<DebugViewState>, mut fps_overlay: ResMut<FpsOverlayConfig>) {
     fps_overlay.enabled = state.fps_overlay;
     fps_overlay.frame_time_graph_config.enabled = state.fps_overlay;
 }
@@ -2409,6 +770,312 @@ fn sync_debug_view_tweaks(tweaks: ResMut<DebugTweaks>, mut state: ResMut<DebugVi
     if let Some(enabled) = tweaks.get_bool(RUNTIME_FOLDER, "Selection Gizmos") {
         state.gizmos = enabled;
     }
+    if let Some(enabled) = tweaks.get_bool(FRUSTUM_FOLDER, "Enabled") {
+        state.frustum_culling = enabled;
+    }
+}
+
+fn sync_frustum_debug_camera(
+    mut commands: Commands,
+    state: Res<DebugViewState>,
+    mut debug_mode: ResMut<FrustumDebugMode>,
+    main_camera_q: Query<(Entity, &RtsCamera)>,
+    mut main_camera_toggle: Query<
+        &mut Camera,
+        (With<RtsCamera>, Without<FrustumDebugObserverCamera>),
+    >,
+    observer_q: Query<Entity, With<FrustumDebugObserverCamera>>,
+    label_q: Query<Entity, With<FrustumDebugLabel>>,
+) {
+    let was_enabled = debug_mode.enabled;
+    debug_mode.enabled = state.frustum_culling;
+
+    if state.frustum_culling {
+        // Disable main camera rendering (observer takes over)
+        if let Ok(mut main_cam) = main_camera_toggle.single_mut() {
+            main_cam.is_active = false;
+        }
+
+        // Snapshot main camera state when first enabling
+        if !was_enabled {
+            if let Ok((_, rts_cam)) = main_camera_q.single() {
+                debug_mode.frozen_pivot = rts_cam.pivot;
+                debug_mode.frozen_distance = rts_cam.distance;
+                debug_mode.frozen_angle = rts_cam.angle;
+                debug_mode.frozen_pitch = rts_cam.pitch;
+                // Start observer elevated and pulled back so the view is noticeably different
+                debug_mode.observer_pos =
+                    rts_cam.pivot + Vec3::new(0.0, rts_cam.distance * 1.8, rts_cam.distance * 0.8);
+                debug_mode.observer_yaw = rts_cam.angle;
+                debug_mode.observer_pitch = -0.75;
+                debug_mode.freeze_main_camera = true;
+            }
+        }
+
+        if observer_q.is_empty() {
+            // Initial position: near the frozen main camera
+            let init_pos = debug_mode.observer_pos;
+            let look_dir = Vec3::new(
+                -debug_mode.observer_yaw.sin() * debug_mode.observer_pitch.cos(),
+                debug_mode.observer_pitch.sin(),
+                -debug_mode.observer_yaw.cos() * debug_mode.observer_pitch.cos(),
+            )
+            .normalize_or_zero();
+            let init_target = init_pos + look_dir * 10.0;
+
+            commands.spawn((
+                GameWorld,
+                FrustumDebugObserverCamera,
+                Camera3d::default(),
+                Camera {
+                    order: 2,
+                    clear_color: bevy::camera::ClearColorConfig::Default,
+                    ..default()
+                },
+                ClusterConfig::FixedZ {
+                    total: 4096,
+                    z_slices: 1,
+                    z_config: ClusterZConfig::default(),
+                    dynamic_resizing: true,
+                },
+                Transform::from_translation(init_pos).looking_at(init_target, Vec3::Y),
+            ));
+        }
+
+        // Spawn overlay label
+        if label_q.is_empty() {
+            commands.spawn((
+                GameWorld,
+                FrustumDebugLabel,
+                Text::new("FRUSTUM DEBUG — WASD fly, RMB look, Scroll speed, F focus"),
+                TextFont {
+                    font_size: 18.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.85, 0.3)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(8.0),
+                    left: Val::Percent(25.0),
+                    padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
+                    ..default()
+                },
+            ));
+        }
+    } else {
+        // Re-enable main camera rendering
+        if let Ok(mut main_cam) = main_camera_toggle.single_mut() {
+            main_cam.is_active = true;
+        }
+        for entity in &observer_q {
+            commands.entity(entity).despawn();
+        }
+        for entity in &label_q {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn frustum_debug_fly_camera(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut scroll_events: bevy::ecs::message::MessageReader<bevy::input::mouse::MouseWheel>,
+    mut motion_events: bevy::ecs::message::MessageReader<bevy::input::mouse::MouseMotion>,
+    time: Res<Time>,
+    mut observer_q: Query<&mut Transform, With<FrustumDebugObserverCamera>>,
+    mut mode: ResMut<FrustumDebugMode>,
+) {
+    if !mode.enabled {
+        // Drain events
+        for _ in scroll_events.read() {}
+        for _ in motion_events.read() {}
+        return;
+    }
+
+    let dt = time.delta_secs();
+    if dt <= 0.0 {
+        return;
+    }
+
+    // Speed adjustment via scroll wheel
+    for ev in scroll_events.read() {
+        let scroll = match ev.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => ev.y,
+            bevy::input::mouse::MouseScrollUnit::Pixel => ev.y / 16.0,
+        };
+        mode.observer_speed = (mode.observer_speed * (1.0 + scroll * 0.15)).clamp(5.0, 200.0);
+    }
+
+    // Mouse look (right mouse button held)
+    if mouse.pressed(MouseButton::Right) {
+        for ev in motion_events.read() {
+            mode.observer_yaw -= ev.delta.x * 0.003;
+            mode.observer_pitch = (mode.observer_pitch - ev.delta.y * 0.003).clamp(
+                -std::f32::consts::FRAC_PI_2 + 0.05,
+                std::f32::consts::FRAC_PI_2 - 0.05,
+            );
+        }
+    } else {
+        for _ in motion_events.read() {}
+    }
+
+    // WASD + Space/Shift movement
+    let forward = Vec3::new(
+        mode.observer_yaw.sin() * mode.observer_pitch.cos(),
+        mode.observer_pitch.sin(),
+        mode.observer_yaw.cos() * mode.observer_pitch.cos(),
+    )
+    .normalize_or_zero();
+    let right = Vec3::new(mode.observer_yaw.cos(), 0.0, -mode.observer_yaw.sin());
+    let up = Vec3::Y;
+
+    let mut dir = Vec3::ZERO;
+    if keyboard.pressed(KeyCode::KeyW) {
+        dir -= forward;
+    }
+    if keyboard.pressed(KeyCode::KeyS) {
+        dir += forward;
+    }
+    if keyboard.pressed(KeyCode::KeyA) {
+        dir -= right;
+    }
+    if keyboard.pressed(KeyCode::KeyD) {
+        dir += right;
+    }
+    if keyboard.pressed(KeyCode::Space) {
+        dir += up;
+    }
+    if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
+        dir -= up;
+    }
+
+    if dir.length_squared() > 0.0 {
+        let speed = mode.observer_speed;
+        mode.observer_pos += dir.normalize() * speed * dt;
+    }
+
+    // F key: snap to main camera pivot
+    if keyboard.just_pressed(KeyCode::KeyF) {
+        mode.observer_pos = mode.frozen_pivot + Vec3::new(0.0, 80.0, 40.0);
+        mode.observer_pitch = -0.6;
+    }
+
+    // Apply transform to observer camera
+    let Ok(mut transform) = observer_q.single_mut() else {
+        return;
+    };
+    transform.translation = mode.observer_pos;
+    let look_dir = Vec3::new(
+        -mode.observer_yaw.sin() * mode.observer_pitch.cos(),
+        mode.observer_pitch.sin(),
+        -mode.observer_yaw.cos() * mode.observer_pitch.cos(),
+    )
+    .normalize_or_zero();
+    let target = mode.observer_pos + look_dir * 10.0;
+    transform.look_at(target, Vec3::Y);
+}
+
+fn update_frustum_debug_camera(
+    state: Res<DebugViewState>,
+    mut observer_q: Query<&mut Camera, With<FrustumDebugObserverCamera>>,
+) {
+    // Observer renders full-screen (no viewport needed — main camera is disabled).
+    // Just ensure it stays active while debug mode is on.
+    if let Ok(mut cam) = observer_q.single_mut() {
+        cam.is_active = state.frustum_culling;
+    }
+}
+
+fn sync_frustum_debug_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    mut debug_mode: ResMut<FrustumDebugMode>,
+    state: Res<DebugViewState>,
+    main_camera_q: Query<&RtsCamera>,
+    cullables: Query<
+        Option<&CullReason>,
+        Or<(
+            With<crate::components::Unit>,
+            With<crate::components::Mob>,
+            With<crate::components::Building>,
+            With<crate::components::ResourceNode>,
+            With<crate::components::Decoration>,
+            With<crate::components::Sapling>,
+            With<crate::components::GrowingTree>,
+            With<crate::components::GrowingResource>,
+        )>,
+    >,
+) {
+    if !state.frustum_culling {
+        return;
+    }
+
+    // Sync freeze toggle from tweak panel
+    if let Some(freeze) = tweaks.get_bool(FRUSTUM_FOLDER, "Freeze Main Camera") {
+        debug_mode.freeze_main_camera = freeze;
+    }
+
+    // Main camera info
+    if let Ok(rts_cam) = main_camera_q.single() {
+        tweaks.set_readonly_if_changed(
+            FRUSTUM_FOLDER,
+            "Main Cam Pos",
+            &format_debug_vec3(rts_cam.pivot),
+        );
+        tweaks.set_readonly_if_changed(
+            FRUSTUM_FOLDER,
+            "Main Cam Angle",
+            &format!(
+                "angle={:.1}° dist={:.1} pitch={:.1}°",
+                rts_cam.angle.to_degrees(),
+                rts_cam.distance,
+                rts_cam.pitch.to_degrees()
+            ),
+        );
+    }
+
+    // Observer info
+    tweaks.set_readonly_if_changed(
+        FRUSTUM_FOLDER,
+        "Observer Pos",
+        &format_debug_vec3(debug_mode.observer_pos),
+    );
+    tweaks.set_readonly_if_changed(
+        FRUSTUM_FOLDER,
+        "Observer Speed",
+        &format!("{:.0}", debug_mode.observer_speed),
+    );
+
+    // Cull reason counters
+    let mut total = 0u32;
+    let mut visible = 0u32;
+    let mut frustum_hidden = 0u32;
+    let mut distance_hidden = 0u32;
+    let mut fog_hidden = 0u32;
+
+    for reason in &cullables {
+        total += 1;
+        match reason {
+            Some(CullReason::Visible) | None => visible += 1,
+            Some(CullReason::Frustum) => frustum_hidden += 1,
+            Some(CullReason::Distance) => distance_hidden += 1,
+            Some(CullReason::Fog) => fog_hidden += 1,
+        }
+    }
+
+    tweaks.set_readonly_if_changed(FRUSTUM_FOLDER, "Tracked Entities", &total.to_string());
+    tweaks.set_readonly_if_changed(FRUSTUM_FOLDER, "Visible", &visible.to_string());
+    tweaks.set_readonly_if_changed(
+        FRUSTUM_FOLDER,
+        "Frustum Hidden",
+        &frustum_hidden.to_string(),
+    );
+    tweaks.set_readonly_if_changed(
+        FRUSTUM_FOLDER,
+        "Distance Hidden",
+        &distance_hidden.to_string(),
+    );
+    tweaks.set_readonly_if_changed(FRUSTUM_FOLDER, "Fog Hidden", &fog_hidden.to_string());
 }
 
 fn sync_debug_flow_tweaks(
@@ -2451,9 +1118,10 @@ fn sync_debug_flow_tweaks(
 
 fn draw_debug_gizmos(
     state: Res<DebugViewState>,
+    _debug_mode: Res<FrustumDebugMode>,
     mut gizmos: Gizmos,
-    camera_q: Query<&RtsCamera>,
-    cam_query: Query<(&Camera, &GlobalTransform)>,
+    camera_q: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
+    cam_query: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     selected: Query<
         (
@@ -2465,67 +1133,188 @@ fn draw_debug_gizmos(
         With<Selected>,
     >,
     targets: Query<&GlobalTransform>,
+    cullables: Query<
+        (
+            &GlobalTransform,
+            Has<FrustumCulled>,
+            Option<&CullReason>,
+            Option<&CullingBounds>,
+        ),
+        Or<(
+            With<crate::components::Unit>,
+            With<crate::components::Mob>,
+            With<crate::components::Building>,
+            With<crate::components::ResourceNode>,
+            With<crate::components::Decoration>,
+            With<crate::components::Sapling>,
+            With<crate::components::GrowingTree>,
+            With<crate::components::GrowingResource>,
+        )>,
+    >,
 ) {
-    if !state.gizmos {
+    if !state.gizmos && !state.frustum_culling {
         return;
     }
 
-    if let Ok(camera) = camera_q.single() {
+    if let Ok((main_camera, main_cam_gt, camera)) = camera_q.single() {
         let pivot = camera.pivot + Vec3::Y * 0.15;
-        gizmos.circle(pivot, 1.2, Color::srgb(1.0, 0.45, 0.1));
-        gizmos.line(
-            pivot + Vec3::X * 1.4,
-            pivot - Vec3::X * 1.4,
-            Color::srgb(1.0, 0.45, 0.1),
-        );
-        gizmos.line(
-            pivot + Vec3::Z * 1.4,
-            pivot - Vec3::Z * 1.4,
-            Color::srgb(1.0, 0.45, 0.1),
-        );
-    }
-
-    if let Some(cursor) = cursor_ground_pos(&cam_query, &windows) {
-        let cursor = cursor + Vec3::Y * 0.08;
-        gizmos.circle(cursor, 0.5, Color::srgb(0.25, 1.0, 0.4));
-        gizmos.line(
-            cursor + Vec3::X * 0.7,
-            cursor - Vec3::X * 0.7,
-            Color::srgb(0.25, 1.0, 0.4),
-        );
-        gizmos.line(
-            cursor + Vec3::Z * 0.7,
-            cursor - Vec3::Z * 0.7,
-            Color::srgb(0.25, 1.0, 0.4),
-        );
-    }
-
-    for (transform, move_target, nav_path, attack_target) in &selected {
-        let origin = transform.translation() + Vec3::Y * 0.15;
-        gizmos.circle(origin, 0.9, Color::srgb(0.2, 0.95, 0.8));
-
-        if let Some(move_target) = move_target {
-            let destination = move_target.0 + Vec3::Y * 0.1;
-            gizmos.line(origin, destination, Color::srgb(0.95, 0.85, 0.2));
-            gizmos.cross(destination, 0.45, Color::srgb(0.95, 0.85, 0.2));
+        if state.gizmos {
+            gizmos.circle(pivot, 1.2, Color::srgb(1.0, 0.45, 0.1));
+            gizmos.line(
+                pivot + Vec3::X * 1.4,
+                pivot - Vec3::X * 1.4,
+                Color::srgb(1.0, 0.45, 0.1),
+            );
+            gizmos.line(
+                pivot + Vec3::Z * 1.4,
+                pivot - Vec3::Z * 1.4,
+                Color::srgb(1.0, 0.45, 0.1),
+            );
         }
 
-        if let Some(nav_path) = nav_path {
-            let mut previous = origin;
-            for point in nav_path.waypoints.iter().skip(nav_path.current_index) {
-                let next = *point + Vec3::Y * 0.12;
-                gizmos.line(previous, next, Color::srgb(0.2, 0.75, 1.0));
-                previous = next;
+        if state.frustum_culling {
+            let cam_pos = main_cam_gt.translation();
+            // Main camera position sphere (orange)
+            gizmos.sphere(cam_pos, 1.2, Color::srgb(1.0, 0.55, 0.2));
+
+            if let Ok(window) = windows.single() {
+                // 3D frustum wireframe: near plane corners projected to world
+                if let Some(corners) = camera_ground_corners(main_camera, main_cam_gt, window) {
+                    // Lines from camera to ground corners (frustum edges)
+                    let frustum_color = Color::srgba(1.0, 0.65, 0.2, 0.7);
+                    for corner in corners {
+                        gizmos.line(cam_pos, corner + Vec3::Y * 0.2, frustum_color);
+                    }
+                    // Ground footprint quad (cyan)
+                    let footprint_color = Color::srgb(0.15, 0.85, 1.0);
+                    for edge in 0..corners.len() {
+                        gizmos.line(
+                            corners[edge] + Vec3::Y * 0.18,
+                            corners[(edge + 1) % corners.len()] + Vec3::Y * 0.18,
+                            footprint_color,
+                        );
+                    }
+
+                    // Draw an elevated near-plane wireframe for 3D frustum visualization
+                    let near_corners: Vec<Vec3> = corners
+                        .iter()
+                        .map(|c| {
+                            let dir = (*c - cam_pos).normalize_or_zero();
+                            cam_pos + dir * 15.0 + Vec3::Y * 0.1
+                        })
+                        .collect();
+                    let near_color = Color::srgba(0.9, 0.9, 0.2, 0.6);
+                    for i in 0..near_corners.len() {
+                        gizmos.line(
+                            near_corners[i],
+                            near_corners[(i + 1) % near_corners.len()],
+                            near_color,
+                        );
+                    }
+
+                    // Draw a mid-plane wireframe
+                    let mid_corners: Vec<Vec3> = corners
+                        .iter()
+                        .map(|c| {
+                            let mid = cam_pos.lerp(*c, 0.5);
+                            mid + Vec3::Y * 0.1
+                        })
+                        .collect();
+                    let mid_color = Color::srgba(0.5, 0.7, 1.0, 0.3);
+                    for i in 0..mid_corners.len() {
+                        gizmos.line(
+                            mid_corners[i],
+                            mid_corners[(i + 1) % mid_corners.len()],
+                            mid_color,
+                        );
+                    }
+                }
+            }
+
+            // Color-coded entity markers by cull reason:
+            // green = visible, red = frustum-culled, yellow = distance-hidden, blue = fog-hidden
+            let color_visible = Color::srgba(0.2, 1.0, 0.45, 0.35);
+            let color_frustum = Color::srgb(1.0, 0.2, 0.2);
+            let color_distance = Color::srgb(1.0, 0.85, 0.15);
+            let color_fog = Color::srgb(0.3, 0.5, 1.0);
+
+            for (gtf, is_culled, cull_reason, bounds) in &cullables {
+                let pos = gtf.translation() + Vec3::Y * 0.35;
+                let reason = cull_reason.copied().unwrap_or(if is_culled {
+                    CullReason::Frustum
+                } else {
+                    CullReason::Visible
+                });
+
+                match reason {
+                    CullReason::Visible => {
+                        gizmos.circle(pos, 0.35, color_visible);
+                    }
+                    CullReason::Frustum => {
+                        gizmos.cross(pos, 1.4, color_frustum);
+                    }
+                    CullReason::Distance => {
+                        gizmos.cross(pos, 1.0, color_distance);
+                    }
+                    CullReason::Fog => {
+                        gizmos.cross(pos, 1.0, color_fog);
+                    }
+                }
+
+                // Show bounding radius for entities with CullingBounds
+                if let Some(b) = bounds {
+                    let center = gtf.translation() + b.center_offset + Vec3::Y * 0.1;
+                    gizmos.circle(center, b.radius, Color::srgba(0.8, 0.8, 0.2, 0.2));
+                }
             }
         }
+    }
 
-        if let Some(attack_target) = attack_target {
-            if let Ok(target) = targets.get(attack_target.0) {
-                gizmos.line(
-                    origin,
-                    target.translation() + Vec3::Y * 0.2,
-                    Color::srgb(1.0, 0.25, 0.25),
-                );
+    if state.gizmos {
+        if let Some(cursor) = cursor_ground_pos(&cam_query, &windows) {
+            let cursor = cursor + Vec3::Y * 0.08;
+            gizmos.circle(cursor, 0.5, Color::srgb(0.25, 1.0, 0.4));
+            gizmos.line(
+                cursor + Vec3::X * 0.7,
+                cursor - Vec3::X * 0.7,
+                Color::srgb(0.25, 1.0, 0.4),
+            );
+            gizmos.line(
+                cursor + Vec3::Z * 0.7,
+                cursor - Vec3::Z * 0.7,
+                Color::srgb(0.25, 1.0, 0.4),
+            );
+        }
+    }
+
+    if state.gizmos {
+        for (transform, move_target, nav_path, attack_target) in &selected {
+            let origin = transform.translation() + Vec3::Y * 0.15;
+            gizmos.circle(origin, 0.9, Color::srgb(0.2, 0.95, 0.8));
+
+            if let Some(move_target) = move_target {
+                let destination = move_target.0 + Vec3::Y * 0.1;
+                gizmos.line(origin, destination, Color::srgb(0.95, 0.85, 0.2));
+                gizmos.cross(destination, 0.45, Color::srgb(0.95, 0.85, 0.2));
+            }
+
+            if let Some(nav_path) = nav_path {
+                let mut previous = origin;
+                for point in nav_path.waypoints.iter().skip(nav_path.current_index) {
+                    let next = *point + Vec3::Y * 0.12;
+                    gizmos.line(previous, next, Color::srgb(0.2, 0.75, 1.0));
+                    previous = next;
+                }
+            }
+
+            if let Some(attack_target) = attack_target {
+                if let Ok(target) = targets.get(attack_target.0) {
+                    gizmos.line(
+                        origin,
+                        target.translation() + Vec3::Y * 0.2,
+                        Color::srgb(1.0, 0.25, 0.25),
+                    );
+                }
             }
         }
     }
@@ -2543,7 +1332,7 @@ fn sync_entity_spawn_tweaks(
     unit_models: Option<Res<UnitModelAssets>>,
     height_map: Option<Res<HeightMap>>,
     camera_q: Query<&RtsCamera>,
-    cam_query: Query<(&Camera, &GlobalTransform)>,
+    cam_query: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
     panel_state: Res<DebugPanelState>,
@@ -2636,9 +1425,10 @@ fn sync_entity_spawn_tweaks(
 fn sync_runtime_debug_tweaks(
     mut tweaks: ResMut<DebugTweaks>,
     camera_q: Query<&RtsCamera>,
-    cam_query: Query<(&Camera, &GlobalTransform)>,
+    cam_query: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     ui_press: Res<UiPressActive>,
+    culled_q: Query<(), With<FrustumCulled>>,
 ) {
     if let Ok(camera) = camera_q.single() {
         tweaks.set_readonly_if_changed(
@@ -2661,6 +1451,11 @@ fn sync_runtime_debug_tweaks(
         RUNTIME_FOLDER,
         "UI Capture",
         if ui_press.0 { "Dragging UI" } else { "Free" },
+    );
+    tweaks.set_readonly_if_changed(
+        RUNTIME_FOLDER,
+        "Culled Entities",
+        &culled_q.iter().count().to_string(),
     );
 }
 
@@ -2730,31 +1525,6 @@ fn sync_entity_selected_tweaks(
     }
 }
 
-fn sync_save_load_tweaks(
-    mut tweaks: ResMut<DebugTweaks>,
-    mut save_req: ResMut<crate::save::SaveRequested>,
-    mut load_req: ResMut<crate::save::LoadRequested>,
-    status: Res<crate::save::SaveLoadStatus>,
-    button_pressed: Res<DebugButtonPressed>,
-) {
-    // Handle button presses
-    for (folder, label) in &button_pressed.pressed {
-        if folder == SAVE_FOLDER {
-            match label.as_str() {
-                "Save Game" => save_req.0 = true,
-                "Load Game" => load_req.0 = true,
-                _ => {}
-            }
-        }
-    }
-
-    // Update status display
-    if !status.message.is_empty() {
-        tweaks.set_readonly_if_changed(SAVE_FOLDER, "Status", &status.message);
-    } else {
-        tweaks.set_readonly_if_changed(SAVE_FOLDER, "Status", "Ready");
-    }
-}
 
 fn sync_ai_debug_tweaks(
     mut tweaks: ResMut<DebugTweaks>,

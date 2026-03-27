@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use super::core::fonts::UiFonts;
 use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
-use crate::components::{ActivePlayer, AppState, Faction, TeamConfig};
+use crate::components::{ActivePlayer, AppState, Faction, RtsCamera, TeamConfig};
 use crate::theme;
 
 pub struct EventLogWidgetPlugin;
@@ -513,7 +513,7 @@ pub fn update_event_log(
 
 pub fn handle_event_log_click(
     interactions: Query<(&Interaction, &EventLogEntry), Changed<Interaction>>,
-    mut camera: Query<&mut Transform, With<Camera3d>>,
+    mut camera: Query<&mut Transform, With<RtsCamera>>,
 ) {
     for (interaction, entry) in &interactions {
         if *interaction != Interaction::Pressed {

@@ -328,7 +328,7 @@ fn resolve_attack_windups(
         Option<&ChargeBonus>,
     )>,
     mut healths: Query<(&Transform, &mut Health, Option<&ArmorType>)>,
-    camera_q: Query<Entity, With<Camera3d>>,
+    camera_q: Query<Entity, With<RtsCamera>>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 

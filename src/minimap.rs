@@ -258,7 +258,7 @@ fn update_minimap_texture(
     // Apply fog of war with color blending (matching in-game fog aesthetic)
     if !fog_settings.reveal_all {
         if let Some(ref fog) = fog_map {
-        // Fog colors matching the in-game FogSettings
+            // Fog colors matching the in-game FogSettings
             let fog_color: [f32; 3] = [0.02, 0.02, 0.06]; // dark navy for unexplored
             let explored_tint: [f32; 3] = [0.12, 0.10, 0.18]; // muted purple for explored
 

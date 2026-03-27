@@ -7,8 +7,8 @@ pub use core::{fonts, framework as widget_framework, shared};
 #[allow(unused_imports)]
 pub use widgets::{
     actions_widget, army_overview_widget, event_log_widget, group_hotkeys_widget, hints_widget,
-    notifications, production_queue_widget, resources_widget, selection_widget,
-    tech_tree_widget, widget_toolbar,
+    notifications, production_queue_widget, resources_widget, selection_widget, tech_tree_widget,
+    widget_toolbar,
 };
 
 use bevy::app::PluginGroupBuilder;

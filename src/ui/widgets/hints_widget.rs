@@ -89,12 +89,12 @@ pub fn hints_system(
                     HintOverlay,
                     Node {
                         position_type: PositionType::Absolute,
-                        top: Val::Px(10.0),
+                        top: Val::Px(40.0),
                         left: Val::Percent(25.0),
                         width: Val::Percent(50.0),
                         padding: UiRect::all(Val::Px(10.0)),
                         justify_content: JustifyContent::Center,
-                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.1, 0.15, 0.25, 0.85)),
@@ -167,10 +167,10 @@ pub fn idle_worker_notification_system(
             Button,
             Node {
                 position_type: PositionType::Absolute,
-                bottom: Val::Px(10.0),
-                right: Val::Px(10.0),
-                padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+                top: Val::Px(10.0),
+                left: Val::Px(10.0),
+                padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
+                border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.8, 0.6, 0.1, 0.9)),

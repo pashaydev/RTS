@@ -977,8 +977,7 @@ fn extract_decoration_instance_assets(
     let Some(grass) = extract_gltf_primitives(&handles.grass, &gltf_assets, &gltf_meshes) else {
         return;
     };
-    let Some(mountains) =
-        extract_gltf_primitives(&handles.mountains, &gltf_assets, &gltf_meshes)
+    let Some(mountains) = extract_gltf_primitives(&handles.mountains, &gltf_assets, &gltf_meshes)
     else {
         return;
     };

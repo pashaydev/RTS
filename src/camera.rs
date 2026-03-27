@@ -5,8 +5,8 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::components::{
-    ActivePlayer, AppState, CameraZoomLevel, CursorOverUi, DragState, GameFlowSet,
-    GameSetupConfig, GameWorld, MapSeed, RtsCamera, UiMode,
+    ActivePlayer, AppState, CameraZoomLevel, CullingSourceCamera, CursorOverUi, DragState,
+    FrustumDebugMode, GameFlowSet, GameSetupConfig, GameWorld, MapSeed, RtsCamera, UiMode,
 };
 
 // ── Tuning constants ──
@@ -35,6 +35,7 @@ impl Plugin for CameraPlugin {
         app.init_resource::<CursorOverUi>()
             .init_resource::<LastSelection>()
             .init_resource::<CameraZoomLevel>()
+            .init_resource::<FrustumDebugMode>()
             .add_systems(
                 OnEnter(AppState::InGame),
                 spawn_camera
@@ -98,6 +99,7 @@ fn spawn_camera(
 
     commands.spawn((
         GameWorld,
+        CullingSourceCamera,
         RtsCamera {
             pivot,
             distance,
@@ -123,7 +125,14 @@ fn spawn_camera(
     ));
 }
 
-fn camera_pan_input(keyboard: Res<ButtonInput<KeyCode>>, mut query: Query<&mut RtsCamera>) {
+fn camera_pan_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut query: Query<&mut RtsCamera>,
+    debug_mode: Res<FrustumDebugMode>,
+) {
+    if debug_mode.enabled && debug_mode.freeze_main_camera {
+        return;
+    }
     let Ok(mut cam) = query.single_mut() else {
         return;
     };
@@ -157,7 +166,11 @@ fn camera_edge_scroll(
     drag: Res<DragState>,
     cursor_over_ui: Res<CursorOverUi>,
     mut query: Query<&mut RtsCamera>,
+    debug_mode: Res<FrustumDebugMode>,
 ) {
+    if debug_mode.enabled && debug_mode.freeze_main_camera {
+        return;
+    }
     if drag.dragging || cursor_over_ui.0 {
         return;
     }
@@ -213,10 +226,15 @@ fn camera_zoom_input(
     cursor_over_ui: Res<CursorOverUi>,
     time: Res<Time>,
     mut query: Query<&mut RtsCamera>,
+    debug_mode: Res<FrustumDebugMode>,
 ) {
     let Ok(mut cam) = query.single_mut() else {
         return;
     };
+    if debug_mode.enabled && debug_mode.freeze_main_camera {
+        // Don't drain scroll events — the fly camera system needs them
+        return;
+    }
 
     if !cursor_over_ui.0 {
         for ev in scroll_events.read() {
@@ -243,7 +261,11 @@ fn camera_rotate_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     mut query: Query<&mut RtsCamera>,
+    debug_mode: Res<FrustumDebugMode>,
 ) {
+    if debug_mode.enabled && debug_mode.freeze_main_camera {
+        return;
+    }
     let Ok(mut cam) = query.single_mut() else {
         return;
     };
@@ -320,7 +342,11 @@ fn camera_focus_selection(
     last: Res<LastSelection>,
     transforms: Query<&GlobalTransform>,
     mut cam_query: Query<&mut RtsCamera>,
+    debug_mode: Res<FrustumDebugMode>,
 ) {
+    if debug_mode.enabled && debug_mode.freeze_main_camera {
+        return;
+    }
     if !keyboard.pressed(KeyCode::Space) {
         return;
     }

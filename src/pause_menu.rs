@@ -478,7 +478,7 @@ fn handle_pause_buttons(
                         *v = 1.0;
                     }
                     for e in fog.explored.iter_mut() {
-                        *e = true;
+                        *e = u8::MAX;
                     }
                     for d in fog.display.iter_mut() {
                         *d = 1.0;

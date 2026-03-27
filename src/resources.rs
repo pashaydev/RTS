@@ -65,6 +65,12 @@ impl Plugin for ResourcesPlugin {
             )
             .add_systems(
                 Update,
+                fix_tree_alpha_mode
+                    .in_set(GameFlowSet::Presentation)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
                 (
                     processor_worker_visual_system,
                     auto_assign_workers_system,
@@ -889,7 +895,11 @@ fn build_decoration_chunks(
     let mut total_count = 0usize;
 
     // Process each decoration category
-    let categories: &[(&[(usize, Vec3, f32, f32)], &[Option<SourceMeshData>], &[(Handle<Mesh>, Handle<StandardMaterial>)])] = &[
+    let categories: &[(
+        &[(usize, Vec3, f32, f32)],
+        &[Option<SourceMeshData>],
+        &[(Handle<Mesh>, Handle<StandardMaterial>)],
+    )] = &[
         (&pending.bushes, &bush_sources, &deco_assets.bushes),
         (&pending.rocks, &rock_sources, &deco_assets.rocks),
         (&pending.grass, &grass_sources, &deco_assets.grass),
@@ -921,7 +931,9 @@ fn build_decoration_chunks(
             };
             let (_, ref mat_handle) = assets[vi];
             let mat_id = mat_handle.id();
-            mat_handles.entry(mat_id).or_insert_with(|| mat_handle.clone());
+            mat_handles
+                .entry(mat_id)
+                .or_insert_with(|| mat_handle.clone());
 
             let cx = (pos.x * inv_chunk).floor() as i32;
             let cz = (pos.z * inv_chunk).floor() as i32;
@@ -1039,10 +1051,7 @@ fn build_decoration_chunks(
 
     commands.remove_resource::<PendingDecorationPlacements>();
     commands.insert_resource(chunk_map);
-    info!(
-        "Built decoration chunks: {} instances merged",
-        total_count
-    );
+    info!("Built decoration chunks: {} instances merged", total_count);
 }
 
 const GRASS_CHUNK_SIZE: f32 = 32.0;
@@ -1111,10 +1120,7 @@ impl SourceMeshData {
 
 /// Merge multiple instances of a source mesh into a single combined mesh.
 /// Each instance has (world_position, uniform_scale, y_rotation_radians).
-fn merge_instances_into_mesh(
-    src: &SourceMeshData,
-    instances: &[(Vec3, f32, f32)],
-) -> Mesh {
+fn merge_instances_into_mesh(src: &SourceMeshData, instances: &[(Vec3, f32, f32)]) -> Mesh {
     let verts_per = src.positions.len();
     let indices_per = src.indices.len();
     let total_verts = verts_per * instances.len();
@@ -2766,6 +2772,51 @@ fn grow_trees_system(
                 tree.stage += 1;
                 tree.timer = Timer::from_seconds(config.growth_stage_duration, TimerMode::Once);
             }
+        }
+    }
+}
+
+// ── Fix Tree Alpha Mode ──
+
+/// Converts tree leaf materials from AlphaMode::Blend to AlphaMode::Mask.
+/// Blend causes massive overdraw when the camera is close because every
+/// overlapping transparent leaf quad is fully shaded. Mask uses a hard cutoff
+/// that enables early-Z rejection, eliminating the overdraw entirely.
+fn fix_tree_alpha_mode(
+    mut commands: Commands,
+    trees: Query<
+        Entity,
+        (
+            Or<(With<MatureTree>, With<Sapling>, With<GrowingTree>)>,
+            Without<TreeAlphaFixed>,
+        ),
+    >,
+    children_q: Query<&Children>,
+    mesh_mat_q: Query<&MeshMaterial3d<StandardMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for tree_entity in &trees {
+        fix_alpha_recursive(tree_entity, &children_q, &mesh_mat_q, &mut materials);
+        commands.entity(tree_entity).insert(TreeAlphaFixed);
+    }
+}
+
+fn fix_alpha_recursive(
+    entity: Entity,
+    children_q: &Query<&Children>,
+    mesh_mat_q: &Query<&MeshMaterial3d<StandardMaterial>>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    if let Ok(mat_handle) = mesh_mat_q.get(entity) {
+        if let Some(mat) = materials.get_mut(mat_handle) {
+            if matches!(mat.alpha_mode, AlphaMode::Blend) {
+                mat.alpha_mode = AlphaMode::Mask(0.5);
+            }
+        }
+    }
+    if let Ok(children) = children_q.get(entity) {
+        for child in children.iter() {
+            fix_alpha_recursive(child, children_q, mesh_mat_q, materials);
         }
     }
 }

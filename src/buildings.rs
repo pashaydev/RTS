@@ -380,7 +380,7 @@ fn create_ghost_materials(mut commands: Commands, mut materials: ResMut<Assets<S
 // ── Placement preview ──
 
 fn cursor_ground_pos(
-    camera_q: &Query<(&Camera, &GlobalTransform)>,
+    camera_q: &Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: &Query<&Window, With<PrimaryWindow>>,
     height_map: &HeightMap,
 ) -> Option<Vec3> {
@@ -535,7 +535,7 @@ fn update_placement_preview(
     cache: Res<EntityVisualCache>,
     ghost_mats: Res<BuildingGhostMaterials>,
     building_models: Option<Res<BuildingModelAssets>>,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut ghosts: Query<&mut Transform, With<GhostBuilding>>,
     mut ghost_valid_q: Query<&mut GhostValid, With<GhostBuilding>>,
@@ -677,7 +677,7 @@ fn update_wall_plot_preview(
     mut wall_preview: ResMut<WallPlotPreview>,
     registry: Res<BlueprintRegistry>,
     ghost_mats: Res<BuildingGhostMaterials>,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     existing_buildings: Query<
         (&Transform, &BuildingFootprint),
@@ -809,7 +809,7 @@ fn update_gate_plot_preview(
     cache: Res<EntityVisualCache>,
     ghost_mats: Res<BuildingGhostMaterials>,
     building_models: Option<Res<BuildingModelAssets>>,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut ghosts: Query<&mut Transform, With<GhostBuilding>>,
     mut ghost_valid_q: Query<&mut GhostValid, With<GhostBuilding>>,
@@ -975,7 +975,7 @@ fn confirm_placement(
     ),
     height_map: Res<HeightMap>,
     queries: (
-        Query<(&Camera, &GlobalTransform)>,
+        Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
         Query<&Window, With<PrimaryWindow>>,
         Query<&Interaction, With<Node>>,
         Query<
@@ -1225,7 +1225,7 @@ fn confirm_wall_plot(
     mut wall_preview: ResMut<WallPlotPreview>,
     mut all_resources: ResMut<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     ui_interactions: Query<&Interaction, With<Node>>,
     height_map: Res<HeightMap>,
@@ -1339,7 +1339,7 @@ fn confirm_gate_plot(
     mut placement: ResMut<BuildingPlacementState>,
     mut all_resources: ResMut<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     ui_interactions: Query<&Interaction, With<Node>>,
     height_map: Res<HeightMap>,

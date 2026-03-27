@@ -13,6 +13,10 @@ struct WaterSettings {
 };
 
 @group(3) @binding(0) var<uniform> settings: WaterSettings;
+@group(3) @binding(1) var fog_visible_tex: texture_2d<f32>;
+@group(3) @binding(2) var fog_visible_sampler: sampler;
+@group(3) @binding(3) var fog_explored_tex: texture_2d<f32>;
+@group(3) @binding(4) var fog_explored_sampler: sampler;
 
 // ── Noise ──
 
@@ -62,6 +66,16 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let normal = normalize(in.world_normal);
     let t = settings.time * settings.wave_speed;
 
+    // ── Fog of war sampling ──
+    let uv = in.uv;
+    let fog_vis = textureSample(fog_visible_tex, fog_visible_sampler, uv).r;
+    let fog_explored = textureSample(fog_explored_tex, fog_explored_sampler, uv).r;
+
+    // Completely unexplored: hide water entirely
+    if fog_explored < 0.02 && fog_vis < 0.02 {
+        discard;
+    }
+
     // Animated noise for surface detail — two scrolling layers
     let noise_uv1 = world_pos.xz * 0.04 + vec2<f32>(t * 0.05, t * 0.03);
     let noise_uv2 = world_pos.xz * 0.08 + vec2<f32>(-t * 0.03, t * 0.06);
@@ -94,5 +108,18 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let sparkle = simplex2d(world_pos.xz * 0.5 + vec2<f32>(t * 0.3, t * 0.2));
     let sparkle_intensity = smoothstep(0.6, 0.8, sparkle) * 0.15;
 
-    return vec4<f32>(color_with_spec + sparkle_intensity, settings.opacity);
+    var final_color = color_with_spec + sparkle_intensity;
+
+    // ── Apply fog of war darkening ──
+    // Explored but not visible: dim the water significantly
+    // Visible: full brightness
+    let fog_factor = clamp(fog_vis, 0.0, 1.0);
+    let explored_dim = 0.25;
+    let brightness = mix(explored_dim, 1.0, smoothstep(0.2, 0.6, fog_factor));
+    final_color = final_color * brightness;
+
+    // Reduce opacity in explored-only areas so fog overlay shows through
+    let fog_opacity = mix(settings.opacity * 0.5, settings.opacity, smoothstep(0.1, 0.5, fog_factor));
+
+    return vec4<f32>(final_color, fog_opacity);
 }

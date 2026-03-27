@@ -441,7 +441,7 @@ fn update_selection_box_visual(
 /// Raycast from cursor using ray-sphere intersection against all pickable entities.
 fn update_hover(
     mut commands: Commands,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     units: Query<Entity, With<Unit>>,
@@ -500,7 +500,7 @@ fn handle_click_select(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut state: (ResMut<DragState>, ResMut<InspectedEnemy>),
     placement: Res<BuildingPlacementState>,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     entity_queries: (
@@ -936,7 +936,7 @@ fn handle_right_click_move(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut next_task_id: ResMut<NextTaskId>,
     viewport: (
-        Query<(&Camera, &GlobalTransform)>,
+        Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
         Query<&Window, With<PrimaryWindow>>,
     ),
     selected_units: Query<
@@ -1663,7 +1663,7 @@ fn handle_unit_command_hotkeys(
     mouse: Res<ButtonInput<MouseButton>>,
     mut cmd_mode: ResMut<CommandMode>,
     mut next_task_id: ResMut<NextTaskId>,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
     mut task_queues: Query<&mut TaskQueue, With<Unit>>,

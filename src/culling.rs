@@ -3,6 +3,7 @@ use bevy::ecs::lifecycle::RemovedComponents;
 use bevy::prelude::*;
 
 use crate::components::*;
+use crate::ground::WaterPlane;
 
 /// System set for all culling systems. Fog-of-war ordering depends on this
 /// so that fog can override visibility after culling has finished.
@@ -28,8 +29,8 @@ impl Plugin for CullingPlugin {
     }
 }
 
-/// Padding in world units beyond frustum edge before culling kicks in.
-/// Prevents pop-in at screen edges.
+/// Default padding in world units beyond frustum edge before culling kicks in.
+/// Used when an entity has no `CullingBounds` component.
 const FRUSTUM_PADDING: f32 = 15.0;
 
 /// Entities beyond this distance from the camera are hidden entirely.
@@ -42,15 +43,24 @@ const DECO_HIDE_DISTANCE_SQ: f32 = 120.0 * 120.0;
 
 /// Tests entity positions against the camera frustum and adds/removes `FrustumCulled`.
 ///
+/// Uses `CullingSourceCamera` to determine whose frustum to test against.
+/// When an entity has `CullingBounds`, its radius is used; otherwise `FRUSTUM_PADDING`.
 /// Sets `Visibility::Hidden` on culled entities so the GPU skips them entirely.
 /// When an entity re-enters the frustum, visibility is restored to `Inherited`.
 /// The fog-of-war system runs later and may override visible entities back to `Hidden`
 /// if they are in unexplored territory — that is intentional.
 fn sync_frustum_culling(
     mut commands: Commands,
-    camera_q: Query<&Frustum, With<RtsCamera>>,
+    camera_q: Query<&Frustum, With<CullingSourceCamera>>,
     mut entities: Query<
-        (Entity, &GlobalTransform, &mut Visibility, Has<FrustumCulled>),
+        (
+            Entity,
+            &GlobalTransform,
+            &mut Visibility,
+            Has<FrustumCulled>,
+            Option<&CullingBounds>,
+            Option<&mut CullReason>,
+        ),
         Or<(
             With<Unit>,
             With<Mob>,
@@ -60,6 +70,7 @@ fn sync_frustum_culling(
             With<Sapling>,
             With<GrowingTree>,
             With<GrowingResource>,
+            With<WaterPlane>,
         )>,
     >,
 ) {
@@ -67,20 +78,31 @@ fn sync_frustum_culling(
         return;
     };
 
-    for (entity, gtf, mut visibility, is_culled) in &mut entities {
+    for (entity, gtf, mut visibility, is_culled, bounds, cull_reason) in &mut entities {
         let pos = gtf.translation();
+        let (center, radius) = if let Some(b) = bounds {
+            (pos + b.center_offset, b.radius)
+        } else {
+            (pos, FRUSTUM_PADDING)
+        };
         let sphere = FrustumSphere {
-            center: pos.into(),
-            radius: FRUSTUM_PADDING,
+            center: center.into(),
+            radius,
         };
         let in_view = frustum.intersects_sphere(&sphere, true);
 
         if in_view && is_culled {
             commands.entity(entity).remove::<FrustumCulled>();
             *visibility = Visibility::Inherited;
+            if let Some(mut reason) = cull_reason {
+                *reason = CullReason::Visible;
+            }
         } else if !in_view && !is_culled {
             commands.entity(entity).insert(FrustumCulled);
             *visibility = Visibility::Hidden;
+            if let Some(mut reason) = cull_reason {
+                *reason = CullReason::Frustum;
+            }
         }
     }
 }
@@ -115,14 +137,16 @@ fn resume_unculled_animations(
 /// Hide entities that are too far from the camera to be meaningfully visible.
 /// Decorations use a shorter threshold since they're smaller.
 /// Only checks entities that passed the frustum test (not already FrustumCulled).
+/// Uses `CullingSourceCamera` for distance reference.
 fn distance_lod_system(
-    camera_q: Query<&GlobalTransform, With<RtsCamera>>,
+    camera_q: Query<&GlobalTransform, With<CullingSourceCamera>>,
     mut entities: Query<
         (
             &GlobalTransform,
             &mut Visibility,
             Has<Decoration>,
             Has<FrustumCulled>,
+            Option<&mut CullReason>,
         ),
         Or<(
             With<Unit>,
@@ -133,6 +157,7 @@ fn distance_lod_system(
             With<Sapling>,
             With<GrowingTree>,
             With<GrowingResource>,
+            With<WaterPlane>,
         )>,
     >,
 ) {
@@ -141,7 +166,7 @@ fn distance_lod_system(
     };
     let cam_pos = cam_gtf.translation();
 
-    for (gtf, mut visibility, is_decoration, is_frustum_culled) in &mut entities {
+    for (gtf, mut visibility, is_decoration, is_frustum_culled, cull_reason) in &mut entities {
         if is_frustum_culled {
             continue;
         }
@@ -156,8 +181,14 @@ fn distance_lod_system(
 
         if dist_sq > threshold {
             *visibility = Visibility::Hidden;
+            if let Some(mut reason) = cull_reason {
+                *reason = CullReason::Distance;
+            }
         } else if *visibility == Visibility::Hidden {
             *visibility = Visibility::Inherited;
+            if let Some(mut reason) = cull_reason {
+                *reason = CullReason::Visible;
+            }
         }
     }
 }

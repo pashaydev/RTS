@@ -5,14 +5,15 @@ use bevy::prelude::*;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use rand::SeedableRng;
 
-use bevy::light::NotShadowCaster;
 use crate::components::{
-    AppState, Biome, BiomeMap, Decoration, FogHideable, GameSetupConfig, GameWorld, Ground, MapSeed,
-    ModelAssets, RtsCamera,
+    AppState, Biome, BiomeMap, CullingBounds, Decoration, FogHideable, GameSetupConfig, GameWorld,
+    Ground, MapSeed, ModelAssets, RtsCamera,
 };
+use crate::fog::FogTextures;
 use crate::lighting::SunLight;
 use crate::terrain_material::{TerrainMaterial, TerrainSettings};
 use crate::water_material::{WaterMaterial, WaterSettings};
+use bevy::light::NotShadowCaster;
 
 pub const MAP_SIZE: f32 = 500.0;
 pub const HALF_MAP: f32 = 250.0;
@@ -267,7 +268,8 @@ impl TerrainNoise {
     fn sample_moisture(&self, x: f32, z: f32, half_map: f32) -> f32 {
         let local = (self
             .moisture_fbm
-            .get([x as f64 * MOISTURE_SCALE, z as f64 * MOISTURE_SCALE]) as f32
+            .get([x as f64 * MOISTURE_SCALE, z as f64 * MOISTURE_SCALE])
+            as f32
             * 0.5
             + 0.5)
             .clamp(0.0, 1.0);
@@ -486,7 +488,8 @@ impl Plugin for GroundPlugin {
             )
             .add_systems(
                 Update,
-                (update_water_time, update_terrain_lighting).run_if(in_state(AppState::InGame)),
+                (update_water_time, update_terrain_lighting, patch_water_fog_textures)
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -559,6 +562,27 @@ fn update_water_time(
             mat.settings.time = time.elapsed_secs();
             mat.settings.camera_position = Vec4::new(cam_pos.x, cam_pos.y, cam_pos.z, 0.0);
             mat.settings.sun_direction = sun_dir;
+        }
+    }
+}
+
+/// Once FogTextures exist, patch all water materials to reference them.
+/// Re-runs if fog textures change (e.g. after returning to main menu and starting a new game).
+fn patch_water_fog_textures(
+    fog_tex: Option<Res<FogTextures>>,
+    mut materials: ResMut<Assets<WaterMaterial>>,
+    query: Query<&MeshMaterial3d<WaterMaterial>, With<WaterPlane>>,
+) {
+    let Some(fog_tex) = fog_tex else {
+        return;
+    };
+
+    for mat_handle in &query {
+        if let Some(mat) = materials.get_mut(&mat_handle.0) {
+            if mat.fog_visible_texture.is_none() {
+                mat.fog_visible_texture = Some(fog_tex.visible.clone());
+                mat.fog_explored_texture = Some(fog_tex.explored.clone());
+            }
         }
     }
 }
@@ -666,6 +690,8 @@ pub fn spawn_ground(
     // ── Detect and spawn separate water bodies ──
     let water_mat_handle = water_materials.add(WaterMaterial {
         settings: WaterSettings::default(),
+        fog_visible_texture: None,
+        fog_explored_texture: None,
     });
 
     let water_bodies = find_water_bodies(&grid_heights, actual_grid_size, step, actual_half_map);
@@ -678,12 +704,16 @@ pub fn spawn_ground(
             step,
             actual_half_map,
         ) {
+            // Compute bounding sphere for frustum culling
+            let (center, radius) =
+                water_body_bounds(body_cells, actual_grid_size, step, actual_half_map);
             commands.spawn((
                 GameWorld,
                 WaterPlane,
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(water_mat_handle.clone()),
                 Transform::IDENTITY,
+                CullingBounds::with_offset(radius, center),
             ));
         }
     }
@@ -762,6 +792,34 @@ fn find_water_bodies(
         }
     }
     bodies
+}
+
+/// Compute the center and radius of a bounding sphere for a water body.
+fn water_body_bounds(
+    cells: &[(usize, usize)],
+    _grid_size: usize,
+    step: f32,
+    half_map: f32,
+) -> (Vec3, f32) {
+    let mut min_x = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut min_z = f32::MAX;
+    let mut max_z = f32::MIN;
+    for &(cx, cz) in cells {
+        let x0 = -half_map + cx as f32 * step;
+        let x1 = -half_map + (cx + 1) as f32 * step;
+        let z0 = -half_map + cz as f32 * step;
+        let z1 = -half_map + (cz + 1) as f32 * step;
+        min_x = min_x.min(x0);
+        max_x = max_x.max(x1);
+        min_z = min_z.min(z0);
+        max_z = max_z.max(z1);
+    }
+    let center = Vec3::new((min_x + max_x) * 0.5, WATER_LEVEL, (min_z + max_z) * 0.5);
+    let half_w = (max_x - min_x) * 0.5;
+    let half_h = (max_z - min_z) * 0.5;
+    let radius = (half_w * half_w + half_h * half_h).sqrt();
+    (center, radius)
 }
 
 /// Build a mesh for a single water body from its constituent grid cells.

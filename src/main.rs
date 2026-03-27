@@ -27,7 +27,6 @@ mod pathvis;
 mod pause_menu;
 mod resources;
 mod roads;
-mod save;
 mod selection;
 mod spatial;
 mod terrain_material;
@@ -133,8 +132,7 @@ fn main() {
         .add_plugins(abilities::AbilitiesPlugin)
         .add_plugins(spatial::SpatialPlugin)
         .add_plugins(pathfinding::PathfindingPlugin)
-        .add_plugins(roads::RoadPlugin)
-        .add_plugins(save::SavePlugin)
+        // .add_plugins(roads::RoadPlugin)
         .add_plugins(culling::CullingPlugin)
         .add_plugins(animation::AnimationPlugin)
         .add_plugins(minimap::MinimapPlugin)

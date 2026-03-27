@@ -567,7 +567,7 @@ pub fn handle_rally_point_button(
     mut online: OnlineInputParams,
     mut rally_mode: ResMut<RallyPointMode>,
     mouse: Res<ButtonInput<MouseButton>>,
-    camera_q: Query<(&Camera, &GlobalTransform)>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
