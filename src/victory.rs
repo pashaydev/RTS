@@ -392,7 +392,7 @@ fn victory_ui_button_system(
         if *interaction == Interaction::Pressed {
             // Clean up overlay
             for entity in &overlay {
-                commands.entity(entity).despawn();
+                commands.entity(entity).try_despawn();
             }
             // Reset victory state
             *victory = VictoryState::default();

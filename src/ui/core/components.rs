@@ -20,6 +20,7 @@ fn tone_color(tone: UiTone) -> Color {
     }
 }
 
+#[allow(dead_code)]
 fn tone_border(tone: UiTone) -> Color {
     match tone {
         UiTone::Neutral => Color::srgba(0.35, 0.48, 0.65, 0.16),
@@ -28,6 +29,7 @@ fn tone_border(tone: UiTone) -> Color {
     }
 }
 
+#[allow(dead_code)]
 fn tone_shadow(tone: UiTone, alpha: f32) -> Color {
     match tone {
         UiTone::Neutral => Color::srgba(0.0, 0.0, 0.0, alpha),
@@ -59,6 +61,7 @@ pub fn ghost_button_chrome(tone: UiTone) -> UiButtonChrome {
 }
 
 /// Shadow color for a button tone at the given opacity (used on hover/press).
+#[allow(dead_code)]
 pub fn tone_hover_shadow(tone: UiTone) -> Color {
     tone_shadow(tone, if tone == UiTone::Neutral { 0.25 } else { 0.35 })
 }

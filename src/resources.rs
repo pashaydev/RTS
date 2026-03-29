@@ -123,7 +123,7 @@ fn create_resource_node_materials(
             base_color: Color::srgb(0.55, 0.55, 0.58),
             ..default()
         }),
-        gold: materials.add(StandardMaterial {
+        _gold: materials.add(StandardMaterial {
             base_color: Color::srgb(0.95, 0.8, 0.2),
             emissive: LinearRgba::new(0.4, 0.35, 0.05, 1.0),
             ..default()
@@ -164,7 +164,7 @@ fn primary_resource_for(
     biome: Biome,
     wood_mesh: &Handle<Mesh>,
     ore_mesh: &Handle<Mesh>,
-    gold_mesh: &Handle<Mesh>,
+    _gold_mesh: &Handle<Mesh>,
     oil_mesh: &Handle<Mesh>,
     stone_mesh: &Handle<Mesh>,
     mats: &ResourceNodeMaterials,
@@ -231,9 +231,9 @@ fn primary_resource_for(
 fn secondary_resource_for(
     biome: Biome,
     tier: usize,
-    wood_mesh: &Handle<Mesh>,
+    _wood_mesh: &Handle<Mesh>,
     ore_mesh: &Handle<Mesh>,
-    gold_mesh: &Handle<Mesh>,
+    _gold_mesh: &Handle<Mesh>,
     mats: &ResourceNodeMaterials,
 ) -> Option<(
     ResourceType,
@@ -2265,7 +2265,7 @@ fn update_resource_popups(
         color.0 = Color::srgba(base.red, base.green, base.blue, alpha);
 
         if popup.lifetime.is_finished() {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -2597,7 +2597,7 @@ fn deplete_resource_nodes(
                 Some(transform.translation),
                 None, // resource nodes are global, no faction
             );
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }

@@ -129,7 +129,7 @@ fn update_projectiles(
         ),
         Without<Projectile>,
     >,
-    factions: Query<&Faction>,
+    _factions: Query<&Faction>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
@@ -138,7 +138,7 @@ fn update_projectiles(
             targets.get_mut(projectile.target)
         else {
             // Target gone, despawn projectile
-            commands.entity(proj_entity).despawn();
+            commands.entity(proj_entity).try_despawn();
             continue;
         };
 
@@ -224,7 +224,7 @@ fn update_projectiles(
                 .entity(projectile.target)
                 .insert(HitReaction(Timer::from_seconds(0.2, TimerMode::Once)));
 
-            commands.entity(proj_entity).despawn();
+            commands.entity(proj_entity).try_despawn();
         } else {
             let forward = dir.normalize();
             let step = forward * projectile.speed * time.delta_secs();
@@ -251,7 +251,7 @@ fn update_vfx_flashes(
         tf.translation.y += flash.rise_speed * time.delta_secs();
 
         if flash.timer.is_finished() {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -274,7 +274,7 @@ fn update_gather_particles(
         tf.scale = Vec3::splat(frac.max(0.01) * particle.start_scale);
 
         if particle.timer.is_finished() {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -368,7 +368,7 @@ fn update_footstep_dust(
         tf.scale = Vec3::splat(frac.max(0.01) * 0.08);
 
         if particle.timer.is_finished() {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -389,7 +389,7 @@ fn update_combat_dust(
         tf.scale = Vec3::splat((frac * particle.start_scale).max(0.01));
 
         if particle.timer.is_finished() {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }

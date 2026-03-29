@@ -67,7 +67,7 @@ pub fn update_ally_notifications(
 
     for (entity, toast) in existing_toasts.iter() {
         if elapsed - toast.spawn_time > 5.0 {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 
@@ -158,7 +158,7 @@ pub fn handle_notification_click(
                 if let Ok(mut cam) = camera_q.single_mut() {
                     cam.target_pivot = Vec3::new(world_pos.x, 0.0, world_pos.z);
                 }
-                commands.entity(entity).despawn();
+                commands.entity(entity).try_despawn();
                 return;
             }
         }

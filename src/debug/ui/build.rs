@@ -240,7 +240,7 @@ pub fn rebuild_tweak_panel(
 
     if let Ok(children) = children_q.get(panel_entity) {
         for child in children {
-            commands.entity(*child).despawn();
+            commands.entity(*child).try_despawn();
         }
     }
 

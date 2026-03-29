@@ -283,9 +283,6 @@ pub(crate) fn handle_menu_buttons(
             MenuAction::BackToMultiplayer => {
                 *page = MenuPage::Multiplayer;
             }
-            MenuAction::CopySessionCode => {
-                // Copy session code — handled separately
-            }
             MenuAction::CancelHost => {
                 #[cfg(not(target_arch = "wasm32"))]
                 multiplayer::stop_hosting(&mut commands, &host_state);
@@ -294,12 +291,6 @@ pub(crate) fn handle_menu_buttons(
             MenuAction::Disconnect => {
                 multiplayer::stop_client(&mut commands, &client_state);
                 *page = MenuPage::JoinLobby;
-            }
-            MenuAction::CancelCountdown => {
-                commands.remove_resource::<super::CountdownState>();
-            }
-            MenuAction::KickPlayer => {
-                // Handled by kick_player_system
             }
         }
     }

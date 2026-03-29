@@ -48,21 +48,16 @@ pub(crate) enum MenuAction {
     RefreshLanHosts,
     StartMultiplayer,
     BackToMultiplayer,
-    CopySessionCode,
     CancelHost,
     Disconnect,
-    CancelCountdown,
-    KickPlayer,
 }
 
+#[allow(dead_code)]
 #[derive(Component)]
 pub(crate) struct SlotCardContainer(pub(crate) usize);
 
 #[derive(Component)]
 pub(crate) struct LobbyStatusText;
-
-#[derive(Component)]
-pub(crate) struct LobbyPlayerSlot(pub(crate) usize);
 
 #[derive(Component)]
 pub(crate) struct SessionCodeText;

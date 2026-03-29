@@ -1039,7 +1039,7 @@ fn extract_decoration_instance_assets(
         bush_model_sizes,
         rocks,
         grass,
-        mountains,
+        _mountains: mountains,
     });
 }
 

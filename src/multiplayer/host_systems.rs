@@ -733,11 +733,11 @@ pub fn host_handle_disconnects(
                 .unwrap_or_else(|| session_tokens.generate(player_id));
 
             session_tokens.disconnected.push(super::DisconnectedPlayer {
-                session_token: token,
+                _session_token: token,
                 player_id,
                 faction: player.faction,
-                seat_index: player.seat_index,
-                color_index: player.color_index,
+                _seat_index: player.seat_index,
+                _color_index: player.color_index,
                 name: player_name.clone(),
                 disconnect_time: time.elapsed_secs(),
             });

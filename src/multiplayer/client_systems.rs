@@ -208,10 +208,10 @@ pub struct BuildingSyncParams<'w, 's> {
     construction_q: Query<'w, 's, &'static mut ConstructionProgress>,
     training_q: Query<'w, 's, &'static mut TrainingQueue>,
     production_q: Query<'w, 's, &'static mut ProductionState>,
-    all_resources: ResMut<'w, AllPlayerResources>,
-    day_cycle: ResMut<'w, DayCycle>,
+    _all_resources: ResMut<'w, AllPlayerResources>,
+    _day_cycle: ResMut<'w, DayCycle>,
     pub net_stats: ResMut<'w, NetStats>,
-    pub pending_neutral: ResMut<'w, PendingNeutralUpdates>,
+    pub _pending_neutral: ResMut<'w, PendingNeutralUpdates>,
 }
 
 /// Bundled system params for extended unit state sync.
@@ -782,7 +782,7 @@ pub fn client_apply_entity_sync(
         let mut removed = 0u32;
         for net_id in &despawns {
             if let Some(&ecs_entity) = net_map.to_ecs.get(net_id) {
-                commands.entity(ecs_entity).despawn();
+                commands.entity(ecs_entity).try_despawn();
                 removed += 1;
             }
         }
@@ -858,7 +858,7 @@ pub fn client_apply_neutral_sync(
     let despawns = std::mem::take(&mut pending.despawns);
     for net_id in &despawns {
         if let Some(&ecs_entity) = net_map.to_ecs.get(net_id) {
-            commands.entity(ecs_entity).despawn();
+            commands.entity(ecs_entity).try_despawn();
         }
     }
 

@@ -871,7 +871,7 @@ fn update_hover_ring(
 ) {
     // Despawn old rings
     for (ring, _) in &existing_rings {
-        commands.entity(ring).despawn();
+        commands.entity(ring).try_despawn();
     }
 
     // Spawn ring for current hovered entity

@@ -346,11 +346,11 @@ pub struct LobbyState {
 /// Tracks a disconnected player during the reconnection grace period.
 #[derive(Debug, Clone)]
 pub struct DisconnectedPlayer {
-    pub session_token: u64,
+    pub _session_token: u64,
     pub player_id: u8,
     pub faction: Faction,
-    pub seat_index: u8,
-    pub color_index: u8,
+    pub _seat_index: u8,
+    pub _color_index: u8,
     pub name: String,
     /// Game-time when disconnection occurred.
     pub disconnect_time: f32,

@@ -11,7 +11,7 @@ use bevy::prelude::*;
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::{
     AiControlledFactions, AiFactionSettings, AllPlayerResources, AllyNotifications, AllyNotifyKind,
-    AppState, AttackTarget, CullReason, CullingBounds, Faction, FrustumCulled, FrustumDebugMode,
+    AppState, AttackTarget, CullReason, Faction, FrustumCulled, FrustumDebugMode,
     GameFlowSet, GameSetupConfig, GameWorld, Health, MoveTarget, ResourceType, RtsCamera, Selected,
     UiPressActive, UnitSpeed,
 };
@@ -21,9 +21,7 @@ use crate::lighting::{
     DayCycle, EntityClusterLight, EntityLightConfig, EntityLightGrid, LightingOverrides, SunLight,
 };
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
-use crate::pathfinding::{NavPath, PathRequestQueue};
-use crate::ui::core::hud::MainHudRoot;
-use crate::ui::fonts::UiFonts;
+use crate::pathfinding::PathRequestQueue;
 use bevy::window::PrimaryWindow;
 pub use model::DebugTweaks;
 pub use ui::build::spawn_debug_content;
@@ -125,12 +123,6 @@ impl Plugin for DebugPlugin {
 
     }
 }
-
-#[derive(Component)]
-struct DebugInspectorOverlay;
-
-#[derive(Component)]
-struct DebugInspectorText;
 
 #[derive(Component)]
 struct FrustumDebugObserverCamera;
@@ -609,128 +601,6 @@ fn apply_debug_view_state(state: Res<DebugViewState>, mut fps_overlay: ResMut<Fp
     fps_overlay.frame_time_graph_config.enabled = state.fps_overlay;
 }
 
-fn spawn_inspector_overlay(
-    mut commands: Commands,
-    fonts: Res<UiFonts>,
-    root_q: Query<Entity, Added<MainHudRoot>>,
-) {
-    let Ok(hud_root) = root_q.single() else {
-        return;
-    };
-
-    let panel = commands
-        .spawn((
-            DebugInspectorOverlay,
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(12.0),
-                top: Val::Px(12.0),
-                width: Val::Px(320.0),
-                max_height: Val::Px(420.0),
-                padding: UiRect::all(Val::Px(10.0)),
-                flex_direction: FlexDirection::Column,
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.04, 0.05, 0.07, 0.94)),
-            Visibility::Hidden,
-        ))
-        .insert(BorderColor::all(Color::srgba(0.35, 0.6, 0.95, 0.75)))
-        .insert(GlobalZIndex(95))
-        .insert(Pickable::IGNORE)
-        .with_children(|parent| {
-            parent.spawn((
-                Text::new("Inspector"),
-                TextFont {
-                    font: fonts.heading.clone(),
-                    font_size: 18.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.85, 0.92, 1.0)),
-            ));
-            parent.spawn((
-                DebugInspectorText,
-                Text::new(""),
-                TextFont {
-                    font: fonts.body.clone(),
-                    font_size: 13.0,
-                    ..default()
-                },
-                TextColor(Color::srgb(0.86, 0.88, 0.9)),
-            ));
-        })
-        .id();
-
-    commands.entity(hud_root).add_child(panel);
-}
-
-fn update_inspector_overlay(
-    state: Res<DebugViewState>,
-    mut overlay_q: Query<&mut Visibility, With<DebugInspectorOverlay>>,
-    mut text_q: Query<&mut Text, With<DebugInspectorText>>,
-    entities: Query<Entity>,
-    selected_q: Query<(Entity, &EntityKind, Option<&Health>), With<Selected>>,
-    move_targets: Query<(), With<MoveTarget>>,
-    attack_targets: Query<(), With<AttackTarget>>,
-    path_queue: Option<Res<PathRequestQueue>>,
-    role: Res<crate::multiplayer::NetRole>,
-    lobby: Option<Res<crate::multiplayer::LobbyState>>,
-    active_player: Option<Res<crate::components::ActivePlayer>>,
-) {
-    let Ok(mut visibility) = overlay_q.single_mut() else {
-        return;
-    };
-    *visibility = if state.inspector {
-        Visibility::Inherited
-    } else {
-        Visibility::Hidden
-    };
-
-    if !state.inspector {
-        return;
-    }
-
-    let selected_count = selected_q.iter().count();
-    let selected_summary = selected_q
-        .iter()
-        .take(6)
-        .map(|(entity, kind, health)| {
-            let hp = health
-                .map(|hp| format!("{:.0}/{:.0}", hp.current, hp.max))
-                .unwrap_or_else(|| "--".to_string());
-            format!("#{:?} {} hp {}", entity, kind.display_name(), hp)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let lobby_status = lobby
-        .as_ref()
-        .map(|l| format!("{:?}", l.status))
-        .unwrap_or_else(|| "--".to_string());
-    let active_player = active_player
-        .as_ref()
-        .map(|p| format!("{:?}", p.0))
-        .unwrap_or_else(|| "--".to_string());
-
-    if let Ok(mut text) = text_q.single_mut() {
-        **text = format!(
-            "Ctrl+] toggles this panel\n\nEntities: {}\nSelected: {}\nMove targets: {}\nAttack targets: {}\nQueued paths: {}\nNet role: {:?}\nLobby: {}\nActive player: {}\n\n{}",
-            entities.iter().count(),
-            selected_count,
-            move_targets.iter().count(),
-            attack_targets.iter().count(),
-            path_queue.as_ref().map(|q| q.requests.len()).unwrap_or_default(),
-            *role,
-            lobby_status,
-            active_player,
-            if selected_summary.is_empty() {
-                "No selected entities".to_string()
-            } else {
-                format!("Selected details:\n{}", selected_summary)
-            }
-        );
-    }
-}
-
 fn sync_debug_view_tweaks(tweaks: ResMut<DebugTweaks>, mut state: ResMut<DebugViewState>) {
     if let Some(enabled) = tweaks.get_bool(RUNTIME_FOLDER, "FPS Overlay") {
         state.fps_overlay = enabled;
@@ -837,10 +707,10 @@ fn sync_frustum_debug_camera(
             main_cam.is_active = true;
         }
         for entity in &observer_q {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
         for entity in &label_q {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -1312,7 +1182,7 @@ fn sync_entity_selected_tweaks(
             }
             "Delete Selected" => {
                 for (entity, _) in &selected_q {
-                    commands.entity(entity).despawn();
+                    commands.entity(entity).try_despawn();
                 }
             }
             _ => {}

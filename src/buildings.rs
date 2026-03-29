@@ -64,7 +64,7 @@ pub fn spawn_wall_grid_cells(
             (gx, gz),
             WallGridCell {
                 entity,
-                faction,
+                _faction: faction,
                 piece_kind: WallPieceKind::Post,
                 is_gate: false,
                 rotation_y: 0.0,
@@ -520,7 +520,7 @@ fn wall_auto_tile_system(
             if let Ok(children) = children_q.get(entity) {
                 for child in children.iter() {
                     if scene_child_q.contains(child) {
-                        commands.entity(child).despawn();
+                        commands.entity(child).try_despawn();
                     }
                 }
             }
@@ -798,7 +798,7 @@ fn wall_cost_from_cells(
 
 fn clear_wall_preview(commands: &mut Commands, wall_preview: &mut WallPlotPreview) {
     for entity in wall_preview.ghost_entities.drain(..) {
-        commands.entity(entity).despawn();
+        commands.entity(entity).try_despawn();
     }
     wall_preview.start = None;
     wall_preview.snapped_points.clear();
@@ -1055,7 +1055,7 @@ fn update_wall_plot_preview(
         let kind = piece_kind_to_entity_kind(piece_kind);
 
         // Spawn GLTF ghost with correct model and rotation
-        let ghost_mat = if wall_preview.valid {
+        let _ghost_mat = if wall_preview.valid {
             ghost_mats.ghost_valid.clone()
         } else {
             ghost_mats.ghost_invalid.clone()
@@ -1459,7 +1459,7 @@ fn confirm_placement(
         crate::multiplayer::matchbox_transport::send_to_host(socket, &msg);
 
         if let Some(ghost) = placement.preview_entity {
-            commands.entity(ghost).despawn();
+            commands.entity(ghost).try_despawn();
         }
         placement.mode = PlacementMode::None;
         placement.preview_entity = None;
@@ -1480,7 +1480,7 @@ fn confirm_placement(
 
     // Despawn ghost
     if let Some(ghost) = placement.preview_entity {
-        commands.entity(ghost).despawn();
+        commands.entity(ghost).try_despawn();
     }
 
     // Assign worker to move to the build site (building spawns on arrival)
@@ -1701,7 +1701,7 @@ fn confirm_gate_plot(
     wall_grid.mark_dirty(gx, gz);
 
     if let Some(preview) = placement.preview_entity.take() {
-        commands.entity(preview).despawn();
+        commands.entity(preview).try_despawn();
     }
 
     // Assign worker to the entity (it will get its model swapped by auto-tile)
@@ -1766,7 +1766,7 @@ fn cancel_placement(
 
     if mouse.just_pressed(MouseButton::Right) || keyboard.just_pressed(KeyCode::Escape) {
         if let Some(preview) = placement.preview_entity {
-            commands.entity(preview).despawn();
+            commands.entity(preview).try_despawn();
         }
         clear_wall_preview(&mut commands, &mut wall_preview);
         placement.mode = PlacementMode::None;
@@ -2106,7 +2106,7 @@ fn construction_progress_system(
                     if let Ok(children) = children_q.get(entity) {
                         for child in children.iter() {
                             if scene_child_q.contains(child) {
-                                commands.entity(child).despawn();
+                                commands.entity(child).try_despawn();
                             }
                         }
                     }
@@ -2140,7 +2140,7 @@ fn construction_progress_system(
                 if let Ok(children) = children_q.get(entity) {
                     for child in children.iter() {
                         if scene_child_q.contains(child) {
-                            commands.entity(child).despawn();
+                            commands.entity(child).try_despawn();
                         }
                     }
                 }
@@ -2938,7 +2938,7 @@ fn demolish_system(
             }
 
             // Despawn
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }

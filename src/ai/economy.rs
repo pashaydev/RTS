@@ -55,6 +55,7 @@ pub fn ai_economy_system(
         Query<(Entity, &Faction, &ResourceProcessor, &BuildingState), With<Building>>,
         Query<&AssignedWorkers>,
     ),
+    tree_query: Query<&Transform, Or<(With<Sapling>, With<GrowingTree>, With<MatureTree>)>>,
 ) {
     let dt = time.delta_secs();
     let (config, active_player, teams, ai_controlled) = context;
@@ -408,6 +409,12 @@ pub fn ai_economy_system(
             }
 
             if let Some(wall_plan) = brain.wall_plan.as_mut() {
+                // Collect tree positions as grid cells for fast overlap checks
+                let tree_cells: std::collections::HashSet<(i32, i32)> = tree_query
+                    .iter()
+                    .map(|tf| WallGrid::world_to_grid(tf.translation))
+                    .collect();
+
                 // Build one uncompleted run per tick
                 for i in 0..wall_plan.runs.len() {
                     if wall_plan.completed[i] {
@@ -428,7 +435,15 @@ pub fn ai_economy_system(
                         break;
                     }
 
-                    let points = generate_wall_points(start, end, &height_map);
+                    let raw_points = generate_wall_points(start, end, &height_map);
+                    // Filter out points that overlap with trees
+                    let points: Vec<Vec3> = raw_points
+                        .into_iter()
+                        .filter(|p| {
+                            let cell = WallGrid::world_to_grid(*p);
+                            !tree_cells.contains(&cell)
+                        })
+                        .collect();
                     if points.len() < 2 {
                         wall_plan.completed[i] = true;
                         continue;

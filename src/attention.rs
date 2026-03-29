@@ -164,7 +164,7 @@ fn update_damage_popups(
         popup.world_pos.y += POPUP_RISE_SPEED * time.delta_secs() * 0.02;
 
         if popup.timer.is_finished() {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }
@@ -231,14 +231,14 @@ fn manage_attention_icons(
             (Some((_icon_e, existing_kind)), Some(desired_kind))
                 if existing_kind == desired_kind => {}
             (Some((icon_e, _)), Some(desired_kind)) => {
-                commands.entity(icon_e).despawn();
+                commands.entity(icon_e).try_despawn();
                 spawn_attention_icon(&mut commands, &assets, unit_entity, desired_kind);
             }
             (None, Some(desired_kind)) => {
                 spawn_attention_icon(&mut commands, &assets, unit_entity, desired_kind);
             }
             (Some((icon_e, _)), None) => {
-                commands.entity(icon_e).despawn();
+                commands.entity(icon_e).try_despawn();
             }
             (None, None) => {}
         }
@@ -246,7 +246,7 @@ fn manage_attention_icons(
 
     // Remove icons for entities that no longer exist in the unit query
     for (_owner, (icon_e, _)) in icon_map {
-        commands.entity(icon_e).despawn();
+        commands.entity(icon_e).try_despawn();
     }
 }
 
@@ -311,7 +311,7 @@ fn manage_unit_labels(
             (Some(_), true) => {}
             (None, false) => {}
             (Some(label_entity), false) => {
-                commands.entity(label_entity).despawn();
+                commands.entity(label_entity).try_despawn();
             }
             (None, true) => {
                 let accent = team_color_ui(faction_colors.get(faction));
@@ -372,7 +372,7 @@ fn manage_unit_labels(
     }
 
     for (_owner, label_entity) in label_map {
-        commands.entity(label_entity).despawn();
+        commands.entity(label_entity).try_despawn();
     }
 }
 
@@ -539,7 +539,7 @@ fn cleanup_orphaned_icons(
 ) {
     for (icon_entity, icon) in &icons {
         if existing.get(icon.owner).is_err() {
-            commands.entity(icon_entity).despawn();
+            commands.entity(icon_entity).try_despawn();
         }
     }
 }
@@ -565,7 +565,7 @@ fn update_worker_overlays(
         // Remove existing overlay for this building
         for (overlay_entity, overlay) in &existing_overlays {
             if overlay.building == building_entity {
-                commands.entity(overlay_entity).despawn();
+                commands.entity(overlay_entity).try_despawn();
             }
         }
 

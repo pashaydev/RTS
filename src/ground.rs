@@ -15,9 +15,6 @@ use crate::terrain_material::{TerrainExtension, TerrainMaterial, TerrainSettings
 use crate::water_material::{WaterMaterial, WaterSettings};
 use bevy::light::NotShadowCaster;
 
-pub const MAP_SIZE: f32 = 500.0;
-pub const HALF_MAP: f32 = 250.0;
-
 /// Pre-computed grid of terrain heights that matches the rendered mesh exactly.
 /// Use `sample(x, z)` for triangle-matched interpolation between grid vertices.
 #[derive(Resource)]
@@ -809,7 +806,7 @@ fn water_body_bounds(
 /// meets the water surface.
 fn build_water_body_mesh(
     cells: &[(usize, usize)],
-    heights: &[f32],
+    _heights: &[f32],
     grid_size: usize,
     step: f32,
     half_map: f32,

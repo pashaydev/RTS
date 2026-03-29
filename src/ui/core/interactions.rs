@@ -11,6 +11,7 @@ pub enum UiInteractPhase {
     Idle,
     Hovered,
     Pressed,
+    #[allow(dead_code)]
     Disabled,
 }
 
@@ -57,7 +58,7 @@ pub struct UiClickEvent {
 
 #[derive(Message, Clone, Copy, Debug)]
 pub struct UiHoldCompleteEvent {
-    pub entity: Entity,
+    pub _entity: Entity,
 }
 
 pub fn attach_interaction_state(
@@ -117,7 +118,7 @@ pub fn update_interaction_states(
                 state.hold_progress = (state.hold_progress + dt / hold_duration).clamp(0.0, 1.0);
 
                 if !state.hold_complete_sent && state.hold_progress >= 1.0 {
-                    hold_events.write(UiHoldCompleteEvent { entity });
+                    hold_events.write(UiHoldCompleteEvent { _entity: entity });
                     state.hold_complete_sent = true;
                 }
             }

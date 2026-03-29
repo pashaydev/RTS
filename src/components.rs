@@ -1193,7 +1193,7 @@ pub struct DecorationInstanceAssets {
     pub bush_model_sizes: Vec<usize>,
     pub rocks: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     pub grass: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
-    pub mountains: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    pub _mountains: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
 }
 
 /// Chunk of merged decoration geometry, analogous to GrassChunk.
@@ -1222,10 +1222,6 @@ pub struct PendingDecorationPlacements {
     pub grass: Vec<(usize, Vec3, f32, f32)>,
 }
 
-/// Pending mountain placements collected at spawn time.
-#[derive(Resource)]
-pub struct PendingMountainPlacements(pub Vec<(usize, Vec3, f32, f32)>);
-
 #[derive(Component, Clone, Copy, Debug)]
 pub struct ExplosiveProp {
     pub damage: f32,
@@ -1239,7 +1235,7 @@ pub struct ResourceNodeMaterials {
     pub wood: Handle<StandardMaterial>,
     pub copper: Handle<StandardMaterial>,
     pub iron: Handle<StandardMaterial>,
-    pub gold: Handle<StandardMaterial>,
+    pub _gold: Handle<StandardMaterial>,
     pub oil: Handle<StandardMaterial>,
     pub stone: Handle<StandardMaterial>,
 }
@@ -1543,11 +1539,11 @@ pub struct TargetingProfile {
 
 #[derive(Component, Clone, Copy, Debug)]
 pub struct AttackTiming {
-    pub attack_point_secs: f32,
-    pub backswing_secs: f32,
-    pub turn_rate_rad_per_sec: f32,
+    pub _attack_point_secs: f32,
+    pub _backswing_secs: f32,
+    pub _turn_rate_rad_per_sec: f32,
     pub minimum_range: f32,
-    pub can_move_during_backswing: bool,
+    pub _can_move_during_backswing: bool,
 }
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -1851,6 +1847,7 @@ pub enum AiPersonality {
     Balanced,
     Aggressive,
     Defensive,
+    #[allow(dead_code)]
     Economic,
     Supportive,
 }
@@ -2029,14 +2026,6 @@ impl FactionBaseState {
     }
 }
 
-/// Spawn positions for each faction (map corners, avoiding mob camps).
-pub const SPAWN_POSITIONS: [(Faction, (f32, f32)); 4] = [
-    (Faction::Player1, (-200.0, -200.0)),
-    (Faction::Player2, (200.0, -200.0)),
-    (Faction::Player3, (-200.0, 200.0)),
-    (Faction::Player4, (200.0, 200.0)),
-];
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PatrolStateKind {
     Idle,
@@ -2190,7 +2179,7 @@ pub struct CombatDust {
 #[derive(Component)]
 pub struct Dying {
     pub timer: Timer,
-    pub killed_by: Option<Faction>,
+    pub _killed_by: Option<Faction>,
     pub original_scale: Vec3,
 }
 
@@ -2206,7 +2195,7 @@ pub struct SpawnAnimation {
 pub struct SummonVfx {
     pub color: Color,
     pub emissive: LinearRgba,
-    pub pulse_speed: f32,
+    pub _pulse_speed: f32,
     pub particle_timer: Timer,
     pub light_entity: Option<Entity>,
 }
@@ -2393,28 +2382,6 @@ impl AbilityId {
             Self::PriestHeal => 6.0,
             Self::PriestHolySmite => 10.0,
             Self::CatapultAoeBoulder => 0.0, // uses normal attack cooldown
-        }
-    }
-
-    pub fn range(self) -> f32 {
-        match self {
-            Self::KnightCharge => 10.0,
-            Self::MageFireball => 14.0,
-            Self::MageFrostNova => 0.0, // self-centered
-            Self::PriestHeal => 12.0,
-            Self::PriestHolySmite => 10.0,
-            Self::CatapultAoeBoulder => 25.0,
-        }
-    }
-
-    pub fn radius(self) -> f32 {
-        match self {
-            Self::KnightCharge => 0.0,
-            Self::MageFireball => 4.0,
-            Self::MageFrostNova => 5.0,
-            Self::PriestHeal => 0.0,
-            Self::PriestHolySmite => 0.0,
-            Self::CatapultAoeBoulder => 3.0,
         }
     }
 
@@ -2904,7 +2871,7 @@ pub enum WallPieceKind {
 #[derive(Clone)]
 pub struct WallGridCell {
     pub entity: Entity,
-    pub faction: Faction,
+    pub _faction: Faction,
     pub piece_kind: WallPieceKind,
     pub is_gate: bool,
     pub rotation_y: f32,
@@ -3148,10 +3115,6 @@ pub struct SelectRecipeButton(pub usize);
 #[derive(Component)]
 pub struct BuildingPaused;
 
-/// Tag on phase-indicator text inside a worker slot, stores the worker entity.
-#[derive(Component)]
-pub struct WorkerSlotPhaseText(pub Entity);
-
 #[derive(Component)]
 pub struct TrainingQueueDisplay;
 
@@ -3307,16 +3270,6 @@ impl FactionColors {
         }
     }
 
-    /// Convert a TeamColor to its wire index.
-    pub fn to_index(color: TeamColor) -> u8 {
-        match color {
-            TeamColor::Blue => 0,
-            TeamColor::Red => 1,
-            TeamColor::Purple => 2,
-            TeamColor::Green => 3,
-            TeamColor::Black => 4,
-        }
-    }
 }
 
 /// Tracks which construction stage model is currently shown (0=foundation, 1=partial, 2=complete).
@@ -3358,8 +3311,8 @@ pub struct ButtonAnimState {
     pub scale_target: f32,
     pub lift_current: f32,
     pub lift_target: f32,
-    pub shadow_current: f32,
-    pub shadow_target: f32,
+    pub _shadow_current: f32,
+    pub _shadow_target: f32,
 }
 
 impl ButtonAnimState {
@@ -3371,8 +3324,8 @@ impl ButtonAnimState {
             scale_target: 1.0,
             lift_current: 0.0,
             lift_target: 0.0,
-            shadow_current: 0.0,
-            shadow_target: 0.0,
+            _shadow_current: 0.0,
+            _shadow_target: 0.0,
         }
     }
 }
@@ -3571,13 +3524,6 @@ pub struct TextInputSelAfter;
 /// Marker for the post-selection/cursor TextSpan (normal color).
 #[derive(Component)]
 pub struct TextInputPostText;
-
-// ── Ally/Enemy Toggle ──
-
-#[derive(Component)]
-pub struct AllyToggleButton {
-    pub slot_index: usize,
-}
 
 #[derive(Component)]
 pub struct RandomNameButton;

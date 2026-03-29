@@ -871,7 +871,7 @@ fn handle_death(
                 }
             }
             // Buildings despawn immediately
-            commands.entity(*dead_entity).despawn();
+            commands.entity(*dead_entity).try_despawn();
         } else {
             // Units play death animation before despawning
             let scale = opt_transform.map(|t| t.scale).unwrap_or(Vec3::ONE);
@@ -914,7 +914,7 @@ fn handle_death(
                 .remove::<ReservedIncomingDamage>()
                 .insert(Dying {
                     timer: Timer::from_seconds(1.5, TimerMode::Once),
-                    killed_by: killer_faction,
+                    _killed_by: killer_faction,
                     original_scale: scale,
                 });
         }
@@ -937,7 +937,7 @@ fn tick_dying(
         }
 
         if dying.timer.is_finished() {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }

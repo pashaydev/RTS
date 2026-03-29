@@ -1,9 +1,8 @@
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
-use crate::blueprints::{EntityKind, IsRanged};
+use crate::blueprints::EntityKind;
 use crate::components::*;
-use crate::multiplayer::NetRole;
 use crate::spatial::SpatialHashGrid;
 
 pub struct AbilitiesPlugin;
@@ -67,7 +66,7 @@ fn process_ability_casts(
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (caster_entity, mut casting, caster_tf, faction, caster_kind) in &mut casters {
+    for (caster_entity, mut casting, caster_tf, faction, _caster_kind) in &mut casters {
         casting.cast_timer.tick(time.delta());
         if !casting.cast_timer.is_finished() {
             continue;
@@ -169,7 +168,7 @@ fn process_ability_casts(
                 // AoE damage + slow around self
                 let center = caster_tf.translation;
                 let nearby = spatial_grid.query_radius(center, 5.0);
-                for (target_e, target_pos) in &nearby {
+                for (target_e, _target_pos) in &nearby {
                     if *target_e == caster_entity {
                         continue;
                     }
@@ -485,13 +484,13 @@ fn spawn_veterancy_indicators(
         // Remove existing indicators
         for child in children.iter() {
             if indicator_q.get(child).is_ok() {
-                commands.entity(child).despawn();
+                commands.entity(child).try_despawn();
             }
             // Also check grandchildren
             if let Ok(grandchildren) = children_q.get(child) {
                 for gc in grandchildren.iter() {
                     if indicator_q.get(gc).is_ok() {
-                        commands.entity(gc).despawn();
+                        commands.entity(gc).try_despawn();
                     }
                 }
             }

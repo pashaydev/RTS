@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use std::f32::consts::{PI, TAU};
 
 use crate::components::*;
+use crate::ground::HeightMap;
 
 pub struct ProceduralMobsPlugin;
 
@@ -53,6 +54,7 @@ enum MobAnimPhase {
 fn animate_procedural_mobs(
     mut commands: Commands,
     time: Res<Time>,
+    height_map: Res<HeightMap>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut mobs: Query<
@@ -127,10 +129,14 @@ fn animate_procedural_mobs(
             proc_mob.dying_progress = (proc_mob.dying_progress + dt * 1.5).min(1.0);
         }
 
-        // Track base XZ from movement systems (they change XZ externally)
+        // Track base position from movement systems (they change XZ externally)
+        // Sample terrain height so mobs stay grounded to the terrain
         if phase != MobAnimPhase::Dying {
             proc_mob.base_translation.x = tf.translation.x;
             proc_mob.base_translation.z = tf.translation.z;
+            proc_mob.base_translation.y = height_map
+                .sample(tf.translation.x, tf.translation.z)
+                + proc_mob.base_y_offset;
         }
 
         let base_scale = proc_mob.base_scale;
@@ -170,7 +176,7 @@ fn animate_procedural_mobs(
         if phase == MobAnimPhase::Dying {
             if let Some(ref d) = dying {
                 if d.timer.is_finished() {
-                    commands.entity(entity).despawn();
+                    commands.entity(entity).try_despawn();
                 }
             }
         }
@@ -286,7 +292,7 @@ fn animate_orc(
     base_scale: Vec3,
     base_y: f32,
     p: f32,
-    dt: f32,
+    _dt: f32,
     proc_mob: &ProceduralMob,
 ) {
     match phase {
@@ -436,7 +442,7 @@ fn update_demon_pulse_rings(
         tf.scale.y = (1.0 - t).max(0.0);
 
         if ring.timer.is_finished() {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
     }
 }

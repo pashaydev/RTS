@@ -4,6 +4,7 @@ use rand::Rng;
 use rand::SeedableRng;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
+use crate::combat::{attack_surface_distance, is_in_attack_band};
 use crate::components::*;
 use crate::ground::{is_in_mountain_border, BorderSettings, HeightMap};
 use crate::model_assets::UnitModelAssets;
@@ -18,8 +19,10 @@ impl Plugin for MobsPlugin {
         )
         .add_systems(
             Update,
-            (mob_patrol, mob_aggro, mob_chase, mob_return)
+            (mob_patrol, mob_aggro, mob_chase)
                 .chain()
+                .in_set(GameFlowSet::Simulation)
+                .before(crate::combat::approach_attack_target)
                 .run_if(in_state(AppState::InGame)),
         );
     }
@@ -874,10 +877,13 @@ fn mob_chase(
             &AttackRange,
             &EntityKind,
             &Faction,
+            Option<&AttackWindup>,
+            Option<&AttackRecovery>,
         ),
         With<Mob>,
     >,
     targets: Query<&Transform, Without<Mob>>,
+    building_footprints: Query<&BuildingFootprint, With<Building>>,
     // For re-targeting: check if nearby units exist to prefer over walls
     units_for_retarget: Query<(Entity, &Transform, &Faction), (With<Unit>, Without<Mob>)>,
 ) {
@@ -889,10 +895,11 @@ fn mob_chase(
     const SEPARATION_RADIUS: f32 = 2.5;
     const SEPARATION_STRENGTH: f32 = 8.0;
 
-    for (mob_entity, mut tf, mut patrol, attack_target, speed, range, kind, faction) in &mut mobs {
+    for (mob_entity, mut tf, mut patrol, attack_target, speed, range, kind, faction, windup, recovery) in &mut mobs {
         let Ok(target_tf) = targets.get(attack_target.0) else {
             patrol.state = PatrolStateKind::Returning;
             patrol.chase_elapsed = 0.0;
+            commands.entity(mob_entity).remove::<AttackTarget>();
             continue;
         };
 
@@ -996,18 +1003,36 @@ fn mob_chase(
             }
         }
 
-        let dir = Vec3::new(
-            target_tf.translation.x - tf.translation.x,
-            0.0,
-            target_tf.translation.z - tf.translation.z,
-        );
-        let dist = dir.length();
+        // Use the same range check as combat.rs (surface distance + 15% tolerance)
+        let target_radius = building_footprints
+            .get(attack_target.0)
+            .map_or(0.0, |fp| fp.0);
+        let surface_dist =
+            attack_surface_distance(tf.translation, target_tf.translation, target_radius);
+        let in_band = is_in_attack_band(surface_dist, range.0, 0.0, range.0 * 0.15);
 
-        if dist <= range.0 {
-            patrol.state = PatrolStateKind::Attacking;
-            patrol.chase_elapsed = 0.0;
+        if in_band {
+            if windup.is_some() || recovery.is_some() {
+                // Locked in attack animation — hold position
+                patrol.state = PatrolStateKind::Attacking;
+                patrol.chase_elapsed = 0.0;
+            } else {
+                // In range but waiting on cooldown — keep Chasing so separation
+                // forces still apply, but don't advance toward the target
+                patrol.state = PatrolStateKind::Chasing;
+            }
         } else {
             patrol.state = PatrolStateKind::Chasing;
+
+            let dir = Vec3::new(
+                target_tf.translation.x - tf.translation.x,
+                0.0,
+                target_tf.translation.z - tf.translation.z,
+            );
+            let dist = dir.length();
+            if dist < 0.01 {
+                continue;
+            }
 
             // Mob-to-mob separation force
             let mut sep = Vec3::ZERO;
@@ -1062,10 +1087,3 @@ fn mob_chase(
     }
 }
 
-fn mob_return(mut commands: Commands, mut mobs: Query<(Entity, &PatrolState), With<Mob>>) {
-    for (entity, patrol) in &mut mobs {
-        if patrol.state == PatrolStateKind::Returning {
-            commands.entity(entity).remove::<AttackTarget>();
-        }
-    }
-}

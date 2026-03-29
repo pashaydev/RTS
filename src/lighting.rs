@@ -564,7 +564,7 @@ fn manage_cluster_lights(
 ) {
     if !config.enabled {
         for (entity, _, _, _) in &existing {
-            commands.entity(entity).despawn();
+            commands.entity(entity).try_despawn();
         }
         return;
     }
@@ -629,7 +629,7 @@ fn manage_cluster_lights(
                 cluster.fade = (cluster.fade - dt * FADE_OUT_SPEED).max(0.0);
                 light.intensity = light.intensity * cluster.fade;
                 if cluster.fade <= 0.01 {
-                    commands.entity(entity).despawn();
+                    commands.entity(entity).try_despawn();
                 }
             }
         }
