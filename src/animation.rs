@@ -205,8 +205,29 @@ fn drive_animations(
             } else {
                 AnimState::AttackA
             }
-        } else if unit_state.map_or(false, |s| matches!(s, UnitState::Gathering(_))) {
+        } else if unit_state.map_or(false, |s| matches!(s, UnitState::Building(_))) {
             AnimState::AttackA
+        } else if unit_state.map_or(false, |s| {
+            matches!(
+                s,
+                UnitState::Gathering(_) | UnitState::AssignedGathering { .. }
+            )
+        }) {
+            // Walk while moving to resource; swing when arrived
+            if move_target.is_some() {
+                AnimState::Walk
+            } else {
+                AnimState::AttackA
+            }
+        } else if unit_state.map_or(false, |s| {
+            matches!(
+                s,
+                UnitState::MovingToBuild(_)
+                    | UnitState::MovingToPlot(_)
+                    | UnitState::ReturningToDeposit { .. }
+            )
+        }) {
+            AnimState::Walk
         } else if matches!(
             patrol_kind,
             Some(
@@ -314,6 +335,7 @@ fn face_movement_direction(
                 Option<&AttackTarget>,
                 Option<&PatrolState>,
                 Option<&IdleBehavior>,
+                Option<&UnitState>,
             ),
             (Or<(With<Unit>, With<Mob>)>, Without<FrustumCulled>),
         >,
@@ -338,6 +360,7 @@ fn face_movement_direction(
         attack_target,
         patrol_state,
         idle_behavior,
+        unit_state,
     ) in &mut queries.p1()
     {
         let target_pos = if let Some(at) = attack_target {
@@ -350,6 +373,12 @@ fn face_movement_direction(
             } else {
                 None
             }
+        } else if let Some(UnitState::Building(building)) = unit_state {
+            // Workers building should face the construction site
+            non_unit_transforms
+                .get(*building)
+                .ok()
+                .map(|tf| tf.translation)
         } else if let Some(patrol) = patrol_state {
             match patrol.state {
                 PatrolStateKind::Patrolling => patrol.patrol_target,

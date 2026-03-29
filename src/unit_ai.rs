@@ -2,6 +2,8 @@ use bevy::prelude::*;
 use std::f32::consts::TAU;
 
 use crate::blueprints::EntityKind;
+use crate::buildings::is_wall_like_kind;
+use crate::combat::{target_score, TargetScoreInput};
 use crate::components::*;
 use crate::multiplayer::NetRole;
 use crate::spatial::SpatialHashGrid;
@@ -78,6 +80,8 @@ fn decision_priority_system(
             &Health,
             Option<&AttackRange>,
             &TaskQueue,
+            Option<&TargetingProfile>,
+            Option<&DamageType>,
         ),
         With<Unit>,
     >,
@@ -86,14 +90,31 @@ fn decision_priority_system(
     active_player: Res<ActivePlayer>,
     building_check: Query<(), With<Building>>,
     deposit_points: Query<(Entity, &Transform, &Faction), (With<DepositPoint>, Without<Unit>)>,
+    target_data: Query<(
+        &Health,
+        &ArmorType,
+        Option<&ThreatValue>,
+        Option<&ReservedIncomingDamage>,
+    )>,
 ) {
     decision_timer.timer.tick(time.delta());
     if !decision_timer.timer.just_finished() {
         return;
     }
 
-    for (entity, tf, mut state, mut source, stance, faction, health, attack_range, task_queue) in
-        &mut units
+    for (
+        entity,
+        tf,
+        mut state,
+        mut source,
+        stance,
+        faction,
+        health,
+        attack_range,
+        task_queue,
+        opt_targeting_profile,
+        opt_damage_type,
+    ) in &mut units
     {
         // Client: only process local player's units; remote units are driven by host state sync
         if *net_role == NetRole::Client && *faction != active_player.0 {
@@ -171,17 +192,17 @@ fn decision_priority_system(
                 continue;
             }
 
-            let mut closest_dist = f32::MAX;
-            let mut closest_target = None;
+            let mut best_score = f32::MAX;
+            let mut best_target = None;
 
-            // Use spatial hash grid instead of iterating all entities
             let nearby = spatial_grid.query_radius(tf.translation, scan_range);
             for (target_entity, target_pos) in &nearby {
                 if *target_entity == entity {
                     continue;
                 }
+                let is_building = building_check.get(*target_entity).is_ok();
                 // Skip buildings unless aggressive stance
-                if *stance != UnitStance::Aggressive && building_check.get(*target_entity).is_ok() {
+                if *stance != UnitStance::Aggressive && is_building {
                     continue;
                 }
                 let Some(target_faction) = factions.get(*target_entity).ok() else {
@@ -190,17 +211,45 @@ fn decision_priority_system(
                 if !teams.is_hostile(faction, target_faction) {
                     continue;
                 }
-                let dx = target_pos.x - tf.translation.x;
-                let dz = target_pos.z - tf.translation.z;
-                let dist = (dx * dx + dz * dz).sqrt();
-                if dist < closest_dist {
-                    closest_dist = dist;
-                    closest_target = Some(*target_entity);
+
+                // Use scored targeting if profile available, else fall back to distance
+                if let Some(profile) = opt_targeting_profile {
+                    let Ok((t_health, t_armor, t_threat, t_reserved)) =
+                        target_data.get(*target_entity)
+                    else {
+                        continue;
+                    };
+                    let dmg_type = opt_damage_type.copied().unwrap_or(DamageType::Melee);
+                    if let Some(score) = target_score(&TargetScoreInput {
+                        profile,
+                        attacker_pos: tf.translation,
+                        attacker_damage_type: dmg_type,
+                        scan_range,
+                        target_pos: *target_pos,
+                        target_health: t_health,
+                        target_armor: *t_armor,
+                        target_threat: t_threat.map_or(0.0, |t| t.0),
+                        target_is_building: is_building,
+                        target_reserved_damage: t_reserved.map_or(0.0, |r| r.total()),
+                    }) {
+                        if score < best_score {
+                            best_score = score;
+                            best_target = Some(*target_entity);
+                        }
+                    }
+                } else {
+                    // Fallback: nearest enemy
+                    let dx = target_pos.x - tf.translation.x;
+                    let dz = target_pos.z - tf.translation.z;
+                    let dist = (dx * dx + dz * dz).sqrt();
+                    if dist < best_score {
+                        best_score = dist;
+                        best_target = Some(*target_entity);
+                    }
                 }
             }
 
-            if let Some(target) = closest_target {
-                // Record leash origin before engaging
+            if let Some(target) = best_target {
                 commands
                     .entity(entity)
                     .insert(LeashOrigin(tf.translation))
@@ -405,7 +454,7 @@ pub fn unit_state_executor_system(
     transforms: Query<&Transform, Without<Unit>>,
     _nodes: Query<&ResourceNode>,
     construction_sites: Query<
-        (&BuildingState, &Faction),
+        (&BuildingState, &Faction, &BuildingFootprint, &EntityKind),
         (With<Building>, With<ConstructionProgress>),
     >,
     processors: Query<(&ResourceProcessor, &BuildingState, &Faction), With<Building>>,
@@ -415,6 +464,7 @@ pub fn unit_state_executor_system(
 ) {
     let gather_range = 3.0;
     let build_range = 4.0;
+    let wall_build_range_bonus = 2.5;
 
     for (
         entity,
@@ -514,7 +564,8 @@ pub fn unit_state_executor_system(
             }
 
             UnitState::MovingToBuild(building) => {
-                if let Ok((build_state, _)) = construction_sites.get(building) {
+                if let Ok((build_state, _, footprint, build_kind)) = construction_sites.get(building)
+                {
                     if *build_state != BuildingState::UnderConstruction {
                         commands.entity(entity).remove::<MoveTarget>();
                         *state = UnitState::Idle;
@@ -523,14 +574,36 @@ pub fn unit_state_executor_system(
                         continue;
                     }
                     if let Ok(build_tf) = transforms.get(building) {
-                        let angle = (entity.index_u32() as f32 * 2.399) % TAU;
-                        let offset = Vec3::new(angle.cos() * 2.5, 0.0, angle.sin() * 2.5);
-                        let target_pos = build_tf.translation + offset;
-                        let dist = tf.translation.distance(build_tf.translation);
-                        if dist <= build_range {
+                        let flat_dist_to_center =
+                            Vec2::new(tf.translation.x, tf.translation.z)
+                                .distance(Vec2::new(build_tf.translation.x, build_tf.translation.z));
+                        // Close enough to building center to start work
+                        let is_wall_like = is_wall_like_kind(*build_kind);
+                        let work_range = footprint.0
+                            + build_range
+                            + if is_wall_like {
+                                wall_build_range_bonus
+                            } else {
+                                0.0
+                            };
+                        if flat_dist_to_center <= work_range {
                             commands.entity(entity).remove::<MoveTarget>();
                             *state = UnitState::Building(building);
                         } else {
+                            // Walk toward an offset outside the footprint
+                            let stand_dist = footprint.0
+                                + if is_wall_like {
+                                    0.75
+                                } else {
+                                    1.5
+                                };
+                            let angle = (entity.index_u32() as f32 * 2.399) % TAU;
+                            let offset = Vec3::new(
+                                angle.cos() * stand_dist,
+                                0.0,
+                                angle.sin() * stand_dist,
+                            );
+                            let target_pos = build_tf.translation + offset;
                             commands.entity(entity).insert(MoveTarget(target_pos));
                         }
                     }
@@ -543,27 +616,31 @@ pub fn unit_state_executor_system(
             }
 
             UnitState::Building(building) => {
-                if let Ok((build_state, _)) = construction_sites.get(building) {
+                if let Ok((build_state, _, footprint, build_kind)) = construction_sites.get(building)
+                {
                     if *build_state != BuildingState::UnderConstruction {
                         commands.entity(entity).remove::<MoveTarget>();
                         *state = UnitState::Idle;
                         *source = TaskSource::Auto;
                         task_queue.current = None;
                     } else if let Ok(build_tf) = transforms.get(building) {
-                        let dist = tf.translation.distance(build_tf.translation);
-                        if dist > build_range {
+                        let flat_dist_to_center =
+                            Vec2::new(tf.translation.x, tf.translation.z)
+                                .distance(Vec2::new(build_tf.translation.x, build_tf.translation.z));
+                        let max_work_range = footprint.0
+                            + build_range
+                            + if is_wall_like_kind(*build_kind) {
+                                wall_build_range_bonus
+                            } else {
+                                0.0
+                            }
+                            + 2.0;
+                        if flat_dist_to_center > max_work_range {
+                            // Pushed too far away — re-path to building
                             *state = UnitState::MovingToBuild(building);
                         } else {
-                            // Gently steer back to offset position if drifted
-                            let angle = (entity.index_u32() as f32 * 2.399) % TAU;
-                            let offset = Vec3::new(angle.cos() * 2.5, 0.0, angle.sin() * 2.5);
-                            let target_pos = build_tf.translation + offset;
-                            let drift = tf.translation.distance(target_pos);
-                            if drift > 1.0 {
-                                commands.entity(entity).insert(MoveTarget(target_pos));
-                            } else {
-                                commands.entity(entity).remove::<MoveTarget>();
-                            }
+                            // Within work range — no movement needed, just build
+                            commands.entity(entity).remove::<MoveTarget>();
                         }
                     }
                 } else {

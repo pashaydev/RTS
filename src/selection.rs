@@ -168,7 +168,6 @@ struct PickResult {
     is_building: bool,
     is_mob: bool,
     is_resource: bool,
-    is_explosive: bool,
 }
 
 /// Pick the best entity for click selection — prioritizes units > buildings > resources > mobs.
@@ -179,9 +178,8 @@ fn pick_for_click(
     buildings: &Query<Entity, With<Building>>,
     mobs: &Query<Entity, With<Mob>>,
     resource_nodes: &Query<Entity, With<ResourceNode>>,
-    explosive_props: &Query<Entity, With<ExplosiveProp>>,
 ) -> Option<PickResult> {
-    let mut hits: Vec<(Entity, f32, bool, bool, bool, bool, bool)> = Vec::new();
+    let mut hits: Vec<(Entity, f32, bool, bool, bool, bool)> = Vec::new();
 
     for (entity, gt, pick_r, inherited_vis) in pickables {
         // Skip entities hidden by fog of war
@@ -192,9 +190,8 @@ fn pick_for_click(
         let is_building = buildings.contains(entity);
         let is_mob = mobs.contains(entity);
         let is_resource = resource_nodes.contains(entity);
-        let is_explosive = explosive_props.contains(entity);
 
-        if !is_unit && !is_building && !is_mob && !is_resource && !is_explosive {
+        if !is_unit && !is_building && !is_mob && !is_resource {
             continue;
         }
 
@@ -207,7 +204,6 @@ fn pick_for_click(
                 is_building,
                 is_mob,
                 is_resource,
-                is_explosive,
             ));
         }
     }
@@ -219,12 +215,12 @@ fn pick_for_click(
     // Sort by distance
     hits.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Among close hits (within 2 units of the closest), prefer units > buildings > resources > explosive > mobs
+    // Among close hits (within 2 units of the closest), prefer units > buildings > resources > mobs
     let closest_dist = hits[0].1;
     let threshold = closest_dist + 2.0;
     let close_hits: Vec<_> = hits.into_iter().filter(|h| h.1 <= threshold).collect();
 
-    // Priority: unit > building > resource > explosive > mob
+    // Priority: unit > building > resource > mob
     if let Some(h) = close_hits.iter().find(|h| h.2) {
         return Some(PickResult {
             entity: h.0,
@@ -232,7 +228,6 @@ fn pick_for_click(
             is_building: false,
             is_mob: false,
             is_resource: false,
-            is_explosive: false,
         });
     }
     if let Some(h) = close_hits.iter().find(|h| h.3) {
@@ -242,7 +237,6 @@ fn pick_for_click(
             is_building: true,
             is_mob: false,
             is_resource: false,
-            is_explosive: false,
         });
     }
     if let Some(h) = close_hits.iter().find(|h| h.5) {
@@ -252,17 +246,15 @@ fn pick_for_click(
             is_building: false,
             is_mob: false,
             is_resource: true,
-            is_explosive: false,
         });
     }
-    if let Some(h) = close_hits.iter().find(|h| h.6) {
+    if let Some(h) = close_hits.iter().find(|h| h.4) {
         return Some(PickResult {
             entity: h.0,
             is_unit: false,
             is_building: false,
             is_mob: false,
             is_resource: false,
-            is_explosive: true,
         });
     }
     if let Some(h) = close_hits.iter().find(|h| h.4) {
@@ -272,7 +264,6 @@ fn pick_for_click(
             is_building: false,
             is_mob: true,
             is_resource: false,
-            is_explosive: false,
         });
     }
 
@@ -448,7 +439,6 @@ fn update_hover(
     buildings: Query<Entity, With<Building>>,
     mobs: Query<Entity, With<Mob>>,
     resource_nodes: Query<Entity, With<ResourceNode>>,
-    explosive_props: Query<Entity, With<ExplosiveProp>>,
     hovered: Query<Entity, With<Hovered>>,
     placement: Res<BuildingPlacementState>,
     ui_interactions: Query<&Interaction, With<Node>>,
@@ -488,7 +478,6 @@ fn update_hover(
         &buildings,
         &mobs,
         &resource_nodes,
-        &explosive_props,
     ) {
         commands.entity(result.entity).insert(Hovered);
     }
@@ -508,7 +497,6 @@ fn handle_click_select(
         Query<Entity, With<Building>>,
         Query<Entity, With<Mob>>,
         Query<Entity, With<ResourceNode>>,
-        Query<Entity, With<ExplosiveProp>>,
     ),
     selected: Query<Entity, With<Selected>>,
     unit_transforms: Query<&GlobalTransform, With<Unit>>,
@@ -527,8 +515,7 @@ fn handle_click_select(
     ),
 ) {
     let (ref mut drag, ref mut inspected) = state;
-    let (ref units, ref buildings, ref mobs, ref resource_nodes, ref explosive_props) =
-        entity_queries;
+    let (ref units, ref buildings, ref mobs, ref resource_nodes) = entity_queries;
     let (ref minimap_interaction, ref ui_clicked, ref ui_press) = flags;
     let (ref time, ref mut dbl_click, ref entity_kinds) = extra;
     if !mouse.just_released(MouseButton::Left) {
@@ -624,13 +611,12 @@ fn handle_click_select(
             &buildings,
             &mobs,
             &resource_nodes,
-            &explosive_props,
         );
 
         if let Some(result) = pick {
             if result.is_mob {
                 inspected.entity = Some(result.entity);
-            } else if result.is_resource || result.is_explosive {
+            } else if result.is_resource {
                 // Resources can always be inspected/selected
                 inspected.entity = None;
                 if !shift {
@@ -723,11 +709,14 @@ fn update_entity_visuals(
     mut removed_selected: RemovedComponents<Selected>,
     added_hovered: Query<(Entity, &EntityKind, Has<Mesh3d>), Added<Hovered>>,
     mut removed_hovered: RemovedComponents<Hovered>,
+    added_army_highlighted: Query<(Entity, &EntityKind, Has<Mesh3d>), Added<ArmyOverviewHighlighted>>,
+    mut removed_army_highlighted: RemovedComponents<ArmyOverviewHighlighted>,
     all_entities: Query<(
         Entity,
         &EntityKind,
         Has<Selected>,
         Has<Hovered>,
+        Has<ArmyOverviewHighlighted>,
         Has<Mesh3d>,
     )>,
     mut outlines: Query<&mut OutlineVolume>,
@@ -750,8 +739,10 @@ fn update_entity_visuals(
     }
 
     for entity in removed_selected.read() {
-        if let Ok((_, kind, _, has_hovered, has_mesh)) = all_entities.get(entity) {
-            if has_hovered {
+        if let Ok((_, kind, _, has_hovered, has_army_highlighted, has_mesh)) =
+            all_entities.get(entity)
+        {
+            if has_hovered || has_army_highlighted {
                 if has_mesh {
                     if let Some(mat) = cache.materials_hovered.get(kind) {
                         commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
@@ -776,7 +767,24 @@ fn update_entity_visuals(
     }
 
     for (entity, kind, has_mesh) in &added_hovered {
-        if let Ok((_, _, has_selected, _, _)) = all_entities.get(entity) {
+        if let Ok((_, _, has_selected, _, _, _)) = all_entities.get(entity) {
+            if !has_selected {
+                if has_mesh {
+                    if let Some(mat) = cache.materials_hovered.get(kind) {
+                        commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                    }
+                }
+                if let Ok(mut outline) = outlines.get_mut(entity) {
+                    outline.visible = true;
+                    outline.colour = outline_hovered;
+                    outline.width = 3.0;
+                }
+            }
+        }
+    }
+
+    for (entity, kind, has_mesh) in &added_army_highlighted {
+        if let Ok((_, _, has_selected, _, _, _)) = all_entities.get(entity) {
             if !has_selected {
                 if has_mesh {
                     if let Some(mat) = cache.materials_hovered.get(kind) {
@@ -793,15 +801,58 @@ fn update_entity_visuals(
     }
 
     for entity in removed_hovered.read() {
-        if let Ok((_, kind, has_selected, _, has_mesh)) = all_entities.get(entity) {
+        if let Ok((_, kind, has_selected, _, has_army_highlighted, has_mesh)) =
+            all_entities.get(entity)
+        {
             if !has_selected {
-                if has_mesh {
-                    if let Some(mat) = cache.materials_default.get(kind) {
-                        commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                if has_army_highlighted {
+                    if has_mesh {
+                        if let Some(mat) = cache.materials_hovered.get(kind) {
+                            commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                        }
+                    }
+                    if let Ok(mut outline) = outlines.get_mut(entity) {
+                        outline.visible = true;
+                        outline.colour = outline_hovered;
+                        outline.width = 3.0;
+                    }
+                } else {
+                    if has_mesh {
+                        if let Some(mat) = cache.materials_default.get(kind) {
+                            commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                        }
+                    }
+                    if let Ok(mut outline) = outlines.get_mut(entity) {
+                        outline.visible = false;
                     }
                 }
-                if let Ok(mut outline) = outlines.get_mut(entity) {
-                    outline.visible = false;
+            }
+        }
+    }
+
+    for entity in removed_army_highlighted.read() {
+        if let Ok((_, kind, has_selected, has_hovered, _, has_mesh)) = all_entities.get(entity) {
+            if !has_selected {
+                if has_hovered {
+                    if has_mesh {
+                        if let Some(mat) = cache.materials_hovered.get(kind) {
+                            commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                        }
+                    }
+                    if let Ok(mut outline) = outlines.get_mut(entity) {
+                        outline.visible = true;
+                        outline.colour = outline_hovered;
+                        outline.width = 3.0;
+                    }
+                } else {
+                    if has_mesh {
+                        if let Some(mat) = cache.materials_default.get(kind) {
+                            commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
+                        }
+                    }
+                    if let Ok(mut outline) = outlines.get_mut(entity) {
+                        outline.visible = false;
+                    }
                 }
             }
         }
@@ -856,7 +907,6 @@ fn update_hover_tooltip(
     hovered_entities: Query<Entity, With<Hovered>>,
     entity_kinds: Query<&EntityKind>,
     resource_nodes: Query<&ResourceNode>,
-    explosive_props: Query<&ExplosiveProp>,
     healths: Query<&Health>,
     building_levels: Query<&BuildingLevel>,
 ) {
@@ -895,11 +945,6 @@ fn update_hover_tooltip(
             "{} ({})",
             rn.resource_type.display_name(),
             rn.amount_remaining
-        ));
-    } else if let Ok(prop) = explosive_props.get(entity) {
-        label.push_str(&format!(
-            "Powder Barrel\nBlast: {:.0} / r{:.1}",
-            prop.damage, prop.radius
         ));
     }
 
@@ -951,7 +996,6 @@ fn handle_right_click_move(
     target_queries: (
         Query<Entity, With<Mob>>,
         Query<Entity, With<ResourceNode>>,
-        Query<Entity, With<ExplosiveProp>>,
         Query<(Entity, &GlobalTransform), (With<Building>, With<ConstructionProgress>)>,
         Query<(Entity, &ResourceProcessor, &BuildingState, &Faction), With<Building>>,
     ),
@@ -980,7 +1024,7 @@ fn handle_right_click_move(
     ),
 ) {
     let (camera_q, windows) = viewport;
-    let (mobs, resource_nodes, explosive_props, construction_q, processor_buildings) =
+    let (mobs, resource_nodes, construction_q, processor_buildings) =
         target_queries;
     let (other_units, other_buildings) = enemy_detect;
     let (minimap_interaction, ui_clicked, ui_press) = ui_flags;
@@ -1031,7 +1075,6 @@ fn handle_right_click_move(
     #[derive(Clone, Copy, PartialEq)]
     enum RClickAction {
         AttackEnemy,     // enemy unit or mob
-        AttackExplosive, // explosive prop
         GatherResource,  // resource node (workers)
         AssistBuild,     // construction site (workers)
         AssignProcessor, // processor building (workers)
@@ -1060,8 +1103,6 @@ fn handle_right_click_move(
         let action = if mobs.contains(entity) {
             // Mobs are always hostile
             Some(RClickAction::AttackEnemy)
-        } else if explosive_props.contains(entity) {
-            Some(RClickAction::AttackExplosive)
         } else if let Ok((_, unit_faction)) = other_units.get(entity) {
             // Another unit — attack if hostile, ignore if allied (can't interact)
             if teams.is_hostile(&active_player.0, unit_faction) {
@@ -1118,18 +1159,13 @@ fn handle_right_click_move(
         let threshold = closest_dist + 2.0;
         let close_hits: Vec<_> = hits.into_iter().filter(|h| h.dist <= threshold).collect();
 
-        // Priority tie-breaker: attack enemy > explosive > resource > construction > processor > ally
+        // Priority tie-breaker: attack enemy > resource > construction > processor > ally
         if let Some(h) = close_hits
             .iter()
             .find(|h| h.action == RClickAction::AttackEnemy)
         {
             Some((h.entity, h.action))
-        } else if let Some(h) = close_hits
-            .iter()
-            .find(|h| h.action == RClickAction::AttackExplosive)
-        {
-            Some((h.entity, h.action))
-        } else if let Some(h) = close_hits
+        }  else if let Some(h) = close_hits
             .iter()
             .find(|h| h.action == RClickAction::GatherResource)
         {
@@ -1179,7 +1215,7 @@ fn handle_right_click_move(
 
         let mut commands = Vec::new();
         match target_action {
-            Some((target_entity, RClickAction::AttackEnemy | RClickAction::AttackExplosive)) => {
+            Some((target_entity, RClickAction::AttackEnemy)) => {
                 let target_id = *net_map.to_net.get(&target_entity)?;
                 commands.push(InputCommand::Attack { target_id });
             }
@@ -1269,7 +1305,7 @@ fn handle_right_click_move(
 
     if let Some((target_entity, action)) = target_action {
         match action {
-            RClickAction::AttackEnemy | RClickAction::AttackExplosive => {
+            RClickAction::AttackEnemy => {
                 for (entity, _kind) in &units_vec {
                     if shift {
                         enqueue_task(

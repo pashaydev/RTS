@@ -511,6 +511,7 @@ pub(crate) fn spawn_join_lobby_page(
                         TextInputField {
                             value: String::new(),
                             cursor_pos: 0,
+                            selection_anchor: None,
                             max_len: 45,
                         },
                         Button,
@@ -518,25 +519,7 @@ pub(crate) fn spawn_join_lobby_page(
                         ui_components::input_chrome(),
                     ))
                     .with_children(|input| {
-                        input.spawn((
-                            Text::new(""),
-                            TextFont {
-                                font_size: theme::FONT_MEDIUM,
-                                ..default()
-                            },
-                            TextColor(theme::TEXT_PRIMARY),
-                            Pickable::IGNORE,
-                        ));
-                        input.spawn((
-                            TextInputCursor,
-                            Text::new("|"),
-                            TextFont {
-                                font_size: theme::FONT_MEDIUM,
-                                ..default()
-                            },
-                            TextColor(Color::NONE),
-                            Pickable::IGNORE,
-                        ));
+                        crate::ui::core::text_input::spawn_text_input_children(input, "");
                     });
 
                 // Paste button

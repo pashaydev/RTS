@@ -49,6 +49,104 @@ The tech tree is gated behind three ages, researched at the Base building:
 - Abilities include charge, shield bash, fireball, frost nova, heal, holy smite, and siege attacks
 - Enemy camps include Goblin, Skeleton, Orc, and Demon factions with patrol and aggro behavior
 
+### Scored Targeting
+
+Units and towers select targets using a weighted scoring formula instead of always attacking the nearest enemy. Each unit type has a **Targeting Profile** that tunes how it weighs different factors. Lower scores are preferred.
+
+**Scoring factors:**
+- **Distance** — closer targets score better (normalized to scan range)
+- **Low HP** — wounded targets are preferred (finish off weak enemies)
+- **Threat** — high-threat targets are prioritized (each unit has a static threat value)
+- **Counter advantage** — targets the attacker deals bonus damage against are preferred
+- **Building penalty** — most units avoid buildings; siege units prefer them (negative penalty)
+- **Reserved damage** — targets with enough incoming damage already committed are deprioritized
+
+**Hard rejects** (never targeted):
+- Dead or dying entities
+- Outside scan range (scan range × 1.5 max)
+- Non-hostile factions
+
+**Stance modifiers:**
+- **Passive** — never auto-engage
+- **Defensive** — scan range = attack range × 1.35
+- **Aggressive** — scan range = attack range × 2.25
+
+**Threat values:**
+
+| Unit | Threat |
+|---|---:|
+| Worker | 0.35 |
+| Scout | 0.15 |
+| Soldier | 0.90 |
+| Archer | 1.15 |
+| Tank | 1.45 |
+| Knight | 1.30 |
+| Mage | 1.55 |
+| Priest | 1.10 |
+| Cavalry | 1.20 |
+| Catapult | 2.10 |
+| Battering Ram | 1.90 |
+| Watch Tower | 1.20 |
+| Guard Tower | 1.45 |
+| Ballista Tower | 1.70 |
+| Bombard Tower | 1.85 |
+| Economy buildings | 0.00 |
+
+**Targeting profile summary:**
+
+| Unit class | Behavior |
+|---|---|
+| Worker / Scout | Strong distance bias, avoids buildings, low threat sensitivity |
+| Soldier / Tank | Balanced — moderate focus on threats and counters |
+| Archer | Finishes low-HP targets, high reserved-damage penalty (avoids wasted volleys) |
+| Knight / Cavalry | Dives high-threat backline targets, moderate building avoidance |
+| Mage | High threat and counter sensitivity, avoids buildings |
+| Priest | Balanced auto-attack, strong building avoidance |
+| Catapult | Prefers buildings (negative penalty), high threat weight, ignores reserved damage |
+| Battering Ram | Strongly prefers buildings, ignores low-HP and reserved damage |
+| Towers | Never targets buildings (99.0 penalty), prioritizes high-threat units, avoids overkill |
+
+### Damage Reservation
+
+When a unit begins an attack windup or a projectile is in flight, the expected damage is **reserved** against the target. Other units factor this reserved damage into their targeting score, avoiding overkill on nearly-dead targets.
+
+- **On windup start:** reserve raw damage with TTL = windup duration + 2s
+- **On projectile launch (ranged):** replace windup reservation with flight-time reservation (TTL = travel time + 0.35s)
+- **On melee hit:** reservation cleared immediately (damage applied)
+- **On projectile hit:** reservation cleared by matching source entity
+- **On target death:** all reservations removed with the entity
+- **TTL expiry:** reservations that outlive their TTL are cleaned up each frame
+
+This system is host-authoritative — reservations are never synced to clients.
+
+### Attack Timing
+
+Each unit has an **Attack Timing** profile that defines the granular phases of their attack animation:
+
+| Unit | Attack Point | Backswing | Turn Rate | Min Range | Move in Backswing |
+|---|---:|---:|---:|---:|---|
+| Worker | 0.22s | 0.26s | 10.0 | — | yes |
+| Soldier | 0.24s | 0.30s | 9.0 | — | yes |
+| Archer | 0.20s | 0.36s | 8.0 | — | yes |
+| Tank | 0.34s | 0.42s | 6.5 | — | no |
+| Knight | 0.26s | 0.28s | 8.5 | — | yes |
+| Mage | 0.30s | 0.34s | 7.0 | — | no |
+| Priest | 0.28s | 0.32s | 7.0 | — | no |
+| Cavalry | 0.22s | 0.24s | 9.5 | — | yes |
+| Catapult | 0.42s | 0.55s | 4.0 | 5.0 | no |
+| Battering Ram | 0.36s | 0.46s | 5.0 | — | no |
+| Watch Tower | 0.16s | 0.22s | ∞ | — | — |
+| Guard Tower | 0.18s | 0.24s | ∞ | — | — |
+| Ballista Tower | 0.26s | 0.34s | ∞ | — | — |
+| Bombard Tower | 0.34s | 0.46s | ∞ | 3.5 | — |
+
+- **Attack point**: time before damage is dealt / projectile launches — responsive units (Archer, Cavalry) can stutter-step
+- **Backswing**: recovery time after the attack point — some units can move during this phase
+- **Turn rate**: how fast a unit rotates to face its target (towers are instant)
+- **Minimum range**: siege units cannot attack targets closer than this distance
+
+These values are stored as components but not yet wired into the attack pipeline (currently uses `AttackProfile.windup_secs` / `recovery_secs`). They will replace those fields in a future update to enable stutter-step micro and siege dead-zones.
+
 ### Damage Counter System
 
 All units and buildings have an **Armor Type** and a **Damage Type**. Damage is multiplied based on the attacker's damage type vs the target's armor type:
@@ -119,7 +217,7 @@ Clearing mob camps grants resources to the killing faction:
 - Starting resources: `0.5x`, `1x`, `2x`
 - Map seed: fixed or random
 - Player name and player color
-- Graphics: resolution, fullscreen, shadow quality, entity lights, UI scale
+- Graphics: resolution, fullscreen, VSync, anti-aliasing, shadow quality, bloom, brightness, auto exposure, depth of field, chromatic aberration, entity lights, UI scale
 
 ## Multiplayer
 

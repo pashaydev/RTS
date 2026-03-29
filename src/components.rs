@@ -215,14 +215,70 @@ pub enum ShadowQuality {
     High,
 }
 
-#[derive(Resource, Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum AntiAliasingMode {
+    Off,
+    #[default]
+    Smaa,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum EffectQuality {
+    Off,
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+#[derive(Resource, Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GraphicsSettings {
     pub resolution: (u32, u32),
     pub fullscreen: bool,
+    #[serde(default = "default_vsync")]
+    pub vsync: bool,
     pub shadow_quality: ShadowQuality,
     pub entity_lights: bool,
+    #[serde(default)]
+    pub anti_aliasing: AntiAliasingMode,
+    #[serde(default)]
+    pub bloom: EffectQuality,
+    #[serde(default = "default_brightness")]
+    pub brightness: f32,
+    #[serde(default = "default_auto_exposure")]
+    pub auto_exposure: bool,
+    #[serde(default = "default_depth_of_field")]
+    pub depth_of_field: EffectQuality,
+    #[serde(default = "default_motion_blur")]
+    pub motion_blur: EffectQuality,
+    #[serde(default = "default_chromatic_aberration")]
+    pub chromatic_aberration: EffectQuality,
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
+}
+
+fn default_vsync() -> bool {
+    true
+}
+
+fn default_brightness() -> f32 {
+    1.0
+}
+
+fn default_auto_exposure() -> bool {
+    false
+}
+
+fn default_depth_of_field() -> EffectQuality {
+    EffectQuality::Off
+}
+
+fn default_motion_blur() -> EffectQuality {
+    EffectQuality::Off
+}
+
+fn default_chromatic_aberration() -> EffectQuality {
+    EffectQuality::Off
 }
 
 fn default_ui_scale() -> f32 {
@@ -234,8 +290,16 @@ impl Default for GraphicsSettings {
         Self {
             resolution: (1280, 720),
             fullscreen: false,
+            vsync: true,
             shadow_quality: ShadowQuality::High,
             entity_lights: true,
+            anti_aliasing: AntiAliasingMode::Smaa,
+            bloom: EffectQuality::Medium,
+            brightness: 1.0,
+            auto_exposure: false,
+            depth_of_field: EffectQuality::Off,
+            motion_blur: EffectQuality::Off,
+            chromatic_aberration: EffectQuality::Off,
             ui_scale: 1.0,
         }
     }
@@ -1125,6 +1189,8 @@ pub struct DecoGltfHandles {
 #[derive(Resource, Default)]
 pub struct DecorationInstanceAssets {
     pub bushes: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
+    /// How many primitives each bush GLTF model contributed to the flat `bushes` list.
+    pub bush_model_sizes: Vec<usize>,
     pub rocks: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     pub grass: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
     pub mountains: Vec<(Handle<Mesh>, Handle<StandardMaterial>)>,
@@ -1136,6 +1202,12 @@ pub struct DecoChunk {
     pub chunk_x: i32,
     pub chunk_z: i32,
 }
+
+/// Marker added to DecoChunk entities once the chunk area has been explored.
+/// Separates fog-reveal state from Visibility so the culling system can freely
+/// toggle Visibility without conflicting with the reveal system.
+#[derive(Component)]
+pub struct DecoRevealed;
 
 /// Maps chunk coords to decoration chunk entities.
 #[derive(Resource, Default)]
@@ -1457,6 +1529,28 @@ pub struct AttackRange(pub f32);
 pub struct AggroRange(pub f32);
 
 #[derive(Component, Clone, Copy, Debug)]
+pub struct ThreatValue(pub f32);
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct TargetingProfile {
+    pub distance_weight: f32,
+    pub low_hp_weight: f32,
+    pub threat_weight: f32,
+    pub counter_weight: f32,
+    pub building_penalty: f32,
+    pub reserved_damage_penalty: f32,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct AttackTiming {
+    pub attack_point_secs: f32,
+    pub backswing_secs: f32,
+    pub turn_rate_rad_per_sec: f32,
+    pub minimum_range: f32,
+    pub can_move_during_backswing: bool,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
 pub struct AttackProfile {
     pub windup_secs: f32,
     pub recovery_secs: f32,
@@ -1472,6 +1566,19 @@ pub enum CombatFxKind {
     Arcane,
     Siege,
     Shadow,
+}
+
+/// Tracks predicted incoming damage from windups and in-flight projectiles.
+#[derive(Component, Clone, Debug, Default)]
+pub struct ReservedIncomingDamage {
+    /// (source_entity, reserved_damage, ttl_secs)
+    pub reservations: Vec<(Entity, f32, f32)>,
+}
+
+impl ReservedIncomingDamage {
+    pub fn total(&self) -> f32 {
+        self.reservations.iter().map(|(_, d, _)| *d).sum()
+    }
 }
 
 #[derive(Component, Clone, Copy, Debug)]
@@ -2027,12 +2134,15 @@ pub struct FogOverlay;
 
 #[derive(Component)]
 pub struct Projectile {
+    pub source: Entity,
     pub target: Entity,
     pub speed: f32,
     pub damage: f32,
     pub damage_type: DamageType,
     pub fx_kind: CombatFxKind,
     pub impact_scale: f32,
+    /// When true, the projectile rotates to face its travel direction (arrows/bolts).
+    pub orient_to_velocity: bool,
 }
 
 #[derive(Component)]
@@ -2099,6 +2209,42 @@ pub struct SummonVfx {
     pub pulse_speed: f32,
     pub particle_timer: Timer,
     pub light_entity: Option<Entity>,
+}
+
+// ── Procedural Mob Visuals ──
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum MobVisualKind {
+    Goblin,
+    Skeleton,
+    Orc,
+    Demon,
+}
+
+#[derive(Component)]
+pub struct ProceduralMob {
+    pub visual_kind: MobVisualKind,
+    /// Accumulated phase for continuous animation (radians)
+    pub phase: f32,
+    /// Base Y offset from ground
+    pub base_y_offset: f32,
+    /// Base scale before any animation modifiers
+    pub base_scale: Vec3,
+    /// Base translation (captured on first tick)
+    pub base_translation: Vec3,
+    /// Attack animation timer (Some when attacking)
+    pub attack_timer: Option<Timer>,
+    /// Whether base values have been initialized from the actual Transform
+    pub initialized: bool,
+    /// Whether a pulse ring was already spawned for this attack
+    pub pulse_ring_spawned: bool,
+    /// Dying animation progress (0..1), drives frame-rate independent death
+    pub dying_progress: f32,
+}
+
+#[derive(Component)]
+pub struct DemonPulseRing {
+    pub timer: Timer,
 }
 
 // ── Formation System ──
@@ -2482,6 +2628,7 @@ impl IconAssets {
             EntityKind::Gatehouse => self.tower.clone(),
             EntityKind::WallSegment => self.tower.clone(),
             EntityKind::WallPost => self.tower.clone(),
+            EntityKind::WallCorner => self.tower.clone(),
             EntityKind::Storage => self.storage.clone(),
             EntityKind::House => self.storage.clone(),
             // Units
@@ -2543,6 +2690,11 @@ pub struct MatureTree;
 /// Marker: tree scene materials have been converted from Blend→Mask.
 #[derive(Component)]
 pub struct TreeAlphaFixed;
+
+/// Deduplicated handles to tree leaf materials (those with a base_color_texture).
+/// Used by the dynamic alpha cutoff system to thin canopies at distance.
+#[derive(Resource, Default)]
+pub struct TreeLeafMaterials(pub Vec<Handle<StandardMaterial>>);
 
 #[derive(Resource)]
 pub struct TreeGrowthConfig {
@@ -2621,6 +2773,14 @@ pub struct UnitCardGrid;
 pub struct UnitCardRef(pub Entity);
 
 #[derive(Component)]
+pub struct ArmyOverviewEntry {
+    pub kind: EntityKind,
+}
+
+#[derive(Component)]
+pub struct ArmyOverviewHighlighted;
+
+#[derive(Component)]
 pub struct HpBarFill(pub Entity);
 
 #[derive(Component)]
@@ -2682,7 +2842,14 @@ pub struct WallSegmentPiece;
 pub struct WallPostPiece;
 
 #[derive(Component)]
+pub struct WallCornerPiece;
+
+#[derive(Component)]
 pub struct GatePiece;
+
+/// Grid coordinate of a wall entity in the WallGrid.
+#[derive(Component, Clone, Copy)]
+pub struct WallGridCoord(pub i32, pub i32);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PlacementMode {
@@ -2720,6 +2887,75 @@ pub struct WallPlotPreview {
     pub ghost_entities: Vec<Entity>,
     pub total_cost: crate::blueprints::ResourceCost,
     pub valid: bool,
+}
+
+// ── Wall Grid Auto-Tiling ──
+
+pub const WALL_CELL_SIZE: f32 = 3.0;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WallPieceKind {
+    Post,
+    Straight,
+    Corner,
+    Gate,
+}
+
+#[derive(Clone)]
+pub struct WallGridCell {
+    pub entity: Entity,
+    pub faction: Faction,
+    pub piece_kind: WallPieceKind,
+    pub is_gate: bool,
+    pub rotation_y: f32,
+}
+
+#[derive(Resource, Default)]
+pub struct WallGrid {
+    pub cells: HashMap<(i32, i32), WallGridCell>,
+    pub dirty: Vec<(i32, i32)>,
+}
+
+impl WallGrid {
+    pub fn world_to_grid(pos: Vec3) -> (i32, i32) {
+        (
+            (pos.x / WALL_CELL_SIZE).round() as i32,
+            (pos.z / WALL_CELL_SIZE).round() as i32,
+        )
+    }
+
+    pub fn grid_to_world(gx: i32, gz: i32) -> Vec3 {
+        Vec3::new(gx as f32 * WALL_CELL_SIZE, 0.0, gz as f32 * WALL_CELL_SIZE)
+    }
+
+    /// Returns cardinal neighbor coords: [North, East, South, West]
+    pub fn cardinal_neighbors(gx: i32, gz: i32) -> [(i32, i32); 4] {
+        [
+            (gx, gz - 1), // North (-Z)
+            (gx + 1, gz), // East (+X)
+            (gx, gz + 1), // South (+Z)
+            (gx - 1, gz), // West (-X)
+        ]
+    }
+
+    /// Mark a cell and its 4 cardinal neighbors as dirty for re-evaluation.
+    pub fn mark_dirty(&mut self, gx: i32, gz: i32) {
+        self.dirty.push((gx, gz));
+        for (nx, nz) in Self::cardinal_neighbors(gx, gz) {
+            self.dirty.push((nx, nz));
+        }
+    }
+
+    /// Compute 4-bit neighbor mask for a cell. Bit 0=N, 1=E, 2=S, 3=W.
+    pub fn neighbor_mask(&self, gx: i32, gz: i32) -> u8 {
+        let mut mask = 0u8;
+        for (i, (nx, nz)) in Self::cardinal_neighbors(gx, gz).iter().enumerate() {
+            if self.cells.contains_key(&(*nx, *nz)) {
+                mask |= 1 << i;
+            }
+        }
+        mask
+    }
 }
 
 // ── Building upgrades & interactions ──
@@ -3286,14 +3522,55 @@ pub struct AttentionIconAssets {
 pub struct TextInputField {
     pub value: String,
     pub cursor_pos: usize,
+    /// When `Some`, a selection exists between `selection_anchor` and `cursor_pos`.
+    pub selection_anchor: Option<usize>,
     pub max_len: usize,
+}
+
+impl TextInputField {
+    /// Returns `(start, end)` of the current selection, or `None` if nothing is selected.
+    pub fn selection_range(&self) -> Option<(usize, usize)> {
+        self.selection_anchor.map(|anchor| {
+            let start = anchor.min(self.cursor_pos);
+            let end = anchor.max(self.cursor_pos);
+            if start == end { return (start, end); }
+            (start, end)
+        }).filter(|(s, e)| s != e)
+    }
+
+    /// Delete the current selection, returning the deleted text. Resets anchor.
+    pub fn delete_selection(&mut self) -> Option<String> {
+        if let Some((start, end)) = self.selection_range() {
+            let removed: String = self.value[start..end].to_string();
+            self.value.replace_range(start..end, "");
+            self.cursor_pos = start;
+            self.selection_anchor = None;
+            Some(removed)
+        } else {
+            self.selection_anchor = None;
+            None
+        }
+    }
 }
 
 #[derive(Component)]
 pub struct TextInputFocused;
 
+/// Marker for the cursor "|" TextSpan inside a text input's rich text.
 #[derive(Component)]
 pub struct TextInputCursor;
+
+/// Marker for the selection-before-cursor TextSpan (highlighted).
+#[derive(Component)]
+pub struct TextInputSelBefore;
+
+/// Marker for the selection-after-cursor TextSpan (highlighted).
+#[derive(Component)]
+pub struct TextInputSelAfter;
+
+/// Marker for the post-selection/cursor TextSpan (normal color).
+#[derive(Component)]
+pub struct TextInputPostText;
 
 // ── Ally/Enemy Toggle ──
 
@@ -3386,6 +3663,27 @@ pub enum PauseAction {
 
 #[derive(Component)]
 pub struct SpectatorStatsText;
+
+// ── Menu Keyboard Navigation ──
+
+/// Marks a button as focusable via keyboard nav. The `order` field determines
+/// the navigation sequence (lowest first).
+#[derive(Component)]
+pub struct NavFocusable(pub usize);
+
+/// Marker added to the currently keyboard-focused button.
+#[derive(Component)]
+pub struct NavFocused;
+
+/// Tracks keyboard focus index for menu navigation.
+#[derive(Resource, Default)]
+pub struct MenuNavFocus {
+    pub index: usize,
+}
+
+/// Controls hint row shown in menus.
+#[derive(Component)]
+pub struct ControlsHint;
 
 // ── Camera Zoom Detail Level ──
 

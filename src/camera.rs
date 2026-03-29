@@ -2,11 +2,19 @@ use bevy::ecs::message::MessageReader;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::light::cluster::{ClusterConfig, ClusterZConfig};
 use bevy::prelude::*;
+use bevy::post_process::{
+    auto_exposure::AutoExposure,
+    bloom::Bloom,
+    dof::{DepthOfField, DepthOfFieldMode},
+    effect_stack::ChromaticAberration,
+};
+use bevy::render::view::Hdr;
 use bevy::window::PrimaryWindow;
 
 use crate::components::{
-    ActivePlayer, AppState, CameraZoomLevel, CullingSourceCamera, CursorOverUi, DragState,
-    FrustumDebugMode, GameFlowSet, GameSetupConfig, GameWorld, MapSeed, RtsCamera, UiMode,
+    ActivePlayer, AntiAliasingMode, AppState, CameraZoomLevel, CullingSourceCamera, CursorOverUi,
+    DragState, EffectQuality, FrustumDebugMode, GameFlowSet, GameSetupConfig, GameWorld,
+    GraphicsSettings, MapSeed, RtsCamera, UiMode,
 };
 
 // ── Tuning constants ──
@@ -45,6 +53,7 @@ impl Plugin for CameraPlugin {
             .add_systems(
                 Update,
                 (
+                    sync_camera_post_process_settings,
                     update_cursor_over_ui,
                     track_last_selection,
                     camera_focus_selection,
@@ -74,6 +83,7 @@ fn update_cursor_over_ui(
 fn spawn_camera(
     mut commands: Commands,
     config: Res<GameSetupConfig>,
+    graphics: Res<GraphicsSettings>,
     map_seed: Res<MapSeed>,
     active_player: Res<ActivePlayer>,
 ) {
@@ -97,7 +107,7 @@ fn spawn_camera(
     let height = distance * pitch.sin();
     let offset = Vec3::new(angle.sin() * h_dist, height, angle.cos() * h_dist);
 
-    commands.spawn((
+    let mut entity = commands.spawn((
         GameWorld,
         CullingSourceCamera,
         RtsCamera {
@@ -111,6 +121,10 @@ fn spawn_camera(
             pan_velocity: Vec3::ZERO,
         },
         Camera3d::default(),
+        Hdr,
+        bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
+        bevy::core_pipeline::tonemapping::DebandDither::Enabled,
+        brightness_exposure(graphics.brightness),
         Transform::from_translation(pivot + offset).looking_at(pivot, Vec3::Y),
         // Top-down RTS camera: flatten Z-slices to 1 since all action is on a single plane
         ClusterConfig::FixedZ {
@@ -120,9 +134,183 @@ fn spawn_camera(
             dynamic_resizing: true,
         },
         Msaa::Off,
-        #[cfg(not(target_arch = "wasm32"))]
-        bevy::anti_alias::smaa::Smaa::default(),
     ));
+
+    #[cfg(not(target_arch = "wasm32"))]
+    if graphics.anti_aliasing == AntiAliasingMode::Smaa {
+        entity.insert(bevy::anti_alias::smaa::Smaa::default());
+    }
+
+    insert_post_process_effects(entity.id(), &mut commands, &graphics);
+}
+
+fn brightness_exposure(brightness: f32) -> bevy::camera::Exposure {
+    bevy::camera::Exposure {
+        ev100: bevy::camera::Exposure::EV100_BLENDER - brightness.max(0.01).log2(),
+    }
+}
+
+fn bloom_for_quality(quality: EffectQuality) -> Option<Bloom> {
+    match quality {
+        EffectQuality::Off => None,
+        EffectQuality::Low => Some(Bloom {
+            intensity: 0.08,
+            ..Bloom::NATURAL
+        }),
+        EffectQuality::Medium => Some(Bloom::NATURAL),
+        EffectQuality::High => Some(Bloom {
+            intensity: 0.25,
+            low_frequency_boost: 0.8,
+            ..Bloom::NATURAL
+        }),
+    }
+}
+
+fn depth_of_field_for_quality(quality: EffectQuality) -> Option<DepthOfField> {
+    match quality {
+        EffectQuality::Off => None,
+        EffectQuality::Low => Some(DepthOfField {
+            mode: DepthOfFieldMode::Gaussian,
+            focal_distance: 60.0,
+            sensor_height: 0.01866,
+            aperture_f_stops: 4.0,
+            max_circle_of_confusion_diameter: 4.0,
+            max_depth: 200.0,
+        }),
+        EffectQuality::Medium => Some(DepthOfField {
+            mode: DepthOfFieldMode::Gaussian,
+            focal_distance: 60.0,
+            sensor_height: 0.01866,
+            aperture_f_stops: 2.8,
+            max_circle_of_confusion_diameter: 6.0,
+            max_depth: 220.0,
+        }),
+        EffectQuality::High => Some(DepthOfField {
+            mode: DepthOfFieldMode::Gaussian,
+            focal_distance: 60.0,
+            sensor_height: 0.01866,
+            aperture_f_stops: 2.0,
+            max_circle_of_confusion_diameter: 8.0,
+            max_depth: 240.0,
+        }),
+    }
+}
+
+fn chromatic_aberration_for_quality(quality: EffectQuality) -> Option<ChromaticAberration> {
+    match quality {
+        EffectQuality::Off => None,
+        EffectQuality::Low => Some(ChromaticAberration {
+            intensity: 0.0075,
+            max_samples: 4,
+            ..default()
+        }),
+        EffectQuality::Medium => Some(ChromaticAberration::default()),
+        EffectQuality::High => Some(ChromaticAberration {
+            intensity: 0.035,
+            max_samples: 12,
+            ..default()
+        }),
+    }
+}
+
+fn insert_post_process_effects(
+    entity: Entity,
+    commands: &mut Commands,
+    graphics: &GraphicsSettings,
+) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Some(bloom) = bloom_for_quality(graphics.bloom) {
+            commands.entity(entity).insert(bloom);
+        }
+        if graphics.auto_exposure {
+            commands.entity(entity).insert(AutoExposure::default());
+        }
+    }
+
+    if let Some(depth_of_field) = depth_of_field_for_quality(graphics.depth_of_field) {
+        commands.entity(entity).insert(depth_of_field);
+    }
+    if let Some(chromatic_aberration) =
+        chromatic_aberration_for_quality(graphics.chromatic_aberration)
+    {
+        commands.entity(entity).insert(chromatic_aberration);
+    }
+}
+
+fn sync_camera_post_process_settings(
+    graphics: Res<GraphicsSettings>,
+    camera_q: Query<Entity, (With<RtsCamera>, With<Camera3d>)>,
+    mut commands: Commands,
+    mut applied: Local<Option<(Entity, GraphicsSettings)>>,
+) {
+    let Ok(entity) = camera_q.single() else {
+        *applied = None;
+        return;
+    };
+
+    if applied
+        .as_ref()
+        .is_some_and(|(last_entity, last_settings)| *last_entity == entity && *last_settings == *graphics)
+    {
+        return;
+    }
+
+    *applied = Some((entity, graphics.clone()));
+
+    commands.entity(entity).insert((
+        Hdr,
+        bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
+        bevy::core_pipeline::tonemapping::DebandDither::Enabled,
+        brightness_exposure(graphics.brightness),
+    ));
+
+    #[cfg(not(target_arch = "wasm32"))]
+    match graphics.anti_aliasing {
+        AntiAliasingMode::Off => {
+            commands.entity(entity).remove::<bevy::anti_alias::smaa::Smaa>();
+        }
+        AntiAliasingMode::Smaa => {
+            commands
+                .entity(entity)
+                .insert(bevy::anti_alias::smaa::Smaa::default());
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    match bloom_for_quality(graphics.bloom) {
+        Some(bloom) => {
+            commands.entity(entity).insert(bloom);
+        }
+        None => {
+            commands.entity(entity).remove::<Bloom>();
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    if graphics.auto_exposure {
+        commands.entity(entity).insert(AutoExposure::default());
+    } else {
+        commands.entity(entity).remove::<AutoExposure>();
+    }
+
+    match depth_of_field_for_quality(graphics.depth_of_field) {
+        Some(depth_of_field) => {
+            commands.entity(entity).insert(depth_of_field);
+        }
+        None => {
+            commands.entity(entity).remove::<DepthOfField>();
+        }
+    }
+
+    match chromatic_aberration_for_quality(graphics.chromatic_aberration) {
+        Some(chromatic_aberration) => {
+            commands.entity(entity).insert(chromatic_aberration);
+        }
+        None => {
+            commands.entity(entity).remove::<ChromaticAberration>();
+        }
+    }
 }
 
 fn camera_pan_input(
@@ -384,6 +572,11 @@ fn camera_focus_selection(
 
 fn update_zoom_level(camera_q: Query<&RtsCamera>, mut zoom_level: ResMut<CameraZoomLevel>) {
     if let Ok(cam) = camera_q.single() {
-        *zoom_level = CameraZoomLevel::from_distance(cam.distance);
+        let new = CameraZoomLevel::from_distance(cam.distance);
+        // Only write when detail level changes or distance drifts significantly,
+        // so that Res::is_changed() gating in downstream systems works correctly.
+        if new.detail != zoom_level.detail || (new.distance - zoom_level.distance).abs() > 0.5 {
+            *zoom_level = new;
+        }
     }
 }

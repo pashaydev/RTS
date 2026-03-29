@@ -6,6 +6,7 @@ use crate::theme;
 use crate::ui::core::components as ui_components;
 use crate::ui::fonts::{self, UiFonts};
 
+#[allow(unused_imports)]
 use super::*;
 
 // ── Title Page ──
@@ -61,15 +62,22 @@ pub(crate) fn spawn_title_page(commands: &mut Commands, container: Entity, fonts
         .id();
     commands.entity(container).add_child(sep);
 
-    for (label, action) in [
+    for (i, (label, action)) in [
         ("NEW GAME", MenuAction::NewGame),
         ("MULTIPLAYER", MenuAction::Multiplayer),
         ("OPTIONS", MenuAction::Options),
         ("QUIT", MenuAction::Quit),
-    ] {
-        let btn = spawn_styled_button(commands, label, MenuButton(action), false, fonts);
+    ]
+    .iter()
+    .enumerate()
+    {
+        let btn =
+            spawn_styled_button_nav(commands, label, MenuButton(*action), false, fonts, Some(i));
         commands.entity(container).add_child(btn);
     }
+
+    // Controls hint
+    spawn_controls_hint(commands, container, fonts);
 
     let ver = commands
         .spawn((
@@ -77,7 +85,7 @@ pub(crate) fn spawn_title_page(commands: &mut Commands, container: Entity, fonts
             fonts::body(fonts, theme::FONT_BODY),
             TextColor(theme::TEXT_SECONDARY),
             Node {
-                margin: UiRect::top(Val::Px(40.0)),
+                margin: UiRect::top(Val::Px(20.0)),
                 ..default()
             },
         ))
@@ -129,13 +137,14 @@ pub(crate) fn spawn_new_game_page(
         TeamMode::Teams => 1,
         TeamMode::Custom => 2,
     };
-    spawn_selector_row(
+    spawn_selector_row_nav(
         commands,
         container,
         "Teams:",
         &["FFA", "2v2", "Custom"],
         team_idx,
         SelectorField::TeamMode,
+        Some(1),
     );
 
     spawn_animated_section_divider(commands, container, "WORLD", fonts);
@@ -145,13 +154,14 @@ pub(crate) fn spawn_new_game_page(
         MapSize::Medium => 1,
         MapSize::Large => 2,
     };
-    spawn_selector_row(
+    spawn_selector_row_nav(
         commands,
         container,
         "Map Size:",
         &["Small", "Medium", "Large"],
         map_idx,
         SelectorField::MapSize,
+        Some(2),
     );
 
     let res_idx = match config.resource_density {
@@ -159,13 +169,14 @@ pub(crate) fn spawn_new_game_page(
         ResourceDensity::Normal => 1,
         ResourceDensity::Dense => 2,
     };
-    spawn_selector_row(
+    spawn_selector_row_nav(
         commands,
         container,
         "Resources:",
         &["Sparse", "Normal", "Dense"],
         res_idx,
         SelectorField::ResourceDensity,
+        Some(3),
     );
 
     let day_idx = DAY_CYCLE_OPTIONS
@@ -173,13 +184,14 @@ pub(crate) fn spawn_new_game_page(
         .position(|&(v, _)| (v - config.day_cycle_secs).abs() < 1.0)
         .unwrap_or(1);
     let day_labels: Vec<&str> = DAY_CYCLE_OPTIONS.iter().map(|&(_, l)| l).collect();
-    spawn_selector_row(
+    spawn_selector_row_nav(
         commands,
         container,
         "Day Cycle:",
         &day_labels,
         day_idx,
         SelectorField::DayCycle,
+        Some(4),
     );
 
     let start_idx = STARTING_RES_OPTIONS
@@ -187,13 +199,14 @@ pub(crate) fn spawn_new_game_page(
         .position(|&(v, _)| (v - config.starting_resources_mult).abs() < 0.01)
         .unwrap_or(1);
     let start_labels: Vec<&str> = STARTING_RES_OPTIONS.iter().map(|&(_, l)| l).collect();
-    spawn_selector_row(
+    spawn_selector_row_nav(
         commands,
         container,
         "Start Res:",
         &start_labels,
         start_idx,
         SelectorField::StartingRes,
+        Some(5),
     );
 
     // Seed row
@@ -268,6 +281,7 @@ pub(crate) fn spawn_new_game_page(
     let start_btn = commands
         .spawn((
             MenuButton(MenuAction::StartGame),
+            NavFocusable(6),
             Button,
             ButtonAnimState::new(theme::ACCENT.to_srgba().to_f32_array()),
             ButtonStyle::Filled,
@@ -285,9 +299,11 @@ pub(crate) fn spawn_new_game_page(
                     bottom: Val::Px(4.0),
                     ..default()
                 },
+                border: UiRect::all(Val::Px(2.0)),
                 ..default()
             },
             BackgroundColor(theme::ACCENT),
+            BorderColor::all(Color::NONE),
             BoxShadow::new(
                 Color::srgba(0.29, 0.62, 1.0, 0.3),
                 Val::Px(0.0),
@@ -330,23 +346,36 @@ pub(crate) fn spawn_options_page(
         .iter()
         .position(|&r| r == graphics.resolution)
         .unwrap_or(0);
-    spawn_selector_row(
+    spawn_selector_row_nav(
         commands,
         container,
         "Resolution:",
         &["1280x720", "1920x1080"],
         res_idx,
         SelectorField::Resolution,
+        Some(0),
     );
 
     let fs_idx = if graphics.fullscreen { 0 } else { 1 };
-    spawn_selector_row(
+    spawn_selector_row_nav(
         commands,
         container,
         "Fullscreen:",
         &["ON", "OFF"],
         fs_idx,
         SelectorField::Fullscreen,
+        Some(1),
+    );
+
+    let vsync_idx = if graphics.vsync { 0 } else { 1 };
+    spawn_selector_row_nav(
+        commands,
+        container,
+        "VSync:",
+        &["ON", "OFF"],
+        vsync_idx,
+        SelectorField::Vsync,
+        Some(2),
     );
 
     let shadow_idx = match graphics.shadow_quality {
@@ -354,23 +383,113 @@ pub(crate) fn spawn_options_page(
         ShadowQuality::Low => 1,
         ShadowQuality::High => 2,
     };
-    spawn_selector_row(
+    spawn_selector_row_nav(
         commands,
         container,
         "Shadows:",
         &["Off", "Low", "High"],
         shadow_idx,
         SelectorField::Shadows,
+        Some(3),
     );
 
     let lights_idx = if graphics.entity_lights { 0 } else { 1 };
-    spawn_selector_row(
+    spawn_selector_row_nav(
         commands,
         container,
         "Lights:",
         &["ON", "OFF"],
         lights_idx,
         SelectorField::EntityLights,
+        Some(4),
+    );
+
+    let aa_idx = match graphics.anti_aliasing {
+        AntiAliasingMode::Off => 0,
+        AntiAliasingMode::Smaa => 1,
+    };
+    spawn_selector_row_nav(
+        commands,
+        container,
+        "Anti-Aliasing:",
+        &["Off", "SMAA"],
+        aa_idx,
+        SelectorField::AntiAliasing,
+        Some(5),
+    );
+
+    let bloom_idx = match graphics.bloom {
+        EffectQuality::Off => 0,
+        EffectQuality::Low => 1,
+        EffectQuality::Medium => 2,
+        EffectQuality::High => 3,
+    };
+    spawn_selector_row_nav(
+        commands,
+        container,
+        "Bloom:",
+        &["Off", "Low", "Medium", "High"],
+        bloom_idx,
+        SelectorField::Bloom,
+        Some(6),
+    );
+
+    let brightness_labels: Vec<&str> = BRIGHTNESS_OPTIONS.iter().map(|&(_, s)| s).collect();
+    let brightness_idx = BRIGHTNESS_OPTIONS
+        .iter()
+        .position(|&(v, _)| (v - graphics.brightness).abs() < 0.01)
+        .unwrap_or(2);
+    spawn_selector_row_nav(
+        commands,
+        container,
+        "Brightness:",
+        &brightness_labels,
+        brightness_idx,
+        SelectorField::Brightness,
+        Some(7),
+    );
+
+    let auto_exposure_idx = if graphics.auto_exposure { 0 } else { 1 };
+    spawn_selector_row_nav(
+        commands,
+        container,
+        "Auto Exposure:",
+        &["ON", "OFF"],
+        auto_exposure_idx,
+        SelectorField::AutoExposure,
+        Some(8),
+    );
+
+    let dof_idx = match graphics.depth_of_field {
+        EffectQuality::Off => 0,
+        EffectQuality::Low => 1,
+        EffectQuality::Medium => 2,
+        EffectQuality::High => 3,
+    };
+    spawn_selector_row_nav(
+        commands,
+        container,
+        "Depth of Field:",
+        &["Off", "Low", "Medium", "High"],
+        dof_idx,
+        SelectorField::DepthOfField,
+        Some(9),
+    );
+
+    let chromatic_idx = match graphics.chromatic_aberration {
+        EffectQuality::Off => 0,
+        EffectQuality::Low => 1,
+        EffectQuality::Medium => 2,
+        EffectQuality::High => 3,
+    };
+    spawn_selector_row_nav(
+        commands,
+        container,
+        "Chromatic Aberration:",
+        &["Off", "Low", "Medium", "High"],
+        chromatic_idx,
+        SelectorField::ChromaticAberration,
+        Some(10),
     );
 
     let scale_labels: Vec<&str> = UI_SCALE_OPTIONS.iter().map(|&(_, s)| s).collect();
@@ -378,21 +497,23 @@ pub(crate) fn spawn_options_page(
         .iter()
         .position(|&(v, _)| (v - graphics.ui_scale).abs() < 0.01)
         .unwrap_or(2);
-    spawn_selector_row(
+    spawn_selector_row_nav(
         commands,
         container,
         "UI Scale:",
         &scale_labels,
         scale_idx,
         SelectorField::UiScale,
+        Some(11),
     );
 
-    let apply_btn = spawn_styled_button(
+    let apply_btn = spawn_styled_button_nav(
         commands,
         "APPLY",
         MenuButton(MenuAction::ApplySettings),
         true,
         fonts,
+        Some(12),
     );
     commands.entity(container).add_child(apply_btn);
 }

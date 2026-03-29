@@ -1,8 +1,12 @@
 //! Generic text input, scroll, and clipboard infrastructure.
 //! Used by both menu and in-game UI.
+//!
+//! Supports text selection (Shift+Arrow, Ctrl+A), clipboard (Ctrl+C/X/V),
+//! and works cross-platform (macOS, Linux, Windows, WASM).
 
+use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::ecs::message::MessageReader;
-use bevy::input::keyboard::KeyboardInput;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
@@ -10,6 +14,10 @@ use crate::components::*;
 use crate::theme;
 
 use super::interactions::UiClickEvent;
+
+// ── Constants ──
+
+const SELECTION_COLOR: Color = Color::srgba(0.29, 0.62, 1.0, 0.85);
 
 // ── Scroll ──
 
@@ -56,6 +64,53 @@ pub fn scroll_panel_system(
     }
 }
 
+// ── Text Input Spawn Helper ──
+
+/// Spawns the rich-text children for a `TextInputField` entity.
+/// Structure: Text root (pre-text) → TextSpan children (sel_before, cursor, sel_after, post).
+pub fn spawn_text_input_children(
+    builder: &mut ChildSpawnerCommands,
+    initial_value: &str,
+) {
+    let font = TextFont {
+        font_size: theme::FONT_MEDIUM,
+        ..default()
+    };
+    builder
+        .spawn((
+            Text::new(initial_value),
+            font.clone(),
+            TextColor(theme::TEXT_PRIMARY),
+            Pickable::IGNORE,
+        ))
+        .with_children(|text_root| {
+            text_root.spawn((
+                TextInputSelBefore,
+                TextSpan::new(""),
+                font.clone(),
+                TextColor(Color::NONE),
+            ));
+            text_root.spawn((
+                TextInputCursor,
+                TextSpan::new("|"),
+                font.clone(),
+                TextColor(Color::NONE),
+            ));
+            text_root.spawn((
+                TextInputSelAfter,
+                TextSpan::new(""),
+                font.clone(),
+                TextColor(Color::NONE),
+            ));
+            text_root.spawn((
+                TextInputPostText,
+                TextSpan::new(""),
+                font,
+                TextColor(theme::TEXT_PRIMARY),
+            ));
+        });
+}
+
 // ── Text Input System ──
 
 pub fn text_input_system(
@@ -65,16 +120,15 @@ pub fn text_input_system(
         Entity,
         &mut TextInputField,
         &Interaction,
-        &Children,
         Option<&TextInputFocused>,
         Option<&crate::menu::SessionCodeInput>,
     )>,
     mut commands: Commands,
     mut config: ResMut<GameSetupConfig>,
     mut keyboard_events: MessageReader<KeyboardInput>,
-    mut text_query: Query<&mut Text, Without<TextInputCursor>>,
     keys: Res<ButtonInput<KeyCode>>,
 ) {
+    // ── Focus management via click ──
     let mut clicked_entity: Option<Entity> = None;
     for event in click_events.read() {
         if input_targets.get(event.entity).is_ok() {
@@ -83,7 +137,7 @@ pub fn text_input_system(
     }
 
     if let Some(clicked) = clicked_entity {
-        for (entity, _, _, _, focused, _) in &inputs {
+        for (entity, _, _, focused, _) in &inputs {
             if entity == clicked {
                 if focused.is_none() {
                     commands.entity(entity).insert(TextInputFocused);
@@ -105,31 +159,16 @@ pub fn text_input_system(
     #[cfg(target_arch = "wasm32")]
     {
         if let Some(clip) = clipboard_read() {
-            for (_entity, mut field, _, children, focused, is_session_code) in &mut inputs {
+            for (_entity, mut field, _, focused, is_session_code) in &mut inputs {
                 if focused.is_none() {
                     continue;
                 }
-                for ch in clip.chars() {
-                    if field.value.len() >= field.max_len {
-                        break;
-                    }
-                    if ch.is_ascii_graphic() || ch == ' ' {
-                        let pos = field.cursor_pos;
-                        field.value.insert(pos, ch);
-                        field.cursor_pos += 1;
-                    }
-                }
-                // Update displayed text
-                for child in children.iter() {
-                    if let Ok(mut text) = text_query.get_mut(child) {
-                        **text = field.value.clone();
-                    }
-                }
-                // Sync to config if this is a player name input
+                field.delete_selection();
+                insert_text_at_cursor(&mut field, &clip);
                 if is_session_code.is_none() {
                     config.player_name = field.value.clone();
                 }
-                break; // Only paste into first focused input
+                break;
             }
         }
     }
@@ -139,109 +178,301 @@ pub fn text_input_system(
         return;
     }
 
-    let cmd_key = keys.pressed(KeyCode::SuperLeft)
-        || keys.pressed(KeyCode::SuperRight)
-        || keys.pressed(KeyCode::ControlLeft)
-        || keys.pressed(KeyCode::ControlRight);
+    let cmd_key = if cfg!(target_os = "macos") {
+        keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight)
+    } else {
+        keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
+    };
 
-    for (entity, mut field, _, children, focused, is_session_code) in &mut inputs {
+    for (_entity, mut field, _, focused, is_session_code) in &mut inputs {
         if focused.is_none() {
             continue;
         }
+        let mut changed = false;
         for event in &events {
             if !event.state.is_pressed() {
                 continue;
             }
 
-            let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+            let shift =
+                keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+
+            // ── Clipboard shortcuts ──
 
             if cmd_key && event.key_code == KeyCode::KeyV {
+                field.delete_selection();
                 if let Some(clip) = clipboard_read() {
-                    for ch in clip.chars() {
-                        if field.value.len() >= field.max_len {
-                            break;
-                        }
-                        if ch.is_ascii_graphic() || ch == ' ' {
-                            let pos = field.cursor_pos;
-                            field.value.insert(pos, ch);
-                            field.cursor_pos += 1;
-                        }
-                    }
+                    insert_text_at_cursor(&mut field, &clip);
                 }
+                changed = true;
                 continue;
             }
 
             if cmd_key && event.key_code == KeyCode::KeyC {
-                clipboard_write(&field.value);
+                if let Some((start, end)) = field.selection_range() {
+                    clipboard_write(&field.value[start..end]);
+                }
+                continue;
+            }
+
+            if cmd_key && event.key_code == KeyCode::KeyX {
+                if let Some((start, end)) = field.selection_range() {
+                    clipboard_write(&field.value[start..end]);
+                    field.delete_selection();
+                    changed = true;
+                }
                 continue;
             }
 
             if cmd_key && event.key_code == KeyCode::KeyA {
-                field.cursor_pos = field.value.len();
+                if !field.value.is_empty() {
+                    field.selection_anchor = Some(0);
+                    field.cursor_pos = field.value.len();
+                }
                 continue;
             }
 
+            // ── Navigation & editing keys ──
+
             match event.key_code {
                 KeyCode::Backspace => {
-                    if field.cursor_pos > 0 {
+                    if field.selection_range().is_some() {
+                        field.delete_selection();
+                    } else if field.cursor_pos > 0 {
                         field.cursor_pos -= 1;
                         let pos = field.cursor_pos;
                         field.value.remove(pos);
                     }
+                    field.selection_anchor = None;
+                    changed = true;
                 }
                 KeyCode::Delete => {
-                    let pos = field.cursor_pos;
-                    if pos < field.value.len() {
-                        field.value.remove(pos);
+                    if field.selection_range().is_some() {
+                        field.delete_selection();
+                    } else {
+                        let pos = field.cursor_pos;
+                        if pos < field.value.len() {
+                            field.value.remove(pos);
+                        }
                     }
+                    field.selection_anchor = None;
+                    changed = true;
                 }
                 KeyCode::ArrowLeft => {
-                    if field.cursor_pos > 0 {
-                        field.cursor_pos -= 1;
+                    if shift {
+                        if field.selection_anchor.is_none() {
+                            field.selection_anchor = Some(field.cursor_pos);
+                        }
+                        if field.cursor_pos > 0 {
+                            field.cursor_pos -= 1;
+                        }
+                    } else if field.selection_range().is_some() {
+                        let (start, _) = field.selection_range().unwrap();
+                        field.cursor_pos = start;
+                        field.selection_anchor = None;
+                    } else {
+                        if field.cursor_pos > 0 {
+                            field.cursor_pos -= 1;
+                        }
+                        field.selection_anchor = None;
                     }
                 }
                 KeyCode::ArrowRight => {
-                    if field.cursor_pos < field.value.len() {
-                        field.cursor_pos += 1;
+                    if shift {
+                        if field.selection_anchor.is_none() {
+                            field.selection_anchor = Some(field.cursor_pos);
+                        }
+                        if field.cursor_pos < field.value.len() {
+                            field.cursor_pos += 1;
+                        }
+                    } else if field.selection_range().is_some() {
+                        let (_, end) = field.selection_range().unwrap();
+                        field.cursor_pos = end;
+                        field.selection_anchor = None;
+                    } else {
+                        if field.cursor_pos < field.value.len() {
+                            field.cursor_pos += 1;
+                        }
+                        field.selection_anchor = None;
                     }
                 }
                 KeyCode::Home => {
+                    if shift {
+                        if field.selection_anchor.is_none() {
+                            field.selection_anchor = Some(field.cursor_pos);
+                        }
+                    } else {
+                        field.selection_anchor = None;
+                    }
                     field.cursor_pos = 0;
                 }
                 KeyCode::End => {
+                    if shift {
+                        if field.selection_anchor.is_none() {
+                            field.selection_anchor = Some(field.cursor_pos);
+                        }
+                    } else {
+                        field.selection_anchor = None;
+                    }
                     field.cursor_pos = field.value.len();
                 }
                 KeyCode::Enter | KeyCode::Escape => {
-                    commands.entity(entity).remove::<TextInputFocused>();
+                    field.selection_anchor = None;
+                    commands.entity(_entity).remove::<TextInputFocused>();
                     commands
-                        .entity(entity)
+                        .entity(_entity)
                         .insert(BorderColor::all(theme::INPUT_BORDER));
                 }
-                KeyCode::Space => {
-                    if field.value.len() < field.max_len {
-                        let pos = field.cursor_pos;
-                        field.value.insert(pos, ' ');
-                        field.cursor_pos += 1;
+                _ => {
+                    // Use logical_key for character input (supports all keyboard layouts)
+                    if cmd_key {
+                        continue;
                     }
-                }
-                code => {
-                    if let Some(ch) = keycode_to_char(code, shift) {
-                        if field.value.len() < field.max_len {
+                    if let Key::Character(ref text) = event.logical_key {
+                        for ch in text.chars() {
+                            if ch.is_control() {
+                                continue;
+                            }
+                            if field.value.len() >= field.max_len {
+                                break;
+                            }
+                            field.delete_selection();
                             let pos = field.cursor_pos;
                             field.value.insert(pos, ch);
                             field.cursor_pos += 1;
+                        }
+                        changed = true;
+                    } else if event.key_code == KeyCode::Space {
+                        if field.value.len() < field.max_len {
+                            field.delete_selection();
+                            let pos = field.cursor_pos;
+                            field.value.insert(pos, ' ');
+                            field.cursor_pos += 1;
+                            changed = true;
                         }
                     }
                 }
             }
         }
 
-        if is_session_code.is_none() {
-            config.player_name = field.value.clone();
+        if changed {
+            if is_session_code.is_none() {
+                config.player_name = field.value.clone();
+            }
         }
-        for child in children.iter() {
-            if let Ok(mut text) = text_query.get_mut(child) {
-                **text = field.value.clone();
+    }
+}
+
+/// Insert text at cursor position, respecting max_len. ASCII-graphic + space only.
+fn insert_text_at_cursor(field: &mut Mut<TextInputField>, text: &str) {
+    for ch in text.chars() {
+        if field.value.len() >= field.max_len {
+            break;
+        }
+        if ch.is_ascii_graphic() || ch == ' ' {
+            let pos = field.cursor_pos;
+            field.value.insert(pos, ch);
+            field.cursor_pos += 1;
+        }
+    }
+}
+
+// ── Text Input Render System ──
+// Updates the rich-text display (Text root + TextSpan children) based on field state.
+
+pub fn text_input_render_system(
+    inputs: Query<(&TextInputField, &Children), Changed<TextInputField>>,
+    mut text_q: Query<&mut Text>,
+    children_q: Query<&Children>,
+    mut span_q: Query<&mut TextSpan>,
+    mut color_q: Query<&mut TextColor>,
+    sel_before: Query<(), With<TextInputSelBefore>>,
+    cursor_q: Query<(), With<TextInputCursor>>,
+    sel_after: Query<(), With<TextInputSelAfter>>,
+    post_q: Query<(), With<TextInputPostText>>,
+) {
+    for (field, children) in &inputs {
+        // Find the root text entity (first child that has Text but not TextInputCursor)
+        let Some(text_root) = children
+            .iter()
+            .find(|c| text_q.get(*c).is_ok() && cursor_q.get(*c).is_err())
+        else {
+            continue;
+        };
+
+        let sel = field.selection_range();
+        let anchor = field.selection_anchor.unwrap_or(field.cursor_pos);
+
+        // Compute 5 segments:
+        // 1. pre-text (root Text) - before selection or cursor
+        // 2. sel_before_cursor - selected text before cursor (when cursor > anchor)
+        // 3. cursor "|"
+        // 4. sel_after_cursor - selected text after cursor (when cursor < anchor)
+        // 5. post-text - after selection/cursor
+        let (pre, sel_b, sel_a, post) = if let Some((start, end)) = sel {
+            if anchor <= field.cursor_pos {
+                // anchor ... cursor_pos: selection is before cursor
+                (
+                    &field.value[..start],
+                    &field.value[start..end],
+                    "",
+                    &field.value[end..],
+                )
+            } else {
+                // cursor_pos ... anchor: selection is after cursor
+                (
+                    &field.value[..start],
+                    "",
+                    &field.value[start..end],
+                    &field.value[end..],
+                )
+            }
+        } else {
+            (
+                &field.value[..field.cursor_pos],
+                "",
+                "",
+                &field.value[field.cursor_pos..],
+            )
+        };
+
+        // Update root text (pre-selection/cursor)
+        if let Ok(mut text) = text_q.get_mut(text_root) {
+            **text = pre.to_string();
+        }
+
+        // Update TextSpan children of the root text
+        if let Ok(span_children) = children_q.get(text_root) {
+            for child in span_children.iter() {
+                if sel_before.get(child).is_ok() {
+                    if let Ok(mut span) = span_q.get_mut(child) {
+                        **span = sel_b.to_string();
+                    }
+                    if let Ok(mut c) = color_q.get_mut(child) {
+                        c.0 = if sel_b.is_empty() {
+                            Color::NONE
+                        } else {
+                            SELECTION_COLOR
+                        };
+                    }
+                } else if cursor_q.get(child).is_ok() {
+                    // cursor span is handled by blink system
+                } else if sel_after.get(child).is_ok() {
+                    if let Ok(mut span) = span_q.get_mut(child) {
+                        **span = sel_a.to_string();
+                    }
+                    if let Ok(mut c) = color_q.get_mut(child) {
+                        c.0 = if sel_a.is_empty() {
+                            Color::NONE
+                        } else {
+                            SELECTION_COLOR
+                        };
+                    }
+                } else if post_q.get(child).is_ok() {
+                    if let Ok(mut span) = span_q.get_mut(child) {
+                        **span = post.to_string();
+                    }
+                }
             }
         }
     }
@@ -299,64 +530,6 @@ pub fn animate_text_input_chrome(
     }
 }
 
-pub fn keycode_to_char(code: KeyCode, shift: bool) -> Option<char> {
-    let ch = match code {
-        KeyCode::KeyA => 'a',
-        KeyCode::KeyB => 'b',
-        KeyCode::KeyC => 'c',
-        KeyCode::KeyD => 'd',
-        KeyCode::KeyE => 'e',
-        KeyCode::KeyF => 'f',
-        KeyCode::KeyG => 'g',
-        KeyCode::KeyH => 'h',
-        KeyCode::KeyI => 'i',
-        KeyCode::KeyJ => 'j',
-        KeyCode::KeyK => 'k',
-        KeyCode::KeyL => 'l',
-        KeyCode::KeyM => 'm',
-        KeyCode::KeyN => 'n',
-        KeyCode::KeyO => 'o',
-        KeyCode::KeyP => 'p',
-        KeyCode::KeyQ => 'q',
-        KeyCode::KeyR => 'r',
-        KeyCode::KeyS => 's',
-        KeyCode::KeyT => 't',
-        KeyCode::KeyU => 'u',
-        KeyCode::KeyV => 'v',
-        KeyCode::KeyW => 'w',
-        KeyCode::KeyX => 'x',
-        KeyCode::KeyY => 'y',
-        KeyCode::KeyZ => 'z',
-        KeyCode::Digit0 => return if shift { Some(')') } else { Some('0') },
-        KeyCode::Digit1 => return if shift { Some('!') } else { Some('1') },
-        KeyCode::Digit2 => return if shift { Some('@') } else { Some('2') },
-        KeyCode::Digit3 => return if shift { Some('#') } else { Some('3') },
-        KeyCode::Digit4 => return if shift { Some('$') } else { Some('4') },
-        KeyCode::Digit5 => return if shift { Some('%') } else { Some('5') },
-        KeyCode::Digit6 => return if shift { Some('^') } else { Some('6') },
-        KeyCode::Digit7 => return if shift { Some('&') } else { Some('7') },
-        KeyCode::Digit8 => return if shift { Some('*') } else { Some('8') },
-        KeyCode::Digit9 => return if shift { Some('(') } else { Some('9') },
-        KeyCode::Minus => return if shift { Some('_') } else { Some('-') },
-        KeyCode::Period => return if shift { Some('>') } else { Some('.') },
-        KeyCode::Semicolon => return if shift { Some(':') } else { Some(';') },
-        KeyCode::Slash => return if shift { Some('?') } else { Some('/') },
-        KeyCode::BracketLeft => return if shift { Some('{') } else { Some('[') },
-        KeyCode::BracketRight => return if shift { Some('}') } else { Some(']') },
-        KeyCode::Backquote => return if shift { Some('~') } else { Some('`') },
-        KeyCode::Equal => return if shift { Some('+') } else { Some('=') },
-        KeyCode::Backslash => return if shift { Some('|') } else { Some('\\') },
-        KeyCode::Quote => return if shift { Some('"') } else { Some('\'') },
-        KeyCode::Comma => return if shift { Some('<') } else { Some(',') },
-        _ => return None,
-    };
-    if shift && ch.is_ascii_alphabetic() {
-        Some(ch.to_ascii_uppercase())
-    } else {
-        Some(ch)
-    }
-}
-
 // ── Clipboard helpers ──
 
 #[cfg(target_arch = "wasm32")]
@@ -365,8 +538,9 @@ mod wasm_clipboard {
     use wasm_bindgen::prelude::*;
 
     static PASTE_BUFFER: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    static COPY_BUFFER: OnceLock<Mutex<String>> = OnceLock::new();
 
-    fn buffer() -> &'static Mutex<Option<String>> {
+    fn paste_buffer() -> &'static Mutex<Option<String>> {
         PASTE_BUFFER.get_or_init(|| {
             if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
                 let cb = Closure::wrap(Box::new(|e: web_sys::ClipboardEvent| {
@@ -391,11 +565,38 @@ mod wasm_clipboard {
         })
     }
 
+    fn copy_buffer() -> &'static Mutex<String> {
+        COPY_BUFFER.get_or_init(|| {
+            if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+                let cb = Closure::wrap(Box::new(|e: web_sys::ClipboardEvent| {
+                    if let Some(dt) = e.clipboard_data() {
+                        if let Ok(buf) = COPY_BUFFER.get().expect("already init").lock() {
+                            if !buf.is_empty() {
+                                let _ = dt.set_data("text/plain", &buf);
+                                e.prevent_default();
+                            }
+                        }
+                    }
+                })
+                    as Box<dyn FnMut(web_sys::ClipboardEvent)>);
+                let _ = doc.add_event_listener_with_callback("copy", cb.as_ref().unchecked_ref());
+                let _ = doc.add_event_listener_with_callback("cut", cb.as_ref().unchecked_ref());
+                cb.forget();
+            }
+            Mutex::new(String::new())
+        })
+    }
+
     pub fn read() -> Option<String> {
-        buffer().lock().ok().and_then(|mut buf| buf.take())
+        paste_buffer().lock().ok().and_then(|mut buf| buf.take())
     }
 
     pub fn write(text: &str) {
+        // Store in copy buffer for browser copy/cut event listeners
+        if let Ok(mut buf) = copy_buffer().lock() {
+            *buf = text.to_string();
+        }
+        // Also try the async clipboard API (requires secure context)
         if let Some(w) = web_sys::window() {
             let clip = w.navigator().clipboard();
             let _ = clip.write_text(text);
@@ -406,20 +607,10 @@ mod wasm_clipboard {
 pub fn clipboard_read() -> Option<String> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        std::process::Command::new("pbpaste")
-            .output()
-            .ok()
-            .and_then(|o| {
-                if o.status.success() {
-                    String::from_utf8(o.stdout).ok()
-                } else {
-                    std::process::Command::new("xclip")
-                        .args(["-selection", "clipboard", "-o"])
-                        .output()
-                        .ok()
-                        .and_then(|o2| String::from_utf8(o2.stdout).ok())
-                }
-            })
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => clipboard.get_text().ok(),
+            Err(_) => None,
+        }
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -430,26 +621,8 @@ pub fn clipboard_read() -> Option<String> {
 pub fn clipboard_write(text: &str) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        use std::io::Write;
-        if let Ok(mut child) = std::process::Command::new("pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-        {
-            if let Some(ref mut stdin) = child.stdin {
-                let _ = stdin.write_all(text.as_bytes());
-            }
-            let _ = child.wait();
-        } else {
-            if let Ok(mut child) = std::process::Command::new("xclip")
-                .args(["-selection", "clipboard"])
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-            {
-                if let Some(ref mut stdin) = child.stdin {
-                    let _ = stdin.write_all(text.as_bytes());
-                }
-                let _ = child.wait();
-            }
+        if let Ok(mut clipboard) = arboard::Clipboard::new() {
+            let _ = clipboard.set_text(text.to_string());
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -464,22 +637,47 @@ pub fn text_input_cursor_blink(
     time: Res<Time>,
     focused: Query<&Children, With<TextInputFocused>>,
     not_focused: Query<&Children, (With<TextInputField>, Without<TextInputFocused>)>,
-    mut cursors: Query<&mut TextColor, With<TextInputCursor>>,
+    children_q: Query<&Children>,
+    mut span_color: Query<&mut TextColor, With<TextInputCursor>>,
 ) {
-    for children in &focused {
-        for child in children.iter() {
-            if let Ok(mut color) = cursors.get_mut(child) {
+    // For focused inputs, find the cursor span inside the text root's children
+    for input_children in &focused {
+        for child in input_children.iter() {
+            // Check direct children first (old structure fallback)
+            if let Ok(mut color) = span_color.get_mut(child) {
                 let t = time.elapsed_secs();
                 let blink = (t * 3.0).sin() * 0.5 + 0.5;
                 let c = theme::ACCENT.to_srgba();
                 color.0 = Color::srgba(c.red, c.green, c.blue, blink);
+                continue;
+            }
+            // Check grandchildren (new rich text structure)
+            if let Ok(grandchildren) = children_q.get(child) {
+                for gc in grandchildren.iter() {
+                    if let Ok(mut color) = span_color.get_mut(gc) {
+                        let t = time.elapsed_secs();
+                        let blink = (t * 3.0).sin() * 0.5 + 0.5;
+                        let c = theme::ACCENT.to_srgba();
+                        color.0 = Color::srgba(c.red, c.green, c.blue, blink);
+                    }
+                }
             }
         }
     }
-    for children in &not_focused {
-        for child in children.iter() {
-            if let Ok(mut color) = cursors.get_mut(child) {
+
+    // Hide cursor for unfocused inputs
+    for input_children in &not_focused {
+        for child in input_children.iter() {
+            if let Ok(mut color) = span_color.get_mut(child) {
                 color.0 = Color::NONE;
+                continue;
+            }
+            if let Ok(grandchildren) = children_q.get(child) {
+                for gc in grandchildren.iter() {
+                    if let Ok(mut color) = span_color.get_mut(gc) {
+                        color.0 = Color::NONE;
+                    }
+                }
             }
         }
     }

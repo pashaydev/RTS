@@ -13,6 +13,7 @@ impl Plugin for CombatPlugin {
         app.add_systems(
             Update,
             (
+                tick_damage_reservations,
                 approach_attack_target,
                 start_attack_windups,
                 resolve_attack_windups,
@@ -26,6 +27,52 @@ impl Plugin for CombatPlugin {
                 .run_if(in_state(AppState::InGame)),
         );
     }
+}
+
+pub fn attack_surface_distance(attacker_pos: Vec3, target_pos: Vec3, target_radius: f32) -> f32 {
+    let dx = target_pos.x - attacker_pos.x;
+    let dz = target_pos.z - attacker_pos.z;
+    ((dx * dx + dz * dz).sqrt() - target_radius).max(0.0)
+}
+
+pub fn is_in_attack_band(
+    surface_distance: f32,
+    max_range: f32,
+    minimum_range: f32,
+    tolerance: f32,
+) -> bool {
+    let min_allowed = (minimum_range - tolerance).max(0.0);
+    let max_allowed = max_range + tolerance;
+    surface_distance >= min_allowed && surface_distance <= max_allowed
+}
+
+fn desired_attack_surface_distance(max_range: f32, minimum_range: f32) -> f32 {
+    if minimum_range > 0.0 {
+        ((minimum_range + max_range) * 0.5)
+            .max(minimum_range + 0.25)
+            .min((max_range - 0.1).max(minimum_range))
+    } else {
+        (max_range - 0.15).max(0.25)
+    }
+}
+
+fn desired_attack_move_target(
+    attacker_entity: Entity,
+    attacker_pos: Vec3,
+    target_pos: Vec3,
+    target_radius: f32,
+    max_range: f32,
+    minimum_range: f32,
+) -> Vec3 {
+    let away = Vec2::new(attacker_pos.x - target_pos.x, attacker_pos.z - target_pos.z);
+    let dir = if away.length_squared() > 0.0001 {
+        away.normalize()
+    } else {
+        let angle = (attacker_entity.to_bits() % 360) as f32 * std::f32::consts::TAU / 360.0;
+        Vec2::new(angle.cos(), angle.sin())
+    };
+    let desired_surface = desired_attack_surface_distance(max_range, minimum_range);
+    target_pos + Vec3::new(dir.x, 0.0, dir.y) * (target_radius + desired_surface)
 }
 
 fn explode_props(
@@ -104,6 +151,7 @@ pub fn approach_attack_target(
             &Transform,
             &AttackTarget,
             &AttackRange,
+            Option<&AttackTiming>,
             &Faction,
             Option<&mut UnitState>,
             Option<&AttackWindup>,
@@ -117,16 +165,18 @@ pub fn approach_attack_target(
         (),
         (
             With<Building>,
-            Or<(With<WallSegmentPiece>, With<WallPostPiece>)>,
+            Or<(With<WallSegmentPiece>, With<WallPostPiece>, With<WallCornerPiece>)>,
         ),
     >,
     all_transforms: Query<&Transform>,
+    building_footprints: Query<&BuildingFootprint, With<Building>>,
 ) {
     for (
         attacker_entity,
         tf,
         attack_target,
         range,
+        attack_timing,
         faction,
         opt_state,
         windup,
@@ -146,6 +196,10 @@ pub fn approach_attack_target(
         let Ok(target_tf) = all_transforms.get(attack_target.0) else {
             continue;
         };
+        let target_radius = building_footprints
+            .get(attack_target.0)
+            .map_or(0.0, |fp| fp.0);
+        let minimum_range = attack_timing.map_or(0.0, |timing| timing.minimum_range);
 
         // ── Wall redirect: if a hostile wall blocks the path, retarget it ──
         let target_is_wall = wall_check.get(attack_target.0).is_ok();
@@ -197,15 +251,23 @@ pub fn approach_attack_target(
         }
 
         // ── Distance check (2D only — ignore terrain height) ──
-        let dx = target_tf.translation.x - tf.translation.x;
-        let dz = target_tf.translation.z - tf.translation.z;
-        let dist = (dx * dx + dz * dz).sqrt();
+        let surface_dist =
+            attack_surface_distance(tf.translation, target_tf.translation, target_radius);
+        let in_band = is_in_attack_band(surface_dist, range.0, minimum_range, 0.15);
 
-        if dist > range.0 {
-            // Out of range — delegate movement to the pathfinding pipeline via MoveTarget
+        if !in_band {
+            // Reposition until the target sits inside the allowed attack band.
+            let desired_pos = desired_attack_move_target(
+                attacker_entity,
+                tf.translation,
+                target_tf.translation,
+                target_radius,
+                range.0,
+                minimum_range,
+            );
             commands
                 .entity(attacker_entity)
-                .insert(MoveTarget(target_tf.translation));
+                .insert(MoveTarget(desired_pos));
 
             // ── Chase timeout ──
             if let Some(mut chase) = opt_chase_timer {
@@ -256,13 +318,17 @@ fn start_attack_windups(
         &AttackTarget,
         &mut AttackCooldown,
         &AttackRange,
+        Option<&AttackTiming>,
         &AttackProfile,
+        &AttackDamage,
         &Faction,
         Option<&AttackWindup>,
         Option<&AttackRecovery>,
         Option<&StatusEffects>,
     )>,
     targets: Query<&Transform>,
+    building_footprints: Query<&BuildingFootprint, With<Building>>,
+    mut reserved_q: Query<&mut ReservedIncomingDamage>,
 ) {
     for (
         entity,
@@ -270,7 +336,9 @@ fn start_attack_windups(
         attack_target,
         mut cooldown,
         range,
+        attack_timing,
         profile,
+        atk_damage,
         faction,
         windup,
         recovery,
@@ -295,8 +363,13 @@ fn start_attack_windups(
         let Ok(target_tf) = targets.get(attack_target.0) else {
             continue;
         };
-        let d = atk_tf.translation - target_tf.translation;
-        if (d.x * d.x + d.z * d.z).sqrt() > range.0 * 1.15 {
+        let target_radius = building_footprints
+            .get(attack_target.0)
+            .map_or(0.0, |fp| fp.0);
+        let minimum_range = attack_timing.map_or(0.0, |timing| timing.minimum_range);
+        let surface_dist =
+            attack_surface_distance(atk_tf.translation, target_tf.translation, target_radius);
+        if !is_in_attack_band(surface_dist, range.0, minimum_range, range.0 * 0.15) {
             continue;
         }
 
@@ -305,6 +378,12 @@ fn start_attack_windups(
             target: attack_target.0,
             remaining_secs: profile.windup_secs.max(0.01),
         });
+
+        // Reserve damage on the target
+        if let Ok(mut reserved) = reserved_q.get_mut(attack_target.0) {
+            let ttl = profile.windup_secs + 2.0;
+            reserved.reservations.push((entity, atk_damage.0, ttl));
+        }
     }
 }
 
@@ -312,6 +391,7 @@ fn resolve_attack_windups(
     mut commands: Commands,
     time: Res<Time>,
     vfx_assets: Option<Res<VfxAssets>>,
+    projectile_assets: Option<Res<crate::model_assets::ProjectileModelAssets>>,
     net_role: Res<NetRole>,
     active_player: Res<ActivePlayer>,
     mut attackers: Query<(
@@ -321,13 +401,21 @@ fn resolve_attack_windups(
         &CombatFxKind,
         &AttackDamage,
         &AttackRange,
+        Option<&AttackTiming>,
         Option<&IsRanged>,
         &Faction,
         Option<&DamageType>,
         &mut AttackWindup,
         Option<&ChargeBonus>,
+        Option<&EntityKind>,
     )>,
-    mut healths: Query<(&Transform, &mut Health, Option<&ArmorType>)>,
+    mut healths: Query<(
+        &Transform,
+        &mut Health,
+        Option<&ArmorType>,
+        Option<&mut ReservedIncomingDamage>,
+    )>,
+    building_footprints: Query<&BuildingFootprint, With<Building>>,
     camera_q: Query<Entity, With<RtsCamera>>,
 ) {
     let Some(vfx) = vfx_assets else { return };
@@ -339,11 +427,13 @@ fn resolve_attack_windups(
         fx_kind,
         damage,
         range,
+        attack_timing,
         is_ranged,
         faction,
         opt_dmg_type,
         mut windup,
         opt_charge,
+        opt_entity_kind,
     ) in &mut attackers
     {
         // Client: only execute attacks for local player's units
@@ -356,7 +446,7 @@ fn resolve_attack_windups(
         }
 
         let target = windup.target;
-        let Ok((target_tf, mut health, opt_armor)) = healths.get_mut(target) else {
+        let Ok((target_tf, mut health, opt_armor, opt_reserved)) = healths.get_mut(target) else {
             commands.entity(entity).remove::<AttackWindup>();
             commands.entity(entity).insert(AttackRecovery {
                 remaining_secs: profile.recovery_secs,
@@ -364,9 +454,17 @@ fn resolve_attack_windups(
             continue;
         };
 
-        let d2 = atk_tf.translation - target_tf.translation;
-        let dist = (d2.x * d2.x + d2.z * d2.z).sqrt();
-        if dist > range.0 * 1.2 {
+        let target_radius = building_footprints
+            .get(target)
+            .map_or(0.0, |fp| fp.0);
+        let minimum_range = attack_timing.map_or(0.0, |timing| timing.minimum_range);
+        let surface_dist =
+            attack_surface_distance(atk_tf.translation, target_tf.translation, target_radius);
+        if !is_in_attack_band(surface_dist, range.0, minimum_range, range.0 * 0.2) {
+            // Out of range — clear windup reservation
+            if let Some(mut reserved) = opt_reserved {
+                reserved.reservations.retain(|(src, _, _)| *src != entity);
+            }
             commands.entity(entity).remove::<AttackWindup>();
             commands.entity(entity).insert(AttackRecovery {
                 remaining_secs: (profile.recovery_secs * 0.5).max(0.05),
@@ -381,24 +479,62 @@ fn resolve_attack_windups(
         };
 
         if is_ranged.is_some() {
+            // Replace windup reservation with projectile-travel reservation
+            if let Some(mut reserved) = opt_reserved {
+                reserved.reservations.retain(|(src, _, _)| *src != entity);
+                let travel_ttl = surface_dist / profile.projectile_speed.max(8.0) + 0.35;
+                reserved.reservations.push((entity, damage.0, travel_ttl));
+            }
             // Ranged: spawn projectile (carries damage_type for on-hit multiplier)
-            commands.spawn((
-                Projectile {
-                    target,
-                    speed: profile.projectile_speed.max(8.0),
-                    damage: damage.0,
-                    damage_type: opt_dmg_type.copied().unwrap_or(DamageType::Melee),
-                    fx_kind: *fx_kind,
-                    impact_scale: profile.impact_scale,
-                },
-                FogHideable::Vfx,
-                Mesh3d(vfx.sphere_mesh.clone()),
-                MeshMaterial3d(vfx.projectile_material.clone()),
-                Transform::from_translation(atk_tf.translation + Vec3::Y * 0.5)
-                    .with_scale(Vec3::splat(profile.projectile_scale.max(0.12))),
-                NotShadowCaster,
-                NotShadowReceiver,
-            ));
+            let proj_visual = opt_entity_kind
+                .and_then(|k| crate::model_assets::projectile_visual_for(*k));
+            let use_model = proj_visual.is_some() && projectile_assets.is_some();
+            let orient = use_model
+                && !matches!(proj_visual, Some(crate::model_assets::ProjectileVisualKind::CatapultRock));
+            let proj_component = Projectile {
+                source: entity,
+                target,
+                speed: profile.projectile_speed.max(8.0),
+                damage: damage.0,
+                damage_type: opt_dmg_type.copied().unwrap_or(DamageType::Melee),
+                fx_kind: *fx_kind,
+                impact_scale: profile.impact_scale,
+                orient_to_velocity: orient,
+            };
+            let spawn_pos = atk_tf.translation + Vec3::Y * 0.5;
+            let dir_to_target = (target_tf.translation - spawn_pos).normalize_or_zero();
+            if let (Some(visual_kind), Some(ref proj_res)) = (proj_visual, &projectile_assets) {
+                let scene = proj_res.scene_for(visual_kind, entity.to_bits() as usize);
+                let proj_scale = match visual_kind {
+                    crate::model_assets::ProjectileVisualKind::Arrow => 0.35,
+                    crate::model_assets::ProjectileVisualKind::Bolt => 0.4,
+                    crate::model_assets::ProjectileVisualKind::CatapultRock => 0.5,
+                };
+                let rotation = if orient {
+                    Quat::from_rotation_arc(Vec3::Z, dir_to_target)
+                } else {
+                    Quat::IDENTITY
+                };
+                commands.spawn((
+                    proj_component,
+                    FogHideable::Vfx,
+                    SceneRoot(scene),
+                    Transform::from_translation(spawn_pos)
+                        .with_rotation(rotation)
+                        .with_scale(Vec3::splat(proj_scale)),
+                ));
+            } else {
+                commands.spawn((
+                    proj_component,
+                    FogHideable::Vfx,
+                    Mesh3d(vfx.sphere_mesh.clone()),
+                    MeshMaterial3d(vfx.projectile_material.clone()),
+                    Transform::from_translation(spawn_pos)
+                        .with_scale(Vec3::splat(profile.projectile_scale.max(0.12))),
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                ));
+            };
             spawn_combat_flash(
                 &mut commands,
                 &vfx,
@@ -411,6 +547,10 @@ fn resolve_attack_windups(
             );
         } else {
             // Melee: apply damage directly with multiplier + flash VFX
+            // Clear windup reservation — damage applied immediately
+            if let Some(mut reserved) = opt_reserved {
+                reserved.reservations.retain(|(src, _, _)| *src != entity);
+            }
             let charge_mult = opt_charge.map(|c| c.damage_mult).unwrap_or(1.0);
             let dealt = damage.0 * multiplier * charge_mult;
             health.current -= dealt;
@@ -593,6 +733,8 @@ fn handle_death(
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     mut all_resources: ResMut<AllPlayerResources>,
     attacker_factions: Query<&Faction, With<AttackTarget>>,
+    mut wall_grid: ResMut<WallGrid>,
+    wall_coord_q: Query<&WallGridCoord>,
 ) {
     let is_client = *net_role == NetRole::Client;
     // Collect dead entities first to avoid borrow issues
@@ -720,6 +862,14 @@ fn handle_death(
         }
 
         if *is_building {
+            // Remove from wall grid if this was a wall piece
+            if let Ok(coord) = wall_coord_q.get(*dead_entity) {
+                let (gx, gz) = (coord.0, coord.1);
+                wall_grid.cells.remove(&(gx, gz));
+                for (nx, nz) in WallGrid::cardinal_neighbors(gx, gz) {
+                    wall_grid.dirty.push((nx, nz));
+                }
+            }
             // Buildings despawn immediately
             commands.entity(*dead_entity).despawn();
         } else {
@@ -761,6 +911,7 @@ fn handle_death(
                 .remove::<AttackWindup>()
                 .remove::<AttackRecovery>()
                 .remove::<AttackCooldown>()
+                .remove::<ReservedIncomingDamage>()
                 .insert(Dying {
                     timer: Timer::from_seconds(1.5, TimerMode::Once),
                     killed_by: killer_faction,
@@ -773,7 +924,7 @@ fn handle_death(
 fn tick_dying(
     mut commands: Commands,
     time: Res<Time>,
-    mut dying: Query<(Entity, &mut Dying, &mut Transform)>,
+    mut dying: Query<(Entity, &mut Dying, &mut Transform), Without<ProceduralMob>>,
 ) {
     for (entity, mut dying, mut tf) in &mut dying {
         dying.timer.tick(time.delta());
@@ -788,5 +939,348 @@ fn tick_dying(
         if dying.timer.is_finished() {
             commands.entity(entity).despawn();
         }
+    }
+}
+
+// ── Scored targeting ──
+
+pub struct TargetScoreInput<'a> {
+    pub profile: &'a TargetingProfile,
+    pub attacker_pos: Vec3,
+    pub attacker_damage_type: DamageType,
+    pub scan_range: f32,
+    pub target_pos: Vec3,
+    pub target_health: &'a Health,
+    pub target_armor: ArmorType,
+    pub target_threat: f32,
+    pub target_is_building: bool,
+    pub target_reserved_damage: f32,
+}
+
+/// Pure scoring function for target selection. Lower score = better target.
+/// Returns `None` if the target should be hard-rejected.
+pub fn target_score(input: &TargetScoreInput) -> Option<f32> {
+    // Hard reject: dead or dying
+    if input.target_health.current <= 0.0 {
+        return None;
+    }
+
+    let dx = input.target_pos.x - input.attacker_pos.x;
+    let dz = input.target_pos.z - input.attacker_pos.z;
+    let dist = (dx * dx + dz * dz).sqrt();
+
+    // Hard reject: outside scan range (allow slight overshoot)
+    if dist > input.scan_range * 1.5 {
+        return None;
+    }
+
+    let dist_norm = (dist / input.scan_range.max(0.1)).clamp(0.0, 1.5);
+
+    let hp_frac = (input.target_health.current / input.target_health.max.max(1.0)).clamp(0.0, 1.0);
+
+    let multiplier = input
+        .attacker_damage_type
+        .multiplier_vs(input.target_armor);
+
+    let overkill_frac = if input.target_health.current > 0.0 {
+        (input.target_reserved_damage / input.target_health.current).min(2.0)
+    } else {
+        2.0
+    };
+
+    // All terms: lower = more desirable target
+    let distance_term = input.profile.distance_weight * dist_norm;
+    let low_hp_term = input.profile.low_hp_weight * hp_frac; // low hp_frac → low score → preferred
+    let threat_term = -input.profile.threat_weight * input.target_threat;
+    let counter_term = -input.profile.counter_weight * (multiplier - 1.0);
+    let building_term = if input.target_is_building {
+        input.profile.building_penalty
+    } else {
+        0.0
+    };
+    let reserved_term = input.profile.reserved_damage_penalty * overkill_frac;
+
+    Some(distance_term + low_hp_term + threat_term + counter_term + building_term + reserved_term)
+}
+
+// ── Damage reservation TTL tick ──
+
+fn tick_damage_reservations(time: Res<Time>, mut query: Query<&mut ReservedIncomingDamage>) {
+    let dt = time.delta_secs();
+    for mut reserved in &mut query {
+        if reserved.reservations.is_empty() {
+            continue;
+        }
+        reserved.reservations.retain_mut(|(_, _, ttl)| {
+            *ttl -= dt;
+            *ttl > 0.0
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_health(current: f32, max: f32) -> Health {
+        Health { current, max }
+    }
+
+    fn base_profile() -> TargetingProfile {
+        TargetingProfile {
+            distance_weight: 1.0,
+            low_hp_weight: 1.0,
+            threat_weight: 1.0,
+            counter_weight: 1.0,
+            building_penalty: 3.0,
+            reserved_damage_penalty: 1.0,
+        }
+    }
+
+    #[test]
+    fn rejects_dead_target() {
+        let profile = base_profile();
+        let health = make_health(0.0, 100.0);
+        let result = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 10.0,
+            target_pos: Vec3::new(3.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Light,
+            target_threat: 1.0,
+            target_is_building: false,
+            target_reserved_damage: 0.0,
+        });
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn rejects_out_of_range() {
+        let profile = base_profile();
+        let health = make_health(50.0, 100.0);
+        let result = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 5.0,
+            target_pos: Vec3::new(20.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Light,
+            target_threat: 1.0,
+            target_is_building: false,
+            target_reserved_damage: 0.0,
+        });
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn prefers_closer_target() {
+        let profile = base_profile();
+        let health = make_health(80.0, 100.0);
+        let close = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 15.0,
+            target_pos: Vec3::new(2.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Light,
+            target_threat: 1.0,
+            target_is_building: false,
+            target_reserved_damage: 0.0,
+        })
+        .unwrap();
+        let far = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 15.0,
+            target_pos: Vec3::new(12.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Light,
+            target_threat: 1.0,
+            target_is_building: false,
+            target_reserved_damage: 0.0,
+        })
+        .unwrap();
+        assert!(close < far, "closer target should score lower (better)");
+    }
+
+    #[test]
+    fn prefers_low_hp_target() {
+        let profile = base_profile();
+        let low_hp = make_health(10.0, 100.0);
+        let high_hp = make_health(90.0, 100.0);
+        let low = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 15.0,
+            target_pos: Vec3::new(5.0, 0.0, 0.0),
+            target_health: &low_hp,
+            target_armor: ArmorType::Light,
+            target_threat: 1.0,
+            target_is_building: false,
+            target_reserved_damage: 0.0,
+        })
+        .unwrap();
+        let high = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 15.0,
+            target_pos: Vec3::new(5.0, 0.0, 0.0),
+            target_health: &high_hp,
+            target_armor: ArmorType::Light,
+            target_threat: 1.0,
+            target_is_building: false,
+            target_reserved_damage: 0.0,
+        })
+        .unwrap();
+        assert!(low < high, "low HP target should score lower (better)");
+    }
+
+    #[test]
+    fn prefers_high_threat_target() {
+        let profile = base_profile();
+        let health = make_health(80.0, 100.0);
+        let high_threat = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 15.0,
+            target_pos: Vec3::new(5.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Light,
+            target_threat: 2.0,
+            target_is_building: false,
+            target_reserved_damage: 0.0,
+        })
+        .unwrap();
+        let low_threat = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 15.0,
+            target_pos: Vec3::new(5.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Light,
+            target_threat: 0.2,
+            target_is_building: false,
+            target_reserved_damage: 0.0,
+        })
+        .unwrap();
+        assert!(
+            high_threat < low_threat,
+            "high threat target should score lower (better)"
+        );
+    }
+
+    #[test]
+    fn building_penalty_applied() {
+        let profile = base_profile();
+        let health = make_health(80.0, 100.0);
+        let unit = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 15.0,
+            target_pos: Vec3::new(5.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Light,
+            target_threat: 1.0,
+            target_is_building: false,
+            target_reserved_damage: 0.0,
+        })
+        .unwrap();
+        let building = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 15.0,
+            target_pos: Vec3::new(5.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Structure,
+            target_threat: 1.0,
+            target_is_building: true,
+            target_reserved_damage: 0.0,
+        })
+        .unwrap();
+        assert!(unit < building, "units should be preferred over buildings");
+    }
+
+    #[test]
+    fn negative_building_penalty_prefers_buildings() {
+        let mut profile = base_profile();
+        profile.building_penalty = -3.0; // siege profile
+        let health = make_health(200.0, 200.0);
+        let unit = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::SiegeDmg,
+            scan_range: 15.0,
+            target_pos: Vec3::new(5.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Light,
+            target_threat: 1.0,
+            target_is_building: false,
+            target_reserved_damage: 0.0,
+        })
+        .unwrap();
+        let building = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::SiegeDmg,
+            scan_range: 15.0,
+            target_pos: Vec3::new(5.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Structure,
+            target_threat: 1.0,
+            target_is_building: true,
+            target_reserved_damage: 0.0,
+        })
+        .unwrap();
+        assert!(
+            building < unit,
+            "siege should prefer buildings with negative penalty"
+        );
+    }
+
+    #[test]
+    fn reserved_damage_discourages_overkill() {
+        let profile = base_profile();
+        let health = make_health(50.0, 100.0);
+        let no_reservation = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 15.0,
+            target_pos: Vec3::new(5.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Light,
+            target_threat: 1.0,
+            target_is_building: false,
+            target_reserved_damage: 0.0,
+        })
+        .unwrap();
+        let with_reservation = target_score(&TargetScoreInput {
+            profile: &profile,
+            attacker_pos: Vec3::ZERO,
+            attacker_damage_type: DamageType::Melee,
+            scan_range: 15.0,
+            target_pos: Vec3::new(5.0, 0.0, 0.0),
+            target_health: &health,
+            target_armor: ArmorType::Light,
+            target_threat: 1.0,
+            target_is_building: false,
+            target_reserved_damage: 45.0,
+        })
+        .unwrap();
+        assert!(
+            no_reservation < with_reservation,
+            "target with reserved damage should score higher (worse)"
+        );
     }
 }

@@ -142,9 +142,9 @@ pub struct BuildRequest {
 /// Wall plan: 4 sides of a rectangle around the base
 #[derive(Clone, Debug)]
 pub struct WallPlan {
-    /// (start, end) for each of 4 wall sides
-    pub sides: [(Vec3, Vec3); 4],
-    pub completed: [bool; 4],
+    /// Inclusive start/end points for each straight wall run.
+    pub runs: Vec<(Vec3, Vec3)>,
+    pub completed: Vec<bool>,
 }
 
 /// Resource goal for economy planning

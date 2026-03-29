@@ -11,7 +11,7 @@ use crate::components::{
 };
 use crate::fog::FogTextures;
 use crate::lighting::SunLight;
-use crate::terrain_material::{TerrainMaterial, TerrainSettings};
+use crate::terrain_material::{TerrainExtension, TerrainMaterial, TerrainSettings};
 use crate::water_material::{WaterMaterial, WaterSettings};
 use bevy::light::NotShadowCaster;
 
@@ -493,41 +493,10 @@ impl Plugin for GroundPlugin {
             )
             .add_systems(
                 Update,
-                (update_water_time, update_terrain_lighting, patch_water_fog_textures)
+                (update_water_time, patch_water_fog_textures)
                     .run_if(in_state(AppState::InGame)),
             );
     }
-}
-
-fn update_terrain_lighting(
-    mut materials: ResMut<Assets<TerrainMaterial>>,
-    terrain_q: Query<&MeshMaterial3d<TerrainMaterial>, With<Ground>>,
-    sun_q: Query<(&DirectionalLight, &Transform), With<SunLight>>,
-    ambient: Res<GlobalAmbientLight>,
-) {
-    let Ok(mat_handle) = terrain_q.single() else {
-        return;
-    };
-    let Some(mat) = materials.get_mut(&mat_handle.0) else {
-        return;
-    };
-
-    // Sync sun direction, color, intensity from scene DirectionalLight
-    if let Ok((sun_light, sun_tf)) = sun_q.single() {
-        let sun_dir = sun_tf.forward().as_vec3();
-        // DirectionalLight forward points *toward* what it illuminates,
-        // but in lighting math we want the direction *from* the surface to the light
-        mat.settings.sun_direction = Vec4::new(-sun_dir.x, -sun_dir.y, -sun_dir.z, 0.0);
-        let c = sun_light.color.to_srgba();
-        mat.settings.sun_color = Vec4::new(c.red, c.green, c.blue, 1.0);
-        // Normalize illuminance: peak sun ~6000 lux in this game's day cycle
-        mat.settings.sun_intensity = (sun_light.illuminance / 6000.0).clamp(0.0, 2.0);
-    }
-
-    // Sync ambient light — normalize brightness (peaks at ~300 in day cycle)
-    let ac = ambient.color.to_srgba();
-    mat.settings.ambient_color = Vec4::new(ac.red, ac.green, ac.blue, 1.0);
-    mat.settings.ambient_brightness = (ambient.brightness / 300.0).clamp(0.0, 1.0) * 0.5;
 }
 
 fn load_terrain_textures(mut commands: Commands, asset_server: Res<AssetServer>) {
@@ -681,14 +650,22 @@ pub fn spawn_ground(
         Ground,
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(terrain_materials.add(TerrainMaterial {
-            settings: TerrainSettings {
-                amplitude: AMPLITUDE,
+            base: StandardMaterial {
+                perceptual_roughness: 0.9,
+                metallic: 0.0,
+                reflectance: 0.1,
                 ..default()
             },
-            grass_texture: Some(terrain_textures.grass.clone()),
-            rock_texture: Some(terrain_textures.rock.clone()),
-            sand_texture: Some(terrain_textures.sand.clone()),
-            snow_texture: Some(terrain_textures.snow.clone()),
+            extension: TerrainExtension {
+                settings: TerrainSettings {
+                    amplitude: AMPLITUDE,
+                    ..default()
+                },
+                grass_texture: Some(terrain_textures.grass.clone()),
+                rock_texture: Some(terrain_textures.rock.clone()),
+                sand_texture: Some(terrain_textures.sand.clone()),
+                snow_texture: Some(terrain_textures.snow.clone()),
+            },
         })),
         Transform::from_translation(Vec3::ZERO),
     ));

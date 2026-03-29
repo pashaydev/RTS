@@ -16,6 +16,7 @@ pub struct ResourcesPlugin;
 impl Plugin for ResourcesPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TreeGrowthConfig>()
+            .init_resource::<TreeLeafMaterials>()
             .init_resource::<CarriedResourceTotals>()
             .init_resource::<PendingCarriedDrains>()
             .add_systems(
@@ -27,7 +28,6 @@ impl Plugin for ResourcesPlugin {
                 (
                     spawn_resource_nodes,
                     spawn_decorations,
-                    spawn_explosive_props,
                 )
                     .after(crate::ground::spawn_ground),
             )
@@ -631,81 +631,6 @@ enum DecoKind {
     DeadTree,
 }
 
-fn spawn_explosive_props(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    biome_map: Res<BiomeMap>,
-    height_map: Res<HeightMap>,
-    config: Res<GameSetupConfig>,
-    map_seed: Res<MapSeed>,
-) {
-    let barrel_mesh = meshes.add(Cylinder::new(0.45, 1.1));
-    let barrel_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.62, 0.18, 0.08),
-        emissive: LinearRgba::new(0.12, 0.03, 0.01, 1.0),
-        perceptual_roughness: 0.85,
-        ..default()
-    });
-
-    let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(3000));
-    let half = height_map.half_map - 12.0;
-    let border = BorderSettings::from_map_size(height_map.map_size);
-    let spawn_positions = config.spawn_positions(map_seed.0);
-    let barrel_count = ((config.map_size.world_size() / 500.0).powi(2) * 22.0).round() as u32;
-
-    for _ in 0..barrel_count.max(8) {
-        let mut placed = false;
-        for _ in 0..20 {
-            let x = rng.random_range(-half..half);
-            let z = rng.random_range(-half..half);
-            if is_in_mountain_border(x, z, height_map.half_map, border) {
-                continue;
-            }
-            let biome = biome_map.get_biome(x, z);
-            if matches!(biome, Biome::Water | Biome::Mountain) {
-                continue;
-            }
-
-            let too_close_to_spawn = spawn_positions.iter().any(|(_, (sx, sz))| {
-                let dx = x - *sx;
-                let dz = z - *sz;
-                (dx * dx + dz * dz).sqrt() < 32.0
-            });
-            if too_close_to_spawn {
-                continue;
-            }
-
-            let y = height_map.sample(x, z) + 0.55;
-            commands.spawn((
-                GameWorld,
-                ExplosiveProp {
-                    damage: 45.0,
-                    radius: 4.5,
-                },
-                Health {
-                    current: 35.0,
-                    max: 35.0,
-                },
-                FogHideable::Object,
-                PickRadius(1.0),
-                Mesh3d(barrel_mesh.clone()),
-                MeshMaterial3d(barrel_material.clone()),
-                NotShadowCaster,
-                Transform::from_translation(Vec3::new(x, y, z)).with_rotation(
-                    Quat::from_rotation_y(rng.random_range(0.0..std::f32::consts::TAU)),
-                ),
-            ));
-            placed = true;
-            break;
-        }
-
-        if !placed {
-            continue;
-        }
-    }
-}
-
 fn spawn_decorations(
     mut commands: Commands,
     biome_map: Res<BiomeMap>,
@@ -786,7 +711,7 @@ fn spawn_decorations(
 
             let (models, scale_min, scale_max) = match kind {
                 DecoKind::Grass => (&model_assets.grass, 0.6_f32, 1.0_f32),
-                DecoKind::Bush => (&model_assets.bushes, 0.7, 1.1),
+                DecoKind::Bush => (&model_assets.bushes, 0.05, 0.21),
                 DecoKind::Rock => (&model_assets.rocks, 0.8, 1.5),
                 DecoKind::DeadTree => (&model_assets.dead_trees, 0.7, 1.1),
             };
@@ -894,13 +819,41 @@ fn build_decoration_chunks(
     let mut chunk_map = DecoChunkMap::default();
     let mut total_count = 0usize;
 
+    // Expand bush placements: each placement uses a model index (0,1,...) but the
+    // flat assets list has multiple primitives per model. Expand into one placement
+    // per primitive so the generic loop can index directly.
+    let expanded_bushes: Vec<(usize, Vec3, f32, f32)> = {
+        // Build cumulative offsets: model_starts[i] = sum of sizes before model i
+        let model_starts: Vec<usize> = deco_assets
+            .bush_model_sizes
+            .iter()
+            .scan(0usize, |acc, &sz| {
+                let start = *acc;
+                *acc += sz;
+                Some(start)
+            })
+            .collect();
+        let num_models = deco_assets.bush_model_sizes.len();
+
+        let mut expanded = Vec::with_capacity(pending.bushes.len() * 2);
+        for &(model_idx, pos, scale, y_rot) in &pending.bushes {
+            let mi = model_idx.min(num_models.saturating_sub(1));
+            let start = model_starts[mi];
+            let count = deco_assets.bush_model_sizes[mi];
+            for prim in 0..count {
+                expanded.push((start + prim, pos, scale, y_rot));
+            }
+        }
+        expanded
+    };
+
     // Process each decoration category
     let categories: &[(
         &[(usize, Vec3, f32, f32)],
         &[Option<SourceMeshData>],
         &[(Handle<Mesh>, Handle<StandardMaterial>)],
     )] = &[
-        (&pending.bushes, &bush_sources, &deco_assets.bushes),
+        (&expanded_bushes, &bush_sources, &deco_assets.bushes),
         (&pending.rocks, &rock_sources, &deco_assets.rocks),
         (&pending.grass, &grass_sources, &deco_assets.grass),
     ];
@@ -1023,11 +976,42 @@ fn build_decoration_chunks(
             if positions.is_empty() {
                 continue;
             }
+
+            // Compute chunk center from vertex positions and shift vertices
+            // into local space so the entity Transform sits at the chunk center.
+            // This gives Bevy correct frustum culling via the auto-computed Aabb.
+            let chunk_center = Vec3::new(
+                (cx as f32 + 0.5) * DECO_CHUNK_SIZE,
+                0.0,
+                (cz as f32 + 0.5) * DECO_CHUNK_SIZE,
+            );
+            // Compute Y center from actual vertex data for a tighter Aabb
+            let (mut y_min, mut y_max) = (f32::MAX, f32::MIN);
+            let local_positions: Vec<[f32; 3]> = positions
+                .iter()
+                .map(|p| {
+                    y_min = y_min.min(p[1]);
+                    y_max = y_max.max(p[1]);
+                    [p[0] - chunk_center.x, p[1], p[2] - chunk_center.z]
+                })
+                .collect();
+            let y_center = (y_min + y_max) * 0.5;
+            let chunk_pos = Vec3::new(chunk_center.x, y_center, chunk_center.z);
+            let local_positions: Vec<[f32; 3]> = local_positions
+                .iter()
+                .map(|p| [p[0], p[1] - y_center, p[2]])
+                .collect();
+
             let mut mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, default());
-            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, local_positions);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
             mesh.insert_indices(bevy::mesh::Indices::U32(indices));
+
+            // Culling sphere radius: half-diagonal of chunk + vertical extent
+            let half_diag = DECO_CHUNK_SIZE * 0.5 * std::f32::consts::SQRT_2;
+            let y_half = (y_max - y_min) * 0.5;
+            let cull_radius = (half_diag * half_diag + y_half * y_half).sqrt();
 
             let mat_handle = mat_handles.get(&mat_id).cloned().unwrap_or_default();
             let entity = commands
@@ -1039,8 +1023,11 @@ fn build_decoration_chunks(
                     },
                     Mesh3d(meshes.add(mesh)),
                     MeshMaterial3d(mat_handle),
-                    Transform::default(),
+                    Transform::from_translation(chunk_pos),
                     Visibility::Hidden,
+                    CullingBounds::new(cull_radius),
+                    CullReason::default(),
+                    bevy::camera::visibility::NoFrustumCulling,
                     NotShadowCaster,
                     NotShadowReceiver,
                 ))
@@ -1332,18 +1319,18 @@ pub fn reveal_explored_grass(
 }
 
 /// Reveal decoration chunks when any part of the chunk has been explored.
-/// Same semantics as grass chunks — once explored, always visible.
+/// Adds `DecoRevealed` marker and sets Visibility::Inherited.
+/// The culling system then manages Visibility independently for revealed chunks.
 fn reveal_explored_decorations(
+    mut commands: Commands,
     fog_map: Res<FogOfWarMap>,
     fog_settings: Res<FogTweakSettings>,
-    mut deco_query: Query<(&DecoChunk, &mut Visibility)>,
+    mut deco_query: Query<(Entity, &DecoChunk, &mut Visibility), Without<DecoRevealed>>,
 ) {
     let step = DECO_CHUNK_SIZE;
-    for (chunk, mut vis) in deco_query.iter_mut() {
-        if *vis != Visibility::Hidden {
-            continue;
-        }
+    for (entity, chunk, mut vis) in deco_query.iter_mut() {
         if fog_settings.reveal_all {
+            commands.entity(entity).insert(DecoRevealed);
             *vis = Visibility::Inherited;
             continue;
         }
@@ -1365,6 +1352,7 @@ fn reveal_explored_decorations(
         }
 
         if explored {
+            commands.entity(entity).insert(DecoRevealed);
             *vis = Visibility::Inherited;
         }
     }
@@ -1471,9 +1459,10 @@ fn worker_ai_system(
         (With<Building>, Without<Unit>, Without<ResourceNode>),
     >,
     storage_auras: Query<(&Transform, &StorageAura, &BuildingState), With<Building>>,
+    footprints: Query<&BuildingFootprint>,
 ) {
     let gather_range = 3.0;
-    let deposit_range = 4.0;
+    let deposit_margin = 1.5; // distance from building edge worker can deposit
     let auto_scan_range = 20.0;
 
     for (
@@ -1765,6 +1754,9 @@ fn worker_ai_system(
                 };
 
                 let dist = tf.translation.distance(depot_tf.translation);
+                let deposit_range = footprints
+                    .get(depot)
+                    .map_or(4.0, |fp| fp.0 + deposit_margin);
                 if dist <= deposit_range {
                     *state = UnitState::Depositing { depot, gather_node };
                 } else {
@@ -2794,10 +2786,21 @@ fn fix_tree_alpha_mode(
     children_q: Query<&Children>,
     mesh_mat_q: Query<&MeshMaterial3d<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut leaf_mats: ResMut<TreeLeafMaterials>,
 ) {
     for tree_entity in &trees {
-        fix_alpha_recursive(tree_entity, &children_q, &mesh_mat_q, &mut materials);
-        commands.entity(tree_entity).insert(TreeAlphaFixed);
+        let fixed = fix_alpha_recursive(
+            tree_entity,
+            &children_q,
+            &mesh_mat_q,
+            &mut materials,
+            &mut leaf_mats.0,
+        );
+        // Only mark as fixed when child meshes have actually been processed.
+        // Scene loading is async — children may not exist yet on the first frame.
+        if fixed > 0 {
+            commands.entity(tree_entity).insert(TreeAlphaFixed);
+        }
     }
 }
 
@@ -2806,19 +2809,31 @@ fn fix_alpha_recursive(
     children_q: &Query<&Children>,
     mesh_mat_q: &Query<&MeshMaterial3d<StandardMaterial>>,
     materials: &mut Assets<StandardMaterial>,
-) {
+    leaf_mats: &mut Vec<Handle<StandardMaterial>>,
+) -> u32 {
+    let mut count = 0;
     if let Ok(mat_handle) = mesh_mat_q.get(entity) {
         if let Some(mat) = materials.get_mut(mat_handle) {
-            if matches!(mat.alpha_mode, AlphaMode::Blend) {
-                mat.alpha_mode = AlphaMode::Mask(0.5);
+            count += 1;
+            if !matches!(mat.alpha_mode, AlphaMode::Mask(_)) {
+                mat.alpha_mode = AlphaMode::Mask(0.6);
+            }
+            mat.double_sided = true;
+            // Collect leaf material handles (those with alpha-tested textures)
+            if mat.base_color_texture.is_some() {
+                let handle = mat_handle.0.clone();
+                if !leaf_mats.iter().any(|h| h == &handle) {
+                    leaf_mats.push(handle);
+                }
             }
         }
     }
     if let Ok(children) = children_q.get(entity) {
         for child in children.iter() {
-            fix_alpha_recursive(child, children_q, mesh_mat_q, materials);
+            count += fix_alpha_recursive(child, children_q, mesh_mat_q, materials, leaf_mats);
         }
     }
+    count
 }
 
 // ── Processor Worker Visual System ──
@@ -2839,6 +2854,7 @@ fn processor_worker_visual_system(
             &ResourceProcessor,
             &BuildingState,
             Option<&BuildingPaused>,
+            &BuildingFootprint,
         ),
         With<Building>,
     >,
@@ -2870,7 +2886,7 @@ fn processor_worker_visual_system(
             continue;
         };
 
-        let Ok((_, building_tf, processor, building_state, building_paused)) =
+        let Ok((_, building_tf, processor, building_state, building_paused, building_fp)) =
             processors.get(building_entity)
         else {
             // Building gone — handled by unit_state_executor
@@ -2967,9 +2983,10 @@ fn processor_worker_visual_system(
                 }
             }
             AssignedPhase::ReturningToBuilding => {
-                // Check if worker arrived at building
+                // Check if worker arrived at building (footprint-aware)
                 let dist = tf.translation.distance(building_tf.translation);
-                if dist <= 3.0 {
+                let arrive_range = building_fp.0 + 1.0;
+                if dist <= arrive_range {
                     commands.entity(entity).remove::<MoveTarget>();
                     *phase = AssignedPhase::Depositing { timer_secs: 0.0 };
                 }

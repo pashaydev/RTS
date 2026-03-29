@@ -143,7 +143,7 @@ fn rebuild_wall_grid(
         (Entity, &Transform, &BuildingFootprint, &Faction),
         (
             With<Building>,
-            Or<(With<WallSegmentPiece>, With<WallPostPiece>)>,
+            Or<(With<WallSegmentPiece>, With<WallPostPiece>, With<WallCornerPiece>)>,
         ),
     >,
 ) {

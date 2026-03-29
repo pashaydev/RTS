@@ -125,6 +125,7 @@ fn update_projectiles(
             &mut Health,
             Option<&ArmorType>,
             Option<&Faction>,
+            Option<&mut ReservedIncomingDamage>,
         ),
         Without<Projectile>,
     >,
@@ -133,7 +134,9 @@ fn update_projectiles(
     let Some(vfx) = vfx_assets else { return };
 
     for (proj_entity, mut proj_tf, projectile, opt_aoe) in &mut projectiles {
-        let Ok((target_tf, mut health, opt_armor, _)) = targets.get_mut(projectile.target) else {
+        let Ok((target_tf, mut health, opt_armor, _, opt_reserved)) =
+            targets.get_mut(projectile.target)
+        else {
             // Target gone, despawn projectile
             commands.entity(proj_entity).despawn();
             continue;
@@ -144,7 +147,13 @@ fn update_projectiles(
         let dist = dir.length();
 
         if dist < 0.5 {
-            // Hit! Apply damage with armor multiplier
+            // Hit! Clear damage reservation from this projectile's source
+            if let Some(mut reserved) = opt_reserved {
+                let src = projectile.source;
+                reserved.reservations.retain(|(s, _, _)| *s != src);
+            }
+
+            // Apply damage with armor multiplier
             let multiplier = opt_armor
                 .map(|armor| projectile.damage_type.multiplier_vs(*armor))
                 .unwrap_or(1.0);
@@ -157,7 +166,7 @@ fn update_projectiles(
                     if *splash_entity == projectile.target {
                         continue; // already damaged primary target
                     }
-                    if let Ok((_, mut splash_health, splash_armor, _)) =
+                    if let Ok((_, mut splash_health, splash_armor, _, _)) =
                         targets.get_mut(*splash_entity)
                     {
                         let splash_dist = (target_pos - *splash_pos).length();
@@ -217,8 +226,13 @@ fn update_projectiles(
 
             commands.entity(proj_entity).despawn();
         } else {
-            let step = dir.normalize() * projectile.speed * time.delta_secs();
+            let forward = dir.normalize();
+            let step = forward * projectile.speed * time.delta_secs();
             proj_tf.translation += step;
+            // Orient arrow/bolt projectiles to face travel direction
+            if projectile.orient_to_velocity {
+                proj_tf.rotation = Quat::from_rotation_arc(Vec3::Z, forward);
+            }
         }
     }
 }
@@ -490,7 +504,7 @@ fn animate_spawn(
 pub fn animate_attack_lunge(
     mut commands: Commands,
     time: Res<Time>,
-    mut lungers: Query<(Entity, &mut Transform, &mut AttackLunge)>,
+    mut lungers: Query<(Entity, &mut Transform, &mut AttackLunge), Without<ProceduralMob>>,
 ) {
     for (entity, mut tf, mut lunge) in &mut lungers {
         lunge.timer.tick(time.delta());

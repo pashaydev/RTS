@@ -9,6 +9,12 @@ use crate::theme;
 use crate::ui::core::interactions::UiClickEvent;
 use crate::ui::fonts::UiFonts;
 
+/// Tracks keyboard focus index for pause menu navigation.
+#[derive(Resource, Default)]
+struct PauseNavFocus {
+    index: usize,
+}
+
 pub struct PauseMenuPlugin;
 
 impl Plugin for PauseMenuPlugin {
@@ -16,13 +22,19 @@ impl Plugin for PauseMenuPlugin {
         app.init_resource::<InGameOverlay>()
             .init_resource::<FactionStats>()
             .init_resource::<StatsTimer>()
+            .init_resource::<PauseNavFocus>()
             .add_systems(
                 Update,
                 handle_pause_buttons.run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
-                (handle_escape_key, update_spectator_stats_display)
+                (
+                    handle_escape_key,
+                    update_spectator_stats_display,
+                    pause_keyboard_nav,
+                    pause_nav_focus_visuals,
+                )
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
@@ -70,10 +82,13 @@ fn handle_escape_key(
     pause_roots: Query<Entity, With<PauseOverlayRoot>>,
     fonts: Res<UiFonts>,
     net_role: Res<NetRole>,
+    mut pause_nav: ResMut<PauseNavFocus>,
 ) {
     if !keyboard.just_pressed(KeyCode::Escape) {
         return;
     }
+
+    pause_nav.index = 0;
 
     match *overlay {
         InGameOverlay::None => {
@@ -214,10 +229,13 @@ fn spawn_pause_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts, 
         ("Quit", PauseAction::Quit, false),
     ];
 
-    for (label, action, accent) in buttons {
-        let btn = spawn_overlay_button(commands, label, action, accent, fonts);
+    for (i, (label, action, accent)) in buttons.into_iter().enumerate() {
+        let btn = spawn_overlay_button(commands, label, action, accent, fonts, Some(i));
         commands.entity(panel).add_child(btn);
     }
+
+    // Controls hint
+    spawn_pause_controls_hint(commands, panel, fonts);
 }
 
 fn spawn_options_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts) {
@@ -256,7 +274,7 @@ fn spawn_options_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts
         .id();
     commands.entity(panel).add_child(placeholder);
 
-    let btn = spawn_overlay_button(commands, "Back", PauseAction::BackFromOptions, true, fonts);
+    let btn = spawn_overlay_button(commands, "Back", PauseAction::BackFromOptions, true, fonts, Some(0));
     commands.entity(panel).add_child(btn);
 }
 
@@ -296,13 +314,14 @@ fn spawn_host_end_confirm_content(commands: &mut Commands, panel: Entity, fonts:
     commands.entity(panel).add_child(body);
 
     let cancel_btn =
-        spawn_overlay_button(commands, "Cancel", PauseAction::CancelHostEnd, false, fonts);
+        spawn_overlay_button(commands, "Cancel", PauseAction::CancelHostEnd, false, fonts, Some(0));
     let confirm_btn = spawn_overlay_button(
         commands,
         "End Match",
         PauseAction::ConfirmHostEnd,
         true,
         fonts,
+        Some(1),
     );
     commands
         .entity(panel)
@@ -315,6 +334,7 @@ fn spawn_overlay_button(
     action: PauseAction,
     accent: bool,
     fonts: &UiFonts,
+    nav_index: Option<usize>,
 ) -> Entity {
     let bg = if accent {
         theme::ACCENT
@@ -322,40 +342,43 @@ fn spawn_overlay_button(
         theme::BTN_PRIMARY
     };
 
-    let btn = commands
-        .spawn((
-            PauseMenuButton(action),
-            Button,
-            ButtonAnimState::new(bg.to_srgba().to_f32_array()),
-            ButtonStyle::Filled,
-            Node {
-                width: Val::Px(240.0),
-                height: Val::Px(44.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                margin: UiRect::vertical(Val::Px(4.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                ..default()
-            },
-            BackgroundColor(bg),
-            BorderColor::all(Color::NONE),
-        ))
-        .with_child((
-            Text::new(label),
-            TextFont {
-                font: fonts.body_emphasis.clone(),
-                font_size: theme::FONT_BUTTON,
-                ..default()
-            },
-            TextColor(if accent {
-                Color::WHITE
-            } else {
-                theme::TEXT_PRIMARY
-            }),
-        ))
-        .id();
+    let mut ec = commands.spawn((
+        PauseMenuButton(action),
+        Button,
+        ButtonAnimState::new(bg.to_srgba().to_f32_array()),
+        ButtonStyle::Filled,
+        Node {
+            width: Val::Px(240.0),
+            height: Val::Px(44.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            margin: UiRect::vertical(Val::Px(4.0)),
+            border: UiRect::all(Val::Px(2.0)),
+            border_radius: BorderRadius::all(Val::Px(8.0)),
+            ..default()
+        },
+        BackgroundColor(bg),
+        BorderColor::all(Color::NONE),
+    ));
+    if let Some(idx) = nav_index {
+        ec.insert(NavFocusable(idx));
+    }
+    ec.with_child((
+        Text::new(label),
+        TextFont {
+            font: fonts.body_emphasis.clone(),
+            font_size: theme::FONT_BUTTON,
+            ..default()
+        },
+        TextColor(if accent {
+            Color::WHITE
+        } else {
+            theme::TEXT_PRIMARY
+        }),
+        Pickable::IGNORE,
+    ));
 
-    btn
+    ec.id()
 }
 
 // ── Handle Pause Buttons ──
@@ -707,8 +730,8 @@ fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, faction_stats: &
         .id();
     commands.entity(root).add_child(btn_row);
 
-    let menu_btn = spawn_overlay_button(commands, "Main Menu", PauseAction::MainMenu, false, fonts);
-    let spec_btn = spawn_overlay_button(commands, "Spectate", PauseAction::Spectate, true, fonts);
+    let menu_btn = spawn_overlay_button(commands, "Main Menu", PauseAction::MainMenu, false, fonts, Some(0));
+    let spec_btn = spawn_overlay_button(commands, "Spectate", PauseAction::Spectate, true, fonts, Some(1));
     commands.entity(btn_row).add_children(&[menu_btn, spec_btn]);
 }
 
@@ -911,6 +934,171 @@ fn update_spectator_stats_display(
             faction_idx += 1;
         }
     }
+}
+
+// ── Pause Menu Keyboard Navigation ──
+
+fn pause_keyboard_nav(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut nav: ResMut<PauseNavFocus>,
+    mut click_events: MessageWriter<UiClickEvent>,
+    focusables: Query<(Entity, &NavFocusable), With<PauseMenuButton>>,
+    mut commands: Commands,
+    focused_q: Query<Entity, (With<NavFocused>, With<PauseMenuButton>)>,
+    overlay: Res<InGameOverlay>,
+) {
+    // Only navigate when a pause panel is visible
+    if !matches!(
+        *overlay,
+        InGameOverlay::PauseMenu
+            | InGameOverlay::PauseOptions
+            | InGameOverlay::PauseConfirmEndMatch
+            | InGameOverlay::DeathScreen
+    ) {
+        return;
+    }
+
+    let mut items: Vec<(Entity, usize)> = focusables.iter().map(|(e, nf)| (e, nf.0)).collect();
+    if items.is_empty() {
+        return;
+    }
+    items.sort_by_key(|&(_, order)| order);
+    let count = items.len();
+
+    let up = keyboard.just_pressed(KeyCode::ArrowUp) || keyboard.just_pressed(KeyCode::KeyW);
+    let down = keyboard.just_pressed(KeyCode::ArrowDown) || keyboard.just_pressed(KeyCode::KeyS);
+    let confirm =
+        keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter);
+
+    if up {
+        nav.index = if nav.index == 0 { count - 1 } else { nav.index - 1 };
+    }
+    if down {
+        nav.index = (nav.index + 1) % count;
+    }
+    nav.index = nav.index.min(count - 1);
+
+    if up || down {
+        for e in &focused_q {
+            commands.entity(e).remove::<NavFocused>();
+        }
+        let (entity, _) = items[nav.index];
+        commands.entity(entity).insert(NavFocused);
+    }
+
+    if focused_q.is_empty() {
+        let (entity, _) = items[nav.index];
+        commands.entity(entity).insert(NavFocused);
+    }
+
+    if confirm {
+        let (entity, _) = items[nav.index];
+        click_events.write(UiClickEvent { entity });
+    }
+}
+
+fn pause_nav_focus_visuals(
+    focused: Query<Entity, (Added<NavFocused>, With<PauseMenuButton>)>,
+    all_focusable: Query<Entity, (With<NavFocusable>, With<PauseMenuButton>)>,
+    nav_focused_q: Query<&NavFocused>,
+    mut commands: Commands,
+    children_q: Query<&Children>,
+    mut text_colors: Query<&mut TextColor>,
+) {
+    if focused.is_empty() {
+        return;
+    }
+
+    for entity in &focused {
+        commands.entity(entity).insert((
+            BorderColor::all(theme::ACCENT),
+            BoxShadow::new(
+                Color::srgba(0.29, 0.62, 1.0, 0.4),
+                Val::Px(0.0),
+                Val::Px(0.0),
+                Val::Px(0.0),
+                Val::Px(10.0),
+            ),
+        ));
+        if let Ok(children) = children_q.get(entity) {
+            for child in children.iter() {
+                if let Ok(mut tc) = text_colors.get_mut(child) {
+                    tc.0 = Color::WHITE;
+                }
+            }
+        }
+    }
+
+    for entity in &all_focusable {
+        if nav_focused_q.get(entity).is_ok() {
+            continue;
+        }
+        commands
+            .entity(entity)
+            .insert(BorderColor::all(Color::NONE));
+        commands.entity(entity).remove::<BoxShadow>();
+    }
+}
+
+fn spawn_pause_controls_hint(commands: &mut Commands, panel: Entity, fonts: &UiFonts) {
+    let hint = commands
+        .spawn((
+            ControlsHint,
+            Node {
+                width: Val::Percent(100.0),
+                margin: UiRect::top(Val::Px(16.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(12.0),
+                ..default()
+            },
+        ))
+        .with_children(|parent| {
+            let items = [("W/S", "Navigate"), ("Enter", "Confirm"), ("Esc", "Close")];
+            for (key, action) in items {
+                parent
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(4.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        row.spawn((
+                            Node {
+                                padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.15, 0.15, 0.15, 0.9)),
+                            BorderColor::all(theme::TEXT_DISABLED),
+                        ))
+                        .with_children(|badge| {
+                            badge.spawn((
+                                Text::new(key),
+                                TextFont {
+                                    font: fonts.body_emphasis.clone(),
+                                    font_size: theme::FONT_TINY,
+                                    ..default()
+                                },
+                                TextColor(theme::TEXT_SECONDARY),
+                            ));
+                        });
+                        row.spawn((
+                            Text::new(action),
+                            TextFont {
+                                font: fonts.body.clone(),
+                                font_size: theme::FONT_TINY,
+                                ..default()
+                            },
+                            TextColor(theme::TEXT_DISABLED),
+                        ));
+                    });
+            }
+        })
+        .id();
+    commands.entity(panel).add_child(hint);
 }
 
 // ── Cleanup Game World ──

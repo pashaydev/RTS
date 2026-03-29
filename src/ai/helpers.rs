@@ -413,18 +413,16 @@ pub fn spawn_ai_building(
 
 /// Generate a rectangular wall plan around the base
 pub fn generate_wall_plan(base_pos: Vec3, personality: AiPersonality) -> WallPlan {
-    let radius = match personality {
-        AiPersonality::Defensive => 45.0,
-        _ => 35.0,
+    let radius_cells = match personality {
+        AiPersonality::Defensive => 15,
+        _ => 12,
     };
-
-    // 4 corners of the rectangle
-    let corners = [
-        Vec3::new(base_pos.x - radius, 0.0, base_pos.z - radius),
-        Vec3::new(base_pos.x + radius, 0.0, base_pos.z - radius),
-        Vec3::new(base_pos.x + radius, 0.0, base_pos.z + radius),
-        Vec3::new(base_pos.x - radius, 0.0, base_pos.z + radius),
-    ];
+    let gate_cells = 3;
+    let (base_gx, base_gz) = WallGrid::world_to_grid(base_pos);
+    let min_x = base_gx - radius_cells;
+    let max_x = base_gx + radius_cells;
+    let min_z = base_gz - radius_cells;
+    let max_z = base_gz + radius_cells;
 
     // Leave a gate opening on the side facing map center
     let to_center = (Vec3::ZERO - base_pos).normalize_or_zero();
@@ -442,41 +440,74 @@ pub fn generate_wall_plan(base_pos: Vec3, personality: AiPersonality) -> WallPla
         }
     };
 
-    let sides = [
-        (corners[0], corners[1]),
-        (corners[1], corners[2]),
-        (corners[2], corners[3]),
-        (corners[3], corners[0]),
-    ];
+    let mut runs = Vec::with_capacity(5);
+    let push_run = |runs: &mut Vec<(Vec3, Vec3)>, start: (i32, i32), end: (i32, i32)| {
+        runs.push((
+            WallGrid::grid_to_world(start.0, start.1),
+            WallGrid::grid_to_world(end.0, end.1),
+        ));
+    };
 
-    // Skip the gate side
-    let gate_opening = 10.0;
-    let (a, b) = sides[gate_side];
-    let dir = (b - a).normalize_or_zero();
-    let len = a.distance(b);
-    let half_opening = gate_opening / 2.0;
-    let mid = len / 2.0;
-    let _ = (dir, half_opening, mid);
+    for side in 0..4 {
+        if side != gate_side {
+            match side {
+                0 => push_run(&mut runs, (min_x, min_z), (max_x, min_z)),
+                1 => push_run(&mut runs, (max_x, min_z), (max_x, max_z)),
+                2 => push_run(&mut runs, (max_x, max_z), (min_x, max_z)),
+                3 => push_run(&mut runs, (min_x, max_z), (min_x, min_z)),
+                _ => unreachable!(),
+            }
+            continue;
+        }
 
-    let mut completed = [false; 4];
-    completed[gate_side] = true;
+        match side {
+            0 | 2 => {
+                let z = if side == 0 { min_z } else { max_z };
+                let mid_x = (min_x + max_x) / 2;
+                let gate_start_x = (mid_x - gate_cells / 2).max(min_x + 1);
+                let gate_end_x = (gate_start_x + gate_cells - 1).min(max_x - 1);
+                push_run(&mut runs, (min_x, z), (gate_start_x - 1, z));
+                push_run(&mut runs, (gate_end_x + 1, z), (max_x, z));
+            }
+            1 | 3 => {
+                let x = if side == 1 { max_x } else { min_x };
+                let mid_z = (min_z + max_z) / 2;
+                let gate_start_z = (mid_z - gate_cells / 2).max(min_z + 1);
+                let gate_end_z = (gate_start_z + gate_cells - 1).min(max_z - 1);
+                push_run(&mut runs, (x, min_z), (x, gate_start_z - 1));
+                push_run(&mut runs, (x, gate_end_z + 1), (x, max_z));
+            }
+            _ => unreachable!(),
+        }
+    }
 
-    WallPlan { sides, completed }
+    let completed = vec![false; runs.len()];
+    WallPlan { runs, completed }
 }
 
 /// Generate evenly-spaced wall points between two positions
 pub fn generate_wall_points(start: Vec3, end: Vec3, height_map: &HeightMap) -> Vec<Vec3> {
-    let dist = start.distance(end);
-    let segment_len = 4.0;
-    let num_posts = (dist / segment_len).ceil() as usize + 1;
-    let num_posts = num_posts.max(2).min(20);
+    let (start_gx, start_gz) = WallGrid::world_to_grid(start);
+    let (end_gx, end_gz) = WallGrid::world_to_grid(end);
 
-    let mut points = Vec::with_capacity(num_posts);
-    for i in 0..num_posts {
-        let t = i as f32 / (num_posts - 1).max(1) as f32;
-        let p = start.lerp(end, t);
-        let y = height_map.sample(p.x, p.z);
-        points.push(Vec3::new(p.x, y, p.z));
+    let dx = end_gx - start_gx;
+    let dz = end_gz - start_gz;
+    let steps = dx.abs().max(dz.abs()) as usize;
+    if steps == 0 {
+        let world = WallGrid::grid_to_world(start_gx, start_gz);
+        let y = height_map.sample(world.x, world.z);
+        return vec![Vec3::new(world.x, y, world.z)];
+    }
+
+    let step_x = dx.signum();
+    let step_z = dz.signum();
+    let mut points = Vec::with_capacity(steps + 1);
+    for i in 0..=steps {
+        let gx = start_gx + step_x * i as i32;
+        let gz = start_gz + step_z * i as i32;
+        let world = WallGrid::grid_to_world(gx, gz);
+        let y = height_map.sample(world.x, world.z);
+        points.push(Vec3::new(world.x, y, world.z));
     }
     points
 }

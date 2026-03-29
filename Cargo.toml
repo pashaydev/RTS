@@ -37,6 +37,7 @@ game_state = { path = "game_state" }
 socket2 = "0.5"
 if-addrs = "0.13"
 tungstenite = { version = "0.26", features = ["native-tls"] }
+arboard = "3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { version = "0.3.91", features = ["WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType", "Document", "HtmlDocument", "DataTransfer", "ClipboardEvent", "Clipboard", "Navigator", "Window", "Location"] }

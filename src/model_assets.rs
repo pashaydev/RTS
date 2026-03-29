@@ -80,6 +80,10 @@ impl Plugin for ModelAssetsPlugin {
         let unit_models = load_unit_model_assets_eager(&asset_server);
         app.insert_resource(unit_models);
 
+        // Load projectile model assets
+        let projectile_models = load_projectile_model_assets(&asset_server);
+        app.insert_resource(projectile_models);
+
         // Load TTP raw GLTF handles for animation extraction
         let ttp_gltf_handles = load_ttp_gltf_handles(&asset_server);
         app.insert_resource(ttp_gltf_handles);
@@ -140,42 +144,23 @@ fn load_gltf_handles_from(
         .collect()
 }
 
-// Quaternius tree packs (CC0, by Quaternius)
-const QUAT_TREE_PATH: &str = "quaternius_tree";
-const QUAT_PINE_PATH: &str = "quaternius_pine_trees";
-const QUAT_TREES_PATH: &str = "quaternius_trees";
-
-// Base scales — tune visually so trees look proportional to buildings/units.
-// Tree.glb is ~6.5 units tall at scale 1.0; Pine/Nature meshes are tiny (cm units)
-// but have node-level scale=100, making them ~1 unit tall — need extra scaling.
-const QUAT_TREE_SCALE: f32 = 0.8;
-const QUAT_PINE_SCALE: f32 = 5.0;
-const QUAT_NATURE_SCALE: f32 = 5.0;
+const NEW_TREE_PATH: &str = "trees_compressed";
+const NEW_TREE_SCALE: f32 = 0.4;
 
 fn load_model_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
-    // Quaternius deciduous tree
-    let mut trees = load_scenes_from(&asset_server, QUAT_TREE_PATH, &["Tree.glb"]);
-    let mut tree_base_scales = vec![QUAT_TREE_SCALE; trees.len()];
-
-    // Quaternius pine trees
-    let pine = load_scenes_from(&asset_server, QUAT_PINE_PATH, &["Pine Trees.glb"]);
-    tree_base_scales.extend(vec![QUAT_PINE_SCALE; pine.len()]);
-    trees.extend(pine);
-
-    // Quaternius nature trees (5 variants, split from Trees.glb)
-    let nature = load_scenes_from(
+    let trees = load_scenes_from(
         &asset_server,
-        QUAT_TREES_PATH,
+        NEW_TREE_PATH,
         &[
-            "NormalTree_1.glb",
-            "NormalTree_2.glb",
-            "NormalTree_3.glb",
-            "NormalTree_4.glb",
-            "NormalTree_5.glb",
+            "tree (1).glb",
+            "tree (2).glb",
+            "tree (3).glb",
+            "tree (4).glb",
+            "tree (7).glb",
+            "tree (8).glb",
         ],
     );
-    tree_base_scales.extend(vec![QUAT_NATURE_SCALE; nature.len()]);
-    trees.extend(nature);
+    let tree_base_scales = vec![NEW_TREE_SCALE; trees.len()];
 
     let dead_trees = load_gltf_scenes(
         &asset_server,
@@ -205,17 +190,11 @@ fn load_model_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
         ],
     );
 
-    let bushes = load_gltf_scenes(
+    let bushes = load_scenes_from(
         &asset_server,
+        NEW_TREE_PATH,
         &[
-            "Bush_1_A_Color1.gltf",
-            "Bush_1_B_Color1.gltf",
-            "Bush_1_C_Color1.gltf",
-            "Bush_2_A_Color1.gltf",
-            "Bush_2_B_Color1.gltf",
-            "Bush_2_C_Color1.gltf",
-            "Bush_3_A_Color1.gltf",
-            "Bush_3_B_Color1.gltf",
+            "bush (1).glb", "bush (2).glb"
         ],
     );
 
@@ -252,18 +231,9 @@ fn load_model_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     // Load GLTF handles for decoration chunk instancing (mesh/material extraction).
     // These are the same files as above but loaded as Gltf (not Scene) so we can
     // access mesh primitives for CPU vertex merging.
-    let deco_bush_gltfs = load_gltf_handles(
+    let deco_bush_gltfs = load_gltf_handles_from(
         &asset_server,
-        &[
-            "Bush_1_A_Color1.gltf",
-            "Bush_1_B_Color1.gltf",
-            "Bush_1_C_Color1.gltf",
-            "Bush_2_A_Color1.gltf",
-            "Bush_2_B_Color1.gltf",
-            "Bush_2_C_Color1.gltf",
-            "Bush_3_A_Color1.gltf",
-            "Bush_3_B_Color1.gltf",
-        ],
+        &["trees_compressed/bush (1).glb", "trees_compressed/bush (2).glb"],
     );
     let deco_rock_gltfs = load_gltf_handles(
         &asset_server,
@@ -335,6 +305,13 @@ impl BuildingModelAssets {
 
         variants.get(variant_index).cloned()
     }
+
+    pub fn child_transform(&self, kind: EntityKind, fallback_scale: f32) -> Transform {
+        let cal = self.calibration.get(&kind);
+        let scale = cal.map(|c| c.scale).unwrap_or(fallback_scale);
+        let y_offset = cal.map(|c| c.y_offset).unwrap_or(0.0);
+        Transform::from_scale(Vec3::splat(scale)).with_translation(Vec3::new(0.0, y_offset, 0.0))
+    }
 }
 
 const TTP_BUILDINGS_PATH: &str = "ToonyTinyPeople/models/buildings";
@@ -374,6 +351,7 @@ fn ttp_building_glb(kind: EntityKind) -> &'static str {
         EntityKind::Gatehouse => "Wall_A_gate",
         EntityKind::WallSegment => "Wall_A_wall",
         EntityKind::WallPost => "Wall_A_1x1",
+        EntityKind::WallCorner => "Wall_A_corner",
         _ => "House", // fallback
     }
 }
@@ -405,6 +383,7 @@ fn load_building_model_assets_eager(asset_server: &AssetServer) -> BuildingModel
         EntityKind::Gatehouse,
         EntityKind::WallSegment,
         EntityKind::WallPost,
+        EntityKind::WallCorner,
     ];
 
     // TTP buildings have no level variants — same model for L1/L2/L3
@@ -430,6 +409,7 @@ fn load_building_model_assets_eager(asset_server: &AssetServer) -> BuildingModel
         (EntityKind::Gatehouse, 0.75, 0.0, 8.0),
         (EntityKind::WallSegment, 1.0, 0.0, 4.0),
         (EntityKind::WallPost, 1.0, 0.0, 4.0),
+        (EntityKind::WallCorner, 1.0, 0.0, 4.0),
         (EntityKind::Storage, 0.75, 0.0, 4.0),
         (EntityKind::House, 0.75, 0.0, 4.0),
         (EntityKind::MageTower, 0.75, 0.0, 8.0),
@@ -497,6 +477,7 @@ fn load_building_construction_assets(asset_server: &AssetServer) -> BuildingCons
         EntityKind::Gatehouse,
         EntityKind::WallSegment,
         EntityKind::WallPost,
+        EntityKind::WallCorner,
     ];
 
     for kind in building_kinds {
@@ -557,12 +538,8 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
         scenes.insert(*kind, handle);
     }
 
-    // Neutrals and summons reuse spare animated TTP characters
+    // Summons reuse spare animated TTP characters (mobs now use procedural cubes)
     let mob_mappings: &[(EntityKind, &str)] = &[
-        (EntityKind::Goblin, "TT_Scout.glb"),
-        (EntityKind::Skeleton, "TT_Swordman.glb"),
-        (EntityKind::Orc, "TT_Commander.glb"),
-        (EntityKind::Demon, "TT_HighPriest.glb"),
         (EntityKind::SkeletonMinion, "TT_Light_Infantry.glb"),
     ];
     for (kind, filename) in mob_mappings {
@@ -587,11 +564,7 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
         // TTP siege machines
         (EntityKind::Catapult, 0.4, -0.9, 0.0),
         (EntityKind::BatteringRam, 0.4, -0.8, 0.0),
-        // Neutrals / summons on TTP rigs
-        (EntityKind::Goblin, 0.42, -0.65, 0.0),
-        (EntityKind::Skeleton, 0.44, -0.78, 0.0),
-        (EntityKind::Orc, 0.5, -1.05, 0.0),
-        (EntityKind::Demon, 0.48, -1.15, 0.0),
+        // Summons on TTP rigs (mobs now use procedural cubes)
         (EntityKind::SkeletonMinion, 0.4, -0.7, 0.0),
     ];
     let calibration: HashMap<_, _> = calibration_data
@@ -611,6 +584,84 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
     UnitModelAssets {
         scenes,
         calibration,
+    }
+}
+
+// ── Projectile Model Assets ──
+
+/// Which visual model a projectile should use.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ProjectileVisualKind {
+    Arrow,
+    Bolt,
+    CatapultRock,
+}
+
+#[derive(Resource)]
+pub struct ProjectileModelAssets {
+    pub arrows: Vec<Handle<Scene>>,
+    pub bolts: Vec<Handle<Scene>>,
+    pub catapult_rocks: Vec<Handle<Scene>>,
+}
+
+impl ProjectileModelAssets {
+    /// Pick the scene handle for a given visual kind, cycling through variants.
+    pub fn scene_for(&self, kind: ProjectileVisualKind, variant: usize) -> Handle<Scene> {
+        match kind {
+            ProjectileVisualKind::Arrow => {
+                self.arrows[variant % self.arrows.len()].clone()
+            }
+            ProjectileVisualKind::Bolt => {
+                self.bolts[variant % self.bolts.len()].clone()
+            }
+            ProjectileVisualKind::CatapultRock => {
+                self.catapult_rocks[variant % self.catapult_rocks.len()].clone()
+            }
+        }
+    }
+}
+
+/// Map an EntityKind to its projectile visual (if it has a 3D model projectile).
+pub fn projectile_visual_for(kind: EntityKind) -> Option<ProjectileVisualKind> {
+    match kind {
+        EntityKind::Archer | EntityKind::Scout => Some(ProjectileVisualKind::Arrow),
+        EntityKind::Tower | EntityKind::WatchTower | EntityKind::GuardTower => {
+            Some(ProjectileVisualKind::Arrow)
+        }
+        EntityKind::BallistaTower => Some(ProjectileVisualKind::Bolt),
+        EntityKind::Catapult | EntityKind::BombardTower => {
+            Some(ProjectileVisualKind::CatapultRock)
+        }
+        _ => None, // Mage, Priest, etc. keep sphere VFX
+    }
+}
+
+const TTP_PROJECTILES_PATH: &str = "ToonyTinyPeople/models/extras/projectiles";
+
+fn load_projectile_model_assets(asset_server: &AssetServer) -> ProjectileModelAssets {
+    let arrows = ["Arrow_A.glb", "Arrow_B.glb"]
+        .iter()
+        .map(|f| asset_server.load(format!("{TTP_PROJECTILES_PATH}/{f}#Scene0")))
+        .collect();
+
+    let bolts = ["Bolt_lvl1.glb", "Bolt_lvl2.glb", "Bolt_lvl3.glb"]
+        .iter()
+        .map(|f| asset_server.load(format!("{TTP_PROJECTILES_PATH}/{f}#Scene0")))
+        .collect();
+
+    let catapult_rocks = [
+        "Catapult_rock_lvl1.glb",
+        "Catapult_rock_lvl2.glb",
+        "Catapult_rock_lvl3.glb",
+    ]
+    .iter()
+    .map(|f| asset_server.load(format!("{TTP_PROJECTILES_PATH}/{f}#Scene0")))
+    .collect();
+
+    ProjectileModelAssets {
+        arrows,
+        bolts,
+        catapult_rocks,
     }
 }
 
@@ -645,10 +696,6 @@ pub fn ttp_anim_set(kind: EntityKind) -> Option<TtpAnimSet> {
         EntityKind::Scout => Some(TtpAnimSet::Infantry),
         EntityKind::Catapult => Some(TtpAnimSet::Machine),
         EntityKind::BatteringRam => Some(TtpAnimSet::Machine),
-        EntityKind::Goblin => Some(TtpAnimSet::Infantry),
-        EntityKind::Skeleton => Some(TtpAnimSet::Shield),
-        EntityKind::Orc => Some(TtpAnimSet::Shield),
-        EntityKind::Demon => Some(TtpAnimSet::Staff),
         EntityKind::SkeletonMinion => Some(TtpAnimSet::Infantry),
         _ => None,
     }
@@ -714,10 +761,6 @@ fn load_ttp_gltf_handles(asset_server: &AssetServer) -> TtpGltfHandles {
         (EntityKind::Scout, TTP_UNITS_PATH, "TT_Crossbowman.glb"),
         (EntityKind::Catapult, TTP_MACHINES_PATH, "catapult.glb"),
         (EntityKind::BatteringRam, TTP_MACHINES_PATH, "ram.glb"),
-        (EntityKind::Goblin, TTP_UNITS_PATH, "TT_Scout.glb"),
-        (EntityKind::Skeleton, TTP_UNITS_PATH, "TT_Swordman.glb"),
-        (EntityKind::Orc, TTP_UNITS_PATH, "TT_Commander.glb"),
-        (EntityKind::Demon, TTP_UNITS_PATH, "TT_HighPriest.glb"),
         (
             EntityKind::SkeletonMinion,
             TTP_UNITS_PATH,
@@ -968,7 +1011,9 @@ fn extract_decoration_instance_assets(
     let Some(handles) = handles else { return };
 
     // Try to extract all categories. If any handle isn't loaded yet, bail and retry next frame.
-    let Some(bushes) = extract_gltf_primitives(&handles.bushes, &gltf_assets, &gltf_meshes) else {
+    let Some((bushes, bush_model_sizes)) =
+        extract_gltf_all_primitives(&handles.bushes, &gltf_assets, &gltf_meshes)
+    else {
         return;
     };
     let Some(rocks) = extract_gltf_primitives(&handles.rocks, &gltf_assets, &gltf_meshes) else {
@@ -991,6 +1036,7 @@ fn extract_decoration_instance_assets(
     );
     commands.insert_resource(DecorationInstanceAssets {
         bushes,
+        bush_model_sizes,
         rocks,
         grass,
         mountains,
@@ -1016,6 +1062,33 @@ fn extract_gltf_primitives(
         ));
     }
     Some(result)
+}
+
+/// Extract ALL (mesh, material) pairs from each GLTF handle (all meshes, all primitives).
+/// Returns the flat list and how many primitives came from each GLTF model.
+fn extract_gltf_all_primitives(
+    handles: &[Handle<bevy::gltf::Gltf>],
+    gltf_assets: &Assets<bevy::gltf::Gltf>,
+    gltf_meshes: &Assets<bevy::gltf::GltfMesh>,
+) -> Option<(Vec<(Handle<Mesh>, Handle<StandardMaterial>)>, Vec<usize>)> {
+    let mut result = Vec::new();
+    let mut model_sizes = Vec::with_capacity(handles.len());
+    for handle in handles {
+        let gltf = gltf_assets.get(handle)?;
+        let mut count = 0usize;
+        for gltf_mesh_handle in &gltf.meshes {
+            let gltf_mesh = gltf_meshes.get(gltf_mesh_handle)?;
+            for primitive in &gltf_mesh.primitives {
+                result.push((
+                    primitive.mesh.clone(),
+                    primitive.material.clone().unwrap_or_default(),
+                ));
+                count += 1;
+            }
+        }
+        model_sizes.push(count);
+    }
+    Some((result, model_sizes))
 }
 
 // ── Team Color Texture Application ──

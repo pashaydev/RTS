@@ -41,6 +41,7 @@ pub enum EntityKind {
     Gatehouse,
     WallSegment,
     WallPost,
+    WallCorner,
     Storage,
     House,
     MageTower,
@@ -101,6 +102,7 @@ impl EntityKind {
             | Self::Gatehouse
             | Self::WallSegment
             | Self::WallPost
+            | Self::WallCorner
             | Self::Storage
             | Self::House
             | Self::MageTower
@@ -191,6 +193,7 @@ impl EntityKind {
             Self::Gatehouse => "Gatehouse",
             Self::WallSegment => "Wall",
             Self::WallPost => "Wall Post",
+            Self::WallCorner => "Wall Corner",
             Self::Storage => "Storage",
             Self::House => "House",
             Self::MageTower => "Mage Tower",
@@ -254,6 +257,7 @@ impl EntityKind {
         EntityKind::SkeletonMinion,
         EntityKind::SpiritWolf,
         EntityKind::FireElemental,
+        EntityKind::WallCorner,
     ];
 
     /// Convert to numeric index (position in ALL array). Used for network serialization.
@@ -294,6 +298,7 @@ impl EntityKind {
             Self::Gatehouse => "Fortified wall gateway for controlled chokepoints.",
             Self::WallSegment => "Defensive wall segment. Best placed in long runs.",
             Self::WallPost => "Wall junction support piece.",
+            Self::WallCorner => "Corner wall piece. Auto-placed at wall bends.",
             Self::Storage => "Resource depot. Increases storage capacity.",
             Self::House => {
                 "Housing building. Increases max units by +4 at level 1, +6 at level 2, and +8 at level 3."
@@ -420,6 +425,268 @@ fn default_attack_profile(kind: EntityKind, combat: &CombatStats) -> AttackProfi
     }
 
     profile
+}
+
+fn default_attack_timing(kind: EntityKind, combat: &CombatStats) -> AttackTiming {
+    match kind {
+        EntityKind::Worker => AttackTiming {
+            attack_point_secs: 0.22,
+            backswing_secs: 0.26,
+            turn_rate_rad_per_sec: 10.0,
+            minimum_range: 0.0,
+            can_move_during_backswing: true,
+        },
+        EntityKind::Soldier => AttackTiming {
+            attack_point_secs: 0.24,
+            backswing_secs: 0.30,
+            turn_rate_rad_per_sec: 9.0,
+            minimum_range: 0.0,
+            can_move_during_backswing: true,
+        },
+        EntityKind::Archer | EntityKind::Scout => AttackTiming {
+            attack_point_secs: 0.20,
+            backswing_secs: 0.36,
+            turn_rate_rad_per_sec: 8.0,
+            minimum_range: 0.0,
+            can_move_during_backswing: true,
+        },
+        EntityKind::Tank => AttackTiming {
+            attack_point_secs: 0.34,
+            backswing_secs: 0.42,
+            turn_rate_rad_per_sec: 6.5,
+            minimum_range: 0.0,
+            can_move_during_backswing: false,
+        },
+        EntityKind::Knight => AttackTiming {
+            attack_point_secs: 0.26,
+            backswing_secs: 0.28,
+            turn_rate_rad_per_sec: 8.5,
+            minimum_range: 0.0,
+            can_move_during_backswing: true,
+        },
+        EntityKind::Mage | EntityKind::Priest => AttackTiming {
+            attack_point_secs: 0.30,
+            backswing_secs: 0.34,
+            turn_rate_rad_per_sec: 7.0,
+            minimum_range: 0.0,
+            can_move_during_backswing: false,
+        },
+        EntityKind::Cavalry => AttackTiming {
+            attack_point_secs: 0.22,
+            backswing_secs: 0.24,
+            turn_rate_rad_per_sec: 9.5,
+            minimum_range: 0.0,
+            can_move_during_backswing: true,
+        },
+        EntityKind::Catapult => AttackTiming {
+            attack_point_secs: 0.42,
+            backswing_secs: 0.55,
+            turn_rate_rad_per_sec: 4.0,
+            minimum_range: 5.0,
+            can_move_during_backswing: false,
+        },
+        EntityKind::BatteringRam => AttackTiming {
+            attack_point_secs: 0.36,
+            backswing_secs: 0.46,
+            turn_rate_rad_per_sec: 5.0,
+            minimum_range: 0.0,
+            can_move_during_backswing: false,
+        },
+        EntityKind::Tower | EntityKind::WatchTower => AttackTiming {
+            attack_point_secs: 0.16,
+            backswing_secs: 0.22,
+            turn_rate_rad_per_sec: f32::INFINITY,
+            minimum_range: 0.0,
+            can_move_during_backswing: false,
+        },
+        EntityKind::GuardTower => AttackTiming {
+            attack_point_secs: 0.18,
+            backswing_secs: 0.24,
+            turn_rate_rad_per_sec: f32::INFINITY,
+            minimum_range: 0.0,
+            can_move_during_backswing: false,
+        },
+        EntityKind::BallistaTower => AttackTiming {
+            attack_point_secs: 0.26,
+            backswing_secs: 0.34,
+            turn_rate_rad_per_sec: f32::INFINITY,
+            minimum_range: 0.0,
+            can_move_during_backswing: false,
+        },
+        EntityKind::BombardTower => AttackTiming {
+            attack_point_secs: 0.34,
+            backswing_secs: 0.46,
+            turn_rate_rad_per_sec: f32::INFINITY,
+            minimum_range: 3.5,
+            can_move_during_backswing: false,
+        },
+        EntityKind::Goblin => AttackTiming {
+            attack_point_secs: 0.16,
+            backswing_secs: 0.24,
+            turn_rate_rad_per_sec: 9.0,
+            minimum_range: 0.0,
+            can_move_during_backswing: true,
+        },
+        EntityKind::Skeleton => AttackTiming {
+            attack_point_secs: 0.22,
+            backswing_secs: 0.28,
+            turn_rate_rad_per_sec: 8.5,
+            minimum_range: 0.0,
+            can_move_during_backswing: true,
+        },
+        EntityKind::Orc => AttackTiming {
+            attack_point_secs: 0.30,
+            backswing_secs: 0.34,
+            turn_rate_rad_per_sec: 7.0,
+            minimum_range: 0.0,
+            can_move_during_backswing: false,
+        },
+        EntityKind::Demon => AttackTiming {
+            attack_point_secs: 0.36,
+            backswing_secs: 0.42,
+            turn_rate_rad_per_sec: 6.5,
+            minimum_range: 0.0,
+            can_move_during_backswing: false,
+        },
+        _ if combat.is_ranged => AttackTiming {
+            attack_point_secs: 0.22,
+            backswing_secs: 0.32,
+            turn_rate_rad_per_sec: 7.5,
+            minimum_range: 0.0,
+            can_move_during_backswing: true,
+        },
+        _ => AttackTiming {
+            attack_point_secs: 0.24,
+            backswing_secs: 0.30,
+            turn_rate_rad_per_sec: 8.0,
+            minimum_range: 0.0,
+            can_move_during_backswing: true,
+        },
+    }
+}
+
+fn default_targeting_profile(kind: EntityKind) -> TargetingProfile {
+    match kind {
+        EntityKind::Worker | EntityKind::Scout => TargetingProfile {
+            distance_weight: 2.4,
+            low_hp_weight: 0.8,
+            threat_weight: 0.7,
+            counter_weight: 0.2,
+            building_penalty: 4.0,
+            reserved_damage_penalty: 0.4,
+        },
+        EntityKind::Soldier | EntityKind::Tank => TargetingProfile {
+            distance_weight: 1.7,
+            low_hp_weight: 1.2,
+            threat_weight: 1.4,
+            counter_weight: 1.3,
+            building_penalty: 2.5,
+            reserved_damage_penalty: 0.8,
+        },
+        EntityKind::Archer | EntityKind::Skeleton => TargetingProfile {
+            distance_weight: 1.1,
+            low_hp_weight: 2.0,
+            threat_weight: 1.2,
+            counter_weight: 1.7,
+            building_penalty: 3.5,
+            reserved_damage_penalty: 2.1,
+        },
+        EntityKind::Knight | EntityKind::Cavalry => TargetingProfile {
+            distance_weight: 1.3,
+            low_hp_weight: 1.0,
+            threat_weight: 1.6,
+            counter_weight: 1.1,
+            building_penalty: 2.0,
+            reserved_damage_penalty: 0.7,
+        },
+        EntityKind::Mage | EntityKind::Demon => TargetingProfile {
+            distance_weight: 1.0,
+            low_hp_weight: 1.3,
+            threat_weight: 1.8,
+            counter_weight: 1.6,
+            building_penalty: 3.0,
+            reserved_damage_penalty: 1.2,
+        },
+        EntityKind::Priest => TargetingProfile {
+            distance_weight: 1.0,
+            low_hp_weight: 1.4,
+            threat_weight: 1.0,
+            counter_weight: 1.2,
+            building_penalty: 4.0,
+            reserved_damage_penalty: 1.0,
+        },
+        EntityKind::Catapult => TargetingProfile {
+            distance_weight: 0.7,
+            low_hp_weight: 0.4,
+            threat_weight: 1.8,
+            counter_weight: 0.9,
+            building_penalty: -1.0,
+            reserved_damage_penalty: 0.2,
+        },
+        EntityKind::BatteringRam => TargetingProfile {
+            distance_weight: 0.9,
+            low_hp_weight: 0.1,
+            threat_weight: 0.8,
+            counter_weight: 0.4,
+            building_penalty: -3.5,
+            reserved_damage_penalty: 0.1,
+        },
+        EntityKind::Tower
+        | EntityKind::WatchTower
+        | EntityKind::GuardTower
+        | EntityKind::BallistaTower
+        | EntityKind::BombardTower => TargetingProfile {
+            distance_weight: 0.8,
+            low_hp_weight: 1.5,
+            threat_weight: 1.9,
+            counter_weight: 1.1,
+            building_penalty: 99.0,
+            reserved_damage_penalty: 1.8,
+        },
+        _ if matches!(kind.category(), EntityCategory::Mob | EntityCategory::Summon) => {
+            TargetingProfile {
+                distance_weight: 1.5,
+                low_hp_weight: 1.0,
+                threat_weight: 1.1,
+                counter_weight: 0.9,
+                building_penalty: 3.5,
+                reserved_damage_penalty: 0.6,
+            }
+        }
+        _ => TargetingProfile {
+            distance_weight: 1.5,
+            low_hp_weight: 1.0,
+            threat_weight: 1.0,
+            counter_weight: 1.0,
+            building_penalty: 3.0,
+            reserved_damage_penalty: 0.8,
+        },
+    }
+}
+
+fn default_threat_value(kind: EntityKind) -> ThreatValue {
+    ThreatValue(match kind {
+        EntityKind::Worker => 0.35,
+        EntityKind::Scout => 0.15,
+        EntityKind::Soldier => 0.90,
+        EntityKind::Archer => 1.15,
+        EntityKind::Tank => 1.45,
+        EntityKind::Knight => 1.30,
+        EntityKind::Mage => 1.55,
+        EntityKind::Priest => 1.10,
+        EntityKind::Cavalry => 1.20,
+        EntityKind::Catapult => 2.10,
+        EntityKind::BatteringRam => 1.90,
+        EntityKind::Goblin => 0.55,
+        EntityKind::Skeleton => 0.75,
+        EntityKind::Orc => 1.05,
+        EntityKind::Demon => 1.60,
+        EntityKind::Tower | EntityKind::WatchTower => 1.20,
+        EntityKind::GuardTower => 1.45,
+        EntityKind::BallistaTower => 1.70,
+        EntityKind::BombardTower => 1.85,
+        _ => 0.0,
+    })
 }
 
 fn default_combat_fx(kind: EntityKind, combat: &CombatStats) -> CombatFxKind {
@@ -614,6 +881,7 @@ pub enum MeshKind {
     Cuboid { x: f32, y: f32, z: f32 },
     GltfScene { pick_radius: f32 },
     GltfCharacter { pick_radius: f32 },
+    ProceduralMob { pick_radius: f32 },
 }
 
 impl MeshKind {
@@ -624,6 +892,7 @@ impl MeshKind {
             MeshKind::Cuboid { x, y, z } => (x * x + y * y + z * z).sqrt() / 2.0,
             MeshKind::GltfScene { pick_radius } => return pick_radius,
             MeshKind::GltfCharacter { pick_radius } => return pick_radius,
+            MeshKind::ProceduralMob { pick_radius } => return pick_radius,
         };
         // 30% buffer for easier clicking
         r * 1.3
@@ -638,6 +907,10 @@ impl MeshKind {
 
     pub fn is_gltf_character(&self) -> bool {
         matches!(self, MeshKind::GltfCharacter { .. })
+    }
+
+    pub fn is_procedural_mob(&self) -> bool {
+        matches!(self, MeshKind::ProceduralMob { .. })
     }
 }
 
@@ -683,6 +956,7 @@ impl BlueprintRegistry {
             EntityKind::Base,
             EntityKind::Outpost,
             EntityKind::WallSegment,
+            EntityKind::WallCorner,
             EntityKind::Gatehouse,
             EntityKind::WatchTower,
             EntityKind::GuardTower,
@@ -741,7 +1015,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 5.0,
-                y_offset: 0.8,
+                y_offset: 1.6,
             }),
             gathering: Some(GatheringStats {
                 gather_speed: 5.0,
@@ -753,11 +1027,11 @@ pub fn build_registry() -> BlueprintRegistry {
             building: None,
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 3.0 },
                 color: Color::srgb(0.9, 0.8, 0.2),
                 selected_color: Color::srgb(1.0, 1.0, 0.4),
                 selected_emissive: LinearRgba::new(0.3, 0.3, 0.0, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -776,7 +1050,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 4.5,
-                y_offset: 0.9,
+                y_offset: 1.8,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 12.0 }),
@@ -787,11 +1061,11 @@ pub fn build_registry() -> BlueprintRegistry {
             building: None,
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 3.0 },
                 color: Color::srgb(0.8, 0.15, 0.15),
                 selected_color: Color::srgb(1.0, 0.3, 0.3),
                 selected_emissive: LinearRgba::new(0.3, 0.05, 0.05, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -810,7 +1084,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 5.5,
-                y_offset: 0.75,
+                y_offset: 1.5,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 18.0 }),
@@ -821,11 +1095,11 @@ pub fn build_registry() -> BlueprintRegistry {
             building: None,
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 3.0 },
                 color: Color::srgb(0.15, 0.7, 0.2),
                 selected_color: Color::srgb(0.3, 1.0, 0.4),
                 selected_emissive: LinearRgba::new(0.05, 0.3, 0.05, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -844,7 +1118,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 3.0,
-                y_offset: 1.25,
+                y_offset: 2.5,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
@@ -858,11 +1132,11 @@ pub fn build_registry() -> BlueprintRegistry {
             building: None,
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 3.6 },
                 color: Color::srgb(0.35, 0.35, 0.4),
                 selected_color: Color::srgb(0.6, 0.6, 0.65),
                 selected_emissive: LinearRgba::new(0.1, 0.1, 0.12, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -881,7 +1155,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 6.0,
-                y_offset: 1.2,
+                y_offset: 2.4,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 14.0 }),
@@ -895,11 +1169,11 @@ pub fn build_registry() -> BlueprintRegistry {
             building: None,
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 3.6 },
                 color: Color::srgb(0.7, 0.7, 0.75),
                 selected_color: Color::srgb(0.9, 0.9, 0.95),
                 selected_emissive: LinearRgba::new(0.2, 0.2, 0.25, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -918,7 +1192,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 4.0,
-                y_offset: 0.8,
+                y_offset: 1.6,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 20.0 }),
@@ -929,11 +1203,11 @@ pub fn build_registry() -> BlueprintRegistry {
             building: None,
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 3.0 },
                 color: Color::srgb(0.3, 0.2, 0.7),
                 selected_color: Color::srgb(0.5, 0.4, 1.0),
                 selected_emissive: LinearRgba::new(0.1, 0.05, 0.3, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -952,7 +1226,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 4.5,
-                y_offset: 0.8,
+                y_offset: 1.6,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 16.0 }),
@@ -963,11 +1237,11 @@ pub fn build_registry() -> BlueprintRegistry {
             building: None,
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 3.0 },
                 color: Color::srgb(0.9, 0.85, 0.6),
                 selected_color: Color::srgb(1.0, 0.95, 0.7),
                 selected_emissive: LinearRgba::new(0.3, 0.28, 0.1, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -986,7 +1260,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 7.0,
-                y_offset: 1.1,
+                y_offset: 2.2,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 14.0 }),
@@ -999,11 +1273,11 @@ pub fn build_registry() -> BlueprintRegistry {
             building: None,
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 3.0 },
                 color: Color::srgb(0.55, 0.4, 0.25),
                 selected_color: Color::srgb(0.75, 0.6, 0.4),
                 selected_emissive: LinearRgba::new(0.15, 0.1, 0.05, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -1022,7 +1296,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 8.0,
-                y_offset: 0.7,
+                y_offset: 1.4,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 25.0 }),
@@ -1031,11 +1305,11 @@ pub fn build_registry() -> BlueprintRegistry {
             building: None,
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.0 },
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 2.0 },
                 color: Color::srgb(0.3, 0.6, 0.3),
                 selected_color: Color::srgb(0.5, 0.8, 0.5),
                 selected_emissive: LinearRgba::new(0.05, 0.15, 0.05, 1.0),
-                scale: 0.8,
+                scale: 1.6,
             },
         },
     );
@@ -1056,7 +1330,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 2.0,
-                y_offset: 1.0,
+                y_offset: 2.0,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 28.0 }),
@@ -1077,7 +1351,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 color: Color::srgb(0.5, 0.35, 0.2),
                 selected_color: Color::srgb(0.7, 0.5, 0.3),
                 selected_emissive: LinearRgba::new(0.1, 0.05, 0.02, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -1096,7 +1370,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 2.5,
-                y_offset: 0.8,
+                y_offset: 1.6,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
@@ -1116,7 +1390,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 color: Color::srgb(0.45, 0.3, 0.15),
                 selected_color: Color::srgb(0.65, 0.45, 0.25),
                 selected_emissive: LinearRgba::new(0.08, 0.04, 0.01, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -1749,11 +2023,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::Cuboid {
-                    x: 1.0,
-                    y: 2.2,
-                    z: 0.7,
-                },
+                mesh_kind: MeshKind::GltfScene { pick_radius: 2.5 },
                 color: Color::srgb(0.42, 0.25, 0.11),
                 selected_color: Color::srgb(0.58, 0.36, 0.17),
                 selected_emissive: LinearRgba::NONE,
@@ -1790,13 +2060,46 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::Cuboid {
-                    x: 0.9,
-                    y: 2.6,
-                    z: 0.9,
-                },
+                mesh_kind: MeshKind::GltfScene { pick_radius: 2.0 },
                 color: Color::srgb(0.40, 0.23, 0.10),
                 selected_color: Color::srgb(0.58, 0.34, 0.16),
+                selected_emissive: LinearRgba::NONE,
+                scale: 1.0,
+            },
+        },
+    );
+
+    blueprints.insert(
+        EntityKind::WallCorner,
+        Blueprint {
+            faction: Faction::Player1,
+            combat: Some(CombatStats {
+                hp: 200.0,
+                damage: 0.0,
+                attack_range: 0.0,
+                attack_cooldown_secs: 1.0,
+                aggro_range: None,
+                is_ranged: false,
+            }),
+            movement: None,
+            gathering: None,
+            vision: Some(VisionStats { range: 8.0 }),
+            cost: ResourceCost::new()
+                .with(ResourceType::Wood, 10)
+                .with(ResourceType::Stone, 8),
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 4.0,
+                half_height: 1.0,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::GltfScene { pick_radius: 2.5 },
+                color: Color::srgb(0.42, 0.25, 0.11),
+                selected_color: Color::srgb(0.58, 0.36, 0.17),
                 selected_emissive: LinearRgba::NONE,
                 scale: 1.0,
             },
@@ -2513,7 +2816,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 3.5,
-                y_offset: 0.65,
+                y_offset: 1.3,
             }),
             gathering: None,
             vision: None,
@@ -2524,11 +2827,11 @@ pub fn build_registry() -> BlueprintRegistry {
                 patrol_radius: 12.0,
             }),
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                mesh_kind: MeshKind::ProceduralMob { pick_radius: 3.0 },
                 color: Color::srgb(0.3, 0.6, 0.15),
                 selected_color: Color::srgb(0.3, 0.6, 0.15),
                 selected_emissive: LinearRgba::NONE,
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -2547,7 +2850,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 3.0,
-                y_offset: 0.78,
+                y_offset: 1.56,
             }),
             gathering: None,
             vision: None,
@@ -2558,11 +2861,11 @@ pub fn build_registry() -> BlueprintRegistry {
                 patrol_radius: 15.0,
             }),
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.5 },
+                mesh_kind: MeshKind::ProceduralMob { pick_radius: 3.0 },
                 color: Color::srgb(0.85, 0.82, 0.75),
                 selected_color: Color::srgb(0.85, 0.82, 0.75),
                 selected_emissive: LinearRgba::NONE,
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -2581,7 +2884,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 2.5,
-                y_offset: 1.05,
+                y_offset: 2.1,
             }),
             gathering: None,
             vision: None,
@@ -2592,11 +2895,11 @@ pub fn build_registry() -> BlueprintRegistry {
                 patrol_radius: 18.0,
             }),
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.8 },
+                mesh_kind: MeshKind::ProceduralMob { pick_radius: 3.6 },
                 color: Color::srgb(0.4, 0.3, 0.15),
                 selected_color: Color::srgb(0.4, 0.3, 0.15),
                 selected_emissive: LinearRgba::NONE,
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -2615,7 +2918,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 3.0,
-                y_offset: 1.15,
+                y_offset: 2.3,
             }),
             gathering: None,
             vision: None,
@@ -2626,11 +2929,11 @@ pub fn build_registry() -> BlueprintRegistry {
                 patrol_radius: 20.0,
             }),
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 2.0 },
+                mesh_kind: MeshKind::ProceduralMob { pick_radius: 4.0 },
                 color: Color::srgb(0.6, 0.1, 0.1),
                 selected_color: Color::srgb(0.6, 0.1, 0.1),
                 selected_emissive: LinearRgba::NONE,
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -2651,7 +2954,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 4.0,
-                y_offset: 0.7,
+                y_offset: 1.4,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 8.0 }),
@@ -2660,11 +2963,11 @@ pub fn build_registry() -> BlueprintRegistry {
             building: None,
             mob_ai: None,
             visual: VisualDef {
-                mesh_kind: MeshKind::GltfCharacter { pick_radius: 1.3 },
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 2.6 },
                 color: Color::srgb(0.75, 0.72, 0.65),
                 selected_color: Color::srgb(0.85, 0.82, 0.75),
                 selected_emissive: LinearRgba::new(0.1, 0.1, 0.08, 1.0),
-                scale: 0.9,
+                scale: 1.8,
             },
         },
     );
@@ -2683,7 +2986,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 7.0,
-                y_offset: 0.5,
+                y_offset: 1.0,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 20.0 }),
@@ -2699,7 +3002,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 color: Color::srgba(0.5, 0.6, 0.8, 0.7),
                 selected_color: Color::srgba(0.6, 0.7, 0.9, 0.8),
                 selected_emissive: LinearRgba::new(0.1, 0.15, 0.25, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -2718,7 +3021,7 @@ pub fn build_registry() -> BlueprintRegistry {
             }),
             movement: Some(MovementStats {
                 speed: 3.5,
-                y_offset: 0.9,
+                y_offset: 1.8,
             }),
             gathering: None,
             vision: Some(VisionStats { range: 12.0 }),
@@ -2734,7 +3037,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 color: Color::srgb(0.9, 0.4, 0.1),
                 selected_color: Color::srgb(1.0, 0.5, 0.15),
                 selected_emissive: LinearRgba::new(0.5, 0.2, 0.05, 1.0),
-                scale: 1.0,
+                scale: 2.0,
             },
         },
     );
@@ -2910,6 +3213,26 @@ pub fn spawn_from_blueprint_with_faction(
         }
         EntityCategory::Mob => {
             entity_cmds.insert((Mob, FogHideable::Mob));
+            if bp.visual.mesh_kind.is_procedural_mob() {
+                let visual_kind = match kind {
+                    EntityKind::Goblin => MobVisualKind::Goblin,
+                    EntityKind::Skeleton => MobVisualKind::Skeleton,
+                    EntityKind::Orc => MobVisualKind::Orc,
+                    EntityKind::Demon => MobVisualKind::Demon,
+                    _ => MobVisualKind::Goblin,
+                };
+                entity_cmds.insert(ProceduralMob {
+                    visual_kind,
+                    phase: 0.0,
+                    base_y_offset: bp.movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8),
+                    base_scale: Vec3::splat(bp.visual.scale),
+                    base_translation: Vec3::ZERO,
+                    attack_timer: None,
+                    initialized: false,
+                    pulse_ring_spawned: false,
+                    dying_progress: 0.0,
+                });
+            }
         }
         EntityCategory::Building => {
             let footprint = crate::buildings::footprint_for_kind(kind);
@@ -3101,6 +3424,9 @@ pub fn spawn_from_blueprint_with_faction(
     if let Some(ref combat) = bp.combat {
         let attack_profile = default_attack_profile(kind, combat);
         let combat_fx = default_combat_fx(kind, combat);
+        let attack_timing = default_attack_timing(kind, combat);
+        let targeting_profile = default_targeting_profile(kind);
+        let threat_value = default_threat_value(kind);
         entity_cmds.insert((
             Health {
                 current: combat.hp,
@@ -3116,6 +3442,10 @@ pub fn spawn_from_blueprint_with_faction(
             combat_fx,
             kind.armor_type(),
             kind.damage_type(),
+            attack_timing,
+            targeting_profile,
+            threat_value,
+            ReservedIncomingDamage::default(),
         ));
         if let Some(aggro) = combat.aggro_range {
             entity_cmds.insert(AggroRange(aggro));
@@ -3124,8 +3454,8 @@ pub fn spawn_from_blueprint_with_faction(
             entity_cmds.insert(IsRanged);
         }
     } else {
-        // Buildings without combat stats still need armor type for counter system
-        entity_cmds.insert(kind.armor_type());
+        // Buildings without combat stats still need armor type + threat value for targeting
+        entity_cmds.insert((kind.armor_type(), default_threat_value(kind)));
     }
 
     // Movement
@@ -3168,17 +3498,13 @@ pub fn spawn_from_blueprint_with_faction(
     if !is_gltf_character && bp.visual.mesh_kind.is_gltf() {
         if let Some(models) = building_models {
             if let Some(scene_handle) = models.scene_for(kind, 1, pos) {
-                let cal = models.calibration.get(&kind);
-                let scale = cal.map(|c| c.scale).unwrap_or(1.0);
-                let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
                 let child = commands
                     .spawn((
                         SceneRoot(scene_handle),
                         BuildingSceneChild,
                         InheritOutline,
                         AsyncSceneInheritOutline::default(),
-                        Transform::from_scale(Vec3::splat(scale))
-                            .with_translation(Vec3::new(0.0, y_off, 0.0)),
+                        models.child_transform(kind, 1.0),
                     ))
                     .id();
                 commands.entity(entity_id).add_child(child);
@@ -3251,10 +3577,25 @@ pub fn build_visual_cache(
             MeshKind::Cuboid { x, y, z } => meshes.add(Cuboid::new(x, y, z)),
             MeshKind::GltfScene { .. } => meshes.add(Cuboid::new(4.0, 0.3, 4.0)),
             MeshKind::GltfCharacter { .. } => meshes.add(Cuboid::new(0.5, 0.1, 0.5)),
+            MeshKind::ProceduralMob { .. } => match *kind {
+                EntityKind::Goblin => meshes.add(Cuboid::new(0.8, 0.8, 0.8)),
+                EntityKind::Skeleton => meshes.add(Cuboid::new(0.6, 1.6, 0.6)),
+                EntityKind::Orc => meshes.add(Cuboid::new(1.4, 1.2, 1.4)),
+                EntityKind::Demon => meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+                _ => meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
+            },
         };
 
+        let emissive = match *kind {
+            EntityKind::Demon => LinearRgba::new(0.8, 0.1, 0.1, 1.0),
+            EntityKind::Skeleton if bp.visual.mesh_kind.is_procedural_mob() => {
+                LinearRgba::new(0.1, 0.1, 0.15, 1.0)
+            }
+            _ => LinearRgba::NONE,
+        };
         let mat_default = materials.add(StandardMaterial {
             base_color: bp.visual.color,
+            emissive,
             ..default()
         });
 

@@ -54,7 +54,6 @@ pub(crate) fn update_lobby_ui(
         >,
     ),
     mut session_tokens: ResMut<multiplayer::SessionTokens>,
-    roots: Query<Entity, With<MenuRoot>>,
     extra: (
         Option<Res<PreferredFaction>>,
         Option<ResMut<CountdownState>>,
@@ -324,8 +323,8 @@ pub(crate) fn update_lobby_ui(
             sync_multiplayer_slots_from_lobby(&mut config, &lobby);
             lobby.players.retain(|p| p.connected);
             broadcast_lobby_update_matchbox(&lobby, socket, &config);
-            for e in &roots {
-                commands.entity(e).try_despawn();
+            if matches!(*page, MenuPage::HostLobby | MenuPage::JoinLobby) {
+                commands.insert_resource(MenuDirty);
             }
         }
 
@@ -436,9 +435,7 @@ pub(crate) fn update_lobby_ui(
                             2.0,
                             TimerMode::Repeating,
                         )));
-                        for e in &roots {
-                            commands.entity(e).try_despawn();
-                        }
+                        commands.insert_resource(MenuDirty);
                         // Send JoinRequest
                         let player_name = if config.player_name.trim().is_empty() {
                             "Client".to_string()
@@ -533,9 +530,7 @@ pub(crate) fn update_lobby_ui(
                                 lobby.status = LobbyStatus::Connected;
                                 lobby.discovery_status.clear();
                                 lobby.discovered_hosts.clear();
-                                for e in &roots {
-                                    commands.entity(e).try_despawn();
-                                }
+                                commands.insert_resource(MenuDirty);
                             }
                             game_state::message::GameEvent::GameStart { config_json } => {
                                 info!("Received GameStart from host");
@@ -692,8 +687,7 @@ pub(crate) fn copy_session_code_system(
 
 pub(crate) fn paste_code_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<PasteCodeButton>)>,
-    mut inputs: Query<(&mut TextInputField, &Children), With<SessionCodeInput>>,
-    mut text_query: Query<&mut Text, Without<TextInputCursor>>,
+    mut inputs: Query<&mut TextInputField, With<SessionCodeInput>>,
 ) {
     for interaction in &interactions {
         if *interaction != Interaction::Pressed {
@@ -706,38 +700,29 @@ pub(crate) fn paste_code_system(
         if clip.is_empty() {
             continue;
         }
-        let Ok((mut field, children)) = inputs.single_mut() else {
+        let Ok(mut field) = inputs.single_mut() else {
             continue;
         };
         field.value = clip[..clip.len().min(field.max_len)].to_string();
         field.cursor_pos = field.value.len();
-        for child in children.iter() {
-            if let Ok(mut text) = text_query.get_mut(child) {
-                **text = field.value.clone();
-            }
-        }
+        field.selection_anchor = None;
     }
 }
 
 pub(crate) fn clear_code_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<ClearCodeButton>)>,
-    mut inputs: Query<(&mut TextInputField, &Children), With<SessionCodeInput>>,
-    mut text_query: Query<&mut Text, Without<TextInputCursor>>,
+    mut inputs: Query<&mut TextInputField, With<SessionCodeInput>>,
 ) {
     for interaction in &interactions {
         if *interaction != Interaction::Pressed {
             continue;
         }
-        let Ok((mut field, children)) = inputs.single_mut() else {
+        let Ok(mut field) = inputs.single_mut() else {
             continue;
         };
         field.value.clear();
         field.cursor_pos = 0;
-        for child in children.iter() {
-            if let Ok(mut text) = text_query.get_mut(child) {
-                **text = String::new();
-            }
-        }
+        field.selection_anchor = None;
     }
 }
 
@@ -843,7 +828,6 @@ pub(crate) fn kick_player_system(
     mut config: ResMut<GameSetupConfig>,
     mut socket: Option<ResMut<MatchboxSocket>>,
     mut commands: Commands,
-    roots: Query<Entity, With<MenuRoot>>,
 ) {
     for (interaction, kick_btn) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -869,9 +853,7 @@ pub(crate) fn kick_player_system(
             broadcast_lobby_update_matchbox(&lobby, socket, &config);
         }
 
-        for e in &roots {
-            commands.entity(e).try_despawn();
-        }
+        commands.insert_resource(MenuDirty);
     }
 }
 

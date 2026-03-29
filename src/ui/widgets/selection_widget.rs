@@ -522,11 +522,7 @@ pub fn spawn_friendly_detail_card(
                     bottom: Val::Px(8.0),
                 },
                 column_gap: Val::Px(10.0),
-                border: UiRect {
-                    left: Val::Px(3.0),
-                    ..default()
-                },
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+                border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..default()
             },
             BorderColor::all(theme::PANEL_ACCENT_FRIENDLY),
@@ -676,11 +672,7 @@ pub fn spawn_building_detail_card(
                     bottom: Val::Px(8.0),
                 },
                 column_gap: Val::Px(10.0),
-                border: UiRect {
-                    left: Val::Px(3.0),
-                    ..default()
-                },
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+                border_radius: BorderRadius::all(Val::Px(2.0)),
                 ..default()
             },
             BorderColor::all(accent_color),
@@ -775,7 +767,7 @@ fn spawn_enemy_detail_card(
                 },
                 column_gap: Val::Px(10.0),
                 border: UiRect {
-                    left: Val::Px(3.0),
+                    left: Val::Px(1.0),
                     top: Val::Px(1.0),
                     right: Val::Px(1.0),
                     bottom: Val::Px(1.0),

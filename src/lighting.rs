@@ -6,8 +6,8 @@ use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLi
 use bevy::prelude::*;
 
 use crate::components::{
-    AppState, Building, GameSetupConfig, GameWorld, GhostBuilding, Unit, WallPostPiece,
-    WallSegmentPiece,
+    AppState, Building, GameSetupConfig, GameWorld, GhostBuilding, GraphicsSettings,
+    ShadowQuality, Unit, WallCornerPiece, WallPostPiece, WallSegmentPiece,
 };
 
 pub struct LightingPlugin;
@@ -23,6 +23,10 @@ impl Plugin for LightingPlugin {
                 (advance_day_cycle, update_lighting)
                     .chain()
                     .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                apply_graphics_lighting_settings.run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
@@ -251,28 +255,22 @@ const SUN_YAW: f32 = 0.3;
 
 // ── Setup ──
 
-fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
+fn setup_lighting(
+    mut commands: Commands,
+    config: Res<GameSetupConfig>,
+    graphics: Res<GraphicsSettings>,
+) {
     commands.insert_resource(DayCycle {
         cycle_duration: config.day_cycle_secs,
         ..default()
     });
     commands.insert_resource(LightingOverrides::default());
 
-    // Reduce shadow map resolution for performance (default is 2048).
-    // 1024 is sufficient for an RTS camera distance.
-    commands.insert_resource(DirectionalLightShadowMap { size: 2048 });
+    commands.insert_resource(DirectionalLightShadowMap {
+        size: shadow_map_size(graphics.shadow_quality),
+    });
 
-    // Shadow cascade config: limit shadow distance to 150 units with 3 cascades.
-    // RTS cameras are typically 40-80 units above ground; shadows beyond 150 are
-    // wasted and the GPU culls far fewer shadow casters with a tighter bound.
-    let cascade_shadow_config: CascadeShadowConfig = CascadeShadowConfigBuilder {
-        num_cascades: 3,
-        minimum_distance: 1.0,
-        maximum_distance: 150.0,
-        first_cascade_far_bound: 15.0,
-        overlap_proportion: 0.15,
-    }
-    .into();
+    let cascade_shadow_config = cascade_shadow_config(graphics.shadow_quality);
 
     // Directional light (sun)
     #[cfg(not(target_arch = "wasm32"))]
@@ -281,7 +279,7 @@ fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
         SunLight,
         DirectionalLight {
             illuminance: 6000.0,
-            shadows_enabled: true,
+            shadows_enabled: graphics.shadow_quality != ShadowQuality::Off,
             color: Color::srgb(0.85, 0.8, 0.7),
             ..default()
         },
@@ -295,7 +293,7 @@ fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
         SunLight,
         DirectionalLight {
             illuminance: 6000.0,
-            shadows_enabled: true,
+            shadows_enabled: graphics.shadow_quality != ShadowQuality::Off,
             color: Color::srgb(0.85, 0.8, 0.7),
             ..default()
         },
@@ -312,6 +310,53 @@ fn setup_lighting(mut commands: Commands, config: Res<GameSetupConfig>) {
 
     // Clear color (sky)
     commands.insert_resource(ClearColor(Color::srgb(0.6, 0.65, 0.75)));
+}
+
+fn shadow_map_size(quality: ShadowQuality) -> usize {
+    match quality {
+        ShadowQuality::Off => 1024,
+        ShadowQuality::Low => 1024,
+        ShadowQuality::High => 2048,
+    }
+}
+
+fn cascade_shadow_config(quality: ShadowQuality) -> CascadeShadowConfig {
+    match quality {
+        ShadowQuality::Off | ShadowQuality::Low => CascadeShadowConfigBuilder {
+            num_cascades: 2,
+            minimum_distance: 1.0,
+            maximum_distance: 100.0,
+            first_cascade_far_bound: 12.0,
+            overlap_proportion: 0.2,
+        }
+        .into(),
+        ShadowQuality::High => CascadeShadowConfigBuilder {
+            num_cascades: 3,
+            minimum_distance: 1.0,
+            maximum_distance: 150.0,
+            first_cascade_far_bound: 15.0,
+            overlap_proportion: 0.15,
+        }
+        .into(),
+    }
+}
+
+fn apply_graphics_lighting_settings(
+    graphics: Res<GraphicsSettings>,
+    overrides: Res<LightingOverrides>,
+    mut shadow_map: ResMut<DirectionalLightShadowMap>,
+    mut entity_lights: ResMut<EntityLightConfig>,
+    mut sun_q: Query<(&mut DirectionalLight, &mut CascadeShadowConfig), With<SunLight>>,
+) {
+    entity_lights.enabled = graphics.entity_lights;
+    shadow_map.size = shadow_map_size(graphics.shadow_quality);
+
+    if let Ok((mut sun, mut cascade_config)) = sun_q.single_mut() {
+        if overrides.shadows_enabled.is_none() {
+            sun.shadows_enabled = graphics.shadow_quality != ShadowQuality::Off;
+        }
+        *cascade_config = cascade_shadow_config(graphics.shadow_quality);
+    }
 }
 
 // ── Day cycle advancement ──
@@ -454,6 +499,7 @@ fn update_entity_light_grid(
             Without<GhostBuilding>,
             Without<WallSegmentPiece>,
             Without<WallPostPiece>,
+            Without<WallCornerPiece>,
         ),
     >,
 ) {

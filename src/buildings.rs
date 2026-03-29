@@ -11,7 +11,7 @@ use crate::blueprints::{
 };
 use crate::components::*;
 use crate::ground::HeightMap;
-use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
+use crate::model_assets::{BuildingConstructionAssets, BuildingModelAssets, UnitModelAssets};
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
 
 #[derive(SystemParam)]
@@ -22,85 +22,147 @@ struct PlacementOnlineParams<'w> {
     time: Res<'w, Time>,
 }
 
-/// Spawn a line of wall posts and segments between the given points.
-/// Returns all spawned entities (posts + segments).
-pub fn spawn_wall_line(
+/// Spawn wall entities at grid cells and register them in the WallGrid.
+/// Each cell gets auto-tiled based on its neighbors.
+/// Returns all spawned entities.
+pub fn spawn_wall_grid_cells(
     commands: &mut Commands,
     cache: &EntityVisualCache,
     registry: &BlueprintRegistry,
     building_models: Option<&BuildingModelAssets>,
     height_map: &HeightMap,
+    wall_grid: &mut WallGrid,
     faction: Faction,
-    points: &[Vec3],
+    cells: &[(i32, i32)],
 ) -> Vec<Entity> {
     let mut spawned_entities = Vec::new();
-    for point in points {
+
+    // First pass: insert all cells into grid so neighbor lookups work
+    // We spawn as WallPost initially; auto-tile system will fix piece kinds
+    for &(gx, gz) in cells {
+        if wall_grid.cells.contains_key(&(gx, gz)) {
+            continue;
+        }
+
+        let world = WallGrid::grid_to_world(gx, gz);
         let entity = spawn_from_blueprint_with_faction(
             commands,
             cache,
             EntityKind::WallPost,
-            *point,
+            world,
             registry,
             building_models,
             None,
             height_map,
             faction,
         );
-        commands.entity(entity).insert(WallPostPiece);
-        spawned_entities.push(entity);
-    }
+        commands
+            .entity(entity)
+            .insert((WallPostPiece, WallGridCoord(gx, gz)));
 
-    for window in points.windows(2) {
-        let a = window[0];
-        let b = window[1];
-        let mid = (a + b) * 0.5;
-        let seg_len = a.distance(b).max(0.8);
-        let angle = (b.z - a.z).atan2(b.x - a.x);
-        let entity = spawn_from_blueprint_with_faction(
-            commands,
-            cache,
-            EntityKind::WallSegment,
-            mid,
-            registry,
-            building_models,
-            None,
-            height_map,
-            faction,
+        wall_grid.cells.insert(
+            (gx, gz),
+            WallGridCell {
+                entity,
+                faction,
+                piece_kind: WallPieceKind::Post,
+                is_gate: false,
+                rotation_y: 0.0,
+            },
         );
-        commands.entity(entity).insert((
-            WallSegmentPiece,
-            Transform::from_translation(Vec3::new(mid.x, height_map.sample(mid.x, mid.z), mid.z))
-                .with_rotation(Quat::from_rotation_y(-angle))
-                .with_scale(Vec3::new(seg_len.max(1.0), 1.0, 1.0)),
-        ));
+
+        // Mark dirty so auto-tile system picks it up
+        wall_grid.mark_dirty(gx, gz);
+
         spawned_entities.push(entity);
     }
 
     spawned_entities
 }
 
+/// Legacy wrapper: spawn walls from world-space points by snapping to grid.
+/// Used by AI and other systems that work with Vec3 positions.
+pub fn spawn_wall_line(
+    commands: &mut Commands,
+    cache: &EntityVisualCache,
+    registry: &BlueprintRegistry,
+    building_models: Option<&BuildingModelAssets>,
+    height_map: &HeightMap,
+    wall_grid: &mut WallGrid,
+    faction: Faction,
+    points: &[Vec3],
+) -> Vec<Entity> {
+    // Convert points to grid cells
+    let mut cells = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for point in points {
+        let coord = WallGrid::world_to_grid(*point);
+        if seen.insert(coord) {
+            cells.push(coord);
+        }
+    }
+
+    spawn_wall_grid_cells(
+        commands,
+        cache,
+        registry,
+        building_models,
+        height_map,
+        wall_grid,
+        faction,
+        &cells,
+    )
+}
+
 pub fn footprint_for_kind(kind: EntityKind) -> f32 {
+    // Based on actual GLTF bounding boxes (scaled) + ~0.5 margin
     match kind {
-        EntityKind::Base | EntityKind::Storage => 7.0,
-        EntityKind::House => 4.5,
-        EntityKind::Gatehouse => 4.0,
-        EntityKind::WallSegment | EntityKind::WallPost => 1.6,
-        EntityKind::Sawmill | EntityKind::Mine | EntityKind::OilRig => 4.0,
+        EntityKind::Outpost => 4.5,           // BeastLair: raw 3.93 @ 1.0
+        EntityKind::Base | EntityKind::Smelter => 3.5, // Castle: 3.02, Keep: 3.11 @ 0.75
+        EntityKind::Barracks
+        | EntityKind::Workshop
+        | EntityKind::MageTower
+        | EntityKind::Temple
+        | EntityKind::Stable
+        | EntityKind::SiegeWorks
+        | EntityKind::Sawmill
+        | EntityKind::Mine
+        | EntityKind::OilRig
+        | EntityKind::Alchemist
+        | EntityKind::Gatehouse => 3.0,       // ~2.5 radius @ 0.75
+        EntityKind::Tower
+        | EntityKind::WatchTower
+        | EntityKind::GuardTower
+        | EntityKind::BallistaTower
+        | EntityKind::BombardTower
+        | EntityKind::Storage
+        | EntityKind::House => 2.0,           // towers ~1.5, Granary 1.6, House 1.7 @ 0.75
+        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner => 1.5,
         _ => 2.5,
     }
+}
+
+pub fn is_wall_like_kind(kind: EntityKind) -> bool {
+    matches!(
+        kind,
+        EntityKind::WallSegment
+            | EntityKind::WallPost
+            | EntityKind::WallCorner
+            | EntityKind::Gatehouse
+    )
 }
 
 pub fn uses_terrain_foundation(kind: EntityKind) -> bool {
     !matches!(
         kind,
-        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::OilRig
+        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner | EntityKind::OilRig
     )
 }
 
 /// Returns the allowed biomes for a building kind, or `None` for default (any non-water).
 pub fn allowed_biomes(kind: EntityKind) -> Option<&'static [Biome]> {
     match kind {
-        EntityKind::Sawmill => Some(&[Biome::Forest]),
+        EntityKind::Sawmill => Some(&[Biome::Forest, Biome::Grassland]),
         EntityKind::Mine => Some(&[Biome::Mountain, Biome::Wetland, Biome::Desert]),
         EntityKind::OilRig => Some(&[Biome::Water]),
         _ => None,
@@ -118,7 +180,7 @@ pub fn is_biome_valid_for(kind: EntityKind, biome: Biome) -> bool {
 /// Returns a human-readable biome requirement hint for placement feedback.
 pub fn biome_requirement_text(kind: EntityKind) -> Option<&'static str> {
     match kind {
-        EntityKind::Sawmill => Some("Sawmill must be placed on Forest"),
+        EntityKind::Sawmill => Some("Sawmill must be placed on Forest or Grassland"),
         EntityKind::Mine => Some("Mine must be placed on Mountain, Wetland, or Desert"),
         EntityKind::OilRig => Some("Oil Rig must be placed on Water"),
         _ => Some("Cannot place on Water"),
@@ -157,7 +219,7 @@ pub fn try_queue_build_order_authoritative(
 ) -> Result<(), String> {
     if matches!(
         kind,
-        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::Gatehouse
+        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner | EntityKind::Gatehouse
     ) {
         return Err("This building uses a specialized placement flow.".to_string());
     }
@@ -213,7 +275,7 @@ pub fn try_queue_build_order_authoritative(
         }
     }
 
-    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost) {
+    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner) {
         const MAX_BUILDING_SLOPE: f32 = 0.5;
         let slope = height_map.max_slope_under_footprint(build_pos.x, build_pos.z, new_footprint);
         if slope > MAX_BUILDING_SLOPE {
@@ -297,12 +359,196 @@ pub fn try_queue_build_order_authoritative(
     Ok(())
 }
 
+// ── Wall Auto-Tile Logic ──
+
+/// Determine wall piece kind and rotation from a 4-bit neighbor mask.
+/// Bits: 0=North(-Z), 1=East(+X), 2=South(+Z), 3=West(-X).
+pub fn auto_tile_piece(neighbor_mask: u8, is_gate: bool) -> (WallPieceKind, f32) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    let count = neighbor_mask.count_ones();
+    let n = neighbor_mask & 1 != 0;
+    let e = neighbor_mask & 2 != 0;
+    let s = neighbor_mask & 4 != 0;
+    let w = neighbor_mask & 8 != 0;
+
+    if count == 2 {
+        // Two opposite neighbors → straight segment
+        // Wall_A_wall.glb runs along Z by default, so:
+        //   E+W (along X) needs PI/2 rotation to reorient
+        //   N+S (along Z) needs 0 rotation (already aligned)
+        if (n && s) || (e && w) {
+            let rot = if e && w { FRAC_PI_2 } else { 0.0 };
+            if is_gate {
+                return (WallPieceKind::Gate, rot);
+            }
+            return (WallPieceKind::Straight, rot);
+        }
+        // Two adjacent neighbors → corner piece
+        // Wall_A_corner.glb default orientation: connects +X and +Z directions
+        let rot = if s && e {
+            0.0
+        } else if s && w {
+            FRAC_PI_2
+        } else if n && w {
+            PI
+        } else {
+            // n && e
+            -FRAC_PI_2
+        };
+        return (WallPieceKind::Corner, rot);
+    }
+
+    // 0, 1, 3, or 4 neighbors → post
+    (WallPieceKind::Post, 0.0)
+}
+
+/// Map WallPieceKind to the EntityKind used for spawning/model lookup.
+pub fn piece_kind_to_entity_kind(pk: WallPieceKind) -> EntityKind {
+    match pk {
+        WallPieceKind::Post => EntityKind::WallPost,
+        WallPieceKind::Straight => EntityKind::WallSegment,
+        WallPieceKind::Corner => EntityKind::WallCorner,
+        WallPieceKind::Gate => EntityKind::Gatehouse,
+    }
+}
+
+fn wall_auto_tile_system(
+    mut commands: Commands,
+    mut wall_grid: ResMut<WallGrid>,
+    building_models: Option<Res<BuildingModelAssets>>,
+    construction_assets: Option<Res<BuildingConstructionAssets>>,
+    children_q: Query<&Children>,
+    scene_child_q: Query<Entity, With<BuildingSceneChild>>,
+    building_state_q: Query<(&BuildingState, Option<&ConstructionStage>)>,
+    transform_q: Query<&Transform>,
+) {
+    let Some(ref building_models) = building_models else {
+        return;
+    };
+
+    let dirty: Vec<(i32, i32)> = wall_grid.dirty.drain(..).collect();
+    // Deduplicate
+    let mut dirty_set = std::collections::HashSet::new();
+    for coord in dirty {
+        dirty_set.insert(coord);
+    }
+
+    for (gx, gz) in dirty_set {
+        let Some(cell) = wall_grid.cells.get(&(gx, gz)).cloned() else {
+            continue;
+        };
+
+        let mask = wall_grid.neighbor_mask(gx, gz);
+        let (new_piece, new_rot) = auto_tile_piece(mask, cell.is_gate);
+
+        if new_piece == cell.piece_kind && (new_rot - cell.rotation_y).abs() < 0.01 {
+            continue; // No change needed
+        }
+
+        let entity = cell.entity;
+        let new_kind = piece_kind_to_entity_kind(new_piece);
+
+        // Update grid cell
+        if let Some(cell_mut) = wall_grid.cells.get_mut(&(gx, gz)) {
+            cell_mut.piece_kind = new_piece;
+            cell_mut.rotation_y = new_rot;
+        }
+
+        // Update EntityKind component
+        commands.entity(entity).insert(new_kind);
+
+        // Swap marker components
+        commands
+            .entity(entity)
+            .remove::<WallSegmentPiece>()
+            .remove::<WallPostPiece>()
+            .remove::<WallCornerPiece>()
+            .remove::<GatePiece>();
+        match new_piece {
+            WallPieceKind::Post => {
+                commands.entity(entity).insert(WallPostPiece);
+            }
+            WallPieceKind::Straight => {
+                commands.entity(entity).insert(WallSegmentPiece);
+            }
+            WallPieceKind::Corner => {
+                commands.entity(entity).insert(WallCornerPiece);
+            }
+            WallPieceKind::Gate => {
+                commands.entity(entity).insert(GatePiece);
+            }
+        }
+
+        // Update rotation
+        if let Ok(current_tf) = transform_q.get(entity) {
+            let mut new_tf = *current_tf;
+            new_tf.rotation = Quat::from_rotation_y(new_rot);
+            // Reset scale to uniform (no more stretching)
+            new_tf.scale = Vec3::ONE;
+            commands.entity(entity).insert(new_tf);
+        }
+
+        // Swap GLTF scene child to match new piece kind
+        // Determine which scene to use based on construction state
+        let scene_handle = if let Ok((state, construction_stage)) = building_state_q.get(entity) {
+            match state {
+                BuildingState::UnderConstruction => {
+                    let stage = construction_stage.map(|cs| cs.0).unwrap_or(0);
+                    construction_assets
+                        .as_ref()
+                        .and_then(|ca| ca.stages.get(&(new_kind, stage)).cloned())
+                }
+                BuildingState::Complete => {
+                    let world_pos = transform_q
+                        .get(entity)
+                        .map(|tf| tf.translation)
+                        .unwrap_or_default();
+                    building_models.scene_for(new_kind, 1, world_pos)
+                }
+            }
+        } else {
+            let world_pos = transform_q
+                .get(entity)
+                .map(|tf| tf.translation)
+                .unwrap_or_default();
+            building_models.scene_for(new_kind, 1, world_pos)
+        };
+
+        if let Some(scene) = scene_handle {
+            // Remove old scene children
+            if let Ok(children) = children_q.get(entity) {
+                for child in children.iter() {
+                    if scene_child_q.contains(child) {
+                        commands.entity(child).despawn();
+                    }
+                }
+            }
+
+            let child = commands
+                .spawn((
+                    SceneRoot(scene),
+                    BuildingSceneChild,
+                    InheritOutline,
+                    AsyncSceneInheritOutline::default(),
+                    building_models.child_transform(new_kind, 1.0),
+                ))
+                .id();
+            commands.entity(entity).add_child(child);
+
+            // Clear team color so it gets re-applied
+            commands.entity(entity).remove::<TeamColorApplied>();
+        }
+    }
+}
+
 pub struct BuildingsPlugin;
 
 impl Plugin for BuildingsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BuildingPlacementState>()
             .init_resource::<WallPlotPreview>()
+            .init_resource::<WallGrid>()
             .add_systems(Startup, create_ghost_materials)
             .add_systems(
                 Update,
@@ -328,6 +574,7 @@ impl Plugin for BuildingsPlugin {
                     build_site_preparation_system,
                     pending_build_cleanup_system,
                     construction_progress_system,
+                    wall_auto_tile_system,
                     tower_auto_attack,
                     training_queue_system,
                     update_completed_buildings_tracker,
@@ -466,46 +713,85 @@ fn is_pointer_over_ui(ui_interactions: &Query<&Interaction, With<Node>>) -> bool
         .any(|interaction| matches!(*interaction, Interaction::Hovered | Interaction::Pressed))
 }
 
-const WALL_SEGMENT_LENGTH: f32 = 3.0;
+/// Compute grid cells for a wall between two world positions.
+/// Walks axis-aligned: first along X, then along Z (L-shape).
+fn wall_layout_grid_cells(start: Vec3, end: Vec3) -> Vec<(i32, i32)> {
+    let (sx, sz) = WallGrid::world_to_grid(start);
+    let (ex, ez) = WallGrid::world_to_grid(end);
 
-fn wall_layout_points(start: Vec3, end: Vec3) -> Vec<Vec3> {
-    let flat_delta = Vec3::new(end.x - start.x, 0.0, end.z - start.z);
-    let distance = flat_delta.length();
-    if distance < 0.1 {
-        return vec![start];
+    let mut cells = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Walk along X first
+    let dx = if ex > sx { 1 } else { -1 };
+    let mut cx = sx;
+    loop {
+        if seen.insert((cx, sz)) {
+            cells.push((cx, sz));
+        }
+        if cx == ex {
+            break;
+        }
+        cx += dx;
     }
 
-    let steps = (distance / WALL_SEGMENT_LENGTH).round().max(1.0) as usize;
-    let dir = flat_delta.normalize();
-    let spacing = distance / steps as f32;
+    // Then walk along Z
+    let dz = if ez > sz { 1 } else { -1 };
+    let mut cz = sz;
+    loop {
+        if seen.insert((ex, cz)) {
+            cells.push((ex, cz));
+        }
+        if cz == ez {
+            break;
+        }
+        cz += dz;
+    }
 
-    (0..=steps)
-        .map(|i| {
-            let offset = dir * spacing * i as f32;
-            Vec3::new(start.x + offset.x, 0.0, start.z + offset.z)
-        })
-        .collect()
+    cells
 }
 
-fn wall_cost_from_points(
-    points: &[Vec3],
+/// Compute the cost for placing walls at the given grid cells.
+/// Uses a merged grid (existing + proposed) to determine piece types.
+fn wall_cost_from_cells(
+    proposed: &[(i32, i32)],
+    existing_grid: &WallGrid,
     registry: &BlueprintRegistry,
 ) -> crate::blueprints::ResourceCost {
-    let mut total = crate::blueprints::ResourceCost::default();
-    if points.len() < 2 {
+    use crate::blueprints::ResourceCost;
+
+    let mut total = ResourceCost::default();
+    if proposed.is_empty() {
         return total;
     }
 
-    let segments = (points.len() - 1) as u32;
-    let posts = points.len() as u32;
-    let seg_cost = &registry.get(EntityKind::WallSegment).cost;
-    let post_cost = &registry.get(EntityKind::WallPost).cost;
+    // Build temporary merged set for neighbor lookups
+    let mut merged: std::collections::HashSet<(i32, i32)> = existing_grid.cells.keys().copied().collect();
+    for &cell in proposed {
+        merged.insert(cell);
+    }
 
-    for rt in ResourceType::RAW.iter() {
-        total.set(
-            *rt,
-            segments * seg_cost.get(*rt) + posts * post_cost.get(*rt),
-        );
+    for &(gx, gz) in proposed {
+        // Skip cells already in the grid
+        if existing_grid.cells.contains_key(&(gx, gz)) {
+            continue;
+        }
+
+        // Compute neighbor mask from merged set
+        let mut mask = 0u8;
+        for (i, (nx, nz)) in WallGrid::cardinal_neighbors(gx, gz).iter().enumerate() {
+            if merged.contains(&(*nx, *nz)) {
+                mask |= 1 << i;
+            }
+        }
+
+        let (piece_kind, _) = auto_tile_piece(mask, false);
+        let kind = piece_kind_to_entity_kind(piece_kind);
+        let cost = &registry.get(kind).cost;
+
+        for rt in ResourceType::ALL.iter() {
+            total.set(*rt, total.get(*rt) + cost.get(*rt));
+        }
     }
     total
 }
@@ -579,13 +865,9 @@ fn update_placement_preview(
                 if let Some(scene_handle) =
                     models.scene_for(kind, 1, Vec3::new(world_pos.x, 0.0, world_pos.z))
                 {
-                    let cal = models.calibration.get(&kind);
-                    let scale = cal.map(|c| c.scale).unwrap_or(1.0);
-                    let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
                     ghost_cmds.with_child((
                         SceneRoot(scene_handle),
-                        Transform::from_scale(Vec3::splat(scale))
-                            .with_translation(Vec3::new(0.0, y_off, 0.0)),
+                        models.child_transform(kind, 1.0),
                         NotShadowCaster,
                         NotShadowReceiver,
                     ));
@@ -637,7 +919,7 @@ fn update_placement_preview(
     }
 
     // Slope validation (walls are exempt — they're designed for varied terrain)
-    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost) {
+    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner) {
         const MAX_BUILDING_SLOPE: f32 = 0.5; // ~27 degrees
         let slope = height_map.max_slope_under_footprint(world_pos.x, world_pos.z, new_footprint);
         if slope > MAX_BUILDING_SLOPE {
@@ -672,11 +954,12 @@ fn update_placement_preview(
 
 fn update_wall_plot_preview(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
     mut placement: ResMut<BuildingPlacementState>,
     mut wall_preview: ResMut<WallPlotPreview>,
+    wall_grid: Res<WallGrid>,
     registry: Res<BlueprintRegistry>,
     ghost_mats: Res<BuildingGhostMaterials>,
+    building_models: Option<Res<BuildingModelAssets>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     existing_buildings: Query<
@@ -705,98 +988,109 @@ fn update_wall_plot_preview(
     let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) else {
         return;
     };
-    let points = wall_layout_points(start, Vec3::new(world_pos.x, 0.0, world_pos.z));
-    if points.len() < 2 {
-        placement.hint_text = Some("Drag farther to plot a wall".to_string());
+
+    let cells = wall_layout_grid_cells(start, Vec3::new(world_pos.x, 0.0, world_pos.z));
+    if cells.is_empty() {
+        placement.hint_text = Some("Move cursor to plot wall".to_string());
         return;
     }
 
+    // Filter out cells already occupied in the grid
+    let new_cells: Vec<(i32, i32)> = cells
+        .iter()
+        .copied()
+        .filter(|c| !wall_grid.cells.contains_key(c))
+        .collect();
+
+    if new_cells.is_empty() {
+        placement.hint_text = Some("All cells already have walls".to_string());
+        return;
+    }
+
+    // Store snapped world points for the confirm system
     wall_preview.start = Some(start);
-    wall_preview.snapped_points = points.clone();
-    wall_preview.total_cost = wall_cost_from_points(&points, &registry);
+    wall_preview.snapped_points = new_cells
+        .iter()
+        .map(|&(gx, gz)| WallGrid::grid_to_world(gx, gz))
+        .collect();
+    wall_preview.total_cost = wall_cost_from_cells(&new_cells, &wall_grid, &registry);
     wall_preview.valid = true;
 
-    for point in &points {
+    // Build merged set for neighbor lookups (existing grid + proposed cells)
+    let mut merged: std::collections::HashSet<(i32, i32)> =
+        wall_grid.cells.keys().copied().collect();
+    for &cell in &new_cells {
+        merged.insert(cell);
+    }
+
+    // Validate each cell and spawn ghost
+    let half_map = height_map.half_map;
+    for &(gx, gz) in &new_cells {
+        let world = WallGrid::grid_to_world(gx, gz);
+        let y = height_map.sample(world.x, world.z);
+
+        // Check map bounds
+        if world.x.abs() > half_map - 5.0 || world.z.abs() > half_map - 5.0 {
+            wall_preview.valid = false;
+        }
+
+        // Check collision with non-wall buildings
+        let fp = footprint_for_kind(EntityKind::WallPost);
         let blocked = existing_buildings.iter().any(|(building_tf, existing_fp)| {
-            let check_pos = Vec3::new(point.x, building_tf.translation.y, point.z);
-            building_tf.translation.distance(check_pos)
-                < existing_fp.0 + footprint_for_kind(EntityKind::WallPost)
+            let check_pos = Vec3::new(world.x, building_tf.translation.y, world.z);
+            building_tf.translation.distance(check_pos) < existing_fp.0 + fp
         });
         if blocked {
             wall_preview.valid = false;
         }
-    }
 
-    for window in points.windows(2) {
-        let mid = (window[0] + window[1]) * 0.5;
-        let blocked = existing_buildings.iter().any(|(building_tf, existing_fp)| {
-            let check_pos = Vec3::new(mid.x, building_tf.translation.y, mid.z);
-            building_tf.translation.distance(check_pos)
-                < existing_fp.0 + footprint_for_kind(EntityKind::WallSegment)
-        });
-        if blocked {
-            wall_preview.valid = false;
+        // Determine auto-tiled piece for this cell
+        let mut mask = 0u8;
+        for (i, (nx, nz)) in WallGrid::cardinal_neighbors(gx, gz).iter().enumerate() {
+            if merged.contains(&(*nx, *nz)) {
+                mask |= 1 << i;
+            }
         }
+        let (piece_kind, rotation_y) = auto_tile_piece(mask, false);
+        let kind = piece_kind_to_entity_kind(piece_kind);
+
+        // Spawn GLTF ghost with correct model and rotation
+        let ghost_mat = if wall_preview.valid {
+            ghost_mats.ghost_valid.clone()
+        } else {
+            ghost_mats.ghost_invalid.clone()
+        };
+
+        let mut ghost_cmds = commands.spawn((
+            GhostBuilding,
+            GhostValid(wall_preview.valid),
+            Transform::from_translation(Vec3::new(world.x, y, world.z))
+                .with_rotation(Quat::from_rotation_y(rotation_y)),
+            Visibility::default(),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+
+        if let Some(ref models) = building_models {
+            if let Some(scene_handle) = models.scene_for(kind, 1, world) {
+                ghost_cmds.with_child((
+                    SceneRoot(scene_handle),
+                    models.child_transform(kind, 1.0),
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                ));
+            }
+        }
+
+        wall_preview.ghost_entities.push(ghost_cmds.id());
     }
 
-    let post_mesh = meshes.add(Cuboid::new(0.6, 2.0, 0.6));
-    let post_mat = if wall_preview.valid {
-        ghost_mats.ghost_valid.clone()
-    } else {
-        ghost_mats.ghost_invalid.clone()
-    };
-    for point in &points {
-        let y = height_map.sample(point.x, point.z);
-        let entity = commands
-            .spawn((
-                GhostBuilding,
-                GhostValid(wall_preview.valid),
-                Mesh3d(post_mesh.clone()),
-                MeshMaterial3d(post_mat.clone()),
-                Transform::from_translation(Vec3::new(point.x, y + 1.0, point.z)),
-                NotShadowCaster,
-                NotShadowReceiver,
-            ))
-            .id();
-        wall_preview.ghost_entities.push(entity);
-    }
-
-    let seg_mat = if wall_preview.valid {
-        ghost_mats.ghost_valid.clone()
-    } else {
-        ghost_mats.ghost_invalid.clone()
-    };
-    for window in points.windows(2) {
-        let a = window[0];
-        let b = window[1];
-        let mid = (a + b) * 0.5;
-        let seg_len = a.distance(b).max(0.8);
-        let angle = (b.z - a.z).atan2(b.x - a.x);
-        let seg_mesh = meshes.add(Cuboid::new(seg_len, 1.1, 0.4));
-        let y = height_map.sample(mid.x, mid.z);
-        let entity = commands
-            .spawn((
-                GhostBuilding,
-                GhostValid(wall_preview.valid),
-                Mesh3d(seg_mesh),
-                MeshMaterial3d(seg_mat.clone()),
-                Transform::from_translation(Vec3::new(mid.x, y + 0.55, mid.z))
-                    .with_rotation(Quat::from_rotation_y(-angle)),
-                NotShadowCaster,
-                NotShadowReceiver,
-            ))
-            .id();
-        wall_preview.ghost_entities.push(entity);
-    }
-
-    let segments = points.len() - 1;
-    let posts = points.len();
+    let count = new_cells.len();
     let cost = &wall_preview.total_cost;
+    let wood = cost.get(ResourceType::Wood);
+    let stone = cost.get(ResourceType::Stone);
     placement.hint_text = Some(if wall_preview.valid {
-        format!(
-            "Wall: {segments} segments, {posts} posts | Cost: {}W",
-            cost.get(ResourceType::Wood)
-        )
+        format!("Wall: {count} pieces | Cost: {wood}W {stone}S")
     } else {
         "Wall path blocked".to_string()
     });
@@ -849,13 +1143,9 @@ fn update_gate_plot_preview(
                 if let Some(scene_handle) =
                     models.scene_for(kind, 1, Vec3::new(world_pos.x, 0.0, world_pos.z))
                 {
-                    let cal = models.calibration.get(&kind);
-                    let scale = cal.map(|c| c.scale).unwrap_or(1.0);
-                    let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
                     ghost_cmds.with_child((
                         SceneRoot(scene_handle),
-                        Transform::from_scale(Vec3::splat(scale))
-                            .with_translation(Vec3::new(0.0, y_off, 0.0)),
+                        models.child_transform(kind, 1.0),
                         NotShadowCaster,
                         NotShadowReceiver,
                     ));
@@ -1083,7 +1373,7 @@ fn confirm_placement(
         }
     }
     // Slope validation (walls exempt)
-    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost) {
+    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner) {
         const MAX_BUILDING_SLOPE: f32 = 0.5;
         let slope = height_map.max_slope_under_footprint(world_pos.x, world_pos.z, new_footprint);
         if slope > MAX_BUILDING_SLOPE {
@@ -1223,6 +1513,7 @@ fn confirm_wall_plot(
     mouse: Res<ButtonInput<MouseButton>>,
     mut placement: ResMut<BuildingPlacementState>,
     mut wall_preview: ResMut<WallPlotPreview>,
+    mut wall_grid: ResMut<WallGrid>,
     mut all_resources: ResMut<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
     camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
@@ -1249,7 +1540,9 @@ fn confirm_wall_plot(
     if let PlacementMode::PlotWall { start } = placement.mode {
         if start == Vec3::ZERO {
             if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) {
-                let first = Vec3::new(world_pos.x, 0.0, world_pos.z);
+                // Snap start to grid
+                let (gx, gz) = WallGrid::world_to_grid(Vec3::new(world_pos.x, 0.0, world_pos.z));
+                let first = WallGrid::grid_to_world(gx, gz);
                 wall_preview.start = Some(first);
                 placement.mode = PlacementMode::PlotWall { start: first };
                 placement.hint_text =
@@ -1259,7 +1552,7 @@ fn confirm_wall_plot(
         }
     }
 
-    if wall_preview.snapped_points.len() < 2 || !wall_preview.valid {
+    if wall_preview.snapped_points.is_empty() || !wall_preview.valid {
         return;
     }
 
@@ -1273,58 +1566,68 @@ fn confirm_wall_plot(
         .total_cost
         .deduct(all_resources.get_mut(&faction));
 
-    let spawned_entities = spawn_wall_line(
+    // Convert snapped world points back to grid cells
+    let cells: Vec<(i32, i32)> = wall_preview
+        .snapped_points
+        .iter()
+        .map(|p| WallGrid::world_to_grid(*p))
+        .collect();
+
+    let spawned_entities = spawn_wall_grid_cells(
         &mut commands,
         &cache,
         &registry,
         building_models.as_deref(),
         &height_map,
+        &mut wall_grid,
         faction,
-        &wall_preview.snapped_points,
+        &cells,
     );
 
-    if let Some(worker_entity) = workers
-        .iter()
-        .filter(|(_, _, state, worker_faction, kind)| {
-            **kind == EntityKind::Worker
-                && **worker_faction == faction
-                && matches!(
-                    state,
-                    UnitState::Idle
-                        | UnitState::Gathering(_)
-                        | UnitState::ReturningToDeposit { .. }
-                        | UnitState::Depositing { .. }
-                        | UnitState::WaitingForStorage { .. }
-                        | UnitState::Moving(_)
-                )
-        })
-        .min_by(|(_, a_tf, _, _, _), (_, b_tf, _, _, _)| {
-            let a_dist = a_tf.translation.distance(wall_preview.snapped_points[0]);
-            let b_dist = b_tf.translation.distance(wall_preview.snapped_points[0]);
-            a_dist
-                .partial_cmp(&b_dist)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .map(|(worker, _, _, _, _)| worker)
-    {
-        let target_building = spawned_entities[0];
-        commands
-            .entity(worker_entity)
-            .remove::<AttackTarget>()
-            .remove::<MoveTarget>()
-            .insert(UnitState::MovingToBuild(target_building))
-            .insert(TaskSource::Manual);
-        commands
-            .entity(target_building)
-            .entry::<AssignedWorkers>()
-            .and_modify(move |mut aw| {
-                if !aw.workers.contains(&worker_entity) {
-                    aw.workers.push(worker_entity);
-                }
+    if !spawned_entities.is_empty() {
+        if let Some(worker_entity) = workers
+            .iter()
+            .filter(|(_, _, state, worker_faction, kind)| {
+                **kind == EntityKind::Worker
+                    && **worker_faction == faction
+                    && matches!(
+                        state,
+                        UnitState::Idle
+                            | UnitState::Gathering(_)
+                            | UnitState::ReturningToDeposit { .. }
+                            | UnitState::Depositing { .. }
+                            | UnitState::WaitingForStorage { .. }
+                            | UnitState::Moving(_)
+                    )
             })
-            .or_insert(AssignedWorkers {
-                workers: vec![worker_entity],
-            });
+            .min_by(|(_, a_tf, _, _, _), (_, b_tf, _, _, _)| {
+                let a_dist = a_tf.translation.distance(wall_preview.snapped_points[0]);
+                let b_dist = b_tf.translation.distance(wall_preview.snapped_points[0]);
+                a_dist
+                    .partial_cmp(&b_dist)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(worker, _, _, _, _)| worker)
+        {
+            let target_building = spawned_entities[0];
+            commands
+                .entity(worker_entity)
+                .remove::<AttackTarget>()
+                .remove::<MoveTarget>()
+                .insert(UnitState::MovingToBuild(target_building))
+                .insert(TaskSource::Manual);
+            commands
+                .entity(target_building)
+                .entry::<AssignedWorkers>()
+                .and_modify(move |mut aw| {
+                    if !aw.workers.contains(&worker_entity) {
+                        aw.workers.push(worker_entity);
+                    }
+                })
+                .or_insert(AssignedWorkers {
+                    workers: vec![worker_entity],
+                });
+        }
     }
 
     clear_wall_preview(&mut commands, &mut wall_preview);
@@ -1337,16 +1640,18 @@ fn confirm_gate_plot(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
     mut placement: ResMut<BuildingPlacementState>,
+    mut wall_grid: ResMut<WallGrid>,
     mut all_resources: ResMut<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
     camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     ui_interactions: Query<&Interaction, With<Node>>,
     height_map: Res<HeightMap>,
-    cache: Res<EntityVisualCache>,
+    wall_segments: Query<
+        (Entity, &Transform, &Faction, &WallGridCoord),
+        (With<WallSegmentPiece>, With<Building>),
+    >,
     registry: Res<BlueprintRegistry>,
-    building_models: Option<Res<BuildingModelAssets>>,
-    wall_segments: Query<(Entity, &Transform, &Faction), (With<WallSegmentPiece>, With<Building>)>,
     workers: Query<(Entity, &Transform, &UnitState, &Faction, &EntityKind), With<Unit>>,
 ) {
     if placement.mode != PlacementMode::PlotGate || !mouse.just_pressed(MouseButton::Left) {
@@ -1361,17 +1666,20 @@ fn confirm_gate_plot(
         return;
     };
 
-    let Some((segment_entity, segment_tf, faction)) = wall_segments
+    // Find nearest owned straight wall segment
+    let Some((segment_entity, segment_tf, faction, grid_coord)) = wall_segments
         .iter()
-        .filter(|(_, _, faction)| **faction == active_player.0)
-        .filter_map(|(entity, tf, faction)| {
+        .filter(|(_, _, faction, _)| **faction == active_player.0)
+        .filter_map(|(entity, tf, faction, coord)| {
             let d = tf
                 .translation
                 .distance(Vec3::new(world_pos.x, tf.translation.y, world_pos.z));
-            (d <= 6.0).then_some((entity, tf, faction, d))
+            (d <= 6.0).then_some((entity, tf, faction, coord, d))
         })
-        .min_by(|(_, _, _, a), (_, _, _, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(e, tf, faction, _)| (e, tf, faction))
+        .min_by(|(_, _, _, _, a), (_, _, _, _, b)| {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(e, tf, faction, coord, _)| (e, tf, faction, coord))
     else {
         placement.hint_text = Some("Gatehouse must replace an owned wall segment".to_string());
         return;
@@ -1385,27 +1693,18 @@ fn confirm_gate_plot(
     }
     bp.cost.deduct(all_resources.get_mut(faction));
 
-    commands.entity(segment_entity).despawn();
+    // Mark the grid cell as a gate — auto-tile system will swap the model
+    let (gx, gz) = (grid_coord.0, grid_coord.1);
+    if let Some(cell) = wall_grid.cells.get_mut(&(gx, gz)) {
+        cell.is_gate = true;
+    }
+    wall_grid.mark_dirty(gx, gz);
+
     if let Some(preview) = placement.preview_entity.take() {
         commands.entity(preview).despawn();
     }
 
-    let gate_entity = spawn_from_blueprint_with_faction(
-        &mut commands,
-        &cache,
-        EntityKind::Gatehouse,
-        segment_tf.translation,
-        &registry,
-        building_models.as_deref(),
-        None,
-        &height_map,
-        *faction,
-    );
-    commands
-        .entity(gate_entity)
-        .insert(GatePiece)
-        .insert(*segment_tf);
-
+    // Assign worker to the entity (it will get its model swapped by auto-tile)
     if let Some(worker_entity) = workers
         .iter()
         .filter(|(_, _, state, worker_faction, kind)| {
@@ -1434,11 +1733,19 @@ fn confirm_gate_plot(
             .entity(worker_entity)
             .remove::<AttackTarget>()
             .remove::<MoveTarget>()
-            .insert(UnitState::MovingToBuild(gate_entity))
+            .insert(UnitState::MovingToBuild(segment_entity))
             .insert(TaskSource::Manual);
-        commands.entity(gate_entity).insert(AssignedWorkers {
-            workers: vec![worker_entity],
-        });
+        commands
+            .entity(segment_entity)
+            .entry::<AssignedWorkers>()
+            .and_modify(move |mut aw| {
+                if !aw.workers.contains(&worker_entity) {
+                    aw.workers.push(worker_entity);
+                }
+            })
+            .or_insert(AssignedWorkers {
+                workers: vec![worker_entity],
+            });
     }
 
     placement.mode = PlacementMode::None;
@@ -1766,7 +2073,10 @@ fn construction_progress_system(
 
         // Unpause when workers are present
         progress.timer.unpause();
-        let speed_mult = 1.0 + 0.5 * (builder_count as f32 - 1.0);
+        let mut speed_mult = 1.0 + 0.5 * (builder_count as f32 - 1.0);
+        if is_wall_like_kind(*kind) {
+            speed_mult *= 2.0;
+        }
 
         let bp = registry.get(*kind);
         let base_scale = bp.visual.scale;
@@ -1801,16 +2111,13 @@ fn construction_progress_system(
                         }
                     }
 
-                    let cal = building_models.calibration.get(kind);
-                    let scale = cal.map(|c| c.scale).unwrap_or(base_scale);
-
                     let child = commands
                         .spawn((
                             SceneRoot(stage_scene.clone()),
                             BuildingSceneChild,
                             InheritOutline,
                             AsyncSceneInheritOutline::default(),
-                            Transform::from_scale(Vec3::splat(scale)),
+                            building_models.child_transform(*kind, base_scale),
                         ))
                         .id();
                     commands.entity(entity).add_child(child);
@@ -1838,9 +2145,6 @@ fn construction_progress_system(
                     }
                 }
 
-                let cal = building_models.calibration.get(kind);
-                let scale = cal.map(|c| c.scale).unwrap_or(base_scale);
-
                 if let Some(complete_scene) =
                     building_models.scene_for(*kind, 1, transform.translation)
                 {
@@ -1850,7 +2154,7 @@ fn construction_progress_system(
                             BuildingSceneChild,
                             InheritOutline,
                             AsyncSceneInheritOutline::default(),
-                            Transform::from_scale(Vec3::splat(scale)),
+                            building_models.child_transform(*kind, base_scale),
                         ))
                         .id();
                     commands.entity(entity).add_child(child);
@@ -1905,27 +2209,59 @@ fn tower_auto_attack(
     time: Res<Time>,
     teams: Res<TeamConfig>,
     vfx_assets: Option<Res<VfxAssets>>,
+    projectile_assets: Option<Res<crate::model_assets::ProjectileModelAssets>>,
     net_role: Res<crate::multiplayer::NetRole>,
     active_player: Res<ActivePlayer>,
     mut towers: Query<
         (
+            Entity,
             &Transform,
             &EntityKind,
             &BuildingState,
             &mut AttackCooldown,
             &AttackDamage,
             &AttackRange,
+            &AttackProfile,
+            &CombatFxKind,
+            Option<&AttackTiming>,
             Option<&TowerAutoAttackEnabled>,
             &Faction,
+            Option<&TargetingProfile>,
+            Option<&DamageType>,
         ),
         With<Building>,
     >,
-    hostiles: Query<(Entity, &Transform, &Faction), Or<(With<Mob>, With<Unit>)>>,
+    mut hostiles: Query<
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            &Health,
+            &ArmorType,
+            Option<&ThreatValue>,
+            Option<&mut ReservedIncomingDamage>,
+        ),
+        Or<(With<Mob>, With<Unit>)>,
+    >,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (tower_tf, kind, state, mut cooldown, damage, range, auto_attack, tower_faction) in
-        &mut towers
+    for (
+        tower_entity,
+        tower_tf,
+        kind,
+        state,
+        mut cooldown,
+        damage,
+        range,
+        attack_profile,
+        fx_kind,
+        attack_timing,
+        auto_attack,
+        tower_faction,
+        opt_profile,
+        opt_dmg_type,
+    ) in &mut towers
     {
         if !kind.uses_tower_auto_attack() || *state != BuildingState::Complete {
             continue;
@@ -1948,37 +2284,118 @@ fn tower_auto_attack(
             continue;
         }
 
-        let mut closest_dist = f32::MAX;
-        let mut closest_target = None;
-        for (target_entity, target_tf, target_faction) in &hostiles {
+        let mut best_score = f32::MAX;
+        let mut best_target: Option<(Entity, f32)> = None; // (entity, travel_dist)
+        let tower_dmg_type = opt_dmg_type.copied().unwrap_or(DamageType::Pierce);
+        let minimum_range = attack_timing.map_or(0.0, |timing| timing.minimum_range);
+
+        for (target_entity, target_tf, target_faction, t_health, t_armor, t_threat, t_reserved) in
+            hostiles.iter()
+        {
             if !teams.is_hostile(tower_faction, target_faction) {
                 continue;
             }
-            let dist = tower_tf.translation.distance(target_tf.translation);
-            if dist < range.0 && dist < closest_dist {
-                closest_dist = dist;
-                closest_target = Some(target_entity);
+
+            let surface_dist =
+                crate::combat::attack_surface_distance(tower_tf.translation, target_tf.translation, 0.0);
+            if !crate::combat::is_in_attack_band(surface_dist, range.0, minimum_range, 0.1) {
+                continue;
+            }
+
+            if let Some(profile) = opt_profile {
+                let reserved_total = t_reserved.as_ref().map_or(0.0, |r| r.total());
+                if let Some(score) = crate::combat::target_score(
+                    &crate::combat::TargetScoreInput {
+                        profile,
+                        attacker_pos: tower_tf.translation,
+                        attacker_damage_type: tower_dmg_type,
+                        scan_range: range.0,
+                        target_pos: target_tf.translation,
+                        target_health: t_health,
+                        target_armor: *t_armor,
+                        target_threat: t_threat.map_or(0.0, |t| t.0),
+                        target_is_building: false,
+                        target_reserved_damage: reserved_total,
+                    },
+                ) {
+                    if score < best_score {
+                        best_score = score;
+                        best_target = Some((target_entity, surface_dist));
+                    }
+                }
+            } else {
+                // Fallback: nearest enemy
+                if surface_dist < best_score {
+                    best_score = surface_dist;
+                    best_target = Some((target_entity, surface_dist));
+                }
             }
         }
 
-        if let Some(target_entity) = closest_target {
+        if let Some((target_entity, travel_dist)) = best_target {
             cooldown.ready_in = cooldown.interval;
-            commands.spawn((
-                Projectile {
-                    target: target_entity,
-                    speed: 20.0,
-                    damage: damage.0,
-                    damage_type: DamageType::Pierce,
-                    fx_kind: CombatFxKind::Pierce,
-                    impact_scale: 0.8,
-                },
-                Mesh3d(vfx.sphere_mesh.clone()),
-                MeshMaterial3d(vfx.projectile_material.clone()),
-                Transform::from_translation(tower_tf.translation + Vec3::Y * 3.0)
-                    .with_scale(Vec3::splat(0.2)),
-                NotShadowCaster,
-                NotShadowReceiver,
-            ));
+
+            // Add damage reservation on target
+            let projectile_speed = attack_profile.projectile_speed.max(8.0);
+            let ttl = travel_dist / projectile_speed + attack_profile.windup_secs + 0.35;
+            if let Ok((_, _, _, _, _, _, Some(mut reserved))) = hostiles.get_mut(target_entity) {
+                reserved.reservations.push((tower_entity, damage.0, ttl));
+            }
+
+            let proj_visual =
+                crate::model_assets::projectile_visual_for(*kind);
+            let orient = proj_visual.is_some()
+                && !matches!(
+                    proj_visual,
+                    Some(crate::model_assets::ProjectileVisualKind::CatapultRock)
+                );
+            let spawn_pos = tower_tf.translation + Vec3::Y * 3.0;
+            let proj_component = Projectile {
+                source: tower_entity,
+                target: target_entity,
+                speed: projectile_speed,
+                damage: damage.0,
+                damage_type: tower_dmg_type,
+                fx_kind: *fx_kind,
+                impact_scale: attack_profile.impact_scale,
+                orient_to_velocity: orient,
+            };
+            if let (Some(visual_kind), Some(ref proj_res)) = (proj_visual, &projectile_assets) {
+                let target_tf = hostiles
+                    .get(target_entity)
+                    .map(|(_, tf, ..)| tf.translation)
+                    .unwrap_or(spawn_pos);
+                let dir = (target_tf - spawn_pos).normalize_or_zero();
+                let proj_scale = match visual_kind {
+                    crate::model_assets::ProjectileVisualKind::Arrow => 0.35,
+                    crate::model_assets::ProjectileVisualKind::Bolt => 0.4,
+                    crate::model_assets::ProjectileVisualKind::CatapultRock => 0.5,
+                };
+                let rotation = if orient {
+                    Quat::from_rotation_arc(Vec3::Z, dir)
+                } else {
+                    Quat::IDENTITY
+                };
+                let scene =
+                    proj_res.scene_for(visual_kind, tower_entity.to_bits() as usize);
+                commands.spawn((
+                    proj_component,
+                    SceneRoot(scene),
+                    Transform::from_translation(spawn_pos)
+                        .with_rotation(rotation)
+                        .with_scale(Vec3::splat(proj_scale)),
+                ));
+            } else {
+                commands.spawn((
+                    proj_component,
+                    Mesh3d(vfx.sphere_mesh.clone()),
+                    MeshMaterial3d(vfx.projectile_material.clone()),
+                    Transform::from_translation(spawn_pos)
+                        .with_scale(Vec3::splat(0.2)),
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                ));
+            };
         }
     }
 }
@@ -2291,17 +2708,13 @@ fn building_upgrade_system(
                         }
                     }
                     // Spawn new scene child with calibration
-                    let cal = models.calibration.get(kind);
-                    let scale = cal.map(|c| c.scale).unwrap_or(1.0);
-                    let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
                     let child = commands
                         .spawn((
                             SceneRoot(new_scene),
                             BuildingSceneChild,
                             InheritOutline,
                             AsyncSceneInheritOutline::default(),
-                            Transform::from_scale(Vec3::splat(scale))
-                                .with_translation(Vec3::new(0.0, y_off, 0.0)),
+                            models.child_transform(*kind, 1.0),
                         ))
                         .id();
                     commands.entity(entity).add_child(child);
@@ -2476,6 +2889,8 @@ fn demolish_system(
     registry: Res<BlueprintRegistry>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     mut all_resources: ResMut<AllPlayerResources>,
+    mut wall_grid: ResMut<WallGrid>,
+    grid_coord_q: Query<&WallGridCoord>,
     mut buildings: Query<
         (
             Entity,
@@ -2510,6 +2925,16 @@ fn demolish_system(
             let res = all_resources.get_mut(faction);
             for (rt, amt) in cost.cost_entries() {
                 res.add(rt, amt / 2);
+            }
+
+            // Remove from wall grid if this was a wall piece
+            if let Ok(coord) = grid_coord_q.get(entity) {
+                let (gx, gz) = (coord.0, coord.1);
+                wall_grid.cells.remove(&(gx, gz));
+                // Mark neighbors dirty so they re-tile
+                for (nx, nz) in WallGrid::cardinal_neighbors(gx, gz) {
+                    wall_grid.dirty.push((nx, nz));
+                }
             }
 
             // Despawn

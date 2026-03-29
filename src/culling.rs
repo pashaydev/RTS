@@ -21,6 +21,8 @@ impl Plugin for CullingPlugin {
                 pause_culled_animations,
                 resume_unculled_animations,
                 distance_lod_system,
+                hide_nearby_trees,
+                update_tree_alpha_for_distance,
             )
                 .chain()
                 .in_set(CullingSet)
@@ -40,6 +42,10 @@ const LOD_HIDE_DISTANCE_SQ: f32 = LOD_HIDE_DISTANCE * LOD_HIDE_DISTANCE;
 
 /// Decorations are hidden at a shorter distance since they're small props.
 const DECO_HIDE_DISTANCE_SQ: f32 = 120.0 * 120.0;
+
+/// Trees are hidden earlier than general entities — their leaf canopy overdraw
+/// is the main GPU cost when looking top-down, and at 130 units they're tiny.
+const TREE_HIDE_DISTANCE_SQ: f32 = 130.0 * 130.0;
 
 /// Tests entity positions against the camera frustum and adds/removes `FrustumCulled`.
 ///
@@ -71,6 +77,7 @@ fn sync_frustum_culling(
             With<GrowingTree>,
             With<GrowingResource>,
             With<WaterPlane>,
+            With<DecoRevealed>,
         )>,
     >,
 ) {
@@ -145,7 +152,11 @@ fn distance_lod_system(
             &GlobalTransform,
             &mut Visibility,
             Has<Decoration>,
+            Has<DecoChunk>,
             Has<FrustumCulled>,
+            Has<MatureTree>,
+            Has<GrowingTree>,
+            Has<Sapling>,
             Option<&mut CullReason>,
         ),
         Or<(
@@ -158,6 +169,7 @@ fn distance_lod_system(
             With<GrowingTree>,
             With<GrowingResource>,
             With<WaterPlane>,
+            With<DecoRevealed>,
         )>,
     >,
 ) {
@@ -166,15 +178,20 @@ fn distance_lod_system(
     };
     let cam_pos = cam_gtf.translation();
 
-    for (gtf, mut visibility, is_decoration, is_frustum_culled, cull_reason) in &mut entities {
+    for (gtf, mut visibility, is_decoration, is_deco_chunk, is_frustum_culled, is_mature_tree, is_growing_tree, is_sapling, cull_reason) in
+        &mut entities
+    {
         if is_frustum_culled {
             continue;
         }
 
         let pos = gtf.translation();
         let dist_sq = (cam_pos - pos).length_squared();
-        let threshold = if is_decoration {
+        let is_tree = is_mature_tree || is_growing_tree || is_sapling;
+        let threshold = if is_decoration || is_deco_chunk {
             DECO_HIDE_DISTANCE_SQ
+        } else if is_tree {
+            TREE_HIDE_DISTANCE_SQ
         } else {
             LOD_HIDE_DISTANCE_SQ
         };
@@ -189,6 +206,55 @@ fn distance_lod_system(
             if let Some(mut reason) = cull_reason {
                 *reason = CullReason::Visible;
             }
+        }
+    }
+}
+
+/// Hide trees that are too close to the camera (camera inside the canopy).
+/// Prevents the player from drowning in leaf geometry at extreme close zoom.
+const TREE_NEAR_HIDE_DIST_SQ: f32 = 10.0 * 10.0;
+
+fn hide_nearby_trees(
+    camera_q: Query<&GlobalTransform, With<CullingSourceCamera>>,
+    mut trees: Query<
+        (&GlobalTransform, &mut Visibility),
+        (
+            Or<(With<MatureTree>, With<GrowingTree>, With<Sapling>)>,
+            Without<FrustumCulled>,
+        ),
+    >,
+) {
+    let Ok(cam_gtf) = camera_q.single() else {
+        return;
+    };
+    let cam_pos = cam_gtf.translation();
+    for (tree_gtf, mut vis) in &mut trees {
+        let dist_sq = (cam_pos - tree_gtf.translation()).length_squared();
+        if dist_sq < TREE_NEAR_HIDE_DIST_SQ {
+            *vis = Visibility::Hidden;
+        }
+    }
+}
+
+/// Adjusts tree leaf material alpha cutoff based on camera zoom level.
+/// Close: 0.6 (slightly thinned), Medium: 0.7, Far: 0.85 (heavily thinned).
+/// Only runs when `CameraZoomLevel` actually changes (detail level or distance drift).
+fn update_tree_alpha_for_distance(
+    zoom_level: Res<CameraZoomLevel>,
+    leaf_mats: Res<TreeLeafMaterials>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    if !zoom_level.is_changed() {
+        return;
+    }
+    let cutoff = match zoom_level.detail {
+        DetailLevel::Close => 0.6,
+        DetailLevel::Medium => 0.7,
+        DetailLevel::Far => 0.85,
+    };
+    for handle in &leaf_mats.0 {
+        if let Some(mat) = materials.get_mut(handle) {
+            mat.alpha_mode = AlphaMode::Mask(cutoff);
         }
     }
 }

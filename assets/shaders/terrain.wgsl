@@ -1,29 +1,40 @@
-#import bevy_pbr::forward_io::VertexOutput
+#import bevy_pbr::{
+    pbr_fragment::pbr_input_from_standard_material,
+    pbr_functions::alpha_discard,
+}
+
+#ifdef PREPASS_PIPELINE
+#import bevy_pbr::{
+    prepass_io::{VertexOutput, FragmentOutput},
+    pbr_deferred_functions::deferred_output,
+}
+#else
+#import bevy_pbr::{
+    forward_io::{VertexOutput, FragmentOutput},
+    pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
+}
+#endif
+
+// ── Extension uniforms & textures ──
 
 struct TerrainSettings {
-    time: f32,
     detail_scale: f32,
     detail_strength: f32,
     snow_height: f32,
     amplitude: f32,
     tile_scale: f32,
-    sun_intensity: f32,
-    ambient_brightness: f32,
-    sun_direction: vec4<f32>,
-    sun_color: vec4<f32>,
-    ambient_color: vec4<f32>,
 };
 
-@group(3) @binding(0) var<uniform> settings: TerrainSettings;
+@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> settings: TerrainSettings;
 
-@group(3) @binding(1) var grass_texture: texture_2d<f32>;
-@group(3) @binding(2) var grass_sampler: sampler;
-@group(3) @binding(3) var rock_texture: texture_2d<f32>;
-@group(3) @binding(4) var rock_sampler: sampler;
-@group(3) @binding(5) var sand_texture: texture_2d<f32>;
-@group(3) @binding(6) var sand_sampler: sampler;
-@group(3) @binding(7) var snow_texture: texture_2d<f32>;
-@group(3) @binding(8) var snow_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var grass_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(102) var grass_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(103) var rock_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(104) var rock_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(105) var sand_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(106) var sand_sampler: sampler;
+@group(#{MATERIAL_BIND_GROUP}) @binding(107) var snow_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(108) var snow_sampler: sampler;
 
 // ── Noise ──
 
@@ -67,7 +78,11 @@ fn fbm3(p: vec2<f32>) -> f32 {
 // ── Fragment shader ──
 
 @fragment
-fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fragment(
+    vertex_output: VertexOutput,
+    @builtin(front_facing) is_front: bool,
+) -> FragmentOutput {
+    var in = vertex_output;
     let world_pos = in.world_position.xyz;
     let vertex_color = in.color;
     let normal = normalize(in.world_normal);
@@ -135,13 +150,23 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         (h0 - hz) * bump_strength
     ));
 
-    // Directional lighting from scene sun
-    let sun_dir = normalize(settings.sun_direction.xyz);
-    let ndl = max(dot(perturbed_normal, sun_dir), 0.0);
-    let ambient_light = settings.ambient_color.rgb * settings.ambient_brightness;
-    let diffuse_light = settings.sun_color.rgb * settings.sun_intensity * ndl;
+    // ── Hook into Bevy PBR pipeline ──
+    var pbr_input = pbr_input_from_standard_material(in, is_front);
 
-    let lit_color = color * (ambient_light + diffuse_light);
+    // Override base color with our computed terrain color
+    pbr_input.material.base_color = vec4<f32>(color, 1.0);
 
-    return vec4<f32>(lit_color, 1.0);
+    // Apply bump-mapped normal for PBR lighting
+    pbr_input.N = perturbed_normal;
+    pbr_input.world_normal = perturbed_normal;
+
+#ifdef PREPASS_PIPELINE
+    let out = deferred_output(in, pbr_input);
+#else
+    var out: FragmentOutput;
+    out.color = apply_pbr_lighting(pbr_input);
+    out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+#endif
+
+    return out;
 }

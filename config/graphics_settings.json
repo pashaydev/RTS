@@ -4,7 +4,15 @@
     720
   ],
   "fullscreen": false,
+  "vsync": true,
   "shadow_quality": "High",
   "entity_lights": true,
+  "anti_aliasing": "Smaa",
+  "bloom": "Medium",
+  "brightness": 1.0,
+  "auto_exposure": true,
+  "depth_of_field": "Off",
+  "motion_blur": "Off",
+  "chromatic_aberration": "Off",
   "ui_scale": 1.0
 }

@@ -124,12 +124,14 @@ fn process_ability_casts(
                     if let Some(target_e) = projectile_target {
                         commands.spawn((
                             Projectile {
+                                source: caster_entity,
                                 target: target_e,
                                 speed: 12.0,
                                 damage: 20.0,
                                 damage_type: DamageType::Magic,
                                 fx_kind: CombatFxKind::Arcane,
                                 impact_scale: 1.2,
+                                orient_to_velocity: false,
                             },
                             AoeSplash {
                                 radius: 4.0,

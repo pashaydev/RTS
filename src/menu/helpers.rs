@@ -6,11 +6,11 @@ use crate::components::*;
 use crate::theme;
 use crate::ui::core::components as ui_components;
 use crate::ui::core::fonts::{self, UiFonts};
-use crate::ui::core::text_input::ScrollablePanel;
+use crate::ui::core::text_input::{spawn_text_input_children, ScrollablePanel};
 
 // ── Shared Components ──
 
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub struct MenuSelector {
     pub field: SelectorField,
     pub index: usize,
@@ -30,8 +30,15 @@ pub enum SelectorField {
     MapSeed,
     Resolution,
     Fullscreen,
+    Vsync,
     Shadows,
     EntityLights,
+    AntiAliasing,
+    Bloom,
+    Brightness,
+    AutoExposure,
+    DepthOfField,
+    ChromaticAberration,
     UiScale,
     PreferredFaction,
 }
@@ -98,18 +105,35 @@ pub fn spawn_styled_button(
     accent: bool,
     fonts: &UiFonts,
 ) -> Entity {
+    spawn_styled_button_nav(commands, label, marker, accent, fonts, None)
+}
+
+pub fn spawn_styled_button_nav(
+    commands: &mut Commands,
+    label: &str,
+    marker: impl Bundle,
+    accent: bool,
+    fonts: &UiFonts,
+    nav_index: Option<usize>,
+) -> Entity {
     let bg = if accent {
         ui_components::UiTone::Accent
     } else {
         ui_components::UiTone::Neutral
     };
 
+    let mut node = ui_components::button_node(240.0, 44.0);
+    node.border = UiRect::all(Val::Px(2.0));
+
     let mut entity_commands = commands.spawn((
         marker,
         Button,
-        ui_components::button_node(240.0, 44.0),
+        node,
         ui_components::filled_button_chrome(bg),
     ));
+    if let Some(idx) = nav_index {
+        entity_commands.insert(NavFocusable(idx));
+    }
     if accent {
         entity_commands.insert((
             UiGlowPulse {
@@ -134,6 +158,75 @@ pub fn spawn_styled_button(
         ));
     });
     entity_commands.id()
+}
+
+/// Spawns a controls hint row at the bottom-left of the screen.
+pub fn spawn_controls_hint(commands: &mut Commands, container: Entity, fonts: &UiFonts) {
+    let hint = commands
+        .spawn((
+            ControlsHint,
+            Node {
+                width: Val::Percent(100.0),
+                margin: UiRect::top(Val::Px(20.0)),
+                justify_content: JustifyContent::Start,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(16.0),
+                ..default()
+            },
+        ))
+        .with_children(|parent| {
+            let items = [
+                ("W/S", "Navigate"),
+                ("A/D", "Change"),
+                ("Enter", "Confirm"),
+                ("Esc", "Back"),
+            ];
+            for (key, action) in items {
+                parent
+                    .spawn(Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(4.0),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        // Key badge
+                        row.spawn((
+                            Node {
+                                padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
+                                border: UiRect::all(Val::Px(1.0)),
+                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.15, 0.15, 0.15, 0.9)),
+                            BorderColor::all(theme::TEXT_DISABLED),
+                        ))
+                        .with_children(|badge| {
+                            badge.spawn((
+                                Text::new(key),
+                                TextFont {
+                                    font: fonts.body_emphasis.clone(),
+                                    font_size: theme::FONT_TINY,
+                                    ..default()
+                                },
+                                TextColor(theme::TEXT_SECONDARY),
+                            ));
+                        });
+                        // Action label
+                        row.spawn((
+                            Text::new(action),
+                            TextFont {
+                                font: fonts.body.clone(),
+                                font_size: theme::FONT_TINY,
+                                ..default()
+                            },
+                            TextColor(theme::TEXT_DISABLED),
+                        ));
+                    });
+            }
+        })
+        .id();
+    commands.entity(container).add_child(hint);
 }
 
 // ── Page Header ──
@@ -250,15 +343,32 @@ pub fn spawn_selector_row(
     selected: usize,
     field: SelectorField,
 ) {
-    let row = commands
-        .spawn(Node {
-            width: Val::Percent(100.0),
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            margin: UiRect::vertical(Val::Px(6.0)),
-            ..default()
-        })
-        .with_children(|parent| {
+    spawn_selector_row_nav(commands, container, label, options, selected, field, None);
+}
+
+pub fn spawn_selector_row_nav(
+    commands: &mut Commands,
+    container: Entity,
+    label: &str,
+    options: &[&str],
+    selected: usize,
+    field: SelectorField,
+    nav_index: Option<usize>,
+) {
+    let mut ec = commands.spawn(Node {
+        width: Val::Percent(100.0),
+        flex_direction: FlexDirection::Row,
+        align_items: AlignItems::Center,
+        margin: UiRect::vertical(Val::Px(6.0)),
+        padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
+        border: UiRect::left(Val::Px(2.0)),
+        ..default()
+    });
+    ec.insert(BorderColor::all(Color::NONE));
+    if let Some(idx) = nav_index {
+        ec.insert(NavFocusable(idx));
+    }
+    let row = ec.with_children(|parent| {
             parent.spawn((
                 Text::new(label),
                 TextFont {
@@ -340,6 +450,7 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Enti
                     TextInputField {
                         value: current_name.to_string(),
                         cursor_pos: current_name.len(),
+                        selection_anchor: None,
                         max_len: 45,
                     },
                     Button,
@@ -347,25 +458,7 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Enti
                     ui_components::input_chrome(),
                 ))
                 .with_children(|input| {
-                    input.spawn((
-                        Text::new(current_name),
-                        TextFont {
-                            font_size: theme::FONT_MEDIUM,
-                            ..default()
-                        },
-                        TextColor(theme::TEXT_PRIMARY),
-                        Pickable::IGNORE,
-                    ));
-                    input.spawn((
-                        TextInputCursor,
-                        Text::new("|"),
-                        TextFont {
-                            font_size: theme::FONT_MEDIUM,
-                            ..default()
-                        },
-                        TextColor(Color::NONE),
-                        Pickable::IGNORE,
-                    ));
+                    spawn_text_input_children(input, current_name);
                 });
 
             parent

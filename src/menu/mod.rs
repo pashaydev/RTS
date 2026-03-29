@@ -152,6 +152,10 @@ pub(crate) struct PreferredFaction(pub Option<u8>);
 #[derive(Component)]
 pub(crate) struct LobbyPingText;
 
+/// Inserted to signal that the menu content should be rebuilt without a page change.
+#[derive(Resource)]
+pub(crate) struct MenuDirty;
+
 /// Timer for lobby ping polling.
 #[derive(Resource)]
 pub(crate) struct LobbyPingTimer(pub Timer);
@@ -188,6 +192,14 @@ pub(crate) const DAY_CYCLE_OPTIONS: &[(f32, &str)] =
     &[(300.0, "5min"), (600.0, "10min"), (1200.0, "20min")];
 pub(crate) const STARTING_RES_OPTIONS: &[(f32, &str)] = &[(0.5, "0.5x"), (1.0, "1x"), (2.0, "2x")];
 pub(crate) const RESOLUTION_OPTIONS: &[(u32, u32)] = &[(1280, 720), (1920, 1080)];
+pub(crate) const BRIGHTNESS_OPTIONS: &[(f32, &str)] = &[
+    (0.80, "80%"),
+    (0.90, "90%"),
+    (1.00, "100%"),
+    (1.10, "110%"),
+    (1.25, "125%"),
+    (1.50, "150%"),
+];
 pub(crate) const UI_SCALE_OPTIONS: &[(f32, &str)] = &[
     (0.75, "75%"),
     (0.85, "85%"),
@@ -212,6 +224,7 @@ pub(crate) enum MenuSet {
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MenuPage>()
+            .init_resource::<MenuNavFocus>()
             .configure_sets(
                 Update,
                 (
@@ -233,12 +246,15 @@ impl Plugin for MenuPlugin {
                 (
                     systems::handle_menu_buttons,
                     systems::handle_selector_clicks,
+                    systems::menu_keyboard_nav,
+                    systems::menu_selector_keyboard_nav,
+                    systems::reset_nav_focus_on_page_change,
                 )
                     .in_set(MenuSet::Input),
             )
             .add_systems(
                 Update,
-                (systems::refresh_menu_page,).in_set(MenuSet::Refresh),
+                (systems::refresh_menu_page, systems::rebuild_dirty_menu).in_set(MenuSet::Refresh),
             )
             .add_systems(
                 Update,
@@ -273,6 +289,7 @@ impl Plugin for MenuPlugin {
                     systems::update_selector_visuals,
                     text_input::animate_text_input_chrome,
                     text_input::text_input_cursor_blink,
+                    text_input::text_input_render_system,
                     multiplayer::update_web_client_url,
                     multiplayer::paste_code_system,
                     multiplayer::clear_code_system,
@@ -281,6 +298,7 @@ impl Plugin for MenuPlugin {
                     multiplayer::countdown_system,
                     multiplayer::kick_player_system,
                     multiplayer::lobby_ping_system,
+                    systems::menu_nav_focus_visuals,
                 )
                     .in_set(MenuSet::Visuals),
             );

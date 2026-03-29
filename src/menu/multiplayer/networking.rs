@@ -416,7 +416,6 @@ pub(crate) fn refresh_lan_hosts_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<DiscoverLanHostsButton>)>,
     mut commands: Commands,
     mut lobby: ResMut<LobbyState>,
-    roots: Query<Entity, With<MenuRoot>>,
 ) {
     let mut pressed = false;
     for interaction in &interactions {
@@ -443,9 +442,7 @@ pub(crate) fn refresh_lan_hosts_system(
     commands.insert_resource(JoinDiscoveryScan {
         rx: std::sync::Mutex::new(rx),
     });
-    for e in &roots {
-        commands.entity(e).try_despawn();
-    }
+    commands.insert_resource(MenuDirty);
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -456,7 +453,6 @@ pub(crate) fn poll_lan_discovery_results_system(
     scan: Option<Res<JoinDiscoveryScan>>,
     mut commands: Commands,
     mut lobby: ResMut<LobbyState>,
-    roots: Query<Entity, With<MenuRoot>>,
 ) {
     let Some(scan) = scan else { return };
     let rx = scan.rx.lock().unwrap();
@@ -472,16 +468,12 @@ pub(crate) fn poll_lan_discovery_results_system(
                 )
             };
             commands.remove_resource::<JoinDiscoveryScan>();
-            for e in &roots {
-                commands.entity(e).try_despawn();
-            }
+            commands.insert_resource(MenuDirty);
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
             lobby.discovery_status = "LAN scan failed.".to_string();
             commands.remove_resource::<JoinDiscoveryScan>();
-            for e in &roots {
-                commands.entity(e).try_despawn();
-            }
+            commands.insert_resource(MenuDirty);
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {}
     }
@@ -493,8 +485,7 @@ pub(crate) fn poll_lan_discovery_results_system() {}
 pub(crate) fn select_discovered_host_system(
     interactions: Query<(&Interaction, &DiscoveredHostButton), Changed<Interaction>>,
     lobby: Res<LobbyState>,
-    mut inputs: Query<(&mut TextInputField, &Children), With<SessionCodeInput>>,
-    mut text_query: Query<&mut Text, Without<TextInputCursor>>,
+    mut inputs: Query<&mut TextInputField, With<SessionCodeInput>>,
 ) {
     for (interaction, button) in &interactions {
         if *interaction != Interaction::Pressed {
@@ -503,16 +494,12 @@ pub(crate) fn select_discovered_host_system(
         let Some(host) = lobby.discovered_hosts.get(button.0) else {
             continue;
         };
-        let Ok((mut field, children)) = inputs.single_mut() else {
+        let Ok(mut field) = inputs.single_mut() else {
             continue;
         };
         field.value = host.session_code.clone();
         field.cursor_pos = field.value.len();
-        for child in children.iter() {
-            if let Ok(mut text) = text_query.get_mut(child) {
-                **text = field.value.clone();
-            }
-        }
+        field.selection_anchor = None;
     }
 }
 

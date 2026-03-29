@@ -25,6 +25,7 @@ mod orders;
 mod pathfinding;
 mod pathvis;
 mod pause_menu;
+mod procedural_mobs;
 mod resources;
 mod roads;
 mod selection;
@@ -40,6 +41,7 @@ mod water_material;
 
 use bevy::ecs::error;
 use bevy::prelude::*;
+use bevy::window::PresentMode;
 use bevy_mod_outline::OutlinePlugin;
 
 use components::{AppState, GameFlowSet, GameSetupConfig, GraphicsSettings};
@@ -82,6 +84,11 @@ fn main() {
                             )
                         } else {
                             bevy::window::WindowMode::Windowed
+                        },
+                        present_mode: if graphics.vsync {
+                            PresentMode::AutoVsync
+                        } else {
+                            PresentMode::AutoNoVsync
                         },
                         ..default()
                     }),
@@ -135,6 +142,7 @@ fn main() {
         // .add_plugins(roads::RoadPlugin)
         .add_plugins(culling::CullingPlugin)
         .add_plugins(animation::AnimationPlugin)
+        .add_plugins(procedural_mobs::ProceduralMobsPlugin)
         .add_plugins(minimap::MinimapPlugin)
         .add_plugins(attention::AttentionPlugin)
         .add_plugins(ai::AiPlugin)

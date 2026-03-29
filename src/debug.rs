@@ -10,9 +10,10 @@ use bevy::prelude::*;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::{
-    AiControlledFactions, AiFactionSettings, AllyNotifications, AllyNotifyKind, AppState,
-    AttackTarget, CullReason, CullingBounds, Faction, FrustumCulled, FrustumDebugMode, GameFlowSet,
-    GameSetupConfig, GameWorld, Health, MoveTarget, RtsCamera, Selected, UiPressActive, UnitSpeed,
+    AiControlledFactions, AiFactionSettings, AllPlayerResources, AllyNotifications, AllyNotifyKind,
+    AppState, AttackTarget, CullReason, CullingBounds, Faction, FrustumCulled, FrustumDebugMode,
+    GameFlowSet, GameSetupConfig, GameWorld, Health, MoveTarget, ResourceType, RtsCamera, Selected,
+    UiPressActive, UnitSpeed,
 };
 use crate::fog::FogTweakSettings;
 use crate::ground::HeightMap;
@@ -110,6 +111,7 @@ impl Plugin for DebugPlugin {
                     sync_entity_spawn_tweaks,
                     sync_entity_selected_tweaks,
                     sync_runtime_debug_tweaks,
+                    sync_resource_debug_tweaks,
                     sync_ai_debug_tweaks,
                     sync_network_debug_tweaks,
                     initialize_debug_folder_defaults,
@@ -369,6 +371,7 @@ const FLOW_FOLDER: &str = "Game/Flow";
 const AI_FOLDER: &str = "Game/AI Settings";
 const SAVE_FOLDER: &str = "Game/Save & Load";
 const FRUSTUM_FOLDER: &str = "Game/Frustum Debug";
+const RESOURCES_FOLDER: &str = "Game/Resources";
 const NET_CONN_FOLDER: &str = "Network/Connection";
 const NET_TRAFFIC_FOLDER: &str = "Network/Traffic";
 
@@ -457,6 +460,25 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_button(SAVE_FOLDER, "Save Game");
     tweaks.add_button(SAVE_FOLDER, "Load Game");
     tweaks.add_readonly(SAVE_FOLDER, "Status", "Ready");
+
+    // Resources folder
+    tweaks.add_cycle_enum(
+        RESOURCES_FOLDER,
+        "Faction",
+        vec![
+            "Player 1".to_string(),
+            "Player 2".to_string(),
+            "Player 3".to_string(),
+            "Player 4".to_string(),
+        ],
+        0,
+    );
+    tweaks.add_float(RESOURCES_FOLDER, "Amount", 500.0, 50.0, 5000.0, 50.0);
+    for rt in ResourceType::ALL.iter() {
+        tweaks.add_button(RESOURCES_FOLDER, &format!("Add {}", rt.display_name()));
+    }
+    tweaks.add_button(RESOURCES_FOLDER, "Add All Resources");
+    tweaks.add_readonly(RESOURCES_FOLDER, "Status", "Ready");
 
     // Network folders — driven by the field table in multiplayer::mod
     for field in crate::multiplayer::NET_STAT_FIELDS {
@@ -949,6 +971,7 @@ fn sync_frustum_debug_tweaks(
             With<crate::components::Sapling>,
             With<crate::components::GrowingTree>,
             With<crate::components::GrowingResource>,
+            With<crate::components::DecoRevealed>,
         )>,
     >,
 ) {
@@ -1200,6 +1223,54 @@ fn sync_runtime_debug_tweaks(
         "Culled Entities",
         &culled_q.iter().count().to_string(),
     );
+}
+
+fn sync_resource_debug_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    pressed: Res<DebugButtonPressed>,
+    mut all_resources: ResMut<AllPlayerResources>,
+) {
+    let faction_idx = tweaks
+        .get_cycle_selected(RESOURCES_FOLDER, "Faction")
+        .unwrap_or(0);
+    let faction = match faction_idx {
+        0 => Faction::Player1,
+        1 => Faction::Player2,
+        2 => Faction::Player3,
+        _ => Faction::Player4,
+    };
+    let amount = tweaks
+        .get_float(RESOURCES_FOLDER, "Amount")
+        .unwrap_or(500.0) as u32;
+
+    for (folder, label) in &pressed.pressed {
+        if folder != RESOURCES_FOLDER {
+            continue;
+        }
+        if label == "Add All Resources" {
+            let res = all_resources.get_mut(&faction);
+            for rt in ResourceType::ALL.iter() {
+                res.add(*rt, amount);
+            }
+            tweaks.set_readonly_if_changed(
+                RESOURCES_FOLDER,
+                "Status",
+                &format!("+{amount} all to {faction:?}"),
+            );
+        } else if let Some(rt_name) = label.strip_prefix("Add ") {
+            if let Some(rt) = ResourceType::ALL
+                .iter()
+                .find(|rt| rt.display_name() == rt_name)
+            {
+                all_resources.get_mut(&faction).add(*rt, amount);
+                tweaks.set_readonly_if_changed(
+                    RESOURCES_FOLDER,
+                    "Status",
+                    &format!("+{amount} {rt_name} to {faction:?}"),
+                );
+            }
+        }
+    }
 }
 
 fn sync_entity_selected_tweaks(

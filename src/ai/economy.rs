@@ -32,6 +32,7 @@ pub fn ai_economy_system(
     building_models: Option<Res<BuildingModelAssets>>,
     height_map: Res<HeightMap>,
     biome_map: Res<BiomeMap>,
+    mut wall_grid: ResMut<WallGrid>,
     queries: (
         Query<&Faction, With<Unit>>,
         Query<(Entity, &Faction, &Transform, &UnitState), (With<Unit>, With<GatherSpeed>)>,
@@ -406,13 +407,13 @@ pub fn ai_economy_system(
                 brain.wall_plan = Some(generate_wall_plan(base_pos, brain.personality));
             }
 
-            if let Some(ref mut wall_plan) = brain.wall_plan.clone() {
-                // Build one uncompleted side per tick
-                for i in 0..4 {
+            if let Some(wall_plan) = brain.wall_plan.as_mut() {
+                // Build one uncompleted run per tick
+                for i in 0..wall_plan.runs.len() {
                     if wall_plan.completed[i] {
                         continue;
                     }
-                    let (start, end) = wall_plan.sides[i];
+                    let (start, end) = wall_plan.runs[i];
                     // Check if we can afford a wall segment
                     let wall_post_bp = registry.get(EntityKind::WallPost);
                     let wall_seg_bp = registry.get(EntityKind::WallSegment);
@@ -453,14 +454,12 @@ pub fn ai_economy_system(
                         &registry,
                         building_models.as_deref(),
                         &height_map,
+                        &mut wall_grid,
                         faction,
                         &points,
                     );
 
                     wall_plan.completed[i] = true;
-                    if let Some(ref mut bp) = brain.wall_plan {
-                        bp.completed[i] = true;
-                    }
                     break;
                 }
             }

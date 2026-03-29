@@ -118,6 +118,11 @@ pub fn handle_build_buttons(
                 continue;
             }
 
+            // Wall corners and posts are auto-placed, not manually buildable
+            if kind == EntityKind::WallCorner || kind == EntityKind::WallPost {
+                continue;
+            }
+
             if kind == EntityKind::WallSegment && founded {
                 placement.mode = PlacementMode::PlotWall { start: Vec3::ZERO };
                 placement.awaiting_release = false;

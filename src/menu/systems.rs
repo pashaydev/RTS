@@ -1,5 +1,6 @@
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
+use bevy::window::PresentMode;
 use rand::Rng;
 
 use super::helpers::*;
@@ -157,6 +158,47 @@ pub(crate) fn refresh_menu_page(
     );
 }
 
+/// Rebuild menu content when `MenuDirty` is inserted (without requiring a page change).
+pub(crate) fn rebuild_dirty_menu(
+    dirty: Option<Res<MenuDirty>>,
+    mut commands: Commands,
+    content_roots: Query<(Entity, Option<&Children>), With<MenuContentRoot>>,
+    page: Res<MenuPage>,
+    config: Res<GameSetupConfig>,
+    graphics: Res<GraphicsSettings>,
+    fonts: Res<UiFonts>,
+    lobby: Res<LobbyState>,
+    net_role: Option<Res<NetRole>>,
+    client_state: Option<Res<ClientNetState>>,
+) {
+    if dirty.is_none() {
+        return;
+    }
+    commands.remove_resource::<MenuDirty>();
+
+    let Ok((content_root, children)) = content_roots.single() else {
+        return;
+    };
+
+    if let Some(children) = children {
+        for child in children.iter() {
+            commands.entity(child).try_despawn();
+        }
+    }
+
+    dispatch_page(
+        &mut commands,
+        content_root,
+        &page,
+        &config,
+        &graphics,
+        &fonts,
+        &lobby,
+        &net_role,
+        &client_state,
+    );
+}
+
 // ── Menu Button Handler ──
 
 pub(crate) fn handle_menu_buttons(
@@ -201,6 +243,11 @@ pub(crate) fn handle_menu_buttons(
                         bevy::window::WindowMode::BorderlessFullscreen(MonitorSelection::Current)
                     } else {
                         bevy::window::WindowMode::Windowed
+                    };
+                    window.present_mode = if graphics.vsync {
+                        PresentMode::AutoVsync
+                    } else {
+                        PresentMode::AutoNoVsync
                     };
                 }
                 *page = MenuPage::Title;
@@ -280,6 +327,8 @@ fn rebuild_slot_cards(
 
 pub(crate) fn handle_selector_clicks(
     interactions: Query<(&Interaction, &MenuSelector), Changed<Interaction>>,
+    mut click_events: MessageReader<UiClickEvent>,
+    all_selectors: Query<&MenuSelector>,
     mut config: ResMut<GameSetupConfig>,
     mut graphics: ResMut<GraphicsSettings>,
     mut lobby: Option<ResMut<LobbyState>>,
@@ -288,11 +337,21 @@ pub(crate) fn handle_selector_clicks(
     mut commands: Commands,
     slots_container: Query<(Entity, &Children), With<SlotCardsContainer>>,
 ) {
-    for (interaction, selector) in &interactions {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
+    // Collect selectors to process from both mouse interactions and keyboard events
+    let mut to_process: Vec<MenuSelector> = Vec::new();
 
+    for (interaction, selector) in &interactions {
+        if *interaction == Interaction::Pressed {
+            to_process.push(*selector);
+        }
+    }
+    for event in click_events.read() {
+        if let Ok(selector) = all_selectors.get(event.entity) {
+            to_process.push(*selector);
+        }
+    }
+
+    for selector in &to_process {
         match selector.field {
             SelectorField::SlotType(slot_idx) => {
                 if slot_idx < 4 {
@@ -428,6 +487,9 @@ pub(crate) fn handle_selector_clicks(
             SelectorField::Fullscreen => {
                 graphics.fullscreen = selector.index == 0;
             }
+            SelectorField::Vsync => {
+                graphics.vsync = selector.index == 0;
+            }
             SelectorField::Shadows => {
                 graphics.shadow_quality = match selector.index {
                     0 => ShadowQuality::Off,
@@ -437,6 +499,44 @@ pub(crate) fn handle_selector_clicks(
             }
             SelectorField::EntityLights => {
                 graphics.entity_lights = selector.index == 0;
+            }
+            SelectorField::AntiAliasing => {
+                graphics.anti_aliasing = match selector.index {
+                    0 => AntiAliasingMode::Off,
+                    _ => AntiAliasingMode::Smaa,
+                };
+            }
+            SelectorField::Bloom => {
+                graphics.bloom = match selector.index {
+                    0 => EffectQuality::Off,
+                    1 => EffectQuality::Low,
+                    2 => EffectQuality::Medium,
+                    _ => EffectQuality::High,
+                };
+            }
+            SelectorField::Brightness => {
+                if selector.index < BRIGHTNESS_OPTIONS.len() {
+                    graphics.brightness = BRIGHTNESS_OPTIONS[selector.index].0;
+                }
+            }
+            SelectorField::AutoExposure => {
+                graphics.auto_exposure = selector.index == 0;
+            }
+            SelectorField::DepthOfField => {
+                graphics.depth_of_field = match selector.index {
+                    0 => EffectQuality::Off,
+                    1 => EffectQuality::Low,
+                    2 => EffectQuality::Medium,
+                    _ => EffectQuality::High,
+                };
+            }
+            SelectorField::ChromaticAberration => {
+                graphics.chromatic_aberration = match selector.index {
+                    0 => EffectQuality::Off,
+                    1 => EffectQuality::Low,
+                    2 => EffectQuality::Medium,
+                    _ => EffectQuality::High,
+                };
             }
             SelectorField::UiScale => {
                 if selector.index < UI_SCALE_OPTIONS.len() {
@@ -553,6 +653,7 @@ pub(crate) fn update_selector_visuals(
                 .get(selector.index)
                 .map_or(false, |&r| r == graphics.resolution),
             SelectorField::Fullscreen => (selector.index == 0) == graphics.fullscreen,
+            SelectorField::Vsync => (selector.index == 0) == graphics.vsync,
             SelectorField::Shadows => {
                 selector.index
                     == match graphics.shadow_quality {
@@ -562,6 +663,44 @@ pub(crate) fn update_selector_visuals(
                     }
             }
             SelectorField::EntityLights => (selector.index == 0) == graphics.entity_lights,
+            SelectorField::AntiAliasing => {
+                selector.index
+                    == match graphics.anti_aliasing {
+                        AntiAliasingMode::Off => 0,
+                        AntiAliasingMode::Smaa => 1,
+                    }
+            }
+            SelectorField::Bloom => {
+                selector.index
+                    == match graphics.bloom {
+                        EffectQuality::Off => 0,
+                        EffectQuality::Low => 1,
+                        EffectQuality::Medium => 2,
+                        EffectQuality::High => 3,
+                    }
+            }
+            SelectorField::Brightness => BRIGHTNESS_OPTIONS
+                .get(selector.index)
+                .map_or(false, |&(v, _)| (v - graphics.brightness).abs() < 0.01),
+            SelectorField::AutoExposure => (selector.index == 0) == graphics.auto_exposure,
+            SelectorField::DepthOfField => {
+                selector.index
+                    == match graphics.depth_of_field {
+                        EffectQuality::Off => 0,
+                        EffectQuality::Low => 1,
+                        EffectQuality::Medium => 2,
+                        EffectQuality::High => 3,
+                    }
+            }
+            SelectorField::ChromaticAberration => {
+                selector.index
+                    == match graphics.chromatic_aberration {
+                        EffectQuality::Off => 0,
+                        EffectQuality::Low => 1,
+                        EffectQuality::Medium => 2,
+                        EffectQuality::High => 3,
+                    }
+            }
             SelectorField::UiScale => UI_SCALE_OPTIONS
                 .get(selector.index)
                 .map_or(false, |&(v, _)| (v - graphics.ui_scale).abs() < 0.01),
@@ -710,8 +849,7 @@ pub(crate) fn randomize_seed_system(
 pub(crate) fn random_name_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<RandomNameButton>)>,
     mut config: ResMut<GameSetupConfig>,
-    mut inputs: Query<(&mut TextInputField, &Children)>,
-    mut text_query: Query<&mut Text, Without<TextInputCursor>>,
+    mut inputs: Query<&mut TextInputField>,
 ) {
     for interaction in &interactions {
         if *interaction != Interaction::Pressed {
@@ -721,14 +859,230 @@ pub(crate) fn random_name_system(
         let name = RANDOM_NAMES[rng.random_range(0..RANDOM_NAMES.len())].to_string();
         config.player_name = name.clone();
 
-        for (mut field, children) in &mut inputs {
+        for mut field in &mut inputs {
             field.value = name.clone();
             field.cursor_pos = name.len();
+            field.selection_anchor = None;
+        }
+    }
+}
+
+// ── Menu Keyboard Navigation ──
+
+pub(crate) fn menu_keyboard_nav(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut nav: ResMut<MenuNavFocus>,
+    mut click_events: MessageWriter<UiClickEvent>,
+    focusables: Query<(Entity, &NavFocusable)>,
+    mut commands: Commands,
+    focused_q: Query<Entity, With<NavFocused>>,
+    text_focus: Query<&TextInputFocused>,
+    menu_btns: Query<&MenuButton>,
+    mut page: ResMut<MenuPage>,
+    host_state: Option<Res<HostNetState>>,
+    client_state: Option<Res<ClientNetState>>,
+) {
+    // Don't navigate if a text input is focused
+    if text_focus.iter().next().is_some() {
+        return;
+    }
+
+    // Escape → go back
+    if keyboard.just_pressed(KeyCode::Escape) {
+        let new_page = match *page {
+            MenuPage::NewGame | MenuPage::Options | MenuPage::Multiplayer => Some(MenuPage::Title),
+            MenuPage::HostLobby => {
+                #[cfg(not(target_arch = "wasm32"))]
+                multiplayer::stop_hosting(&mut commands, &host_state);
+                Some(MenuPage::Multiplayer)
+            }
+            MenuPage::JoinLobby => {
+                multiplayer::stop_client(&mut commands, &client_state);
+                Some(MenuPage::Multiplayer)
+            }
+            _ => None,
+        };
+        if let Some(p) = new_page {
+            *page = p;
+            return;
+        }
+    }
+
+    let mut items: Vec<(Entity, usize)> = focusables.iter().map(|(e, nf)| (e, nf.0)).collect();
+    if items.is_empty() {
+        return;
+    }
+    items.sort_by_key(|&(_, order)| order);
+    let count = items.len();
+
+    let up = keyboard.just_pressed(KeyCode::ArrowUp) || keyboard.just_pressed(KeyCode::KeyW);
+    let down = keyboard.just_pressed(KeyCode::ArrowDown) || keyboard.just_pressed(KeyCode::KeyS);
+    let confirm =
+        keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter);
+
+    if up {
+        nav.index = if nav.index == 0 { count - 1 } else { nav.index - 1 };
+    }
+    if down {
+        nav.index = (nav.index + 1) % count;
+    }
+
+    // Clamp in case buttons changed
+    nav.index = nav.index.min(count - 1);
+
+    // Update NavFocused marker
+    if up || down {
+        for e in &focused_q {
+            commands.entity(e).remove::<NavFocused>();
+        }
+        let (entity, _) = items[nav.index];
+        commands.entity(entity).insert(NavFocused);
+    }
+
+    // Ensure focus marker exists even without input (first frame)
+    if focused_q.is_empty() {
+        let (entity, _) = items[nav.index];
+        commands.entity(entity).insert(NavFocused);
+    }
+
+    // Enter on an action button (MenuButton) → emit click
+    if confirm {
+        let (entity, _) = items[nav.index];
+        if menu_btns.get(entity).is_ok() {
+            click_events.write(UiClickEvent { entity });
+        }
+    }
+}
+
+/// Handles Left/Right (A/D) to change the selected option within a focused selector row.
+pub(crate) fn menu_selector_keyboard_nav(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    focused: Query<(Entity, &Children), With<NavFocused>>,
+    selectors: Query<(Entity, &MenuSelector, Option<&SelectedOption>)>,
+    mut click_events: MessageWriter<UiClickEvent>,
+    menu_btns: Query<&MenuButton>,
+    text_focus: Query<&TextInputFocused>,
+) {
+    if text_focus.iter().next().is_some() {
+        return;
+    }
+
+    let left = keyboard.just_pressed(KeyCode::ArrowLeft) || keyboard.just_pressed(KeyCode::KeyA);
+    let right = keyboard.just_pressed(KeyCode::ArrowRight) || keyboard.just_pressed(KeyCode::KeyD);
+    let confirm =
+        keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter);
+
+    if !left && !right && !confirm {
+        return;
+    }
+
+    for (entity, children) in &focused {
+        // Skip action buttons — those are handled by menu_keyboard_nav
+        if menu_btns.get(entity).is_ok() {
+            continue;
+        }
+
+        // Collect selector children of this row
+        let mut child_selectors: Vec<(Entity, usize, bool)> = Vec::new();
+        for child in children.iter() {
+            if let Ok((e, sel, selected)) = selectors.get(child) {
+                child_selectors.push((e, sel.index, selected.is_some()));
+            }
+        }
+        child_selectors.sort_by_key(|&(_, idx, _)| idx);
+
+        if child_selectors.is_empty() {
+            continue;
+        }
+
+        let current = child_selectors
+            .iter()
+            .position(|&(_, _, sel)| sel)
+            .unwrap_or(0);
+
+        let new = if left {
+            if current == 0 {
+                child_selectors.len() - 1
+            } else {
+                current - 1
+            }
+        } else if right || confirm {
+            (current + 1) % child_selectors.len()
+        } else {
+            continue;
+        };
+
+        if new != current {
+            let (target_entity, _, _) = child_selectors[new];
+            click_events.write(UiClickEvent { entity: target_entity });
+        }
+    }
+}
+
+/// Applies visual highlight to the keyboard-focused item (button or selector row).
+pub(crate) fn menu_nav_focus_visuals(
+    focused: Query<Entity, Added<NavFocused>>,
+    all_focusable: Query<(Entity, Option<&MenuButton>), With<NavFocusable>>,
+    nav_focused_q: Query<(Entity, Option<&MenuButton>), With<NavFocused>>,
+    mut commands: Commands,
+    children_q: Query<&Children>,
+    mut text_colors: Query<&mut TextColor>,
+) {
+    if focused.is_empty() {
+        return;
+    }
+
+    // Style newly focused items
+    for entity in &focused {
+        commands.entity(entity).insert((
+            BorderColor::all(theme::ACCENT),
+            BoxShadow::new(
+                Color::srgba(0.29, 0.62, 1.0, 0.4),
+                Val::Px(0.0),
+                Val::Px(0.0),
+                Val::Px(0.0),
+                Val::Px(10.0),
+            ),
+        ));
+        if let Ok(children) = children_q.get(entity) {
             for child in children.iter() {
-                if let Ok(mut text) = text_query.get_mut(child) {
-                    **text = name.clone();
+                if let Ok(mut tc) = text_colors.get_mut(child) {
+                    tc.0 = Color::WHITE;
                 }
             }
+        }
+    }
+
+    // Reset unfocused items
+    for (entity, is_btn) in &all_focusable {
+        if nav_focused_q.iter().any(|(e, _)| e == entity) {
+            continue;
+        }
+        // Selector rows: reset left border
+        if is_btn.is_none() {
+            commands
+                .entity(entity)
+                .insert(BorderColor::all(Color::NONE));
+        } else {
+            commands
+                .entity(entity)
+                .insert(BorderColor::all(Color::NONE));
+        }
+        commands.entity(entity).remove::<BoxShadow>();
+    }
+}
+
+/// Resets nav focus index when the menu page changes.
+pub(crate) fn reset_nav_focus_on_page_change(
+    page: Res<MenuPage>,
+    mut nav: ResMut<MenuNavFocus>,
+    focused_q: Query<Entity, With<NavFocused>>,
+    mut commands: Commands,
+) {
+    if page.is_changed() {
+        nav.index = 0;
+        for e in &focused_q {
+            commands.entity(e).remove::<NavFocused>();
         }
     }
 }

@@ -273,7 +273,11 @@ fn steer_avoidance(
         // ── Wall repulsion ── (push away from nearby walls)
         if is_moving {
             let nearby_walls = wall_grid.query_radius(my_pos, wall_avoidance_radius);
-            for (_wall_entity, wall_pos, wall_fp, _wall_faction) in &nearby_walls {
+            for (wall_entity, wall_pos, wall_fp, _wall_faction) in &nearby_walls {
+                // Let builders approach the wall piece they are assigned to.
+                if my_target_building == Some(*wall_entity) {
+                    continue;
+                }
                 // Repel from all walls (not just hostile) to avoid clipping
                 let diff = my_pos - *wall_pos;
                 let flat_diff = Vec3::new(diff.x, 0.0, diff.z);

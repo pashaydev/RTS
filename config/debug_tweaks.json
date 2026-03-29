@@ -6,18 +6,24 @@
   "Entities/Spawn": {
     "Click to Place": false
   },
-  "Game/AI Settings": {
-    "P2 AI Enabled": true,
-    "P3 AI Enabled": true,
-    "P4 AI Enabled": true
+  "Game/AI Settings": {},
+  "Game/Flow": {},
+  "Game/Frustum Debug": {
+    "Enabled": false,
+    "Freeze Main Camera": true
   },
-  "Game/Player Control": {},
+  "Game/Runtime": {
+    "FPS Overlay": true,
+    "World Inspector": false
+  },
   "Game/Save & Load": {},
+  "Network/Connection": {},
+  "Network/Traffic": {},
   "Visuals/Ambient Light": {
-    "Brightness": 300.0,
-    "Color B": 0.8,
-    "Color G": 0.85,
-    "Color R": 0.9,
+    "Brightness": 253.1716,
+    "Color B": 0.6439053,
+    "Color G": 0.65488166,
+    "Color R": 0.7439053,
     "Override": false
   },
   "Visuals/Entity Lights": {
@@ -34,8 +40,17 @@
     "LOS Ray Count": 48.0,
     "Mob Threshold": 0.8,
     "Object Threshold": 0.4,
+    "Reveal Full Map": false,
     "Transition Speed": 4.0,
     "VFX Threshold": 0.3
+  },
+  "Visuals/FoW Performance": {
+    "Display Lerp": true,
+    "Entity Hiding": true,
+    "Shader Quality": 2.0,
+    "Texture Upload": true,
+    "Tick Rate Hz": 12.0,
+    "Visibility Update": true
   },
   "Visuals/FoW Shader": {
     "Contrast": 0.2,
@@ -63,24 +78,24 @@
     "Warp Speed": 0.5
   },
   "Visuals/Sky Color": {
-    "Color B": 0.75,
-    "Color G": 0.65,
-    "Color R": 0.6,
+    "Color B": 0.61341715,
+    "Color G": 0.53292894,
+    "Color R": 0.58048815,
     "Override": false
   },
   "Visuals/Sunlight": {
-    "Color B": 0.7,
-    "Color G": 0.8,
-    "Color R": 0.85,
-    "Illuminance": 6000.0,
+    "Color B": 0.5048816,
+    "Color G": 0.682929,
+    "Color R": 0.9085355,
+    "Illuminance": 4829.2896,
     "Override": false,
-    "Pitch": -0.8,
+    "Pitch": -0.5463461,
     "Shadows": true,
     "Yaw": 0.3
   },
   "Visuals/Time of Day": {
     "Cycle Duration": 600.0,
     "Paused": false,
-    "Time": 0.35
+    "Time": 0.60661054
   }
 }
