@@ -1,13 +1,16 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
+use game_state::message::TerrainShapeOp;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 use rand::SeedableRng;
 
+use crate::blueprints::EntityKind;
 use crate::components::{
-    AppState, Biome, BiomeMap, CullingBounds, Decoration, FogHideable, GameSetupConfig, GameWorld,
-    Ground, MapSeed, ModelAssets, RtsCamera,
+    AppState, Biome, BiomeMap, Building, BuildingFootprint, CullingBounds, Decoration,
+    FogHideable, GameFlowSet, GameSetupConfig, GameWorld, Ground, MapSeed, ModelAssets,
+    RtsCamera,
 };
 use crate::fog::FogTextures;
 use crate::lighting::SunLight;
@@ -25,6 +28,18 @@ pub struct HeightMap {
     pub step: f32,
     pub map_size: f32,
     pub half_map: f32,
+}
+
+#[derive(Resource, Default)]
+pub struct TerrainShapeUpdateQueue {
+    pub pending: VecDeque<TerrainShapeOp>,
+}
+
+#[derive(Resource, Default)]
+pub struct TerrainShapeSyncState {
+    pub applied_history: HashSet<TerrainShapeOp>,
+    pub applied_history_ordered: Vec<TerrainShapeOp>,
+    pub pending_network: Vec<TerrainShapeOp>,
 }
 
 impl HeightMap {
@@ -483,6 +498,8 @@ impl Plugin for GroundPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_plugins(MaterialPlugin::<TerrainMaterial>::default())
+            .init_resource::<TerrainShapeUpdateQueue>()
+            .init_resource::<TerrainShapeSyncState>()
             .add_systems(Startup, load_terrain_textures)
             .add_systems(
                 OnEnter(AppState::InGame),
@@ -491,6 +508,13 @@ impl Plugin for GroundPlugin {
             .add_systems(
                 Update,
                 (update_water_time, patch_water_fog_textures)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (enqueue_building_terrain_updates, process_terrain_shape_update_queue)
+                    .chain()
+                    .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),
             );
     }
@@ -965,4 +989,246 @@ fn spawn_border_mountain(
             ))
             .with_scale(Vec3::splat(scale)),
     ));
+}
+
+fn enqueue_building_terrain_updates(
+    new_buildings: Query<
+        (&Transform, &EntityKind, &BuildingFootprint),
+        (With<Building>, Added<Building>),
+    >,
+    height_map: Res<HeightMap>,
+    net_role: Option<Res<crate::multiplayer::NetRole>>,
+    mut queue: ResMut<TerrainShapeUpdateQueue>,
+) {
+    if matches!(net_role.as_deref(), Some(crate::multiplayer::NetRole::Client)) {
+        return;
+    }
+
+    for (transform, kind, footprint) in &new_buildings {
+        if !crate::buildings::uses_terrain_foundation(*kind) {
+            continue;
+        }
+
+        let center = transform.translation.xz();
+        queue.pending.push_back(TerrainShapeOp {
+            center: [center.x, center.y],
+            footprint: footprint.0,
+            target_height: height_map.foundation_target_height(center.x, center.y, footprint.0),
+        });
+    }
+}
+
+fn process_terrain_shape_update_queue(
+    mut queue: ResMut<TerrainShapeUpdateQueue>,
+    mut height_map: ResMut<HeightMap>,
+    mut sync_state: ResMut<TerrainShapeSyncState>,
+    net_role: Option<Res<crate::multiplayer::NetRole>>,
+    ground_q: Query<&Mesh3d, With<Ground>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    if queue.pending.is_empty() {
+        return;
+    }
+
+    let Ok(ground_mesh) = ground_q.single() else {
+        return;
+    };
+    let Some(mesh) = meshes.get_mut(&ground_mesh.0) else {
+        return;
+    };
+
+    // Collect dirty grid bounds across all ops this frame
+    let mut dirty_min_x = usize::MAX;
+    let mut dirty_max_x = 0usize;
+    let mut dirty_min_z = usize::MAX;
+    let mut dirty_max_z = 0usize;
+    let mut any_changed = false;
+    let is_client = matches!(net_role.as_deref(), Some(crate::multiplayer::NetRole::Client));
+
+    while let Some(update) = queue.pending.pop_front() {
+        let (_, outer_radius) = foundation_radii(update.footprint, height_map.step);
+        let op_min_x = (((update.center[0] - outer_radius) + height_map.half_map) / height_map.step)
+            .floor()
+            .max(0.0) as usize;
+        let op_max_x = (((update.center[0] + outer_radius) + height_map.half_map) / height_map.step)
+            .ceil()
+            .min((height_map.grid_size - 1) as f32) as usize;
+        let op_min_z = (((update.center[1] - outer_radius) + height_map.half_map) / height_map.step)
+            .floor()
+            .max(0.0) as usize;
+        let op_max_z = (((update.center[1] + outer_radius) + height_map.half_map) / height_map.step)
+            .ceil()
+            .min((height_map.grid_size - 1) as f32) as usize;
+
+        if apply_terrain_shape_op(&mut height_map, &update) {
+            dirty_min_x = dirty_min_x.min(op_min_x);
+            dirty_max_x = dirty_max_x.max(op_max_x);
+            dirty_min_z = dirty_min_z.min(op_min_z);
+            dirty_max_z = dirty_max_z.max(op_max_z);
+            any_changed = true;
+        }
+
+        sync_state.applied_history.insert(update.clone());
+        sync_state.applied_history_ordered.push(update.clone());
+        if !is_client {
+            sync_state.pending_network.push(update);
+        }
+    }
+
+    if any_changed {
+        // Expand dirty region by 1 for correct normal recalculation at boundaries
+        let norm_min_x = dirty_min_x.saturating_sub(1);
+        let norm_max_x = (dirty_max_x + 1).min(height_map.grid_size - 1);
+        let norm_min_z = dirty_min_z.saturating_sub(1);
+        let norm_max_z = (dirty_max_z + 1).min(height_map.grid_size - 1);
+
+        sync_ground_mesh_partial(mesh, &height_map, norm_min_x, norm_max_x, norm_min_z, norm_max_z);
+    }
+}
+
+pub fn apply_terrain_shape_op(height_map: &mut HeightMap, update: &TerrainShapeOp) -> bool {
+    let (inner_radius, outer_radius) = foundation_radii(update.footprint, height_map.step);
+    let min_x = (((update.center[0] - outer_radius) + height_map.half_map) / height_map.step)
+        .floor()
+        .max(0.0) as usize;
+    let max_x = (((update.center[0] + outer_radius) + height_map.half_map) / height_map.step)
+        .ceil()
+        .min((height_map.grid_size - 1) as f32) as usize;
+    let min_z = (((update.center[1] - outer_radius) + height_map.half_map) / height_map.step)
+        .floor()
+        .max(0.0) as usize;
+    let max_z = (((update.center[1] + outer_radius) + height_map.half_map) / height_map.step)
+        .ceil()
+        .min((height_map.grid_size - 1) as f32) as usize;
+
+    let mut changed = false;
+    for iz in min_z..=max_z {
+        for ix in min_x..=max_x {
+            let (world_x, world_z) = height_map.world_pos_for_grid(ix, iz);
+            let dist =
+                Vec2::new(world_x - update.center[0], world_z - update.center[1]).length();
+            if dist > outer_radius {
+                continue;
+            }
+
+            let blend = if dist <= inner_radius {
+                1.0
+            } else {
+                let t = ((dist - inner_radius) / (outer_radius - inner_radius)).clamp(0.0, 1.0);
+                1.0 - (t * t * (3.0 - 2.0 * t))
+            };
+
+            let idx = iz * height_map.grid_size + ix;
+            let current = height_map.heights[idx];
+            let next = current + (update.target_height - current) * blend;
+            if (next - current).abs() > 0.001 {
+                height_map.heights[idx] = next;
+                changed = true;
+            }
+        }
+    }
+
+    changed
+}
+
+pub fn sync_ground_mesh_to_height_map(mesh: &mut Mesh, height_map: &HeightMap) {
+    let mut positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+        Some(VertexAttributeValues::Float32x3(values)) => values.clone(),
+        _ => return,
+    };
+
+    if positions.len() != height_map.heights.len() {
+        return;
+    }
+
+    for (pos, height) in positions.iter_mut().zip(height_map.heights.iter().copied()) {
+        pos[1] = height;
+    }
+
+    let mut normals = Vec::with_capacity(height_map.heights.len());
+    for iz in 0..height_map.grid_size {
+        for ix in 0..height_map.grid_size {
+            let left_ix = ix.saturating_sub(1);
+            let right_ix = (ix + 1).min(height_map.grid_size - 1);
+            let down_iz = iz.saturating_sub(1);
+            let up_iz = (iz + 1).min(height_map.grid_size - 1);
+
+            let h_l = height_map.heights[iz * height_map.grid_size + left_ix];
+            let h_r = height_map.heights[iz * height_map.grid_size + right_ix];
+            let h_d = height_map.heights[down_iz * height_map.grid_size + ix];
+            let h_u = height_map.heights[up_iz * height_map.grid_size + ix];
+            let normal = Vec3::new(h_l - h_r, 2.0 * height_map.step, h_d - h_u).normalize();
+            normals.push(normal.to_array());
+        }
+    }
+
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+}
+
+/// Update only the dirty region of the mesh instead of all vertices.
+pub fn sync_ground_mesh_partial(
+    mesh: &mut Mesh,
+    height_map: &HeightMap,
+    min_x: usize,
+    max_x: usize,
+    min_z: usize,
+    max_z: usize,
+) {
+    let Some(VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return;
+    };
+
+    if positions.len() != height_map.heights.len() {
+        return;
+    }
+
+    // Update positions in dirty region
+    for iz in min_z..=max_z {
+        for ix in min_x..=max_x {
+            let idx = iz * height_map.grid_size + ix;
+            positions[idx][1] = height_map.heights[idx];
+        }
+    }
+
+    // Recalculate normals only in dirty region
+    let Some(VertexAttributeValues::Float32x3(normals)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL)
+    else {
+        return;
+    };
+
+    for iz in min_z..=max_z {
+        for ix in min_x..=max_x {
+            let left_ix = ix.saturating_sub(1);
+            let right_ix = (ix + 1).min(height_map.grid_size - 1);
+            let down_iz = iz.saturating_sub(1);
+            let up_iz = (iz + 1).min(height_map.grid_size - 1);
+
+            let h_l = height_map.heights[iz * height_map.grid_size + left_ix];
+            let h_r = height_map.heights[iz * height_map.grid_size + right_ix];
+            let h_d = height_map.heights[down_iz * height_map.grid_size + ix];
+            let h_u = height_map.heights[up_iz * height_map.grid_size + ix];
+            let normal = Vec3::new(h_l - h_r, 2.0 * height_map.step, h_d - h_u).normalize();
+
+            let idx = iz * height_map.grid_size + ix;
+            normals[idx] = normal.to_array();
+        }
+    }
+}
+
+pub fn reset_terrain_to_natural(height_map: &mut HeightMap, mesh: &mut Mesh) {
+    height_map.heights.clone_from(&height_map.natural_heights);
+    sync_ground_mesh_to_height_map(mesh, height_map);
+}
+
+pub fn terrain_heights_hash(height_map: &HeightMap) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for height in &height_map.heights {
+        hash ^= height.to_bits() as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
 }

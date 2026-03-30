@@ -2925,6 +2925,74 @@ impl WallGrid {
     }
 }
 
+// ── Obstacle grid (trees / natural blockers) ──
+
+/// Sparse grid of cells occupied by natural obstacles (trees) plus border margin.
+/// Refreshed every frame by `sync_obstacle_grid`. Used by all placement flows.
+#[derive(Resource, Default)]
+pub struct ObstacleGrid {
+    pub cells: HashSet<(i32, i32)>,
+    /// Half-size of the playable area (excludes border hills). 0 = not yet initialised.
+    pub playable_half: f32,
+}
+
+impl ObstacleGrid {
+    /// Is a world-space position inside the border hills (unbuildable edge)?
+    fn is_in_border(&self, x: f32, z: f32) -> bool {
+        self.playable_half > 0.0
+            && (x.abs() > self.playable_half || z.abs() > self.playable_half)
+    }
+
+    /// Is a single grid cell blocked by an obstacle or border?
+    pub fn is_cell_blocked(&self, gx: i32, gz: i32) -> bool {
+        if self.cells.contains(&(gx, gz)) {
+            return true;
+        }
+        let world = WallGrid::grid_to_world(gx, gz);
+        self.is_in_border(world.x, world.z)
+    }
+
+    /// Is a world-space point blocked?
+    pub fn is_blocked(&self, pos: Vec3) -> bool {
+        if self.is_in_border(pos.x, pos.z) {
+            return true;
+        }
+        let (gx, gz) = WallGrid::world_to_grid(pos);
+        self.cells.contains(&(gx, gz))
+    }
+
+    /// Does a circular footprint centered at `pos` with `radius` overlap any obstacle cell
+    /// or extend into the border?
+    pub fn is_footprint_blocked(&self, pos: Vec3, radius: f32) -> bool {
+        if self.is_in_border(pos.x - radius, pos.z)
+            || self.is_in_border(pos.x + radius, pos.z)
+            || self.is_in_border(pos.x, pos.z - radius)
+            || self.is_in_border(pos.x, pos.z + radius)
+        {
+            return true;
+        }
+        let cells_needed = (radius / WALL_CELL_SIZE).ceil() as i32 + 1;
+        let (cx, cz) = WallGrid::world_to_grid(pos);
+        let r_sq = radius * radius;
+        for dx in -cells_needed..=cells_needed {
+            for dz in -cells_needed..=cells_needed {
+                let gx = cx + dx;
+                let gz = cz + dz;
+                if !self.cells.contains(&(gx, gz)) {
+                    continue;
+                }
+                let cell_world = WallGrid::grid_to_world(gx, gz);
+                let ddx = cell_world.x - pos.x;
+                let ddz = cell_world.z - pos.z;
+                if ddx * ddx + ddz * ddz < r_sq {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
 // ── Building upgrades & interactions ──
 
 #[derive(Component)]
@@ -3290,6 +3358,10 @@ pub struct BuildingGhostMaterials {
 
 #[derive(Component)]
 pub struct GhostBuilding;
+
+/// Marker: vegetation around this building has already been cleared.
+#[derive(Component)]
+pub struct VegetationCleared;
 
 #[derive(Component)]
 pub struct GhostValid(pub bool);

@@ -1,6 +1,7 @@
 use bevy::ecs::message::MessageWriter;
 use bevy::prelude::*;
 
+use crate::audio::{PlaySfx, SfxKind};
 use crate::components::TextInputField;
 
 use super::framework::{WidgetDragHandle, WidgetResizeHandle};
@@ -93,6 +94,7 @@ pub fn update_interaction_states(
     time: Res<Time>,
     mut click_events: MessageWriter<UiClickEvent>,
     mut hold_events: MessageWriter<UiHoldCompleteEvent>,
+    mut sfx_events: MessageWriter<PlaySfx>,
     mut query: Query<(
         Entity,
         &Interaction,
@@ -125,7 +127,19 @@ pub fn update_interaction_states(
             Interaction::Hovered => {
                 if state.phase == UiInteractPhase::Pressed && state.armed && behavior.emit_click {
                     click_events.write(UiClickEvent { entity });
+                    sfx_events.write(PlaySfx {
+                        kind: SfxKind::ButtonClick,
+                        position: None,
+                    });
                     state.click_flash = 1.0;
+                }
+
+                // Play hover sound when transitioning from Idle → Hovered
+                if state.phase == UiInteractPhase::Idle {
+                    sfx_events.write(PlaySfx {
+                        kind: SfxKind::ButtonHover,
+                        position: None,
+                    });
                 }
 
                 state.phase = UiInteractPhase::Hovered;

@@ -14,6 +14,7 @@ use game_state::message::{
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
 use crate::buildings;
 use crate::components::*;
+use crate::ground::{terrain_heights_hash, HeightMap, TerrainShapeSyncState};
 use crate::lighting::DayCycle;
 use crate::net_bridge::{EntityNetMap, NetworkId};
 use crate::orders;
@@ -165,6 +166,7 @@ pub struct HostCommandExecution<'w, 's> {
         ),
         (With<Building>, Without<GhostBuilding>),
     >,
+    obstacle_grid: Res<'w, ObstacleGrid>,
 }
 
 pub fn execute_input_command(
@@ -547,6 +549,7 @@ pub fn host_process_client_commands(
                                     &exec.height_map,
                                     &exec.existing_buildings,
                                     &worker_query,
+                                    &exec.obstacle_grid,
                                 )
                                 .is_ok()
                                 {
@@ -1168,6 +1171,24 @@ pub fn host_broadcast_building_sync(
     broadcast_msg(&mut socket, &msg);
 }
 
+pub fn host_broadcast_terrain_shape_sync(
+    mut socket: ResMut<MatchboxSocket>,
+    host: Res<HostNetState>,
+    mut terrain_sync: ResMut<TerrainShapeSyncState>,
+) {
+    if terrain_sync.pending_network.is_empty() || socket.connected_peers().count() == 0 {
+        return;
+    }
+
+    let seq = {
+        let mut s = host.seq.lock().unwrap();
+        *s += 1;
+        *s
+    };
+    let ops = std::mem::take(&mut terrain_sync.pending_network);
+    broadcast_msg(&mut socket, &ServerMessage::TerrainShapeSync { seq, ops });
+}
+
 // ── Resource sync: host → clients (1s) ─────────────────────────────────────
 
 #[derive(Resource)]
@@ -1420,6 +1441,8 @@ pub fn host_broadcast_neutral_world_sync(
     config: Res<GameSetupConfig>,
     map_seed: Option<Res<MapSeed>>,
     cycle: Res<DayCycle>,
+    height_map: Res<HeightMap>,
+    terrain_sync: Res<TerrainShapeSyncState>,
     resource_nodes: Query<(
         &NetworkId,
         &crate::components::ResourceNode,
@@ -1471,8 +1494,9 @@ pub fn host_broadcast_neutral_world_sync(
                 resource_density: resource_density_to_net(config.resource_density),
                 day_cycle_secs: cycle.cycle_duration,
             },
-            terrain_hash: 0,
+            terrain_hash: terrain_heights_hash(&height_map),
             biome_hash: 0,
+            terrain_ops: terrain_sync.applied_history_ordered.clone(),
             neutral_objects,
         };
         broadcast_msg(&mut socket, &ServerMessage::WorldBaseline { seq, baseline });

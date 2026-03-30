@@ -7,14 +7,17 @@ use std::sync::atomic::Ordering;
 
 use game_state::message::{
     BuildingSnapshot, DayCycleSnapshot, EntitySnapshot, EntitySpawnData, GameEvent, NetUnitState,
-    PlayerInput, ServerMessage, WorldBaseline,
+    PlayerInput, ServerMessage, TerrainShapeOp, WorldBaseline,
 };
 
 use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache,
 };
 use crate::components::*;
-use crate::ground::HeightMap;
+use crate::ground::{
+    apply_terrain_shape_op, reset_terrain_to_natural, sync_ground_mesh_to_height_map,
+    terrain_heights_hash, HeightMap, TerrainShapeSyncState, TerrainShapeUpdateQueue,
+};
 use crate::lighting::DayCycle;
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::net_bridge::{EntityNetMap, NetworkId};
@@ -77,6 +80,11 @@ pub struct PendingNetEvents {
 #[derive(Resource, Default)]
 pub struct PendingBaseline {
     pub baseline: Option<WorldBaseline>,
+}
+
+#[derive(Resource, Default)]
+pub struct PendingTerrainShapeSync {
+    pub ops: Vec<TerrainShapeOp>,
 }
 
 /// Interpolation state for smooth remote entity movement.
@@ -233,6 +241,7 @@ pub fn client_receive_commands(
     mut pending_day_cycle: ResMut<PendingDayCycleSync>,
     mut pending_events: ResMut<PendingNetEvents>,
     mut pending_baseline: ResMut<PendingBaseline>,
+    mut pending_terrain: ResMut<PendingTerrainShapeSync>,
     mut pending_spawns: ResMut<PendingNetSpawns>,
     mut pending_neutral: ResMut<PendingNeutralUpdates>,
     mut net_stats: ResMut<NetStats>,
@@ -281,6 +290,9 @@ pub fn client_receive_commands(
             ServerMessage::WorldBaseline { baseline, .. } => {
                 pending_baseline.baseline = Some(baseline.clone());
                 debug_tap::record_info("client_world_sync", "queued world baseline");
+            }
+            ServerMessage::TerrainShapeSync { ops, .. } => {
+                pending_terrain.ops.extend(ops.iter().cloned());
             }
             ServerMessage::NeutralWorldDelta { objects, .. } => {
                 pending_neutral.deltas.extend(objects.iter().cloned());
@@ -643,11 +655,31 @@ pub fn client_apply_world_baseline(
     mut commands: Commands,
     mut pending_baseline: ResMut<PendingBaseline>,
     mut pending_neutral: ResMut<PendingNeutralUpdates>,
+    mut terrain_queue: ResMut<TerrainShapeUpdateQueue>,
+    mut terrain_sync: ResMut<TerrainShapeSyncState>,
+    mut height_map: ResMut<HeightMap>,
+    ground_q: Query<&Mesh3d, With<Ground>>,
+    mut meshes: ResMut<Assets<Mesh>>,
     mut resource_nodes: Query<(Entity, &GlobalTransform, Option<&NetworkId>), With<ResourceNode>>,
 ) {
     let Some(baseline) = pending_baseline.baseline.take() else {
         return;
     };
+
+    if let Ok(ground_mesh) = ground_q.single() {
+        if let Some(mesh) = meshes.get_mut(&ground_mesh.0) {
+            reset_terrain_to_natural(&mut height_map, mesh);
+            for op in &baseline.terrain_ops {
+                apply_terrain_shape_op(&mut height_map, op);
+            }
+            sync_ground_mesh_to_height_map(mesh, &height_map);
+        }
+    }
+    terrain_queue.pending.clear();
+    terrain_sync.applied_history = baseline.terrain_ops.iter().cloned().collect();
+    terrain_sync.applied_history_ordered = baseline.terrain_ops.clone();
+    terrain_sync.pending_network.clear();
+
     for object in &baseline.neutral_objects {
         pending_neutral.deltas.push(object.clone());
         let snap_pos = Vec3::new(object.pos[0], object.pos[1], object.pos[2]);
@@ -664,11 +696,37 @@ pub fn client_apply_world_baseline(
     debug_tap::record_info(
         "client_world_sync",
         format!(
-            "applied world baseline with {} neutral objects",
-            baseline.neutral_objects.len()
+            "applied world baseline with {} neutral objects and {} terrain ops",
+            baseline.neutral_objects.len(),
+            baseline.terrain_ops.len()
         ),
     );
+    let actual_hash = terrain_heights_hash(&height_map);
+    if baseline.terrain_hash != 0 && actual_hash != baseline.terrain_hash {
+        warn!(
+            "Client terrain hash mismatch after baseline replay: host={} local={}",
+            baseline.terrain_hash, actual_hash
+        );
+    }
 }
+
+pub fn client_apply_terrain_shape_sync(
+    mut pending_terrain: ResMut<PendingTerrainShapeSync>,
+    mut terrain_queue: ResMut<TerrainShapeUpdateQueue>,
+    terrain_sync: Res<TerrainShapeSyncState>,
+) {
+    if pending_terrain.ops.is_empty() {
+        return;
+    }
+
+    for op in pending_terrain.ops.drain(..) {
+        if terrain_sync.applied_history.contains(&op) {
+            continue;
+        }
+        terrain_queue.pending.push_back(op);
+    }
+}
+
 
 /// Smoothly interpolates remote entity positions between state sync snapshots.
 pub fn client_interpolate_remote_units(
@@ -710,6 +768,7 @@ pub fn client_apply_entity_sync(
     building_models: Option<Res<BuildingModelAssets>>,
     unit_models: Option<Res<UnitModelAssets>>,
     existing_with_id: Query<(Entity, &NetworkId)>,
+    mut transforms: Query<&mut Transform>,
 ) {
     net_stats.pending_spawns = pending.spawns.len() as u32;
     net_stats.pending_despawns = pending.despawns.len() as u32;
@@ -763,6 +822,10 @@ pub fn client_apply_entity_sync(
                 faction,
             );
             commands.entity(entity).insert(NetworkId(spawn_data.net_id));
+            if let Ok(mut transform) = transforms.get_mut(entity) {
+                transform.translation = pos;
+                transform.rotation = Quat::from_rotation_y(spawn_data.rot_y);
+            }
             known_ids.insert(spawn_data.net_id);
             spawned += 1;
         }

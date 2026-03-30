@@ -124,6 +124,25 @@ pub struct BuildingSnapshot {
     pub production_progress: Option<f32>,
 }
 
+/// One terrain shaping operation applied to the authoritative heightmap.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TerrainShapeOp {
+    pub center: [f32; 2],
+    pub footprint: f32,
+    pub target_height: f32,
+}
+
+impl Eq for TerrainShapeOp {}
+
+impl std::hash::Hash for TerrainShapeOp {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.center[0].to_bits().hash(state);
+        self.center[1].to_bits().hash(state);
+        self.footprint.to_bits().hash(state);
+        self.target_height.to_bits().hash(state);
+    }
+}
+
 /// Snapshot of the authoritative day/night cycle state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DayCycleSnapshot {
@@ -213,6 +232,8 @@ pub struct WorldBaseline {
     pub terrain: TerrainDescriptor,
     pub terrain_hash: u64,
     pub biome_hash: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terrain_ops: Vec<TerrainShapeOp>,
     pub neutral_objects: Vec<NeutralWorldSnapshot>,
 }
 
@@ -373,6 +394,13 @@ pub enum ServerMessage {
         baseline: WorldBaseline,
     },
 
+    /// Incremental authoritative terrain deformation updates.
+    #[serde(rename = "terrain_shape_sync")]
+    TerrainShapeSync {
+        seq: u32,
+        ops: Vec<TerrainShapeOp>,
+    },
+
     /// Incremental update for neutral world objects after baseline application.
     #[serde(rename = "neutral_world_delta")]
     NeutralWorldDelta {
@@ -470,6 +498,7 @@ impl ServerMessage {
             | Self::EntitySpawn { seq, .. }
             | Self::EntityDespawn { seq, .. }
             | Self::BuildingSync { seq, .. }
+            | Self::TerrainShapeSync { seq, .. }
             | Self::ResourceSync { seq, .. }
             | Self::DayCycleSync { seq, .. }
             | Self::WorldBaseline { seq, .. }

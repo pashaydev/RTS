@@ -1,6 +1,7 @@
 //! Menu-specific UI spawn helpers: panels, buttons, selectors, input rows.
 
 use bevy::prelude::*;
+use bevy::ui::RelativeCursorPosition;
 
 use crate::components::*;
 use crate::theme;
@@ -40,6 +41,8 @@ pub enum SelectorField {
     DepthOfField,
     ChromaticAberration,
     UiScale,
+    MusicVolume,
+    SfxVolume,
     PreferredFaction,
 }
 
@@ -415,6 +418,119 @@ pub fn spawn_selector_row_nav(
                     ));
                 });
             }
+        })
+        .id();
+    commands.entity(container).add_child(row);
+}
+
+// ── Volume Slider ──
+
+/// Marker on the slider track container. Stores which field it controls.
+#[derive(Component, Clone, Copy)]
+pub struct VolumeSlider(pub SelectorField);
+
+/// The filled portion of the slider bar.
+#[derive(Component)]
+pub struct VolumeSliderFill;
+
+/// The percentage label to the right of the slider.
+#[derive(Component)]
+pub struct VolumeSliderLabel(pub SelectorField);
+
+/// State for active slider drag.
+#[derive(Resource, Default)]
+pub struct SliderDragState {
+    pub active: Option<Entity>,
+}
+
+/// Spawns a volume slider row: `[Label:] [====■-----------] [50%]`
+pub fn spawn_volume_slider(
+    commands: &mut Commands,
+    container: Entity,
+    label: &str,
+    value: f32,
+    field: SelectorField,
+    nav_index: Option<usize>,
+) {
+    let pct = (value * 100.0).round();
+
+    let mut ec = commands.spawn(Node {
+        width: Val::Percent(100.0),
+        flex_direction: FlexDirection::Row,
+        align_items: AlignItems::Center,
+        margin: UiRect::vertical(Val::Px(6.0)),
+        padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
+        border: UiRect::left(Val::Px(2.0)),
+        ..default()
+    });
+    ec.insert(BorderColor::all(Color::NONE));
+    if let Some(idx) = nav_index {
+        ec.insert(NavFocusable(idx));
+    }
+    let row = ec
+        .with_children(|parent| {
+            // Label
+            parent.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: theme::FONT_MEDIUM,
+                    ..default()
+                },
+                TextColor(theme::TEXT_SECONDARY),
+                Node {
+                    width: Val::Px(120.0),
+                    ..default()
+                },
+            ));
+
+            // Slider track (clickable area)
+            parent
+                .spawn((
+                    VolumeSlider(field),
+                    Button,
+                    Interaction::None,
+                    RelativeCursorPosition::default(),
+                    Node {
+                        width: Val::Px(260.0),
+                        height: Val::Px(20.0),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.10, 0.10, 0.10, 0.94)),
+                    BorderColor::all(theme::SEPARATOR),
+                ))
+                .with_children(|track| {
+                    // Filled bar
+                    track.spawn((
+                        VolumeSliderFill,
+                        Node {
+                            width: Val::Percent(pct),
+                            height: Val::Percent(100.0),
+                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            ..default()
+                        },
+                        BackgroundColor(theme::ACCENT),
+                        Pickable::IGNORE,
+                    ));
+                });
+
+            // Percentage label
+            parent.spawn((
+                VolumeSliderLabel(field),
+                Text::new(format!("{pct:.0}%")),
+                TextFont {
+                    font_size: theme::FONT_MEDIUM,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Node {
+                    width: Val::Px(45.0),
+                    margin: UiRect::left(Val::Px(8.0)),
+                    ..default()
+                },
+            ));
         })
         .id();
     commands.entity(container).add_child(row);

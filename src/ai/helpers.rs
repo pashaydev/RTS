@@ -340,6 +340,7 @@ pub fn find_build_pos(
     _footprints: &Query<&BuildingFootprint>,
     height_map: &HeightMap,
     near_position: Option<Vec3>,
+    obstacle_grid: &ObstacleGrid,
 ) -> Vec3 {
     let footprint = footprint_for_kind(kind);
     let spacing = footprint * 2.5;
@@ -363,6 +364,10 @@ pub fn find_build_pos(
             }
 
             if x.abs() > MAP_HALF || z.abs() > MAP_HALF {
+                continue;
+            }
+
+            if obstacle_grid.is_footprint_blocked(Vec3::new(x, 0.0, z), footprint) {
                 continue;
             }
 

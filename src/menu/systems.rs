@@ -1,6 +1,6 @@
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
-use bevy::window::PresentMode;
+use bevy::ui::RelativeCursorPosition;
 use rand::Rng;
 
 use super::helpers::*;
@@ -22,6 +22,7 @@ pub(crate) fn spawn_menu(
     page: Res<MenuPage>,
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
+    audio_settings: Res<crate::audio::AudioSettings>,
     fonts: Res<UiFonts>,
     restart: Option<Res<RestartRequested>>,
     mut next_state: ResMut<NextState<AppState>>,
@@ -82,6 +83,7 @@ pub(crate) fn spawn_menu(
         &page,
         &config,
         &graphics,
+        &audio_settings,
         &fonts,
         &lobby,
         &net_role,
@@ -95,6 +97,7 @@ fn dispatch_page(
     page: &MenuPage,
     config: &GameSetupConfig,
     graphics: &GraphicsSettings,
+    audio_settings: &crate::audio::AudioSettings,
     fonts: &UiFonts,
     lobby: &LobbyState,
     net_role: &Option<Res<NetRole>>,
@@ -103,7 +106,7 @@ fn dispatch_page(
     match *page {
         MenuPage::Title => pages::spawn_title_page(commands, container, fonts),
         MenuPage::NewGame => pages::spawn_new_game_page(commands, container, config, fonts),
-        MenuPage::Options => pages::spawn_options_page(commands, container, graphics, fonts),
+        MenuPage::Options => pages::spawn_options_page(commands, container, graphics, audio_settings, fonts),
         MenuPage::Multiplayer => multiplayer::spawn_multiplayer_page(commands, container, fonts),
         MenuPage::HostLobby => {
             multiplayer::spawn_host_lobby_page(commands, container, config, fonts, lobby)
@@ -126,6 +129,7 @@ pub(crate) fn refresh_menu_page(
     page: Res<MenuPage>,
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
+    audio_settings: Res<crate::audio::AudioSettings>,
     fonts: Res<UiFonts>,
     lobby: Res<LobbyState>,
     net_role: Option<Res<NetRole>>,
@@ -151,6 +155,7 @@ pub(crate) fn refresh_menu_page(
         &page,
         &config,
         &graphics,
+        &audio_settings,
         &fonts,
         &lobby,
         &net_role,
@@ -166,6 +171,7 @@ pub(crate) fn rebuild_dirty_menu(
     page: Res<MenuPage>,
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
+    audio_settings: Res<crate::audio::AudioSettings>,
     fonts: Res<UiFonts>,
     lobby: Res<LobbyState>,
     net_role: Option<Res<NetRole>>,
@@ -192,6 +198,7 @@ pub(crate) fn rebuild_dirty_menu(
         &page,
         &config,
         &graphics,
+        &audio_settings,
         &fonts,
         &lobby,
         &net_role,
@@ -208,6 +215,7 @@ pub(crate) fn handle_menu_buttons(
     mut page: ResMut<MenuPage>,
     mut config: ResMut<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
+    audio_settings: Res<crate::audio::AudioSettings>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
     mut windows: Query<&mut Window>,
@@ -236,19 +244,9 @@ pub(crate) fn handle_menu_buttons(
             }
             MenuAction::ApplySettings => {
                 graphics.save();
+                audio_settings.save();
                 if let Ok(mut window) = windows.single_mut() {
-                    let (w, h) = graphics.resolution;
-                    window.resolution = (w, h).into();
-                    window.mode = if graphics.fullscreen {
-                        bevy::window::WindowMode::BorderlessFullscreen(MonitorSelection::Current)
-                    } else {
-                        bevy::window::WindowMode::Windowed
-                    };
-                    window.present_mode = if graphics.vsync {
-                        PresentMode::AutoVsync
-                    } else {
-                        PresentMode::AutoNoVsync
-                    };
+                    super::options::apply_graphics_settings(&graphics, &mut window);
                 }
                 *page = MenuPage::Title;
             }
@@ -470,69 +468,22 @@ pub(crate) fn handle_selector_clicks(
                     config.starting_resources_mult = STARTING_RES_OPTIONS[selector.index].0;
                 }
             }
-            SelectorField::Resolution => {
-                if selector.index < RESOLUTION_OPTIONS.len() {
-                    graphics.resolution = RESOLUTION_OPTIONS[selector.index];
-                }
+            SelectorField::Resolution
+            | SelectorField::Fullscreen
+            | SelectorField::Vsync
+            | SelectorField::Shadows
+            | SelectorField::EntityLights
+            | SelectorField::AntiAliasing
+            | SelectorField::Bloom
+            | SelectorField::Brightness
+            | SelectorField::AutoExposure
+            | SelectorField::DepthOfField
+            | SelectorField::ChromaticAberration
+            | SelectorField::UiScale => {
+                super::options::apply_selector_change(&selector.field, selector.index, &mut graphics);
             }
-            SelectorField::Fullscreen => {
-                graphics.fullscreen = selector.index == 0;
-            }
-            SelectorField::Vsync => {
-                graphics.vsync = selector.index == 0;
-            }
-            SelectorField::Shadows => {
-                graphics.shadow_quality = match selector.index {
-                    0 => ShadowQuality::Off,
-                    1 => ShadowQuality::Low,
-                    _ => ShadowQuality::High,
-                };
-            }
-            SelectorField::EntityLights => {
-                graphics.entity_lights = selector.index == 0;
-            }
-            SelectorField::AntiAliasing => {
-                graphics.anti_aliasing = match selector.index {
-                    0 => AntiAliasingMode::Off,
-                    _ => AntiAliasingMode::Smaa,
-                };
-            }
-            SelectorField::Bloom => {
-                graphics.bloom = match selector.index {
-                    0 => EffectQuality::Off,
-                    1 => EffectQuality::Low,
-                    2 => EffectQuality::Medium,
-                    _ => EffectQuality::High,
-                };
-            }
-            SelectorField::Brightness => {
-                if selector.index < BRIGHTNESS_OPTIONS.len() {
-                    graphics.brightness = BRIGHTNESS_OPTIONS[selector.index].0;
-                }
-            }
-            SelectorField::AutoExposure => {
-                graphics.auto_exposure = selector.index == 0;
-            }
-            SelectorField::DepthOfField => {
-                graphics.depth_of_field = match selector.index {
-                    0 => EffectQuality::Off,
-                    1 => EffectQuality::Low,
-                    2 => EffectQuality::Medium,
-                    _ => EffectQuality::High,
-                };
-            }
-            SelectorField::ChromaticAberration => {
-                graphics.chromatic_aberration = match selector.index {
-                    0 => EffectQuality::Off,
-                    1 => EffectQuality::Low,
-                    2 => EffectQuality::Medium,
-                    _ => EffectQuality::High,
-                };
-            }
-            SelectorField::UiScale => {
-                if selector.index < UI_SCALE_OPTIONS.len() {
-                    graphics.ui_scale = UI_SCALE_OPTIONS[selector.index].0;
-                }
+            SelectorField::MusicVolume | SelectorField::SfxVolume => {
+                // Handled by volume_slider_system.
             }
             SelectorField::MapSeed => {
                 // Handled by randomize_seed_system
@@ -640,7 +591,7 @@ pub(crate) fn update_selector_visuals(
                 .map_or(false, |&(v, _)| {
                     (v - config.starting_resources_mult).abs() < 0.01
                 }),
-            SelectorField::Resolution => RESOLUTION_OPTIONS
+            SelectorField::Resolution => super::options::RESOLUTION_OPTIONS
                 .get(selector.index)
                 .map_or(false, |&r| r == graphics.resolution),
             SelectorField::Fullscreen => (selector.index == 0) == graphics.fullscreen,
@@ -695,6 +646,7 @@ pub(crate) fn update_selector_visuals(
             SelectorField::UiScale => UI_SCALE_OPTIONS
                 .get(selector.index)
                 .map_or(false, |&(v, _)| (v - graphics.ui_scale).abs() < 0.01),
+            SelectorField::MusicVolume | SelectorField::SfxVolume => false,
             SelectorField::SlotTeam(slot_idx) => {
                 slot_idx < 4 && selector.index == config.player_teams[slot_idx] as usize
             }
@@ -1074,6 +1026,90 @@ pub(crate) fn reset_nav_focus_on_page_change(
         nav.index = 0;
         for e in &focused_q {
             commands.entity(e).remove::<NavFocused>();
+        }
+    }
+}
+
+// ── Volume Slider Interaction ──
+
+/// Handles click and drag on volume slider tracks.
+///
+/// Uses `RelativeCursorPosition` to map cursor to 0.0–1.0 within the track.
+pub(crate) fn volume_slider_system(
+    mouse: Res<ButtonInput<MouseButton>>,
+    sliders: Query<(
+        Entity,
+        &VolumeSlider,
+        &Interaction,
+        &RelativeCursorPosition,
+    )>,
+    mut fills: Query<(&ChildOf, &mut Node), With<VolumeSliderFill>>,
+    mut labels: Query<(&VolumeSliderLabel, &mut Text)>,
+    mut audio_settings: ResMut<crate::audio::AudioSettings>,
+    mut drag: ResMut<SliderDragState>,
+) {
+    // On release, stop dragging and save.
+    if mouse.just_released(MouseButton::Left) {
+        if drag.active.is_some() {
+            audio_settings.save();
+            drag.active = None;
+        }
+        return;
+    }
+
+    // Determine which slider is active.
+    let active_slider = if let Some(active) = drag.active {
+        if mouse.pressed(MouseButton::Left) {
+            Some(active)
+        } else {
+            None
+        }
+    } else if mouse.just_pressed(MouseButton::Left) {
+        sliders
+            .iter()
+            .find(|(_, _, interaction, _)| **interaction == Interaction::Pressed)
+            .map(|(entity, _, _, _)| entity)
+    } else {
+        None
+    };
+
+    let Some(slider_entity) = active_slider else {
+        return;
+    };
+    drag.active = Some(slider_entity);
+
+    let Ok((_, slider, _, rel_cursor)) = sliders.get(slider_entity) else {
+        return;
+    };
+
+    // RelativeCursorPosition: (0,0) = center, (-0.5,-0.5) = top-left, (0.5,0.5) = bottom-right.
+    // Convert to 0.0–1.0 range: add 0.5 to the x component.
+    let Some(normalized) = rel_cursor.normalized else {
+        return;
+    };
+    let t = (normalized.x + 0.5).clamp(0.0, 1.0);
+
+    // Snap to 1% increments.
+    let value = (t * 100.0).round() / 100.0;
+
+    // Apply value.
+    match slider.0 {
+        SelectorField::MusicVolume => audio_settings.music_volume = value,
+        SelectorField::SfxVolume => audio_settings.sfx_volume = value,
+        _ => {}
+    }
+
+    // Update fill bar width and label.
+    let pct = value * 100.0;
+    for (parent, mut node) in fills.iter_mut() {
+        if parent.parent() == slider_entity {
+            node.width = Val::Percent(pct);
+        }
+    }
+    let field = slider.0;
+    for (lbl, mut text) in labels.iter_mut() {
+        if lbl.0 == field {
+            **text = format!("{pct:.0}%");
         }
     }
 }

@@ -3,7 +3,7 @@
     1280,
     720
   ],
-  "fullscreen": false,
+  "fullscreen": true,
   "vsync": true,
   "shadow_quality": "High",
   "entity_lights": true,

@@ -5,12 +5,13 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
+use crate::audio::{PlaySfx, SfxKind};
 use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityCategory, EntityKind,
     EntityVisualCache, LevelBonus,
 };
 use crate::components::*;
-use crate::ground::HeightMap;
+use crate::ground::{BorderSettings, HeightMap};
 use crate::model_assets::{BuildingConstructionAssets, BuildingModelAssets, UnitModelAssets};
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
 
@@ -20,6 +21,104 @@ struct PlacementOnlineParams<'w> {
     client_state: Option<Res<'w, crate::multiplayer::ClientNetState>>,
     matchbox_socket: Option<ResMut<'w, bevy_matchbox::prelude::MatchboxSocket>>,
     time: Res<'w, Time>,
+}
+
+/// Worker availability priority for building placement.
+/// Lower number = preferred (idle workers are picked before assigned ones).
+/// `build_counts` tracks how many workers target each construction site — extras are stealable.
+fn worker_availability_priority(
+    state: &UnitState,
+    build_counts: &std::collections::HashMap<Entity, u32>,
+) -> Option<u8> {
+    match state {
+        UnitState::Idle | UnitState::Moving(_) => Some(0),
+        UnitState::Gathering(_)
+        | UnitState::ReturningToDeposit { .. }
+        | UnitState::Depositing { .. }
+        | UnitState::WaitingForStorage { .. } => Some(1),
+        UnitState::AssignedGathering { .. } => Some(2),
+        // Extra builders on a construction site can be reassigned (keep at least 1)
+        UnitState::MovingToBuild(building) | UnitState::Building(building) => {
+            let count = build_counts.get(building).copied().unwrap_or(1);
+            if count > 1 {
+                Some(3) // stealable, but lowest priority
+            } else {
+                None // sole builder — never steal
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Find the best available worker for a build task at `build_pos`.
+/// Returns `(entity, priority)` — the closest worker at the best (lowest) priority tier.
+/// Workers building/moving-to-build are stealable only if their target building has >1 worker.
+fn find_best_worker_for_build<'a>(
+    workers: impl Iterator<
+        Item = (
+            Entity,
+            &'a Transform,
+            &'a UnitState,
+            &'a Faction,
+            &'a EntityKind,
+        ),
+    >,
+    faction: Faction,
+    build_pos: Vec3,
+) -> Option<(Entity, u8)> {
+    // First pass: collect faction workers and count builders per construction site
+    let mut faction_workers: Vec<(Entity, Vec3, &UnitState)> = Vec::new();
+    let mut build_counts: std::collections::HashMap<Entity, u32> =
+        std::collections::HashMap::new();
+
+    for (w_entity, w_tf, w_state, w_faction, w_kind) in workers {
+        if *w_kind != EntityKind::Worker || *w_faction != faction {
+            continue;
+        }
+        faction_workers.push((w_entity, w_tf.translation, w_state));
+        match w_state {
+            UnitState::MovingToBuild(building) | UnitState::Building(building) => {
+                *build_counts.entry(*building).or_insert(0) += 1;
+            }
+            _ => {}
+        }
+    }
+
+    // Second pass: pick the best candidate
+    let mut best: Option<(Entity, u8, f32)> = None;
+    for &(w_entity, w_pos, w_state) in &faction_workers {
+        let Some(prio) = worker_availability_priority(w_state, &build_counts) else {
+            continue;
+        };
+        let dist = w_pos.distance(build_pos);
+        let dominated = best.map_or(false, |(_, best_prio, best_dist)| {
+            prio > best_prio || (prio == best_prio && dist >= best_dist)
+        });
+        if !dominated {
+            best = Some((w_entity, prio, dist));
+        }
+    }
+    best.map(|(e, prio, _)| (e, prio))
+}
+
+/// When reassigning a worker away from their current task, clean up the old building's
+/// worker list and remove `BuildingAssignment`.
+fn cleanup_worker_assignment(commands: &mut Commands, worker: Entity, state: &UnitState) {
+    match state {
+        UnitState::AssignedGathering { building, .. }
+        | UnitState::MovingToBuild(building)
+        | UnitState::Building(building) => {
+            let building_entity = *building;
+            commands
+                .entity(building_entity)
+                .entry::<AssignedWorkers>()
+                .and_modify(move |mut aw| {
+                    aw.workers.retain(|w| *w != worker);
+                });
+        }
+        _ => {}
+    }
+    commands.entity(worker).remove::<BuildingAssignment>();
 }
 
 /// Spawn wall entities at grid cells and register them in the WallGrid.
@@ -216,6 +315,7 @@ pub fn try_queue_build_order_authoritative(
         ),
         With<Unit>,
     >,
+    obstacle_grid: &ObstacleGrid,
 ) -> Result<(), String> {
     if matches!(
         kind,
@@ -291,35 +391,18 @@ pub fn try_queue_build_order_authoritative(
         }
     }
 
+    if obstacle_grid.is_footprint_blocked(build_pos, new_footprint) {
+        return Err("Blocked by trees.".to_string());
+    }
+
     let half_map = height_map.half_map;
     if build_pos.x.abs() > half_map - 5.0 || build_pos.z.abs() > half_map - 5.0 {
         return Err("Too close to the edge of the map.".to_string());
     }
 
-    let mut best_worker: Option<(Entity, f32)> = None;
-    for (w_entity, w_tf, w_state, w_faction, w_kind, _) in workers {
-        if *w_kind != EntityKind::Worker || *w_faction != faction {
-            continue;
-        }
-        let available = matches!(
-            w_state,
-            UnitState::Idle
-                | UnitState::Gathering(_)
-                | UnitState::ReturningToDeposit { .. }
-                | UnitState::Depositing { .. }
-                | UnitState::WaitingForStorage { .. }
-                | UnitState::Moving(_)
-        );
-        if !available {
-            continue;
-        }
-        let dist = w_tf.translation.distance(build_pos);
-        if best_worker.map_or(true, |(_, best_dist)| dist < best_dist) {
-            best_worker = Some((w_entity, dist));
-        }
-    }
-
-    let Some((worker_entity, _)) = best_worker else {
+    // Find best worker using priority-based selection (includes processor-assigned workers)
+    let worker_iter = workers.iter().map(|(e, tf, state, fac, kind, _)| (e, tf, state, fac, kind));
+    let Some((worker_entity, _worker_prio)) = find_best_worker_for_build(worker_iter, faction, build_pos) else {
         return Err("No workers available!".to_string());
     };
 
@@ -337,6 +420,11 @@ pub fn try_queue_build_order_authoritative(
     };
     if drain.has_deficit() {
         pending_drains.drains.push(drain);
+    }
+
+    // Clean up any existing gathering assignment before reassigning
+    if let Ok((_, _, w_state, _, _, _)) = workers.get(worker_entity) {
+        cleanup_worker_assignment(commands, worker_entity, w_state);
     }
 
     commands
@@ -549,7 +637,14 @@ impl Plugin for BuildingsPlugin {
         app.init_resource::<BuildingPlacementState>()
             .init_resource::<WallPlotPreview>()
             .init_resource::<WallGrid>()
+            .init_resource::<ObstacleGrid>()
             .add_systems(Startup, create_ghost_materials)
+            .add_systems(
+                Update,
+                sync_obstacle_grid
+                    .in_set(GameFlowSet::Simulation)
+                    .run_if(in_state(AppState::InGame)),
+            )
             .add_systems(
                 Update,
                 (
@@ -593,11 +688,29 @@ impl Plugin for BuildingsPlugin {
                     level_indicator_system,
                     sync_storage_on_spend,
                     update_storage_piles,
+                    clear_vegetation_around_buildings,
                 )
                     .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),
             );
     }
+}
+
+// ── Obstacle grid sync ──
+
+fn sync_obstacle_grid(
+    mut grid: ResMut<ObstacleGrid>,
+    trees: Query<&Transform, Or<(With<Sapling>, With<GrowingTree>, With<MatureTree>)>>,
+    height_map: Res<HeightMap>,
+) {
+    grid.cells.clear();
+    for tf in &trees {
+        let (gx, gz) = WallGrid::world_to_grid(tf.translation);
+        grid.cells.insert((gx, gz));
+    }
+    // Compute playable boundary from border hill settings
+    let border = BorderSettings::from_map_size(height_map.map_size);
+    grid.playable_half = height_map.half_map - border.thickness - border.transition;
 }
 
 // ── Asset creation (ghost materials only) ──
@@ -831,6 +944,7 @@ fn update_placement_preview(
     >,
     biome_map: Option<Res<BiomeMap>>,
     height_map: Res<HeightMap>,
+    obstacle_grid: Res<ObstacleGrid>,
 ) {
     let Some(kind) = placement_kind(placement.mode) else {
         return;
@@ -940,6 +1054,13 @@ fn update_placement_preview(
         }
     }
 
+    if obstacle_grid.is_footprint_blocked(Vec3::new(world_pos.x, 0.0, world_pos.z), new_footprint) {
+        valid = false;
+        if hint.is_none() {
+            hint = Some("Blocked by trees".to_owned());
+        }
+    }
+
     let half_map = height_map.half_map;
     if world_pos.x.abs() > half_map - 5.0 || world_pos.z.abs() > half_map - 5.0 {
         valid = false;
@@ -967,6 +1088,7 @@ fn update_wall_plot_preview(
         (With<Building>, Without<GhostBuilding>),
     >,
     height_map: Res<HeightMap>,
+    obstacle_grid: Res<ObstacleGrid>,
 ) {
     if !matches!(placement.mode, PlacementMode::PlotWall { .. }) {
         if wall_preview.start.is_some() || !wall_preview.ghost_entities.is_empty() {
@@ -995,11 +1117,11 @@ fn update_wall_plot_preview(
         return;
     }
 
-    // Filter out cells already occupied in the grid
+    // Filter out cells already occupied in the grid or blocked by obstacles
     let new_cells: Vec<(i32, i32)> = cells
         .iter()
         .copied()
-        .filter(|c| !wall_grid.cells.contains_key(c))
+        .filter(|c| !wall_grid.cells.contains_key(c) && !obstacle_grid.is_cell_blocked(c.0, c.1))
         .collect();
 
     if new_cells.is_empty() {
@@ -1284,6 +1406,7 @@ fn confirm_placement(
             With<Unit>,
         >,
     ),
+    obstacle_grid: Res<ObstacleGrid>,
 ) {
     let (all_completed, biome_map, faction_ages) = extras;
     let (camera_q, windows, ui_interactions, existing_buildings, workers) = queries;
@@ -1387,39 +1510,18 @@ fn confirm_placement(
             return;
         }
     }
+    if obstacle_grid.is_footprint_blocked(Vec3::new(world_pos.x, 0.0, world_pos.z), new_footprint) {
+        return;
+    }
     let half_map = height_map.half_map;
     if world_pos.x.abs() > half_map - 5.0 || world_pos.z.abs() > half_map - 5.0 {
         return;
     }
 
-    // Find closest available worker (idle, gathering, returning, depositing, waiting)
+    // Find best available worker using priority-based selection
     let build_pos = Vec3::new(world_pos.x, 0.0, world_pos.z);
-    let mut best_worker: Option<(Entity, f32)> = None;
-    for (w_entity, w_tf, w_state, w_faction, w_kind, _) in &workers {
-        if *w_kind != EntityKind::Worker || *w_faction != faction {
-            continue;
-        }
-        // Skip workers already assigned to plot or build something, or inside processors
-        let available = matches!(
-            w_state,
-            UnitState::Idle
-                | UnitState::Gathering(_)
-                | UnitState::ReturningToDeposit { .. }
-                | UnitState::Depositing { .. }
-                | UnitState::WaitingForStorage { .. }
-                | UnitState::Moving(_)
-        );
-        if !available {
-            continue;
-        }
-        let dist = w_tf.translation.distance(build_pos);
-        if best_worker.map_or(true, |(_, best_dist)| dist < best_dist) {
-            best_worker = Some((w_entity, dist));
-        }
-    }
-
-    let Some((worker_entity, _)) = best_worker else {
-        // No workers available — show hint and abort
+    let worker_iter = workers.iter().map(|(e, tf, state, fac, kind, _)| (e, tf, state, fac, kind));
+    let Some((worker_entity, _)) = find_best_worker_for_build(worker_iter, faction, build_pos) else {
         placement.hint_text = Some("No workers available!".to_string());
         return;
     };
@@ -1483,6 +1585,11 @@ fn confirm_placement(
         commands.entity(ghost).try_despawn();
     }
 
+    // Clean up any existing gathering assignment before reassigning
+    if let Ok((_, _, w_state, _, _, _)) = workers.get(worker_entity) {
+        cleanup_worker_assignment(&mut commands, worker_entity, w_state);
+    }
+
     // Assign worker to move to the build site (building spawns on arrival)
     commands
         .entity(worker_entity)
@@ -1524,6 +1631,7 @@ fn confirm_wall_plot(
     registry: Res<BlueprintRegistry>,
     building_models: Option<Res<BuildingModelAssets>>,
     workers: Query<(Entity, &Transform, &UnitState, &Faction, &EntityKind), With<Unit>>,
+    obstacle_grid: Res<ObstacleGrid>,
 ) {
     if !matches!(placement.mode, PlacementMode::PlotWall { .. }) || placement.awaiting_release {
         return;
@@ -1566,12 +1674,19 @@ fn confirm_wall_plot(
         .total_cost
         .deduct(all_resources.get_mut(&faction));
 
-    // Convert snapped world points back to grid cells
+    // Convert snapped world points back to grid cells, filtering out any newly blocked
     let cells: Vec<(i32, i32)> = wall_preview
         .snapped_points
         .iter()
         .map(|p| WallGrid::world_to_grid(*p))
+        .filter(|(gx, gz)| !obstacle_grid.is_cell_blocked(*gx, *gz))
         .collect();
+    if cells.is_empty() {
+        clear_wall_preview(&mut commands, &mut wall_preview);
+        placement.mode = PlacementMode::None;
+        placement.hint_text = Some("Wall path blocked by trees".to_string());
+        return;
+    }
 
     let spawned_entities = spawn_wall_grid_cells(
         &mut commands,
@@ -1585,30 +1700,13 @@ fn confirm_wall_plot(
     );
 
     if !spawned_entities.is_empty() {
-        if let Some(worker_entity) = workers
-            .iter()
-            .filter(|(_, _, state, worker_faction, kind)| {
-                **kind == EntityKind::Worker
-                    && **worker_faction == faction
-                    && matches!(
-                        state,
-                        UnitState::Idle
-                            | UnitState::Gathering(_)
-                            | UnitState::ReturningToDeposit { .. }
-                            | UnitState::Depositing { .. }
-                            | UnitState::WaitingForStorage { .. }
-                            | UnitState::Moving(_)
-                    )
-            })
-            .min_by(|(_, a_tf, _, _, _), (_, b_tf, _, _, _)| {
-                let a_dist = a_tf.translation.distance(wall_preview.snapped_points[0]);
-                let b_dist = b_tf.translation.distance(wall_preview.snapped_points[0]);
-                a_dist
-                    .partial_cmp(&b_dist)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(worker, _, _, _, _)| worker)
-        {
+        let wall_pos = wall_preview.snapped_points[0];
+        let worker_iter = workers.iter().map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
+        if let Some((worker_entity, _)) = find_best_worker_for_build(worker_iter, faction, wall_pos) {
+            // Clean up any existing gathering assignment
+            if let Ok((_, _, w_state, _, _)) = workers.get(worker_entity) {
+                cleanup_worker_assignment(&mut commands, worker_entity, w_state);
+            }
             let target_building = spawned_entities[0];
             commands
                 .entity(worker_entity)
@@ -2052,7 +2150,16 @@ fn construction_progress_system(
     children_q: Query<&Children>,
     scene_child_q: Query<Entity, With<BuildingSceneChild>>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
+    mut sfx: bevy::ecs::message::MessageWriter<PlaySfx>,
+    mut hammer_timer: Local<f32>,
 ) {
+    const HAMMER_INTERVAL: f32 = 1.5;
+    *hammer_timer += time.delta_secs();
+    let play_hammer = *hammer_timer >= HAMMER_INTERVAL;
+    if play_hammer {
+        *hammer_timer = 0.0;
+    }
+
     for (entity, kind, mut state, mut progress, construction_stage, mut transform, faction) in
         &mut buildings
     {
@@ -2087,6 +2194,13 @@ fn construction_progress_system(
             .tick(Duration::from_secs_f32(time.delta_secs() * speed_mult));
 
         let fraction = progress.timer.fraction();
+
+        if play_hammer && !progress.timer.is_finished() {
+            sfx.write(PlaySfx {
+                kind: SfxKind::ConstructionHammer,
+                position: Some(transform.translation),
+            });
+        }
 
         // For GLTF buildings: swap construction stage models at thresholds
         if is_gltf {
@@ -2189,6 +2303,11 @@ fn construction_progress_system(
                     });
                 }
             }
+
+            sfx.write(PlaySfx {
+                kind: SfxKind::ConstructionComplete,
+                position: Some(transform.translation),
+            });
 
             // Log construction complete event
             event_log.push(
@@ -3243,4 +3362,104 @@ fn update_storage_piles(
             entities: pile_entities,
         });
     }
+}
+
+// ── Vegetation clearing around buildings ──
+
+/// Removes grass and decoration geometry within a building's footprint.
+///
+/// Operates on merged chunk meshes: for each triangle whose centroid falls
+/// inside the clear radius, the triangle's indices are dropped and the mesh
+/// is rebuilt.  Empty chunks are despawned entirely.
+fn clear_vegetation_around_buildings(
+    mut commands: Commands,
+    new_buildings: Query<
+        (Entity, &Transform, &BuildingFootprint),
+        (With<Building>, Without<VegetationCleared>),
+    >,
+    grass_chunks: Query<(Entity, &GrassChunk, &Mesh3d)>,
+    deco_chunks: Query<(Entity, &DecoChunk, &Transform, &Mesh3d), Without<Building>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    for (building_entity, building_tf, footprint) in &new_buildings {
+        let bx = building_tf.translation.x;
+        let bz = building_tf.translation.z;
+        // Clear a bit beyond the footprint so there is a visible gap.
+        let clear_radius = footprint.0 + 2.0;
+        let clear_r2 = clear_radius * clear_radius;
+
+        // ── Grass chunks (vertices in world space, Transform::default) ──
+        for (chunk_entity, _chunk, mesh_handle) in &grass_chunks {
+            let Some(mesh) = meshes.get_mut(&mesh_handle.0) else {
+                continue;
+            };
+            if strip_triangles_in_radius(mesh, bx, bz, clear_r2, 0.0, 0.0) {
+                commands.entity(chunk_entity).despawn();
+            }
+        }
+
+        // ── Deco chunks (vertices in local space relative to chunk transform) ──
+        for (chunk_entity, _chunk, chunk_tf, mesh_handle) in &deco_chunks {
+            let Some(mesh) = meshes.get_mut(&mesh_handle.0) else {
+                continue;
+            };
+            let ox = chunk_tf.translation.x;
+            let oz = chunk_tf.translation.z;
+            if strip_triangles_in_radius(mesh, bx, bz, clear_r2, ox, oz) {
+                commands.entity(chunk_entity).despawn();
+            }
+        }
+
+        commands.entity(building_entity).insert(VegetationCleared);
+    }
+}
+
+/// Remove triangles whose centroid (in world XZ) falls within `radius_sq` of
+/// `(cx, cz)`.  `offset_x/z` are added to vertex positions to convert from
+/// local to world space.  Returns `true` when the mesh is left with zero
+/// indices (caller should despawn the entity).
+fn strip_triangles_in_radius(
+    mesh: &mut Mesh,
+    cx: f32,
+    cz: f32,
+    radius_sq: f32,
+    offset_x: f32,
+    offset_z: f32,
+) -> bool {
+    let positions: Vec<[f32; 3]> = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+        Some(bevy::mesh::VertexAttributeValues::Float32x3(v)) => v.clone(),
+        _ => return false,
+    };
+
+    let old_indices: Vec<u32> = match mesh.indices() {
+        Some(bevy::mesh::Indices::U32(v)) => v.clone(),
+        _ => return false,
+    };
+
+    if old_indices.len() % 3 != 0 {
+        return false;
+    }
+
+    let mut new_indices = Vec::with_capacity(old_indices.len());
+    for tri in old_indices.chunks_exact(3) {
+        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+        if i0 >= positions.len() || i1 >= positions.len() || i2 >= positions.len() {
+            new_indices.extend_from_slice(tri);
+            continue;
+        }
+        let ax = (positions[i0][0] + positions[i1][0] + positions[i2][0]) / 3.0 + offset_x;
+        let az = (positions[i0][2] + positions[i1][2] + positions[i2][2]) / 3.0 + offset_z;
+        let dx = ax - cx;
+        let dz = az - cz;
+        if dx * dx + dz * dz > radius_sq {
+            new_indices.extend_from_slice(tri);
+        }
+    }
+
+    if new_indices.is_empty() {
+        return true;
+    }
+
+    mesh.insert_indices(bevy::mesh::Indices::U32(new_indices));
+    false
 }

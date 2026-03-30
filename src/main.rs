@@ -1,3 +1,4 @@
+mod audio;
 mod abilities;
 mod ages;
 mod ai;
@@ -150,5 +151,6 @@ fn main() {
         .add_plugins(multiplayer::MultiplayerPlugin)
         .add_plugins(victory::VictoryPlugin)
         .add_plugins(ages::AgesPlugin)
+        .add_plugins(audio::GameAudioPlugin)
         .run();
 }

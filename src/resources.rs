@@ -2,6 +2,7 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
+use crate::audio::{PlaySfx, SfxKind};
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
 use crate::components::*;
 use crate::fog::FogTweakSettings;
@@ -1460,10 +1461,21 @@ fn worker_ai_system(
     >,
     storage_auras: Query<(&Transform, &StorageAura, &BuildingState), With<Building>>,
     footprints: Query<&BuildingFootprint>,
+    mut sfx_state: (
+        bevy::ecs::message::MessageWriter<PlaySfx>,
+        Local<f32>,
+    ),
 ) {
     let gather_range = 3.0;
     let deposit_margin = 1.5; // distance from building edge worker can deposit
     let auto_scan_range = 20.0;
+
+    const GATHER_SFX_INTERVAL: f32 = 2.0;
+    *sfx_state.1 += time.delta_secs();
+    let play_gather = *sfx_state.1 >= GATHER_SFX_INTERVAL;
+    if play_gather {
+        *sfx_state.1 = 0.0;
+    }
 
     for (
         entity,
@@ -1708,6 +1720,13 @@ fn worker_ai_system(
 
                 if let Some(ref vfx) = vfx_assets {
                     spawn_gather_vfx(&mut commands, vfx, tf.translation, node_pos, rt, actual);
+                }
+
+                if play_gather && *worker_faction == active_player.0 {
+                    sfx_state.0.write(PlaySfx {
+                        kind: SfxKind::WorkerGather,
+                        position: Some(tf.translation),
+                    });
                 }
 
                 // If effectively full for this resource type, head to a depot.

@@ -540,10 +540,13 @@ fn reset_multiplayer_sync(
     mut pending: ResMut<client::apply::PendingNetSpawns>,
     mut pending_neutral: ResMut<client::apply::PendingNeutralUpdates>,
     mut pending_baseline: ResMut<client::apply::PendingBaseline>,
+    mut pending_terrain: ResMut<client::apply::PendingTerrainShapeSync>,
     mut prev_snapshots: ResMut<server::replication::PreviousSnapshots>,
     mut prev_buildings: ResMut<server::replication::PreviousBuildingSnapshots>,
     mut prev_neutral: ResMut<server::replication::PreviousNeutralSnapshots>,
     mut pending_frame: ResMut<server::replication::PendingServerFrame>,
+    mut terrain_queue: ResMut<crate::ground::TerrainShapeUpdateQueue>,
+    mut terrain_sync: ResMut<crate::ground::TerrainShapeSyncState>,
 ) {
     synced.known.clear();
     synced.full_resync_counter = 0;
@@ -552,11 +555,16 @@ fn reset_multiplayer_sync(
     pending_neutral.deltas.clear();
     pending_neutral.despawns.clear();
     pending_baseline.baseline = None;
+    pending_terrain.ops.clear();
     prev_snapshots.snapshots.clear();
     prev_snapshots.full_sync_counter = 0;
     prev_buildings.snapshots.clear();
     prev_neutral.amounts.clear();
     pending_frame.messages.clear();
+    terrain_queue.pending.clear();
+    terrain_sync.applied_history.clear();
+    terrain_sync.applied_history_ordered.clear();
+    terrain_sync.pending_network.clear();
 }
 
 pub struct MultiplayerPlugin;
@@ -594,6 +602,7 @@ impl Plugin for MultiplayerPlugin {
             .init_resource::<client::apply::PendingDayCycleSync>()
             .init_resource::<client::apply::PendingNetEvents>()
             .init_resource::<client::apply::PendingBaseline>()
+            .init_resource::<client::apply::PendingTerrainShapeSync>()
             .init_resource::<client::apply::PendingNetSpawns>()
             .init_resource::<client::apply::PendingNeutralUpdates>()
             .init_resource::<client::receive::ClientPingTimer>()
@@ -627,6 +636,7 @@ impl Plugin for MultiplayerPlugin {
                     server::replication::host_broadcast_entity_spawns
                         .after(server::replication::host_broadcast_state_sync),
                     server::replication::host_broadcast_building_sync,
+                    server::replication::host_broadcast_terrain_shape_sync,
                     server::replication::host_broadcast_resource_sync,
                     server::replication::host_broadcast_day_cycle_sync,
                     server::replication::host_broadcast_neutral_world_sync,
@@ -654,6 +664,7 @@ impl Plugin for MultiplayerPlugin {
                     client::apply::client_apply_relayed_inputs,
                     client::apply::client_apply_state_sync,
                     client::apply::client_apply_building_sync,
+                    client::apply::client_apply_terrain_shape_sync,
                     client::apply::client_apply_resource_sync,
                     client::apply::client_apply_day_cycle_sync,
                     client::apply::client_apply_server_events,

@@ -159,7 +159,7 @@ pub fn approach_attack_target(
             Option<&mut ChaseTimer>,
             Option<&TaskSource>,
         ),
-        With<Unit>,
+        Or<(With<Unit>, With<Mob>)>,
     >,
     wall_check: Query<
         (),

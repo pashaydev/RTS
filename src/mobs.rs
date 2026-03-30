@@ -4,7 +4,7 @@ use rand::Rng;
 use rand::SeedableRng;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
-use crate::combat::{attack_surface_distance, is_in_attack_band};
+use crate::combat::approach_attack_target;
 use crate::components::*;
 use crate::ground::{is_in_mountain_border, BorderSettings, HeightMap};
 use crate::model_assets::UnitModelAssets;
@@ -19,10 +19,10 @@ impl Plugin for MobsPlugin {
         )
         .add_systems(
             Update,
-            (mob_patrol, mob_aggro, mob_chase)
+            (mob_patrol, mob_aggro, mob_leash)
                 .chain()
                 .in_set(GameFlowSet::Simulation)
-                .before(crate::combat::approach_attack_target)
+                .before(approach_attack_target)
                 .run_if(in_state(AppState::InGame)),
         );
     }
@@ -852,237 +852,56 @@ fn mob_aggro(
     }
 }
 
-fn mob_chase(
+/// Leash system: checks if a chasing mob has wandered too far from camp or chased
+/// too long, and returns it home. Also updates PatrolState for procedural animations.
+/// All movement and attacking is handled by the shared combat pipeline
+/// (approach_attack_target → start_attack_windups → resolve_attack_windups).
+fn mob_leash(
     mut commands: Commands,
     time: Res<Time>,
-    teams: Res<TeamConfig>,
-    registry: Res<BlueprintRegistry>,
-    height_map: Res<HeightMap>,
-    spatial_grid: Res<crate::spatial::SpatialHashGrid>,
-    walls: Query<
-        (Entity, &Transform, &BuildingFootprint, &Faction),
-        (
-            With<Building>,
-            Without<Mob>,
-            Or<(With<WallSegmentPiece>, With<WallPostPiece>, With<WallCornerPiece>)>,
-        ),
-    >,
     mut mobs: Query<
         (
             Entity,
-            &mut Transform,
+            &Transform,
             &mut PatrolState,
-            &AttackTarget,
-            &UnitSpeed,
-            &AttackRange,
-            &EntityKind,
-            &Faction,
             Option<&AttackWindup>,
             Option<&AttackRecovery>,
         ),
-        With<Mob>,
+        (With<Mob>, With<AttackTarget>),
     >,
     targets: Query<&Transform, Without<Mob>>,
-    building_footprints: Query<&BuildingFootprint, With<Building>>,
-    // For re-targeting: check if nearby units exist to prefer over walls
-    units_for_retarget: Query<(Entity, &Transform, &Faction), (With<Unit>, Without<Mob>)>,
 ) {
-    // Leash: max distance from camp center before giving up chase
     const LEASH_DISTANCE: f32 = 40.0;
-    // Max seconds a mob will chase before giving up
     const MAX_CHASE_SECS: f32 = 15.0;
-    // Mob-to-mob separation radius
-    const SEPARATION_RADIUS: f32 = 2.5;
-    const SEPARATION_STRENGTH: f32 = 8.0;
 
-    for (mob_entity, mut tf, mut patrol, attack_target, speed, range, kind, faction, windup, recovery) in &mut mobs {
-        let Ok(target_tf) = targets.get(attack_target.0) else {
-            patrol.state = PatrolStateKind::Returning;
-            patrol.chase_elapsed = 0.0;
-            commands.entity(mob_entity).remove::<AttackTarget>();
-            continue;
-        };
+    for (mob_entity, tf, mut patrol, windup, recovery) in &mut mobs {
+        patrol.chase_elapsed += time.delta_secs();
 
-        // Leash check: distance from home or chase duration exceeded
         let dist_from_home = Vec2::new(
             tf.translation.x - patrol.center.x,
             tf.translation.z - patrol.center.z,
         )
         .length();
-        patrol.chase_elapsed += time.delta_secs();
 
-        if dist_from_home > LEASH_DISTANCE || patrol.chase_elapsed > MAX_CHASE_SECS {
+        // Target gone or leash exceeded → return home
+        let target_gone = !targets.contains(mob_entity); // AttackTarget checked by filter
+        if target_gone || dist_from_home > LEASH_DISTANCE || patrol.chase_elapsed > MAX_CHASE_SECS
+        {
             patrol.state = PatrolStateKind::Returning;
             patrol.chase_elapsed = 0.0;
-            commands.entity(mob_entity).remove::<AttackTarget>();
+            commands
+                .entity(mob_entity)
+                .remove::<AttackTarget>()
+                .remove::<MoveTarget>()
+                .remove::<ChaseTimer>();
             continue;
         }
 
-        // Wall redirect: only redirect to wall if no unit is close enough to attack directly
-        let target_is_wall = walls.get(attack_target.0).is_ok();
-        if !target_is_wall {
-            // Before wall-redirect, check if a player unit is within attack range —
-            // if so, retarget to that unit instead of ever redirecting to a wall
-            let mut unit_in_range = false;
-            for (unit_entity, unit_tf, unit_faction) in &units_for_retarget {
-                if *unit_faction == Faction::Neutral {
-                    continue;
-                }
-                let d = Vec2::new(
-                    unit_tf.translation.x - tf.translation.x,
-                    unit_tf.translation.z - tf.translation.z,
-                )
-                .length();
-                if d <= range.0 + 1.0 {
-                    // Retarget to this nearby unit
-                    if unit_entity != attack_target.0 {
-                        commands
-                            .entity(mob_entity)
-                            .insert(AttackTarget(unit_entity));
-                    }
-                    unit_in_range = true;
-                    break;
-                }
-            }
-
-            // Only do wall redirect if no unit is nearby
-            if !unit_in_range {
-                let from = Vec2::new(tf.translation.x, tf.translation.z);
-                let to = Vec2::new(target_tf.translation.x, target_tf.translation.z);
-                let delta = to - from;
-                let line_len = delta.length();
-                if line_len > 0.5 {
-                    let dir = delta / line_len;
-                    let mut blocking_wall: Option<(Entity, f32)> = None;
-
-                    for (wall_entity, wall_tf, wall_fp, wall_faction) in &walls {
-                        if !teams.is_hostile(faction, wall_faction) {
-                            continue;
-                        }
-                        let wall_pos = Vec2::new(wall_tf.translation.x, wall_tf.translation.z);
-                        let rel = wall_pos - from;
-                        let t = rel.dot(dir);
-                        if t <= 0.3 || t >= line_len - 0.3 {
-                            continue;
-                        }
-                        let closest = from + dir * t;
-                        let perp_dist = wall_pos.distance(closest);
-                        if perp_dist <= wall_fp.0 + 0.35
-                            && blocking_wall.map_or(true, |(_, best_t)| t < best_t)
-                        {
-                            blocking_wall = Some((wall_entity, t));
-                        }
-                    }
-
-                    if let Some((wall_entity, _)) = blocking_wall {
-                        commands
-                            .entity(mob_entity)
-                            .insert(AttackTarget(wall_entity));
-                        continue;
-                    }
-                }
-            }
-        } else {
-            // Currently targeting a wall — check if a unit is now closer/in range
-            for (unit_entity, unit_tf, unit_faction) in &units_for_retarget {
-                if *unit_faction == Faction::Neutral {
-                    continue;
-                }
-                let d = Vec2::new(
-                    unit_tf.translation.x - tf.translation.x,
-                    unit_tf.translation.z - tf.translation.z,
-                )
-                .length();
-                if d <= range.0 + 2.0 {
-                    // Switch from wall to unit
-                    commands
-                        .entity(mob_entity)
-                        .insert(AttackTarget(unit_entity));
-                    break;
-                }
-            }
-        }
-
-        // Use the same range check as combat.rs (surface distance + 15% tolerance)
-        let target_radius = building_footprints
-            .get(attack_target.0)
-            .map_or(0.0, |fp| fp.0);
-        let surface_dist =
-            attack_surface_distance(tf.translation, target_tf.translation, target_radius);
-        let in_band = is_in_attack_band(surface_dist, range.0, 0.0, range.0 * 0.15);
-
-        if in_band {
-            if windup.is_some() || recovery.is_some() {
-                // Locked in attack animation — hold position
-                patrol.state = PatrolStateKind::Attacking;
-                patrol.chase_elapsed = 0.0;
-            } else {
-                // In range but waiting on cooldown — keep Chasing so separation
-                // forces still apply, but don't advance toward the target
-                patrol.state = PatrolStateKind::Chasing;
-            }
+        // Update patrol state for procedural animations
+        if windup.is_some() || recovery.is_some() {
+            patrol.state = PatrolStateKind::Attacking;
         } else {
             patrol.state = PatrolStateKind::Chasing;
-
-            let dir = Vec3::new(
-                target_tf.translation.x - tf.translation.x,
-                0.0,
-                target_tf.translation.z - tf.translation.z,
-            );
-            let dist = dir.length();
-            if dist < 0.01 {
-                continue;
-            }
-
-            // Mob-to-mob separation force
-            let mut sep = Vec3::ZERO;
-            let nearby = spatial_grid.query_radius(tf.translation, SEPARATION_RADIUS);
-            for (other_entity, other_pos) in &nearby {
-                if *other_entity == mob_entity {
-                    continue;
-                }
-                let diff = Vec3::new(
-                    tf.translation.x - other_pos.x,
-                    0.0,
-                    tf.translation.z - other_pos.z,
-                );
-                let d = diff.length();
-                if d < 0.01 {
-                    // Nearly overlapping — push based on entity bits
-                    let bits = mob_entity.to_bits();
-                    let angle = (bits % 360) as f32 * std::f32::consts::TAU / 360.0;
-                    sep += Vec3::new(angle.cos(), 0.0, angle.sin()) * SEPARATION_STRENGTH;
-                } else if d < SEPARATION_RADIUS {
-                    let weight = (1.0 - d / SEPARATION_RADIUS).powi(2);
-                    sep += diff.normalize() * SEPARATION_STRENGTH * weight;
-                }
-            }
-
-            let step = dir.normalize() * speed.0 * time.delta_secs()
-                + sep * time.delta_secs();
-            let candidate = tf.translation + step;
-            let blocked = walls
-                .iter()
-                .filter(|(wall_entity, _, _, _)| *wall_entity != attack_target.0)
-                .any(|(_, wall_tf, wall_fp, wall_faction)| {
-                    if !teams.is_hostile(faction, wall_faction) {
-                        return false;
-                    }
-                    let a = Vec2::new(candidate.x, candidate.z);
-                    let b = Vec2::new(wall_tf.translation.x, wall_tf.translation.z);
-                    a.distance(b) < wall_fp.0 + 0.6
-                });
-            if blocked {
-                continue;
-            }
-            tf.translation = candidate;
-            let y_off = registry
-                .get(*kind)
-                .movement
-                .as_ref()
-                .map(|m| m.y_offset)
-                .unwrap_or(0.8);
-            tf.translation.y = height_map.sample(tf.translation.x, tf.translation.z) + y_off;
         }
     }
 }

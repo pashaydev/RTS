@@ -569,6 +569,7 @@ pub(crate) fn update_lobby_ui(
                 game_state::message::ServerMessage::EntitySpawn { .. } => {}
                 game_state::message::ServerMessage::EntityDespawn { .. } => {}
                 game_state::message::ServerMessage::BuildingSync { .. } => {}
+                game_state::message::ServerMessage::TerrainShapeSync { .. } => {}
                 game_state::message::ServerMessage::ResourceSync { .. } => {}
                 game_state::message::ServerMessage::DayCycleSync { .. } => {}
                 game_state::message::ServerMessage::WorldBaseline { .. } => {}

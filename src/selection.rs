@@ -12,6 +12,7 @@ use crate::minimap::{MinimapInteraction, MinimapSet};
 use crate::multiplayer::host_systems::execute_input_command;
 use crate::multiplayer::{ClientNetState, HostNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
+use crate::audio::{PlaySfx, SfxKind};
 use crate::orders;
 use crate::theme;
 use crate::ui::fonts;
@@ -512,12 +513,13 @@ fn handle_click_select(
         Res<Time<Real>>,
         ResMut<DoubleClickDetector>,
         Query<&EntityKind>,
+        bevy::ecs::message::MessageWriter<PlaySfx>,
     ),
 ) {
     let (ref mut drag, ref mut inspected) = state;
     let (ref units, ref buildings, ref mobs, ref resource_nodes) = entity_queries;
     let (ref minimap_interaction, ref ui_clicked, ref ui_press) = flags;
-    let (ref time, ref mut dbl_click, ref entity_kinds) = extra;
+    let (ref time, ref mut dbl_click, ref entity_kinds, ref mut sfx) = extra;
     if !mouse.just_released(MouseButton::Left) {
         return;
     }
@@ -687,6 +689,12 @@ fn handle_click_select(
                             commands.entity(result.entity).remove::<Selected>();
                         } else {
                             commands.entity(result.entity).insert(Selected);
+                            if let Ok(gt) = unit_transforms.get(result.entity) {
+                                sfx.write(PlaySfx {
+                                    kind: SfxKind::UnitSelect,
+                                    position: Some(gt.translation()),
+                                });
+                            }
                         }
                     }
                 }
@@ -1009,6 +1017,7 @@ fn handle_right_click_move(
         Res<MinimapInteraction>,
         Res<UiClickedThisFrame>,
         Res<UiPressActive>,
+        bevy::ecs::message::MessageWriter<PlaySfx>,
     ),
     net_params: (
         Res<NetRole>,
@@ -1027,7 +1036,7 @@ fn handle_right_click_move(
     let (mobs, resource_nodes, construction_q, processor_buildings) =
         target_queries;
     let (other_units, other_buildings) = enemy_detect;
-    let (minimap_interaction, ui_clicked, ui_press) = ui_flags;
+    let (minimap_interaction, ui_clicked, ui_press, mut sfx) = ui_flags;
     let (
         net_role,
         client_net,
@@ -1328,6 +1337,7 @@ fn handle_right_click_move(
                         );
                     }
                 }
+                sfx.write(PlaySfx { kind: SfxKind::UnitAttack, position: None });
             }
             RClickAction::AssignProcessor => {
                 if let Ok((_, processor, state, proc_faction)) =
@@ -1623,6 +1633,7 @@ fn handle_right_click_move(
                         }
                     }
                 }
+                sfx.write(PlaySfx { kind: SfxKind::UnitMove, position: Some(point) });
             }
         }
     }

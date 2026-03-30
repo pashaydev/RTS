@@ -55,7 +55,7 @@ pub fn ai_economy_system(
         Query<(Entity, &Faction, &ResourceProcessor, &BuildingState), With<Building>>,
         Query<&AssignedWorkers>,
     ),
-    tree_query: Query<&Transform, Or<(With<Sapling>, With<GrowingTree>, With<MatureTree>)>>,
+    obstacle_grid: Res<ObstacleGrid>,
 ) {
     let dt = time.delta_secs();
     let (config, active_player, teams, ai_controlled) = context;
@@ -366,6 +366,7 @@ pub fn ai_economy_system(
                     &footprints_q,
                     &height_map,
                     near,
+                    &obstacle_grid,
                 );
 
                 let deficits = bp.cost.deduct_with_carried(all_resources.get_mut(&faction));
@@ -409,12 +410,6 @@ pub fn ai_economy_system(
             }
 
             if let Some(wall_plan) = brain.wall_plan.as_mut() {
-                // Collect tree positions as grid cells for fast overlap checks
-                let tree_cells: std::collections::HashSet<(i32, i32)> = tree_query
-                    .iter()
-                    .map(|tf| WallGrid::world_to_grid(tf.translation))
-                    .collect();
-
                 // Build one uncompleted run per tick
                 for i in 0..wall_plan.runs.len() {
                     if wall_plan.completed[i] {
@@ -436,13 +431,10 @@ pub fn ai_economy_system(
                     }
 
                     let raw_points = generate_wall_points(start, end, &height_map);
-                    // Filter out points that overlap with trees
+                    // Filter out points blocked by obstacles (trees etc.)
                     let points: Vec<Vec3> = raw_points
                         .into_iter()
-                        .filter(|p| {
-                            let cell = WallGrid::world_to_grid(*p);
-                            !tree_cells.contains(&cell)
-                        })
+                        .filter(|p| !obstacle_grid.is_blocked(*p))
                         .collect();
                     if points.len() < 2 {
                         wall_plan.completed[i] = true;

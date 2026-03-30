@@ -351,7 +351,7 @@ fn move_units(
             Option<&StatusEffects>,
             Option<&mut MovementSmoothing>,
         ),
-        With<Unit>,
+        Or<(With<Unit>, With<Mob>)>,
     >,
 ) {
     let dt = time.delta_secs();
@@ -532,7 +532,7 @@ fn snap_units_to_terrain(
     height_map: Res<HeightMap>,
     net_role: Res<crate::multiplayer::NetRole>,
     active_player: Res<ActivePlayer>,
-    mut units: Query<(&mut Transform, &EntityKind, &Faction), With<Unit>>,
+    mut units: Query<(&mut Transform, &EntityKind, &Faction), Or<(With<Unit>, With<Mob>)>>,
 ) {
     for (mut transform, kind, faction) in &mut units {
         // Client: only snap local player's units; remote units get correct Y from state sync

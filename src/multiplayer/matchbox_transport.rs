@@ -258,6 +258,7 @@ fn server_msg_kind(msg: &ServerMessage) -> &'static str {
         ServerMessage::EntitySpawn { .. } => "entity_spawn",
         ServerMessage::EntityDespawn { .. } => "entity_despawn",
         ServerMessage::BuildingSync { .. } => "building_sync",
+        ServerMessage::TerrainShapeSync { .. } => "terrain_shape_sync",
         ServerMessage::ResourceSync { .. } => "resource_sync",
         ServerMessage::DayCycleSync { .. } => "day_cycle_sync",
         ServerMessage::WorldBaseline { .. } => "world_baseline",

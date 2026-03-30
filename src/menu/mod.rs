@@ -1,5 +1,6 @@
 pub(crate) mod helpers;
 mod multiplayer;
+pub(crate) mod options;
 mod pages;
 mod systems;
 
@@ -186,7 +187,6 @@ pub(crate) const RANDOM_NAMES: &[&str] = &[
 pub(crate) const DAY_CYCLE_OPTIONS: &[(f32, &str)] =
     &[(300.0, "5min"), (600.0, "10min"), (1200.0, "20min")];
 pub(crate) const STARTING_RES_OPTIONS: &[(f32, &str)] = &[(0.5, "0.5x"), (1.0, "1x"), (2.0, "2x")];
-pub(crate) const RESOLUTION_OPTIONS: &[(u32, u32)] = &[(1280, 720), (1920, 1080)];
 pub(crate) const BRIGHTNESS_OPTIONS: &[(f32, &str)] = &[
     (0.80, "80%"),
     (0.90, "90%"),
@@ -220,6 +220,7 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MenuPage>()
             .init_resource::<MenuNavFocus>()
+            .init_resource::<helpers::SliderDragState>()
             .configure_sets(
                 Update,
                 (
@@ -241,6 +242,7 @@ impl Plugin for MenuPlugin {
                 (
                     systems::handle_menu_buttons,
                     systems::handle_selector_clicks,
+                    systems::volume_slider_system,
                     systems::menu_keyboard_nav,
                     systems::menu_selector_keyboard_nav,
                     systems::reset_nav_focus_on_page_change,
