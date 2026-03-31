@@ -491,6 +491,8 @@ fn entity_light_factor(day_time: f32, config: &EntityLightConfig) -> f32 {
 
 fn update_entity_light_grid(
     mut grid: ResMut<EntityLightGrid>,
+    time: Res<Time>,
+    mut cooldown: Local<f32>,
     units: Query<&Transform, (With<Unit>, Without<GhostBuilding>)>,
     buildings: Query<
         &Transform,
@@ -503,6 +505,13 @@ fn update_entity_light_grid(
         ),
     >,
 ) {
+    // Throttle to ~10 Hz — lights don't need per-frame position updates.
+    *cooldown -= time.delta_secs();
+    if *cooldown > 0.0 {
+        return;
+    }
+    *cooldown = 0.1;
+
     grid.cells.clear();
     let inv = 1.0 / grid.cell_size;
 
@@ -561,6 +570,7 @@ fn manage_cluster_lights(
         &mut PointLight,
         &mut Transform,
     )>,
+    mut cached_active: Local<HashSet<IVec2>>,
 ) {
     if !config.enabled {
         for (entity, _, _, _) in &existing {
@@ -572,11 +582,16 @@ fn manage_cluster_lights(
     let factor = entity_light_factor(cycle.time, &config);
     let dt = time.delta_secs();
 
-    // Rank cells by entity count, take top max_lights
-    let mut ranked: Vec<(IVec2, &ClusterCell)> = grid.cells.iter().map(|(k, v)| (*k, v)).collect();
-    ranked.sort_by(|a, b| b.1.entity_count.cmp(&a.1.entity_count));
-    ranked.truncate(grid.max_lights);
-    let active_cells: HashSet<IVec2> = ranked.iter().map(|(k, _)| *k).collect();
+    // Only re-rank cells when the grid resource actually changed.
+    if grid.is_changed() {
+        let mut ranked: Vec<(IVec2, &ClusterCell)> =
+            grid.cells.iter().map(|(k, v)| (*k, v)).collect();
+        ranked.sort_by(|a, b| b.1.entity_count.cmp(&a.1.entity_count));
+        ranked.truncate(grid.max_lights);
+        cached_active.clear();
+        cached_active.extend(ranked.iter().map(|(k, _)| *k));
+    }
+    let active_cells = &*cached_active;
 
     let mut matched_cells: HashSet<IVec2> = HashSet::new();
 
@@ -635,11 +650,14 @@ fn manage_cluster_lights(
         }
     }
 
-    // Spawn lights for new cells
-    for (cell, cell_data) in &ranked {
+    // Spawn lights for new active cells that don't have a light yet.
+    for cell in active_cells.iter() {
         if matched_cells.contains(cell) {
             continue;
         }
+        let Some(cell_data) = grid.cells.get(cell) else {
+            continue;
+        };
         let (color, base_intensity, range, y_offset) = if cell_data.has_building {
             (
                 Color::srgb(

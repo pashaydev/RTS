@@ -492,6 +492,9 @@ impl ResourceType {
 #[derive(Component)]
 pub struct Unit;
 
+#[derive(Component, Clone, Debug)]
+pub struct UnitDisplayName(pub String);
+
 #[derive(Component)]
 pub struct Selected;
 
@@ -592,6 +595,112 @@ pub enum TaskSource {
     Auto,
 }
 
+/// Authoritative combat command source.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum IntentSource {
+    Manual,
+    #[default]
+    Auto,
+}
+
+/// High-level combat intent owned by command ingestion and combat AI.
+#[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
+pub enum CombatIntent {
+    #[default]
+    None,
+    Move(Vec3),
+    Attack(Entity, IntentSource),
+    AttackMove(Vec3, IntentSource),
+    Hold,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum BufferedCommandKind {
+    Move(Vec3),
+    Attack(Entity),
+    AttackMove(Vec3),
+    Hold,
+    Stop,
+}
+
+/// Short-lived command buffer used to decouple input ingestion from execution.
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct BufferedCommand {
+    pub kind: BufferedCommandKind,
+    pub issue_time: f64,
+    pub expires_at: Option<f64>,
+}
+
+#[allow(dead_code)]
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum CombatPhase {
+    #[default]
+    Idle,
+    Pursuing,
+    SeekingSlot,
+    InRange,
+    Windup,
+    Committed,
+    Recovery,
+    Blocked,
+}
+
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct CombatTargetLock {
+    pub target: Entity,
+    pub locked_until: f64,
+    pub source: IntentSource,
+}
+
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct AttackCommit {
+    pub target: Entity,
+    pub commit_time: f64,
+    pub release_time: f64,
+}
+
+#[allow(dead_code)]
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct EngagementAnchor(pub Vec3);
+
+#[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
+pub struct PathBlockedTimer {
+    pub blocked_since: Option<f64>,
+    pub retry_after: Option<f64>,
+}
+
+#[allow(dead_code)]
+#[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
+pub struct CombatThinkTimer {
+    pub next_think_at: f64,
+    pub interval_secs: f32,
+}
+
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct SlotClaim {
+    pub target: Entity,
+    pub slot_index: u16,
+    pub last_valid_time: f64,
+}
+
+#[allow(dead_code)]
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct MeleeSlotProfile {
+    pub personal_radius: f32,
+    pub preferred_ring: u8,
+    pub slot_weight: f32,
+}
+
+#[allow(dead_code)]
+#[derive(Component, Clone, Debug, Default)]
+pub struct CombatTelemetrySample {
+    pub think_bucket: u8,
+    pub last_intent_refresh_time: f64,
+    pub last_target_acquire_time: Option<f64>,
+    pub rescan_count: u32,
+    pub slot_refresh_count: u32,
+}
+
 /// Combat stance — governs automatic threat response behavior.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
 pub enum UnitStance {
@@ -605,6 +714,7 @@ pub enum UnitStance {
 }
 
 impl UnitStance {
+    #[allow(dead_code)]
     pub fn cycle(self) -> Self {
         match self {
             Self::Passive => Self::Defensive,
@@ -613,6 +723,7 @@ impl UnitStance {
         }
     }
 
+    #[allow(dead_code)]
     /// Scan range multiplier for auto-acquiring targets.
     pub fn scan_multiplier(self) -> f32 {
         match self {
@@ -622,6 +733,7 @@ impl UnitStance {
         }
     }
 
+    #[allow(dead_code)]
     /// Max chase distance before leashing back (0 = no leash).
     pub fn leash_distance(self) -> f32 {
         match self {
@@ -650,6 +762,86 @@ impl Default for DecisionTimer {
             timer: Timer::from_seconds(0.1, TimerMode::Repeating),
         }
     }
+}
+
+#[allow(dead_code)]
+#[derive(Resource, Clone, Debug)]
+pub struct CombatTuning {
+    pub passive_scan_multiplier: f32,
+    pub defensive_scan_multiplier: f32,
+    pub aggressive_scan_multiplier: f32,
+    pub passive_leash_distance: f32,
+    pub defensive_leash_distance: f32,
+    pub aggressive_leash_distance: f32,
+    pub manual_override_freshness_secs: f32,
+    pub command_buffer_ttl_secs: f32,
+    pub manual_target_lock_secs: f32,
+    pub auto_target_lock_secs: f32,
+}
+
+impl Default for CombatTuning {
+    fn default() -> Self {
+        Self {
+            passive_scan_multiplier: 0.0,
+            defensive_scan_multiplier: 1.5,
+            aggressive_scan_multiplier: 2.5,
+            passive_leash_distance: 0.0,
+            defensive_leash_distance: 12.0,
+            aggressive_leash_distance: 50.0,
+            manual_override_freshness_secs: 1.5,
+            command_buffer_ttl_secs: 0.35,
+            manual_target_lock_secs: 0.75,
+            auto_target_lock_secs: 0.5,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Resource, Clone, Debug)]
+pub struct CombatBudget {
+    pub max_target_rescans_per_frame: usize,
+    pub max_slot_refreshes_per_frame: usize,
+    pub max_repath_requests_per_frame: usize,
+    pub max_blocked_resolutions_per_frame: usize,
+}
+
+impl Default for CombatBudget {
+    fn default() -> Self {
+        Self {
+            max_target_rescans_per_frame: 64,
+            max_slot_refreshes_per_frame: 32,
+            max_repath_requests_per_frame: 48,
+            max_blocked_resolutions_per_frame: 32,
+        }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Default, Clone, Debug)]
+pub struct MeleeSlotCacheEntry {
+    pub target_position: Vec3,
+    pub last_update_time: f64,
+    pub slot_count: usize,
+    pub occupancy_revision: u32,
+}
+
+#[allow(dead_code)]
+#[derive(Resource, Default, Clone, Debug)]
+pub struct MeleeSlotCache {
+    pub active_targets: HashMap<Entity, MeleeSlotCacheEntry>,
+}
+
+#[derive(Resource, Default, Clone, Debug)]
+pub struct CombatStatsDebug {
+    pub buffered_commands_active: usize,
+    pub target_locks_active: usize,
+    pub slot_claims_active: usize,
+    pub expired_buffered_commands: u64,
+    pub expired_target_locks: u64,
+    pub target_rescans_this_frame: usize,
+    pub slot_refreshes_this_frame: usize,
+    pub repath_requests_this_frame: usize,
+    pub blocked_resolutions_this_frame: usize,
 }
 
 // ── Gathering ──
@@ -1027,6 +1219,18 @@ pub struct CarryVisual(pub Entity);
 pub struct ResourcePileVisuals {
     pub entities: Vec<Entity>,
 }
+
+#[derive(Component)]
+pub struct SawmillYard {
+    pub fence_entities: Vec<Entity>,
+    pub tree_entities: Vec<Entity>,
+    pub current_tree_count: u8,
+}
+
+/// Marks a resource node as belonging to a specific sawmill's yard.
+/// Workers assigned to the sawmill will only harvest from these nodes.
+#[derive(Component)]
+pub struct YardResourceNode(pub Entity);
 
 #[derive(Resource)]
 pub struct CarryVisualAssets {
@@ -1601,6 +1805,7 @@ pub struct AttackLunge {
     pub direction: Vec3,
     pub timer: Timer,
     pub strength: f32,
+    pub applied_offset: Vec3,
 }
 
 /// Knockback impulse applied to target on hit.
@@ -1609,6 +1814,9 @@ pub struct HitRecoil {
     pub direction: Vec3,
     pub timer: Timer,
     pub strength: f32,
+    pub lift: f32,
+    pub base_scale: Vec3,
+    pub applied_offset: Vec3,
 }
 
 /// Triggers AnimState::Damage briefly on hit.
@@ -2053,8 +2261,14 @@ pub struct VisionRange(pub f32);
 /// Two-layer fog of war map: `visible` (per-frame) + `explored` (permanent).
 #[derive(Resource)]
 pub struct FogOfWarMap {
-    /// Currently visible intensity per cell (0.0–1.0). Cleared each frame.
+    /// Currently visible intensity per cell (0.0–1.0). Contains the last
+    /// *complete* visibility cycle. Only swapped in when all amortized chunks
+    /// have been processed, so readers always see consistent data.
     pub visible: Vec<f32>,
+    /// Back-buffer for the in-progress amortization cycle. Chunks write here;
+    /// once the cycle completes, this is swapped into `visible`.
+    #[allow(dead_code)]
+    pub visible_next: Vec<f32>,
     /// Permanent explored flag per cell. Stored as bytes so it can be copied
     /// directly into the explored texture without per-frame conversion.
     pub explored: Vec<u8>,

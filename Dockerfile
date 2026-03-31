@@ -35,6 +35,7 @@ COPY assets/KayKit_Forest_Nature/Assets/gltf/ assets/KayKit_Forest_Nature/Assets
 COPY assets/UltimateFantasyRTS/glTF/ assets/UltimateFantasyRTS/glTF/
 COPY assets/ToonyTinyPeople/models/buildings/ assets/ToonyTinyPeople/models/buildings/
 COPY assets/ToonyTinyPeople/models/units/ assets/ToonyTinyPeople/models/units/
+COPY assets/ToonyTinyPeople/models/extras/projectiles/ assets/ToonyTinyPeople/models/extras/projectiles/
 COPY assets/ToonyTinyPeople/textures/buildings/ assets/ToonyTinyPeople/textures/buildings/
 COPY assets/ToonyTinyPeople/textures/units/ assets/ToonyTinyPeople/textures/units/
 COPY assets/KayKit_Skeletons/characters/gltf/ assets/KayKit_Skeletons/characters/gltf/
@@ -43,6 +44,8 @@ COPY assets/quaternius_tree/ assets/quaternius_tree/
 COPY assets/quaternius_pine_trees/ assets/quaternius_pine_trees/
 COPY assets/quaternius_trees/ assets/quaternius_trees/
 COPY assets/textures/ assets/textures/
+COPY assets/trees_compressed/ assets/trees_compressed/
+COPY assets/audio/ assets/audio/
 
 # Disable reference-types/externref to avoid browser failures in the
 # generated wasm-bindgen bootstrap on stricter WebAssembly runtimes.

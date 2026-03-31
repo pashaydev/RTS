@@ -330,6 +330,7 @@ pub fn client_apply_relayed_inputs(
     >,
     mut next_task_id: ResMut<NextTaskId>,
     read_transforms: Query<&GlobalTransform>,
+    time: Res<Time>,
     mut pending_inputs: ResMut<PendingRelayedInputs>,
 ) {
     let inputs = std::mem::take(&mut pending_inputs.inputs);
@@ -337,6 +338,7 @@ pub fn client_apply_relayed_inputs(
         execute_input_command(
             &mut commands,
             input,
+            time.elapsed_secs_f64(),
             &net_map,
             &mut unit_states,
             &mut task_queues,

@@ -28,6 +28,41 @@
                 height: 100vh !important;
             }
         </style>
+        <script>
+            // Monkey-patch AudioContext to capture every instance Bevy creates,
+            // then resume them all on the first user gesture (click / key / touch).
+            (function () {
+                var Ctor = window.AudioContext || window.webkitAudioContext;
+                if (!Ctor) return;
+                var contexts = [];
+                var OrigAudioContext = Ctor;
+                var PatchedAudioContext = function () {
+                    var ctx = new OrigAudioContext();
+                    contexts.push(ctx);
+                    return ctx;
+                };
+                PatchedAudioContext.prototype = OrigAudioContext.prototype;
+                window.AudioContext = PatchedAudioContext;
+                if (window.webkitAudioContext)
+                    window.webkitAudioContext = PatchedAudioContext;
+
+                function unlock() {
+                    for (var i = 0; i < contexts.length; i++) {
+                        if (contexts[i].state === "suspended") {
+                            contexts[i].resume();
+                        }
+                    }
+                    if (contexts.length > 0) {
+                        document.removeEventListener("click", unlock, true);
+                        document.removeEventListener("keydown", unlock, true);
+                        document.removeEventListener("touchstart", unlock, true);
+                    }
+                }
+                document.addEventListener("click", unlock, true);
+                document.addEventListener("keydown", unlock, true);
+                document.addEventListener("touchstart", unlock, true);
+            })();
+        </script>
     </head>
     <body></body>
 </html>

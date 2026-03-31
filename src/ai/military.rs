@@ -5,6 +5,7 @@ use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::components::*;
 
 use super::helpers::*;
+use super::AiWorldSnapshot;
 use super::types::*;
 
 /// Minimum squad size before committing to an attack (staging requirement)
@@ -24,6 +25,7 @@ pub fn ai_military_system(
     teams: Res<TeamConfig>,
     ai_controlled: Res<AiControlledFactions>,
     mut ai_state: ResMut<AiState>,
+    snapshot: Res<AiWorldSnapshot>,
     mut all_resources: ResMut<AllPlayerResources>,
     carried_totals: Res<CarriedResourceTotals>,
     mut pending_drains: ResMut<PendingCarriedDrains>,
@@ -79,33 +81,27 @@ pub fn ai_military_system(
         }
         brain.military_timer = brain.effective_tick(MILITARY_TICK);
 
-        let base_pos = match brain.base_position {
-            Some(p) => p,
-            None => continue,
+        let Some(faction_snapshot) = snapshot.factions.get(&faction) else {
+            continue;
         };
+        let base_pos = faction_snapshot
+            .base_position
+            .or(brain.base_position)
+            .unwrap_or_else(|| Vec3::ZERO);
+        brain.base_position = Some(base_pos);
 
         // Prune dead entities
-        let alive: std::collections::HashSet<Entity> = units_q
-            .iter()
-            .filter(|(_, f, _, _)| **f == faction)
-            .map(|(e, _, _, _)| e)
-            .collect();
+        let alive: std::collections::HashSet<Entity> =
+            faction_snapshot.unit_entities.iter().copied().collect();
         brain.prune_dead(&alive);
 
         // Count our units by type
-        let mut unit_counts: HashMap<EntityKind, usize> = HashMap::new();
-        let mut military_count = 0usize;
+        let unit_counts: HashMap<EntityKind, usize> = faction_snapshot.unit_counts.clone();
+        let military_count = faction_snapshot.military_count;
         let mut total_own_strength: f32 = 0.0;
-        for (e, f, kind, _) in units_q.iter() {
-            if *f != faction {
-                continue;
-            }
-            *unit_counts.entry(*kind).or_default() += 1;
-            if *kind != EntityKind::Worker {
-                military_count += 1;
-                if let Ok(h) = health_q.get(e) {
-                    total_own_strength += h.current;
-                }
+        for &(entity, _, _) in &faction_snapshot.military_entities {
+            if let Ok(h) = health_q.get(entity) {
+                total_own_strength += h.current;
             }
         }
 
@@ -136,8 +132,8 @@ pub fn ai_military_system(
             top_state,
             personality,
             is_friendly,
-            &units_q,
-            &active_player,
+            &snapshot,
+            active_player.0,
             &brain.enemy_composition,
         );
 
@@ -182,12 +178,9 @@ pub fn ai_military_system(
 
         // ── Assign unassigned military to squads ──
         let mut unassigned: Vec<(Entity, EntityKind, Vec3)> = Vec::new();
-        for (entity, f, kind, tf) in units_q.iter() {
-            if *f != faction || *kind == EntityKind::Worker {
-                continue;
-            }
+        for &(entity, kind, pos) in &faction_snapshot.military_entities {
             if !brain.assigned_units.contains_key(&entity) {
-                unassigned.push((entity, *kind, tf.translation));
+                unassigned.push((entity, kind, pos));
             }
         }
 
@@ -320,20 +313,15 @@ pub fn ai_military_system(
                 brain.last_cooperation_check = COOPERATION_CHECK_INTERVAL;
 
                 let mut player_army_center = Vec3::ZERO;
-                let mut player_army_count = 0u32;
                 let mut player_base = base_pos;
-                for (_, f, kind, tf) in units_q.iter() {
-                    if *f == active_player.0 {
-                        if *kind != EntityKind::Worker {
-                            player_army_center += tf.translation;
-                            player_army_count += 1;
-                        }
+                let mut player_army_count = 0u32;
+                if let Some(player_snapshot) = snapshot.factions.get(&active_player.0) {
+                    if let Some(center) = player_snapshot.military_center {
+                        player_army_center = center;
+                        player_army_count = player_snapshot.military_count as u32;
                     }
-                }
-                for (f, tf) in enemy_buildings_q.iter() {
-                    if *f == active_player.0 {
-                        player_base = tf.translation;
-                        break;
+                    if let Some(base) = player_snapshot.base_position {
+                        player_base = base;
                     }
                 }
 
@@ -520,11 +508,11 @@ fn get_desired_composition_with_intel(
     state: AiTopState,
     personality: AiPersonality,
     is_friendly: bool,
-    units_q: &Query<(Entity, &Faction, &EntityKind, &Transform), (With<Unit>, Without<Building>)>,
-    active_player: &ActivePlayer,
+    snapshot: &AiWorldSnapshot,
+    active_player: Faction,
     enemy_composition: &HashMap<EntityKind, u32>,
 ) -> Vec<(EntityKind, usize)> {
-    let base = get_desired_composition(state, personality, is_friendly, units_q, active_player);
+    let base = get_desired_composition(state, personality, is_friendly, snapshot, active_player);
 
     if enemy_composition.is_empty() {
         return base;
@@ -571,22 +559,32 @@ fn get_desired_composition(
     state: AiTopState,
     personality: AiPersonality,
     is_friendly: bool,
-    units_q: &Query<(Entity, &Faction, &EntityKind, &Transform), (With<Unit>, Without<Building>)>,
-    active_player: &ActivePlayer,
+    snapshot: &AiWorldSnapshot,
+    active_player: Faction,
 ) -> Vec<(EntityKind, usize)> {
     if is_friendly || personality == AiPersonality::Supportive {
-        let mut player_melee = 0usize;
-        let mut player_ranged = 0usize;
-        for (_, f, kind, _) in units_q.iter() {
-            if *f != active_player.0 || *kind == EntityKind::Worker {
-                continue;
-            }
-            match kind {
-                EntityKind::Soldier | EntityKind::Knight | EntityKind::Cavalry => player_melee += 1,
-                EntityKind::Archer | EntityKind::Mage => player_ranged += 1,
-                _ => {}
-            }
-        }
+        let player_units = snapshot.factions.get(&active_player);
+        let player_melee = player_units.map_or(0, |player| {
+            player
+                .unit_counts
+                .iter()
+                .filter(|(kind, _)| {
+                    matches!(
+                        kind,
+                        EntityKind::Soldier | EntityKind::Knight | EntityKind::Cavalry
+                    )
+                })
+                .map(|(_, count)| *count)
+                .sum()
+        });
+        let player_ranged = player_units.map_or(0, |player| {
+            player
+                .unit_counts
+                .iter()
+                .filter(|(kind, _)| matches!(kind, EntityKind::Archer | EntityKind::Mage))
+                .map(|(_, count)| *count)
+                .sum()
+        });
         let player_prefers_melee = player_melee > player_ranged;
 
         return match state {

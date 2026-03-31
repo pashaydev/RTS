@@ -11,6 +11,7 @@ use crate::fog::FogTweakSettings;
 use crate::ui::core::hud::MainHudRoot;
 
 const MINIMAP_TEX_SIZE: usize = 200;
+const MINIMAP_REFRESH_HZ: f32 = 4.0;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MinimapSet;
@@ -19,8 +20,10 @@ pub struct MinimapSet;
 struct MinimapTexture {
     handle: Handle<Image>,
     base_pixels: Vec<[u8; 4]>,
+    scratch_pixels: Vec<[u8; 4]>,
     map_size: f32,
     half_map: f32,
+    refresh_timer: Timer,
 }
 
 #[derive(Resource, Default)]
@@ -185,8 +188,10 @@ fn setup_minimap(
     commands.insert_resource(MinimapTexture {
         handle: handle.clone(),
         base_pixels,
+        scratch_pixels: vec![[0u8; 4]; MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE],
         map_size,
         half_map,
+        refresh_timer: Timer::from_seconds(1.0 / MINIMAP_REFRESH_HZ, TimerMode::Repeating),
     });
 
     // Spawn minimap image inside the widget content area
@@ -227,8 +232,21 @@ fn cleanup_minimap_state(mut commands: Commands) {
     commands.remove_resource::<MinimapTexture>();
 }
 
+/// Pre-computed mapping from minimap pixel index to fog grid index.
+/// Built once, reused every frame to avoid per-pixel coordinate math.
+#[derive(Default)]
+struct MinimapFogIndexCache {
+    /// For each minimap pixel (MINIMAP_TEX_SIZE²), the corresponding fog grid
+    /// index, or usize::MAX if out of bounds.
+    indices: Vec<usize>,
+    /// Cached fog grid_size used to detect when the cache needs rebuilding.
+    fog_grid_size: usize,
+}
+
 fn update_minimap_texture(
-    minimap_tex: Res<MinimapTexture>,
+    time: Res<Time>,
+    mut minimap_tex: ResMut<MinimapTexture>,
+    minimap_interaction: Res<MinimapInteraction>,
     mut images: ResMut<Assets<Image>>,
     fog_map: Option<Res<FogOfWarMap>>,
     fog_settings: Res<FogTweakSettings>,
@@ -240,8 +258,18 @@ fn update_minimap_texture(
     resource_nodes: Query<&Transform, With<ResourceNode>>,
     camera_q: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    mut fog_idx_cache: Local<MinimapFogIndexCache>,
 ) {
-    let Some(image) = images.get_mut(&minimap_tex.handle) else {
+    minimap_tex.refresh_timer.tick(time.delta());
+    if !minimap_tex.refresh_timer.just_finished() && !minimap_interaction.clicked {
+        return;
+    }
+
+    let handle = minimap_tex.handle.clone();
+    let map_size = minimap_tex.map_size;
+    let half_map = minimap_tex.half_map;
+
+    let Some(image) = images.get_mut(&handle) else {
         warn_once!("Minimap: image handle not found in assets");
         return;
     };
@@ -251,78 +279,108 @@ fn update_minimap_texture(
     };
 
     // Work with a pixel buffer for convenience
-    let total = MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE;
-    let mut buf = vec![[0u8; 4]; total];
-    buf.copy_from_slice(&minimap_tex.base_pixels);
+    let (base_pixels, buf) = {
+        let tex = &mut *minimap_tex;
+        (&tex.base_pixels, &mut tex.scratch_pixels)
+    };
+    buf.copy_from_slice(base_pixels);
 
-    // Apply fog of war with color blending (matching in-game fog aesthetic)
+    // Apply fog of war with color blending (matching in-game fog aesthetic).
+    // Uses a pre-computed index cache to avoid per-pixel coordinate math.
     if !fog_settings.reveal_all {
         if let Some(ref fog) = fog_map {
-            // Fog colors matching the in-game FogSettings
-            let fog_color: [f32; 3] = [0.02, 0.02, 0.06]; // dark navy for unexplored
-            let explored_tint: [f32; 3] = [0.12, 0.10, 0.18]; // muted purple for explored
-
-            for py in 0..MINIMAP_TEX_SIZE {
-                for px in 0..MINIMAP_TEX_SIZE {
-                    let (wx, wz) = minimap_to_world(
-                        px as f32 + 0.5,
-                        py as f32 + 0.5,
-                        minimap_tex.map_size,
-                        minimap_tex.half_map,
-                    );
-                    let vis = fog.get_visibility(wx, wz);
-                    let idx = py * MINIMAP_TEX_SIZE + px;
-                    let base = [
-                        buf[idx][0] as f32 / 255.0,
-                        buf[idx][1] as f32 / 255.0,
-                        buf[idx][2] as f32 / 255.0,
-                    ];
-
-                    let blended = if vis < 0.01 {
-                        // Unexplored: ~95% fog color overlay (nearly black)
-                        let t = 0.05;
-                        [
-                            base[0] * t + fog_color[0] * (1.0 - t),
-                            base[1] * t + fog_color[1] * (1.0 - t),
-                            base[2] * t + fog_color[2] * (1.0 - t),
-                        ]
-                    } else if vis < 0.6 {
-                        // Explored but not visible: blend between fog-tinted and explored
-                        let t = vis / 0.6; // 0.0 at edge of explored, 1.0 near visible
-                        let tinted = [
-                            base[0] * 0.4 + explored_tint[0] * 0.6,
-                            base[1] * 0.4 + explored_tint[1] * 0.6,
-                            base[2] * 0.4 + explored_tint[2] * 0.6,
-                        ];
-                        let near_fog = [
-                            base[0] * 0.2 + fog_color[0] * 0.8,
-                            base[1] * 0.2 + fog_color[1] * 0.8,
-                            base[2] * 0.2 + fog_color[2] * 0.8,
-                        ];
-                        [
-                            near_fog[0] + (tinted[0] - near_fog[0]) * t,
-                            near_fog[1] + (tinted[1] - near_fog[1]) * t,
-                            near_fog[2] + (tinted[2] - near_fog[2]) * t,
-                        ]
-                    } else {
-                        // Visible: smooth fade from explored tint to full color
-                        let t = ((vis - 0.6) / 0.4).min(1.0);
-                        let tinted = [
-                            base[0] * 0.4 + explored_tint[0] * 0.6,
-                            base[1] * 0.4 + explored_tint[1] * 0.6,
-                            base[2] * 0.4 + explored_tint[2] * 0.6,
-                        ];
-                        [
-                            tinted[0] + (base[0] - tinted[0]) * t,
-                            tinted[1] + (base[1] - tinted[1]) * t,
-                            tinted[2] + (base[2] - tinted[2]) * t,
-                        ]
-                    };
-
-                    buf[idx][0] = (blended[0] * 255.0).clamp(0.0, 255.0) as u8;
-                    buf[idx][1] = (blended[1] * 255.0).clamp(0.0, 255.0) as u8;
-                    buf[idx][2] = (blended[2] * 255.0).clamp(0.0, 255.0) as u8;
+            // Rebuild index cache if fog grid changed or not yet built.
+            let pixel_count = MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE;
+            if fog_idx_cache.indices.len() != pixel_count
+                || fog_idx_cache.fog_grid_size != fog.grid_size
+            {
+                fog_idx_cache.indices.resize(pixel_count, usize::MAX);
+                fog_idx_cache.fog_grid_size = fog.grid_size;
+                for py in 0..MINIMAP_TEX_SIZE {
+                    for px in 0..MINIMAP_TEX_SIZE {
+                        let (wx, wz) = minimap_to_world(
+                            px as f32 + 0.5,
+                            py as f32 + 0.5,
+                            map_size,
+                            half_map,
+                        );
+                        let ix = ((wx + fog.half_map) / fog.step).round() as usize;
+                        let iz = ((wz + fog.half_map) / fog.step).round() as usize;
+                        let fog_idx = if ix < fog.grid_size && iz < fog.grid_size {
+                            iz * fog.grid_size + ix
+                        } else {
+                            usize::MAX
+                        };
+                        fog_idx_cache.indices[py * MINIMAP_TEX_SIZE + px] = fog_idx;
+                    }
                 }
+            }
+
+            let fog_color: [f32; 3] = [0.02, 0.02, 0.06];
+            let explored_tint: [f32; 3] = [0.12, 0.10, 0.18];
+
+            for i in 0..pixel_count {
+                let fog_idx = fog_idx_cache.indices[i];
+                let vis = if fog_idx != usize::MAX {
+                    let v = fog.display[fog_idx];
+                    if v > 0.01 {
+                        0.5 + 0.5 * v
+                    } else if fog.explored[fog_idx] != 0 {
+                        0.5
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                };
+
+                let base = [
+                    buf[i][0] as f32 / 255.0,
+                    buf[i][1] as f32 / 255.0,
+                    buf[i][2] as f32 / 255.0,
+                ];
+
+                let blended = if vis < 0.01 {
+                    let t = 0.05;
+                    [
+                        base[0] * t + fog_color[0] * (1.0 - t),
+                        base[1] * t + fog_color[1] * (1.0 - t),
+                        base[2] * t + fog_color[2] * (1.0 - t),
+                    ]
+                } else if vis < 0.6 {
+                    let t = vis / 0.6;
+                    let tinted = [
+                        base[0] * 0.4 + explored_tint[0] * 0.6,
+                        base[1] * 0.4 + explored_tint[1] * 0.6,
+                        base[2] * 0.4 + explored_tint[2] * 0.6,
+                    ];
+                    let near_fog = [
+                        base[0] * 0.2 + fog_color[0] * 0.8,
+                        base[1] * 0.2 + fog_color[1] * 0.8,
+                        base[2] * 0.2 + fog_color[2] * 0.8,
+                    ];
+                    [
+                        near_fog[0] + (tinted[0] - near_fog[0]) * t,
+                        near_fog[1] + (tinted[1] - near_fog[1]) * t,
+                        near_fog[2] + (tinted[2] - near_fog[2]) * t,
+                    ]
+                } else {
+                    let t = ((vis - 0.6) / 0.4).min(1.0);
+                    let tinted = [
+                        base[0] * 0.4 + explored_tint[0] * 0.6,
+                        base[1] * 0.4 + explored_tint[1] * 0.6,
+                        base[2] * 0.4 + explored_tint[2] * 0.6,
+                    ];
+                    [
+                        tinted[0] + (base[0] - tinted[0]) * t,
+                        tinted[1] + (base[1] - tinted[1]) * t,
+                        tinted[2] + (base[2] - tinted[2]) * t,
+                    ]
+                };
+
+                buf[i][0] = (blended[0] * 255.0).clamp(0.0, 255.0) as u8;
+                buf[i][1] = (blended[1] * 255.0).clamp(0.0, 255.0) as u8;
+                buf[i][2] = (blended[2] * 255.0).clamp(0.0, 255.0) as u8;
             }
         }
     }
@@ -339,10 +397,10 @@ fn update_minimap_texture(
         let (px, py) = world_to_minimap(
             tf.translation.x,
             tf.translation.z,
-            minimap_tex.map_size,
-            minimap_tex.half_map,
+            map_size,
+            half_map,
         );
-        draw_dot(&mut buf, px, py, 1, [255, 220, 50, 255]);
+        draw_dot(buf, px, py, 1, [255, 220, 50, 255]);
     }
 
     // Draw mobs (red, only if fog-visible)
@@ -357,10 +415,10 @@ fn update_minimap_texture(
         let (px, py) = world_to_minimap(
             tf.translation.x,
             tf.translation.z,
-            minimap_tex.map_size,
-            minimap_tex.half_map,
+            map_size,
+            half_map,
         );
-        draw_dot(&mut buf, px, py, 1, [220, 40, 40, 255]);
+        draw_dot(buf, px, py, 1, [220, 40, 40, 255]);
     }
 
     // Draw buildings (allied = always visible, enemy = fog-check)
@@ -382,10 +440,10 @@ fn update_minimap_texture(
         let (px, py) = world_to_minimap(
             tf.translation.x,
             tf.translation.z,
-            minimap_tex.map_size,
-            minimap_tex.half_map,
+            map_size,
+            half_map,
         );
-        draw_dot(&mut buf, px, py, 2, color);
+        draw_dot(buf, px, py, 2, color);
     }
 
     // Draw units (allied = always visible, enemy = fog-check)
@@ -407,10 +465,10 @@ fn update_minimap_texture(
         let (px, py) = world_to_minimap(
             tf.translation.x,
             tf.translation.z,
-            minimap_tex.map_size,
-            minimap_tex.half_map,
+            map_size,
+            half_map,
         );
-        draw_dot(&mut buf, px, py, 1, color);
+        draw_dot(buf, px, py, 1, color);
     }
 
     // Draw camera viewport rectangle
@@ -435,8 +493,8 @@ fn update_minimap_texture(
                             let (px, py) = world_to_minimap(
                                 hit.x,
                                 hit.z,
-                                minimap_tex.map_size,
-                                minimap_tex.half_map,
+                                map_size,
+                                half_map,
                             );
                             minimap_corners.push((px as i32, py as i32));
                         }
@@ -450,7 +508,7 @@ fn update_minimap_texture(
                 for i in 0..n {
                     let (x0, y0) = minimap_corners[i];
                     let (x1, y1) = minimap_corners[(i + 1) % n];
-                    draw_line(&mut buf, x0, y0, x1, y1, white);
+                    draw_line(buf, x0, y0, x1, y1, white);
                 }
             }
         }

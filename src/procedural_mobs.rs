@@ -65,7 +65,7 @@ fn animate_procedural_mobs(
             Option<&PatrolState>,
             Option<&MoveTarget>,
             Option<&AttackWindup>,
-            Option<&Dying>,
+            Option<&mut Dying>,
             Has<SpawnAnimation>,
         ),
         With<Mob>,
@@ -74,7 +74,7 @@ fn animate_procedural_mobs(
     let dt = time.delta_secs();
     let t = time.elapsed_secs();
 
-    for (entity, mut tf, mut proc_mob, patrol, move_target, windup, dying, has_spawn_anim) in
+    for (entity, mut tf, mut proc_mob, patrol, move_target, windup, mut dying, has_spawn_anim) in
         &mut mobs
     {
         if has_spawn_anim {
@@ -125,6 +125,10 @@ fn animate_procedural_mobs(
         }
 
         // Tick dying progress (frame-rate independent)
+        if let Some(ref mut dying) = dying {
+            dying.timer.tick(time.delta());
+        }
+
         if phase == MobAnimPhase::Dying {
             proc_mob.dying_progress = (proc_mob.dying_progress + dt * 1.5).min(1.0);
         }

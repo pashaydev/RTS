@@ -5,6 +5,7 @@ use crate::blueprints::EntityKind;
 use crate::components::*;
 
 use super::helpers::push_if_missing;
+use super::AiWorldSnapshot;
 use super::types::*;
 
 // ════════════════════════════════════════════════════════════════════
@@ -18,10 +19,10 @@ pub fn ai_strategy_system(
     teams: Res<TeamConfig>,
     ai_controlled: Res<AiControlledFactions>,
     mut ai_state: ResMut<AiState>,
+    snapshot: Res<AiWorldSnapshot>,
     base_state: Res<FactionBaseState>,
     all_completed: Res<AllCompletedBuildings>,
     buildings_q: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
-    units_q: Query<(&Faction, &EntityKind), With<Unit>>,
     training_queues_q: Query<(&Faction, &TrainingQueue), With<Building>>,
 ) {
     let dt = time.delta_secs();
@@ -70,46 +71,16 @@ pub fn ai_strategy_system(
         brain.strategy_timer = brain.effective_tick(STRATEGY_TICK);
         brain.game_time += STRATEGY_TICK;
 
-        // Cache counts
-        let mut building_counts: HashMap<EntityKind, usize> = HashMap::new();
-        let mut completed_building_counts: HashMap<EntityKind, usize> = HashMap::new();
-        for (f, kind, state, _) in buildings_q.iter() {
-            if *f != faction {
-                continue;
-            }
-            *building_counts.entry(*kind).or_default() += 1;
-            if *state == BuildingState::Complete {
-                *completed_building_counts.entry(*kind).or_default() += 1;
-            }
-        }
-
-        let mut worker_count = 0usize;
-        let mut military_count = 0usize;
-        for (f, kind) in units_q.iter() {
-            if *f != faction {
-                continue;
-            }
-            if *kind == EntityKind::Worker {
-                worker_count += 1;
-            } else {
-                military_count += 1;
-            }
-        }
-
-        // Count buildings under construction
-        let mut under_construction = 0u8;
-        for (f, _, state, _) in buildings_q.iter() {
-            if *f == faction && *state == BuildingState::UnderConstruction {
-                under_construction += 1;
-            }
-        }
-        brain.pending_builds = under_construction;
+        let Some(faction_snapshot) = snapshot.factions.get(&faction) else {
+            continue;
+        };
+        let building_counts: HashMap<EntityKind, usize> = faction_snapshot.building_counts.clone();
+        let worker_count = faction_snapshot.worker_count;
+        let military_count = faction_snapshot.military_count;
+        brain.pending_builds = faction_snapshot.under_construction_count;
 
         let unit_cap = UnitCapStats {
-            used: count_faction_units(
-                faction,
-                units_q.iter().map(|(unit_faction, _)| unit_faction),
-            ),
+            used: faction_snapshot.unit_count,
             queued: count_faction_queued_units(faction, training_queues_q.iter()),
             cap: faction_unit_cap(
                 faction,
@@ -259,13 +230,10 @@ pub fn ai_strategy_system(
             } else {
                 let tc = &building_counts;
                 let player_buildings = if brain.personality == AiPersonality::Supportive {
-                    let mut pb: HashMap<EntityKind, usize> = HashMap::new();
-                    for (f, kind, state, _) in buildings_q.iter() {
-                        if *f == active_player.0 && *state == BuildingState::Complete {
-                            *pb.entry(*kind).or_default() += 1;
-                        }
-                    }
-                    Some(pb)
+                    snapshot
+                        .factions
+                        .get(&active_player.0)
+                        .map(|player| player.completed_building_counts.clone())
                 } else {
                     None
                 };

@@ -2,6 +2,8 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
 use crate::blueprints::{EntityKind, IsRanged};
+use crate::combat_budget::CombatBudgetState;
+use crate::combat_slots::slot_anchor;
 use crate::components::*;
 use crate::multiplayer::NetRole;
 use crate::spatial::WallSpatialGrid;
@@ -14,6 +16,7 @@ impl Plugin for CombatPlugin {
             Update,
             (
                 tick_damage_reservations,
+                resolve_combat_intents,
                 approach_attack_target,
                 start_attack_windups,
                 resolve_attack_windups,
@@ -26,6 +29,145 @@ impl Plugin for CombatPlugin {
                 .in_set(GameFlowSet::Simulation)
                 .run_if(in_state(AppState::InGame)),
         );
+    }
+}
+
+fn intended_attack_target(
+    intent: Option<&CombatIntent>,
+    target_lock: Option<&CombatTargetLock>,
+) -> Option<Entity> {
+    match intent {
+        Some(CombatIntent::Attack(target, _)) => Some(*target),
+        Some(CombatIntent::AttackMove(_, _)) => target_lock.map(|lock| lock.target),
+        _ => None,
+    }
+}
+
+fn resolve_combat_intents(
+    mut commands: Commands,
+    net_role: Res<NetRole>,
+    active_player: Res<ActivePlayer>,
+    all_entities: Query<()>,
+    mut actors: Query<
+        (
+            Entity,
+            Option<&Faction>,
+            Option<&CombatIntent>,
+            Option<&CombatTargetLock>,
+            Option<&mut UnitState>,
+            Option<&AttackTarget>,
+            Option<&MoveTarget>,
+            Option<&AttackWindup>,
+            Option<&AttackRecovery>,
+        ),
+        Or<(With<Unit>, With<Mob>)>,
+    >,
+) {
+    for (
+        entity,
+        faction,
+        intent,
+        target_lock,
+        opt_state,
+        attack_target,
+        move_target,
+        windup,
+        _recovery,
+    ) in &mut actors
+    {
+        if net_role.as_ref() == &NetRole::Client
+            && faction.is_some_and(|f| *f != active_player.0)
+        {
+            continue;
+        }
+
+        // Windup is the true commit point. Recovery should still accept the next move/order.
+        let committed = windup.is_some();
+        let desired_target = intended_attack_target(intent, target_lock)
+            .filter(|target| all_entities.contains(*target));
+
+        if let Some(target) = desired_target {
+            let needs_sync = attack_target.map_or(true, |current| current.0 != target);
+            if needs_sync && !committed {
+                commands
+                    .entity(entity)
+                    .insert(AttackTarget(target))
+                    .remove::<MoveTarget>();
+                if let Some(mut state) = opt_state {
+                    *state = UnitState::Attacking(target);
+                }
+            }
+            continue;
+        }
+
+        match intent.copied().unwrap_or_default() {
+            CombatIntent::AttackMove(destination, _) => {
+                if attack_target.is_some() && !committed {
+                    commands
+                        .entity(entity)
+                        .remove::<AttackTarget>()
+                        .remove::<ChaseTimer>();
+                }
+                if !committed
+                    && move_target.map_or(true, |current| current.0.distance(destination) > 0.6)
+                {
+                    commands.entity(entity).insert(MoveTarget(destination));
+                }
+                if let Some(mut state) = opt_state {
+                    if !matches!(*state, UnitState::AttackMoving(dest) if dest.distance(destination) <= 0.1)
+                        && !committed
+                    {
+                        *state = UnitState::AttackMoving(destination);
+                    }
+                }
+            }
+            CombatIntent::Move(destination) => {
+                if attack_target.is_some() && !committed {
+                    commands
+                        .entity(entity)
+                        .remove::<AttackTarget>()
+                        .remove::<ChaseTimer>();
+                }
+                if !committed
+                    && move_target.map_or(true, |current| current.0.distance(destination) > 0.6)
+                {
+                    commands.entity(entity).insert(MoveTarget(destination));
+                }
+                if let Some(mut state) = opt_state {
+                    if !matches!(*state, UnitState::Moving(dest) if dest.distance(destination) <= 0.1)
+                        && !committed
+                    {
+                        *state = UnitState::Moving(destination);
+                    }
+                }
+            }
+            CombatIntent::Hold => {
+                if !committed {
+                    commands
+                        .entity(entity)
+                        .remove::<AttackTarget>()
+                        .remove::<MoveTarget>()
+                        .remove::<ChaseTimer>();
+                    if let Some(mut state) = opt_state {
+                        *state = UnitState::HoldPosition;
+                    }
+                }
+            }
+            CombatIntent::None => {
+                if attack_target.is_some() && !committed {
+                    commands
+                        .entity(entity)
+                        .remove::<AttackTarget>()
+                        .remove::<ChaseTimer>();
+                    if let Some(mut state) = opt_state {
+                        if matches!(*state, UnitState::Attacking(_)) {
+                            *state = UnitState::Idle;
+                        }
+                    }
+                }
+            }
+            CombatIntent::Attack(_, _) => {}
+        }
     }
 }
 
@@ -72,7 +214,16 @@ fn desired_attack_move_target(
         Vec2::new(angle.cos(), angle.sin())
     };
     let desired_surface = desired_attack_surface_distance(max_range, minimum_range);
-    target_pos + Vec3::new(dir.x, 0.0, dir.y) * (target_radius + desired_surface)
+    let tangent = Vec2::new(-dir.y, dir.x);
+    let slot_seed = (attacker_entity.to_bits() % 7) as i32 - 3;
+    let lateral_offset = if minimum_range > 0.0 || max_range > 3.0 {
+        slot_seed as f32 * 0.85
+    } else {
+        0.0
+    };
+    target_pos
+        + Vec3::new(dir.x, 0.0, dir.y) * (target_radius + desired_surface)
+        + Vec3::new(tangent.x, 0.0, tangent.y) * lateral_offset
 }
 
 fn explode_props(
@@ -141,6 +292,8 @@ fn explode_props(
 pub fn approach_attack_target(
     mut commands: Commands,
     time: Res<Time>,
+    combat_budget: Res<CombatBudget>,
+    mut budget_state: ResMut<CombatBudgetState>,
     teams: Res<TeamConfig>,
     wall_grid: Res<WallSpatialGrid>,
     net_role: Res<NetRole>,
@@ -152,12 +305,16 @@ pub fn approach_attack_target(
             &AttackTarget,
             &AttackRange,
             Option<&AttackTiming>,
+            Option<&IsRanged>,
             &Faction,
             Option<&mut UnitState>,
+            Option<&MoveTarget>,
             Option<&AttackWindup>,
             Option<&AttackRecovery>,
             Option<&mut ChaseTimer>,
             Option<&TaskSource>,
+            Option<&mut CombatTargetLock>,
+            Option<&SlotClaim>,
         ),
         Or<(With<Unit>, With<Mob>)>,
     >,
@@ -177,12 +334,16 @@ pub fn approach_attack_target(
         attack_target,
         range,
         attack_timing,
+        is_ranged,
         faction,
         opt_state,
+        current_move_target,
         windup,
         recovery,
         opt_chase_timer,
         opt_task_source,
+        opt_target_lock,
+        slot_claim,
     ) in &mut attackers
     {
         // During windup/recovery, unit is locked in animation — skip
@@ -245,6 +406,25 @@ pub fn approach_attack_target(
                             *state = UnitState::Attacking(wall_entity);
                         }
                     }
+                    let source = if opt_task_source
+                        .map_or(false, |task_source| *task_source == TaskSource::Manual)
+                    {
+                        IntentSource::Manual
+                    } else {
+                        IntentSource::Auto
+                    };
+                    commands
+                        .entity(attacker_entity)
+                        .insert(CombatIntent::Attack(wall_entity, source));
+                    if let Some(mut target_lock) = opt_target_lock {
+                        target_lock.target = wall_entity;
+                    } else {
+                        commands.entity(attacker_entity).insert(CombatTargetLock {
+                            target: wall_entity,
+                            locked_until: time.elapsed_secs_f64() + 0.5,
+                            source,
+                        });
+                    }
                     continue;
                 }
             }
@@ -257,17 +437,35 @@ pub fn approach_attack_target(
 
         if !in_band {
             // Reposition until the target sits inside the allowed attack band.
-            let desired_pos = desired_attack_move_target(
-                attacker_entity,
-                tf.translation,
-                target_tf.translation,
-                target_radius,
-                range.0,
-                minimum_range,
-            );
-            commands
-                .entity(attacker_entity)
-                .insert(MoveTarget(desired_pos));
+            if budget_state.repath_requests_this_frame >= combat_budget.max_repath_requests_per_frame {
+                continue;
+            }
+            let desired_pos = if is_ranged.is_none()
+                && slot_claim.is_some_and(|claim| claim.target == attack_target.0)
+            {
+                let claim = slot_claim.unwrap();
+                slot_anchor(
+                    attacker_entity,
+                    target_tf.translation,
+                    target_radius.max(0.75),
+                    claim.slot_index,
+                    12,
+                    minimum_range.max(range.0 * 0.85),
+                )
+            } else {
+                desired_attack_move_target(
+                    attacker_entity,
+                    tf.translation,
+                    target_tf.translation,
+                    target_radius,
+                    range.0,
+                    minimum_range,
+                )
+            };
+            if current_move_target.map_or(true, |current| current.0.distance(desired_pos) > 0.9) {
+                commands.entity(attacker_entity).insert(MoveTarget(desired_pos));
+            }
+            budget_state.repath_requests_this_frame += 1;
 
             // ── Chase timeout ──
             if let Some(mut chase) = opt_chase_timer {
@@ -280,6 +478,10 @@ pub fn approach_attack_target(
                         .remove::<MoveTarget>()
                         .remove::<LeashOrigin>()
                         .remove::<ChaseTimer>();
+                    commands
+                        .entity(attacker_entity)
+                        .remove::<CombatTargetLock>()
+                        .insert(CombatIntent::None);
                     if let Some(mut state) = opt_state {
                         *state = UnitState::Idle;
                     }
@@ -581,28 +783,32 @@ fn resolve_attack_windups(
             let hit_dir_flat = Vec3::new(hit_dir.x, 0.0, hit_dir.z);
             commands.entity(entity).insert(AttackLunge {
                 direction: hit_dir_flat,
-                timer: Timer::from_seconds(0.1, TimerMode::Once),
-                strength: 0.3,
+                timer: Timer::from_seconds(0.14, TimerMode::Once),
+                strength: (0.28 + dealt * 0.008).min(0.7),
+                applied_offset: Vec3::ZERO,
             });
 
             // ── Juice: hit recoil on target ──
             commands.entity(target).insert(HitRecoil {
                 direction: hit_dir_flat,
-                timer: Timer::from_seconds(0.12, TimerMode::Once),
-                strength: 0.15,
+                timer: Timer::from_seconds(0.2, TimerMode::Once),
+                strength: (0.18 + dealt * 0.006).min(0.5),
+                lift: (0.04 + dealt * 0.002).min(0.14),
+                base_scale: target_tf.scale,
+                applied_offset: Vec3::ZERO,
             });
 
             // ── Juice: hit reaction anim on target ──
             commands
                 .entity(target)
-                .insert(HitReaction(Timer::from_seconds(0.2, TimerMode::Once)));
+                .insert(HitReaction(Timer::from_seconds(0.24, TimerMode::Once)));
 
             // ── Juice: camera shake for heavy melee hits ──
-            if dealt > 25.0 {
+            if dealt > 18.0 {
                 if let Ok(cam_entity) = camera_q.single() {
                     commands.entity(cam_entity).insert(CameraShake {
                         timer: Timer::from_seconds(0.15, TimerMode::Once),
-                        intensity: (dealt * 0.004).min(0.3),
+                        intensity: (dealt * 0.005).min(0.38),
                     });
                 }
             }
@@ -816,7 +1022,12 @@ fn handle_death(
 
         for (attacker_entity, attack_target, opt_patrol) in &mut attackers_with_target {
             if attack_target.0 == *dead_entity {
-                commands.entity(attacker_entity).remove::<AttackTarget>();
+                commands
+                    .entity(attacker_entity)
+                    .remove::<AttackTarget>()
+                    .remove::<CombatTargetLock>()
+                    .remove::<SlotClaim>()
+                    .insert(CombatIntent::None);
                 if let Some(mut patrol) = opt_patrol {
                     patrol.state = PatrolStateKind::Returning;
                 }

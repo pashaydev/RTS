@@ -101,40 +101,6 @@ pub fn pick_goal_aware_resource(
     best_rt
 }
 
-pub fn find_nearest_resource_node_with_avoidance(
-    pos: Vec3,
-    resource_type: ResourceType,
-    nodes: &Query<(Entity, &Transform, &ResourceNode), Without<Unit>>,
-    max_range: f32,
-    player_base: Option<Vec3>,
-    is_friendly: bool,
-) -> Option<Entity> {
-    let mut best: Option<(Entity, f32)> = None;
-    for (entity, tf, node) in nodes.iter() {
-        if node.resource_type != resource_type || node.amount_remaining == 0 {
-            continue;
-        }
-        let mut d = pos.distance(tf.translation);
-        if d >= max_range {
-            continue;
-        }
-
-        if is_friendly {
-            if let Some(pbp) = player_base {
-                let dist_to_player = tf.translation.distance(pbp);
-                if dist_to_player < 40.0 {
-                    d += 80.0;
-                }
-            }
-        }
-
-        if best.is_none() || d < best.unwrap().1 {
-            best = Some((entity, d));
-        }
-    }
-    best.map(|(e, _)| e)
-}
-
 pub fn find_resource_biome_pos(
     kind: EntityKind,
     base_pos: Vec3,

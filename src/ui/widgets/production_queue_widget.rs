@@ -5,6 +5,7 @@ use super::core::fonts::UiFonts;
 use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
+use crate::combat_intents::clear_combat_intent;
 use crate::components::*;
 use crate::theme;
 
@@ -768,6 +769,7 @@ pub fn handle_queue_cancel_buttons(
     registry: Res<crate::blueprints::BlueprintRegistry>,
     mut all_resources: ResMut<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
+    time: Res<Time>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -783,6 +785,7 @@ pub fn handle_queue_cancel_buttons(
                 queue.current = None;
                 *state = UnitState::Idle;
                 *source = TaskSource::Auto;
+                clear_combat_intent(&mut commands, button.unit, time.elapsed_secs_f64());
                 commands
                     .entity(button.unit)
                     .remove::<MoveTarget>()

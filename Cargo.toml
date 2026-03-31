@@ -43,6 +43,7 @@ arboard = "3"
 web-sys = { version = "0.3.91", features = ["WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType", "Document", "HtmlDocument", "DataTransfer", "ClipboardEvent", "Clipboard", "Navigator", "Window", "Location"] }
 wasm-bindgen = "0.2.114"
 js-sys = "0.3.91"
+web-time = "1.1"
 
 [dev-dependencies]
 uuid = "1"

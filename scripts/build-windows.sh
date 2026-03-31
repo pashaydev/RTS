@@ -50,9 +50,12 @@ copy_asset_dir() {
 }
 
 echo "  Copying assets..."
+copy_asset_dir "audio"
 copy_asset_dir "fonts"
 copy_asset_dir "shaders"
 copy_asset_dir "icons"
+copy_asset_dir "textures"
+copy_asset_dir "trees_compressed"
 copy_asset_dir "KayKit_Forest_Nature/Assets/gltf"
 copy_asset_dir "UltimateFantasyRTS/glTF"
 copy_asset_dir "ToonyTinyPeople/models/buildings"

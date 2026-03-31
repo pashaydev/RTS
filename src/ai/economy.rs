@@ -7,6 +7,7 @@ use crate::ground::HeightMap;
 use crate::model_assets::BuildingModelAssets;
 
 use super::helpers::*;
+use super::AiWorldSnapshot;
 use super::types::*;
 
 // ════════════════════════════════════════════════════════════════════
@@ -23,20 +24,22 @@ pub fn ai_economy_system(
         Res<AiControlledFactions>,
     ),
     mut ai_state: ResMut<AiState>,
-    mut all_resources: ResMut<AllPlayerResources>,
-    all_completed: Res<AllCompletedBuildings>,
-    carried_totals: Res<CarriedResourceTotals>,
-    mut pending_drains: ResMut<PendingCarriedDrains>,
-    registry: Res<BlueprintRegistry>,
-    cache: Res<EntityVisualCache>,
-    building_models: Option<Res<BuildingModelAssets>>,
-    height_map: Res<HeightMap>,
-    biome_map: Res<BiomeMap>,
-    mut wall_grid: ResMut<WallGrid>,
+    world: (
+        Res<AiWorldSnapshot>,
+        ResMut<AllPlayerResources>,
+        Res<AllCompletedBuildings>,
+        Res<CarriedResourceTotals>,
+        ResMut<PendingCarriedDrains>,
+    ),
+    assets: (
+        Res<BlueprintRegistry>,
+        Res<EntityVisualCache>,
+        Option<Res<BuildingModelAssets>>,
+    ),
+    terrain: (Res<HeightMap>, Res<BiomeMap>, ResMut<WallGrid>),
     queries: (
         Query<&Faction, With<Unit>>,
         Query<(Entity, &Faction, &Transform, &UnitState), (With<Unit>, With<GatherSpeed>)>,
-        Query<(Entity, &Transform, &ResourceNode), Without<Unit>>,
         Query<(Entity, &Faction, &EntityKind, &Transform, &BuildingState), With<Building>>,
         Query<
             (
@@ -59,10 +62,12 @@ pub fn ai_economy_system(
 ) {
     let dt = time.delta_secs();
     let (config, active_player, teams, ai_controlled) = context;
+    let (snapshot, mut all_resources, all_completed, carried_totals, mut pending_drains) = world;
+    let (registry, cache, building_models) = assets;
+    let (height_map, biome_map, mut wall_grid) = terrain;
     let (
         all_units_q,
         workers_q,
-        resource_nodes_q,
         buildings_q,
         building_levels_q,
         cap_buildings_q,
@@ -86,6 +91,9 @@ pub fn ai_economy_system(
         let brain = match ai_state.factions.get_mut(&faction) {
             Some(b) => b,
             None => continue,
+        };
+        let Some(faction_snapshot) = snapshot.factions.get(&faction) else {
+            continue;
         };
 
         brain.economy_timer -= dt;
@@ -132,20 +140,11 @@ pub fn ai_economy_system(
         }
 
         // Cache base position
-        let mut base_pos = None;
-        let mut our_building_positions: Vec<Vec3> = Vec::new();
-        for (_, f, kind, tf, _) in buildings_q.iter() {
-            if *f == faction {
-                our_building_positions.push(tf.translation);
-                if *kind == EntityKind::Base {
-                    base_pos = Some(tf.translation);
-                }
-            }
-        }
-        let worker_positions: Vec<Vec3> = workers_q
+        let our_building_positions = faction_snapshot.building_positions.clone();
+        let worker_positions: Vec<Vec3> = faction_snapshot
+            .worker_entities
             .iter()
-            .filter(|(_, f, _, _)| **f == faction)
-            .map(|(_, _, tf, _)| tf.translation)
+            .map(|(_, pos)| *pos)
             .collect();
 
         let fallback_pos = if worker_positions.is_empty() {
@@ -158,7 +157,7 @@ pub fn ai_economy_system(
             Some(sum / worker_positions.len() as f32)
         };
 
-        let base_pos = match base_pos.or(fallback_pos) {
+        let base_pos = match faction_snapshot.base_position.or(fallback_pos) {
             Some(p) => p,
             None => continue,
         };
@@ -166,21 +165,15 @@ pub fn ai_economy_system(
 
         // Get player base pos for friendly AI resource avoidance
         let player_base_pos = if is_friendly {
-            buildings_q
-                .iter()
-                .find(|(_, f, kind, _, _)| **f == active_player.0 && **kind == EntityKind::Base)
-                .map(|(_, _, _, tf, _)| tf.translation)
+            snapshot
+                .factions
+                .get(&active_player.0)
+                .and_then(|player| player.base_position)
         } else {
             None
         };
 
-        // Count workers
-        let mut worker_count = 0usize;
-        for (_, f, _, _) in workers_q.iter() {
-            if *f == faction {
-                worker_count += 1;
-            }
-        }
+        let worker_count = faction_snapshot.worker_count;
 
         // ── Train workers if needed ──
         let desired = brain.desired_workers as usize;
@@ -217,12 +210,17 @@ pub fn ai_economy_system(
             amounts: pr.amounts,
         };
         let mut idle_workers: Vec<(Entity, Vec3)> = Vec::new();
-        for (entity, f, tf, task) in workers_q.iter() {
-            if *f != faction {
+        for &(entity, cached_pos) in &faction_snapshot.worker_entities {
+            let Ok((_, _, tf, task)) = workers_q.get(entity) else {
                 continue;
-            }
+            };
             if *task == UnitState::Idle && !brain.assigned_units.contains_key(&entity) {
-                idle_workers.push((entity, tf.translation));
+                let pos = if tf.translation != cached_pos {
+                    tf.translation
+                } else {
+                    cached_pos
+                };
+                idle_workers.push((entity, pos));
             }
         }
 
@@ -232,10 +230,10 @@ pub fn ai_economy_system(
             let needed = pick_goal_aware_resource(&player_res, resource_goal.as_ref(), top_state);
             let role = SquadRole::for_resource(needed);
 
-            if let Some(node_entity) = find_nearest_resource_node_with_avoidance(
+            if let Some(node_entity) = find_nearest_resource_node_in_snapshot(
                 *pos,
                 needed,
-                &resource_nodes_q,
+                &snapshot,
                 200.0,
                 player_base_pos,
                 is_friendly,
@@ -264,7 +262,10 @@ pub fn ai_economy_system(
             }
             let slots = processor.max_workers as usize - current_count;
             let mut assigned = 0;
-            for (w_entity, w_f, _, w_task) in workers_q.iter() {
+            for &(w_entity, _) in &faction_snapshot.worker_entities {
+                let Ok((_, w_f, _, w_task)) = workers_q.get(w_entity) else {
+                    continue;
+                };
                 if *w_f != faction || *w_task != UnitState::Idle {
                     continue;
                 }
@@ -303,7 +304,10 @@ pub fn ai_economy_system(
 
             if cw < 2 {
                 let mut best: Option<(Entity, f32)> = None;
-                for (w_entity, w_f, w_tf, w_task) in workers_q.iter() {
+                for &(w_entity, _) in &faction_snapshot.worker_entities {
+                    let Ok((_, w_f, w_tf, w_task)) = workers_q.get(w_entity) else {
+                        continue;
+                    };
                     if *w_f != faction {
                         continue;
                     }
@@ -515,4 +519,39 @@ pub fn ai_economy_system(
             }
         }
     }
+}
+
+fn find_nearest_resource_node_in_snapshot(
+    pos: Vec3,
+    resource_type: ResourceType,
+    snapshot: &AiWorldSnapshot,
+    max_range: f32,
+    player_base: Option<Vec3>,
+    is_friendly: bool,
+) -> Option<Entity> {
+    let mut best: Option<(Entity, f32)> = None;
+    let Some(nodes) = snapshot.resource_nodes_by_type.get(&resource_type) else {
+        return None;
+    };
+
+    for &(entity, node_pos) in nodes {
+        let mut d = pos.distance(node_pos);
+        if d >= max_range {
+            continue;
+        }
+
+        if is_friendly {
+            if let Some(pbp) = player_base {
+                if node_pos.distance(pbp) < 40.0 {
+                    d += 80.0;
+                }
+            }
+        }
+
+        if best.is_none() || d < best.unwrap().1 {
+            best = Some((entity, d));
+        }
+    }
+
+    best.map(|(entity, _)| entity)
 }

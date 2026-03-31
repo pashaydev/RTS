@@ -207,7 +207,7 @@ fn primary_resource_for(
         )),
         Biome::Wetland => Some((
             ResourceType::Iron,
-            620,
+            800,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.4,
@@ -253,7 +253,7 @@ fn secondary_resource_for(
         )),
         (Biome::Grassland, 1) => Some((
             ResourceType::Iron,
-            320,
+            440,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.45,
@@ -266,15 +266,15 @@ fn secondary_resource_for(
             0.4,
         )),
         (Biome::Forest, 1) => Some((
-            ResourceType::Stone,
-            260,
+            ResourceType::Iron,
+            420,
             ore_mesh.clone(),
-            mats.stone.clone(),
+            mats.iron.clone(),
             0.45,
         )),
         (Biome::Desert, 0) => Some((
             ResourceType::Iron,
-            480,
+            600,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.4,
@@ -295,7 +295,7 @@ fn secondary_resource_for(
         )),
         (Biome::Beach, 1) => Some((
             ResourceType::Iron,
-            220,
+            360,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.45,
@@ -316,7 +316,7 @@ fn secondary_resource_for(
         )),
         (Biome::Mountain, 0) => Some((
             ResourceType::Iron,
-            520,
+            680,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.4,
@@ -1972,10 +1972,11 @@ fn resource_processor_system(
             Option<&mut StorageInventory>,
             Option<&AssignedWorkers>,
             Option<&BuildingPaused>,
+            Option<&SawmillYard>,
         ),
         With<Building>,
     >,
-    mut nodes: Query<(&Transform, &mut ResourceNode), Without<Building>>,
+    mut nodes: Query<(Entity, &Transform, &mut ResourceNode, Option<&YardResourceNode>), Without<Building>>,
     vfx_assets: Option<Res<VfxAssets>>,
     unit_factions: Query<&Faction, With<Unit>>,
 ) {
@@ -1986,7 +1987,7 @@ fn resource_processor_system(
         *faction_unit_counts.entry(*f).or_default() += 1;
     }
     for (
-        _building_entity,
+        building_entity,
         building_tf,
         mut processor,
         state,
@@ -1994,6 +1995,7 @@ fn resource_processor_system(
         storage,
         assigned_workers,
         paused,
+        sawmill_yard,
     ) in &mut processors
     {
         if *state != BuildingState::Complete {
@@ -2013,8 +2015,15 @@ fn resource_processor_system(
         // Count assigned workers for this building
         let worker_count = assigned_workers.map(|aw| aw.workers.len()).unwrap_or(0) as f32;
 
-        // With 0 workers: 30% trickle rate. Each worker adds worker_rate_bonus fraction of base.
-        let trickle_fraction = if worker_count == 0.0 { 0.3 } else { 0.0 };
+        // Sawmills with yards require workers — no trickle without workers
+        let is_yard_building = sawmill_yard.is_some();
+        let trickle_fraction = if is_yard_building {
+            0.0
+        } else if worker_count == 0.0 {
+            0.3
+        } else {
+            0.0
+        };
         let base_rate = processor.harvest_rate * trickle_fraction
             + (worker_count * processor.harvest_rate * processor.worker_rate_bonus);
         // Apply population upkeep modifier
@@ -2029,11 +2038,19 @@ fn resource_processor_system(
         }
         processor.buffer += amount;
 
-        // Find nearest matching resource node in range and drain from it
+        // Find nearest matching resource node in range and drain from it.
+        // Sawmills with yards only harvest from their own yard nodes.
         let mut harvested_type = None;
-        for (node_tf, mut node) in &mut nodes {
+        for (_node_entity, node_tf, mut node, yard_tag) in &mut nodes {
             if !processor.resource_types.contains(&node.resource_type) {
                 continue;
+            }
+            // Yard-based filtering: sawmills only use their own yard nodes
+            if is_yard_building {
+                match yard_tag {
+                    Some(YardResourceNode(owner)) if *owner == building_entity => {}
+                    _ => continue,
+                }
             }
             let dist = building_tf.translation.distance(node_tf.translation);
             if dist > processor.harvest_radius {
@@ -2605,10 +2622,14 @@ fn deplete_resource_nodes(
     mut commands: Commands,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     time: Res<Time>,
-    nodes: Query<(Entity, &ResourceNode, &Transform)>,
+    nodes: Query<(Entity, &ResourceNode, &Transform, Option<&YardResourceNode>)>,
 ) {
-    for (entity, node, transform) in &nodes {
+    for (entity, node, transform, yard_tag) in &nodes {
         if node.amount_remaining == 0 {
+            // Yard trees regrow — don't despawn them
+            if yard_tag.is_some() {
+                continue;
+            }
             event_log.push(
                 time.elapsed_secs(),
                 format!("{} node depleted", node.resource_type.display_name()),
@@ -2793,6 +2814,11 @@ fn grow_trees_system(
 /// Blend causes massive overdraw when the camera is close because every
 /// overlapping transparent leaf quad is fully shaded. Mask uses a hard cutoff
 /// that enables early-Z rejection, eliminating the overdraw entirely.
+/// Limit how many trees get alpha-fixed per frame to avoid spikes when many
+/// trees spawn at once (e.g. map load). Unfixed trees will be processed on
+/// subsequent frames.
+const MAX_TREE_ALPHA_FIXES_PER_FRAME: usize = 8;
+
 fn fix_tree_alpha_mode(
     mut commands: Commands,
     trees: Query<
@@ -2807,7 +2833,11 @@ fn fix_tree_alpha_mode(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut leaf_mats: ResMut<TreeLeafMaterials>,
 ) {
+    let mut processed = 0;
     for tree_entity in &trees {
+        if processed >= MAX_TREE_ALPHA_FIXES_PER_FRAME {
+            break;
+        }
         let fixed = fix_alpha_recursive(
             tree_entity,
             &children_q,
@@ -2819,6 +2849,7 @@ fn fix_tree_alpha_mode(
         // Scene loading is async — children may not exist yet on the first frame.
         if fixed > 0 {
             commands.entity(tree_entity).insert(TreeAlphaFixed);
+            processed += 1;
         }
     }
 }
@@ -2874,10 +2905,11 @@ fn processor_worker_visual_system(
             &BuildingState,
             Option<&BuildingPaused>,
             &BuildingFootprint,
+            Option<&SawmillYard>,
         ),
         With<Building>,
     >,
-    nodes: Query<(Entity, &Transform, &ResourceNode), Without<Unit>>,
+    nodes: Query<(Entity, &Transform, &ResourceNode, Option<&YardResourceNode>), Without<Unit>>,
 ) {
     // Collect nodes targeted by other workers to avoid clustering
     let mut targeted_nodes: Vec<Entity> = Vec::new();
@@ -2905,12 +2937,14 @@ fn processor_worker_visual_system(
             continue;
         };
 
-        let Ok((_, building_tf, processor, building_state, building_paused, building_fp)) =
+        let Ok((_, building_tf, processor, building_state, building_paused, building_fp, sawmill_yard)) =
             processors.get(building_entity)
         else {
             // Building gone — handled by unit_state_executor
             continue;
         };
+
+        let is_yard_building = sawmill_yard.is_some();
 
         if *building_state != BuildingState::Complete {
             continue;
@@ -2923,11 +2957,18 @@ fn processor_worker_visual_system(
 
         match phase {
             AssignedPhase::SeekingNode => {
-                // Find nearest resource node within processor's harvest_radius not targeted by another worker
+                // Find nearest resource node within processor's harvest_radius not targeted by another worker.
+                // Sawmills only target their own yard nodes.
                 let mut best: Option<(Entity, f32)> = None;
-                for (node_entity, node_tf, node_data) in &nodes {
+                for (node_entity, node_tf, node_data, yard_tag) in &nodes {
                     if !processor.resource_types.contains(&node_data.resource_type) {
                         continue;
+                    }
+                    if is_yard_building {
+                        match yard_tag {
+                            Some(YardResourceNode(owner)) if *owner == building_entity => {}
+                            _ => continue,
+                        }
                     }
                     if node_data.amount_remaining == 0 {
                         continue;
@@ -2948,7 +2989,7 @@ fn processor_worker_visual_system(
                 }
                 if let Some((node, _)) = best {
                     // Set MoveTarget so the worker physically walks to the node
-                    if let Ok((_, node_tf, _)) = nodes.get(node) {
+                    if let Ok((_, node_tf, _, _)) = nodes.get(node) {
                         commands
                             .entity(entity)
                             .insert(MoveTarget(node_tf.translation));
@@ -2958,7 +2999,7 @@ fn processor_worker_visual_system(
             }
             AssignedPhase::MovingToNode(node) => {
                 let node = *node;
-                let Ok((_, node_tf, node_data)) = nodes.get(node) else {
+                let Ok((_, node_tf, node_data, _)) = nodes.get(node) else {
                     *phase = AssignedPhase::SeekingNode;
                     commands.entity(entity).remove::<MoveTarget>();
                     continue;
@@ -2986,7 +3027,7 @@ fn processor_worker_visual_system(
                 if nodes.get(node).is_err()
                     || nodes
                         .get(node)
-                        .map(|(_, _, n)| n.amount_remaining == 0)
+                        .map(|(_, _, n, _)| n.amount_remaining == 0)
                         .unwrap_or(true)
                 {
                     *phase = AssignedPhase::SeekingNode;

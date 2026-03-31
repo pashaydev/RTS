@@ -13,6 +13,10 @@ use game_state::message::{
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
 use crate::buildings;
+use crate::combat_intents::{
+    apply_manual_attack_intent, apply_manual_attack_move_intent, apply_manual_hold_intent,
+    apply_manual_move_intent, clear_combat_intent,
+};
 use crate::components::*;
 use crate::ground::{terrain_heights_hash, HeightMap, TerrainShapeSyncState};
 use crate::lighting::DayCycle;
@@ -172,6 +176,7 @@ pub struct HostCommandExecution<'w, 's> {
 pub fn execute_input_command(
     commands: &mut Commands,
     input: &PlayerInput,
+    issue_time: f64,
     net_map: &EntityNetMap,
     unit_states: &mut Query<&mut UnitState>,
     task_queues: &mut Query<&mut TaskQueue, With<Unit>>,
@@ -206,6 +211,7 @@ pub fn execute_input_command(
                         if let Ok(mut state) = unit_states.get_mut(ecs_entity) {
                             *state = UnitState::Moving(dest);
                         }
+                        apply_manual_move_intent(commands, ecs_entity, dest, issue_time);
                         commands
                             .entity(ecs_entity)
                             .remove::<AttackTarget>()
@@ -229,6 +235,7 @@ pub fn execute_input_command(
                             if let Ok(mut state) = unit_states.get_mut(ecs_entity) {
                                 *state = UnitState::Attacking(target_ecs);
                             }
+                            apply_manual_attack_intent(commands, ecs_entity, target_ecs, issue_time);
                             commands
                                 .entity(ecs_entity)
                                 .remove::<MoveTarget>()
@@ -257,6 +264,7 @@ pub fn execute_input_command(
                             if let Ok(mut state) = unit_states.get_mut(ecs_entity) {
                                 *state = UnitState::Gathering(target_ecs);
                             }
+                            clear_combat_intent(commands, ecs_entity, issue_time);
                             commands
                                 .entity(ecs_entity)
                                 .remove::<AttackTarget>()
@@ -284,6 +292,7 @@ pub fn execute_input_command(
                                 origin: pos,
                             };
                         }
+                        clear_combat_intent(commands, ecs_entity, issue_time);
                         commands
                             .entity(ecs_entity)
                             .remove::<AttackTarget>()
@@ -307,6 +316,7 @@ pub fn execute_input_command(
                         if let Ok(mut state) = unit_states.get_mut(ecs_entity) {
                             *state = UnitState::AttackMoving(pos);
                         }
+                        apply_manual_attack_move_intent(commands, ecs_entity, pos, issue_time);
                         commands
                             .entity(ecs_entity)
                             .remove::<AttackTarget>()
@@ -329,6 +339,7 @@ pub fn execute_input_command(
                         if let Ok(mut state) = unit_states.get_mut(ecs_entity) {
                             *state = UnitState::HoldPosition;
                         }
+                        apply_manual_hold_intent(commands, ecs_entity, issue_time);
                         commands
                             .entity(ecs_entity)
                             .remove::<MoveTarget>()
@@ -577,6 +588,7 @@ pub fn host_process_client_commands(
                         execute_input_command(
                             &mut commands,
                             &sanitized_input,
+                            time.elapsed_secs_f64(),
                             &net_map,
                             &mut unit_states,
                             &mut exec.task_queues,

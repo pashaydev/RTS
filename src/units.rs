@@ -211,14 +211,15 @@ fn steer_avoidance(
             Option<&AttackTarget>,
             &Faction,
         ),
-        With<Unit>,
+        (Or<(With<Unit>, With<Mob>)>, Without<Building>),
     >,
     buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<Unit>)>,
 ) {
-    let unit_avoidance_radius = 3.5;
-    let unit_strength = 12.0;
-    let idle_strength = 18.0; // stronger push when units are stationary
-    let hard_push_radius = 1.2; // very close units get a hard instant push
+    let moving_avoidance_radius = 2.6;
+    let idle_avoidance_radius = 3.2;
+    let unit_strength = 8.5;
+    let idle_strength = 12.5;
+    let hard_push_radius = 0.9;
     let wall_avoidance_radius = 3.5;
     let wall_strength = 12.0;
     let building_avoidance_radius = 1.5; // extra margin beyond footprint
@@ -232,6 +233,11 @@ fn steer_avoidance(
         let my_pos = transform.translation;
         let mut separation = Vec3::ZERO;
         let is_moving = move_target.is_some();
+        let unit_avoidance_radius = if is_moving {
+            moving_avoidance_radius
+        } else {
+            idle_avoidance_radius
+        };
         let effective_strength = if is_moving {
             unit_strength
         } else {
@@ -259,14 +265,14 @@ fn steer_avoidance(
                 let angle = (entity.to_bits().wrapping_sub(other_e.to_bits()) % 360) as f32
                     * std::f32::consts::TAU
                     / 360.0;
-                separation += Vec3::new(angle.cos(), 0.0, angle.sin()) * 2.0;
+                separation += Vec3::new(angle.cos(), 0.0, angle.sin()) * 1.4;
             } else if dist < hard_push_radius {
                 // Very close — strong quadratic push to prevent stacking
-                let weight = ((hard_push_radius - dist) / hard_push_radius).powi(2) * 3.0 + 1.0;
+                let weight = ((hard_push_radius - dist) / hard_push_radius).powi(2) * 2.2 + 0.8;
                 separation += flat_diff.normalize() * weight;
             } else if dist < unit_avoidance_radius {
-                let weight = (unit_avoidance_radius - dist) / unit_avoidance_radius;
-                separation += flat_diff.normalize() * weight;
+                let weight = ((unit_avoidance_radius - dist) / unit_avoidance_radius).powi(2);
+                separation += flat_diff.normalize() * weight * 0.5;
             }
         }
 
@@ -317,7 +323,7 @@ fn steer_avoidance(
 
         if separation.length_squared() > 0.0 {
             // Cap separation to avoid teleporting
-            let max_sep = 15.0 * time.delta_secs();
+            let max_sep = if is_moving { 6.0 } else { 9.0 } * time.delta_secs();
             let sep_vec = separation * effective_strength * time.delta_secs();
             let sep_len = sep_vec.length();
             if sep_len > max_sep {

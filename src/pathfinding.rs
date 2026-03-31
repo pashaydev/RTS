@@ -1,7 +1,13 @@
 use bevy::ecs::entity::Entities;
+use bevy::ecs::lifecycle::RemovedComponents;
 use bevy::prelude::*;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
+use std::time::Duration;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Instant;
+#[cfg(target_arch = "wasm32")]
+use web_time::Instant;
 
 use crate::components::*;
 use crate::ground::HeightMap;
@@ -12,6 +18,8 @@ use crate::spatial::WallSpatialGrid;
 const NAV_GRID_STEP: f32 = 2.5;
 const ASTAR_NODE_LIMIT: usize = 12_000;
 const PATHS_PER_FRAME: usize = 12;
+const PATHFINDING_BUDGET_MS: u64 = 2;
+const NEW_PATH_REQUESTS_PER_FRAME: usize = 24;
 /// Distance threshold below which we skip A* and just walk directly
 const DIRECT_MOVE_THRESHOLD: f32 = 3.0;
 /// Cost for cells near obstacles (soft margin — guides paths away but doesn't block)
@@ -43,6 +51,9 @@ pub struct NavPending;
 #[derive(Resource)]
 pub struct NavGrid {
     pub costs: Vec<u8>,
+    /// Terrain-only base costs computed once at init. Used to quickly reset
+    /// the grid before re-stamping buildings (avoids full biome/height recompute).
+    terrain_base_costs: Vec<u8>,
     pub grid_size: usize,
     pub step: f32,
     pub half_map: f32,
@@ -72,12 +83,13 @@ impl NavGrid {
     }
 }
 
-#[derive(Resource)]
-pub struct NavGridDirty(pub bool);
-
-/// Timer to periodically refresh the nav grid obstacle overlay
-#[derive(Resource)]
-pub struct NavGridRefreshTimer(pub Timer);
+#[derive(Resource, Default)]
+pub struct NavGridDirty {
+    /// Full rebuild needed (building removed, state changed, etc.)
+    pub full: bool,
+    /// Buildings added this frame — only stamp their footprints (fast path).
+    pub added: Vec<(Vec3, f32, f32)>, // (pos, footprint radius+padding, margin_radius)
+}
 
 pub struct PathRequest {
     pub entity: Entity,
@@ -96,11 +108,7 @@ pub struct PathfindingPlugin;
 
 impl Plugin for PathfindingPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(NavGridDirty(true))
-            .insert_resource(NavGridRefreshTimer(Timer::from_seconds(
-                2.0,
-                TimerMode::Repeating,
-            )))
+        app.insert_resource(NavGridDirty { full: true, ..default() })
             .init_resource::<PathRequestQueue>()
             .add_systems(
                 OnEnter(AppState::InGame),
@@ -109,6 +117,7 @@ impl Plugin for PathfindingPlugin {
             .add_systems(
                 Update,
                 (
+                    mark_nav_grid_dirty,
                     invalidate_stale_paths,
                     cleanup_orphan_paths,
                     refresh_nav_grid,
@@ -212,116 +221,137 @@ fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut comm
         }
     }
 
+    let terrain_base_costs = costs.clone();
     commands.insert_resource(NavGrid {
         costs,
+        terrain_base_costs,
         grid_size,
         step,
         half_map,
     });
-    commands.insert_resource(NavGridDirty(false));
+    commands.insert_resource(NavGridDirty::default());
 }
 
-/// Rebuild obstacle overlay when buildings/walls change.
-fn refresh_nav_grid(
-    time: Res<Time>,
-    mut timer: ResMut<NavGridRefreshTimer>,
+/// Track nav grid changes. New buildings use a fast incremental stamp;
+/// removals or transform/footprint changes trigger a full rebuild.
+/// BuildingState changes (e.g. UnderConstruction → Complete) are ignored
+/// because the footprint was already stamped when the building was added.
+fn mark_nav_grid_dirty(
     mut dirty: ResMut<NavGridDirty>,
-    mut nav_grid: ResMut<NavGrid>,
-    height_map: Res<HeightMap>,
-    biome_map: Res<BiomeMap>,
-    buildings: Query<(&Transform, &BuildingFootprint, &BuildingState), With<Building>>,
-    wall_grid: Res<WallSpatialGrid>,
+    nav_grid: Res<NavGrid>,
+    new_buildings: Query<
+        (Entity, &Transform, &BuildingFootprint, &BuildingState),
+        (With<Building>, Added<Building>),
+    >,
+    moved_buildings: Query<
+        Entity,
+        (
+            With<Building>,
+            Or<(Changed<Transform>, Changed<BuildingFootprint>)>,
+        ),
+    >,
+    mut removed_buildings: RemovedComponents<Building>,
 ) {
-    timer.0.tick(time.delta());
-    if timer.0.just_finished() {
-        dirty.0 = true;
+    // Removals need a full rebuild.
+    if removed_buildings.read().next().is_some() {
+        dirty.full = true;
     }
-    if !dirty.0 {
-        return;
-    }
-    dirty.0 = false;
 
-    let gs = nav_grid.grid_size;
-    let step = nav_grid.step;
-    let half = nav_grid.half_map;
-
-    // Reset to terrain-only costs
-    for gz in 0..gs {
-        for gx in 0..gs {
-            let idx = gz * gs + gx;
-            let wx = gx as f32 * step - half;
-            let wz = gz as f32 * step - half;
-
-            let biome = biome_map.get_biome(wx, wz);
-            match biome {
-                Biome::Water => {
-                    nav_grid.costs[idx] = 0;
-                }
-                Biome::Mountain => {
-                    let h = height_map.sample(wx, wz);
-                    if h > 8.0 {
-                        nav_grid.costs[idx] = 0;
-                    } else {
-                        nav_grid.costs[idx] = 20;
-                    }
-                }
-                _ => {
-                    let h = height_map.sample(wx, wz);
-                    let base = 1 + (h.abs() * 2.0).min(30.0) as u8;
-                    nav_grid.costs[idx] = base;
-                }
-            }
+    // Transform or footprint changes (not just state) need full rebuild.
+    for entity in &moved_buildings {
+        if new_buildings.get(entity).is_ok() {
+            continue;
         }
+        dirty.full = true;
+        break;
     }
 
-    // Stamp building footprints as impassable
-    for (tf, footprint, state) in &buildings {
-        // Only stamp completed or under-construction buildings
+    // Newly added buildings can be stamped incrementally (fast path).
+    for (_entity, tf, footprint, state) in &new_buildings {
         if *state != BuildingState::Complete && *state != BuildingState::UnderConstruction {
             continue;
         }
-        let radius = footprint.0 + 0.8; // padding
-        let margin_radius = radius + step; // soft margin ring
-        let pos = tf.translation;
+        let radius = footprint.0 + 0.8;
+        let margin_radius = radius + nav_grid.step;
+        dirty.added.push((tf.translation, radius, margin_radius));
+    }
+}
 
-        let (min_gx, min_gz) = nav_grid.world_to_grid(pos.x - margin_radius, pos.z - margin_radius);
-        let (max_gx, max_gz) = nav_grid.world_to_grid(pos.x + margin_radius, pos.z + margin_radius);
+fn refresh_nav_grid(
+    mut dirty: ResMut<NavGridDirty>,
+    mut nav_grid: ResMut<NavGrid>,
+    buildings: Query<(&Transform, &BuildingFootprint, &BuildingState), With<Building>>,
+    wall_grid: Res<WallSpatialGrid>,
+) {
+    let has_adds = !dirty.added.is_empty();
+    let needs_full = dirty.full;
 
-        for gz in min_gz..=max_gz.min(gs - 1) {
-            for gx in min_gx..=max_gx.min(gs - 1) {
-                let (wx, wz) = nav_grid.grid_to_world(gx, gz);
-                let dist = ((wx - pos.x).powi(2) + (wz - pos.z).powi(2)).sqrt();
-                let idx = nav_grid.index(gx, gz);
-                if dist < radius {
-                    nav_grid.costs[idx] = 0;
-                } else if dist < margin_radius && nav_grid.costs[idx] > 0 {
-                    nav_grid.costs[idx] = nav_grid.costs[idx].max(OBSTACLE_MARGIN_COST);
-                }
-            }
-        }
+    if !needs_full && !has_adds {
+        return;
     }
 
-    // Stamp walls as impassable
-    for cells in wall_grid.cells.values() {
-        for &(_entity, wall_pos, wall_fp, _faction) in cells {
-            let radius = wall_fp + 0.6;
-            let margin_radius = radius + step;
-            let (min_gx, min_gz) =
-                nav_grid.world_to_grid(wall_pos.x - margin_radius, wall_pos.z - margin_radius);
-            let (max_gx, max_gz) =
-                nav_grid.world_to_grid(wall_pos.x + margin_radius, wall_pos.z + margin_radius);
+    let gs = nav_grid.grid_size;
 
-            for gz in min_gz..=max_gz.min(gs - 1) {
-                for gx in min_gx..=max_gx.min(gs - 1) {
-                    let (wx, wz) = nav_grid.grid_to_world(gx, gz);
-                    let dist = ((wx - wall_pos.x).powi(2) + (wz - wall_pos.z).powi(2)).sqrt();
-                    let idx = nav_grid.index(gx, gz);
-                    if dist < radius {
-                        nav_grid.costs[idx] = 0;
-                    } else if dist < margin_radius && nav_grid.costs[idx] > 0 {
-                        nav_grid.costs[idx] = nav_grid.costs[idx].max(OBSTACLE_MARGIN_COST);
-                    }
-                }
+    if needs_full {
+        // ── Full rebuild (building removed / state changed) ──
+        dirty.full = false;
+        dirty.added.clear();
+
+        // Reset to cached terrain costs.
+        for i in 0..nav_grid.costs.len() {
+            nav_grid.costs[i] = nav_grid.terrain_base_costs[i];
+        }
+        let step = nav_grid.step;
+
+        // Stamp ALL building footprints.
+        for (tf, footprint, state) in &buildings {
+            if *state != BuildingState::Complete && *state != BuildingState::UnderConstruction {
+                continue;
+            }
+            let radius = footprint.0 + 0.8;
+            let margin_radius = radius + step;
+            stamp_obstacle(&mut nav_grid, tf.translation, radius, margin_radius, gs);
+        }
+
+        // Stamp walls.
+        for cells in wall_grid.cells.values() {
+            for &(_entity, wall_pos, wall_fp, _faction) in cells {
+                let radius = wall_fp + 0.6;
+                let margin_radius = radius + step;
+                stamp_obstacle(&mut nav_grid, wall_pos, radius, margin_radius, gs);
+            }
+        }
+    } else {
+        // ── Incremental: only stamp newly added buildings (fast path) ──
+        let added: Vec<_> = dirty.added.drain(..).collect();
+        for (pos, radius, margin_radius) in added {
+            stamp_obstacle(&mut nav_grid, pos, radius, margin_radius, gs);
+        }
+    }
+}
+
+/// Stamp a circular obstacle into the nav grid.
+fn stamp_obstacle(
+    nav_grid: &mut NavGrid,
+    pos: Vec3,
+    radius: f32,
+    margin_radius: f32,
+    gs: usize,
+) {
+    let (min_gx, min_gz) =
+        nav_grid.world_to_grid(pos.x - margin_radius, pos.z - margin_radius);
+    let (max_gx, max_gz) =
+        nav_grid.world_to_grid(pos.x + margin_radius, pos.z + margin_radius);
+
+    for gz in min_gz..=max_gz.min(gs - 1) {
+        for gx in min_gx..=max_gx.min(gs - 1) {
+            let (wx, wz) = nav_grid.grid_to_world(gx, gz);
+            let dist = ((wx - pos.x).powi(2) + (wz - pos.z).powi(2)).sqrt();
+            let idx = nav_grid.index(gx, gz);
+            if dist < radius {
+                nav_grid.costs[idx] = 0;
+            } else if dist < margin_radius && nav_grid.costs[idx] > 0 {
+                nav_grid.costs[idx] = nav_grid.costs[idx].max(OBSTACLE_MARGIN_COST);
             }
         }
     }
@@ -341,7 +371,12 @@ fn queue_path_requests(
         ),
     >,
 ) {
+    let mut queued_this_frame = 0usize;
     for (entity, tf, target) in &new_movers {
+        if queued_this_frame >= NEW_PATH_REQUESTS_PER_FRAME {
+            break;
+        }
+
         let start = tf.translation;
         let goal = target.0;
         let flat_dist = Vec2::new(goal.x - start.x, goal.z - start.z).length();
@@ -351,13 +386,19 @@ fn queue_path_requests(
             continue;
         }
 
-        queue.requests.push_back(PathRequest {
-            entity,
-            start,
-            goal,
-        });
+        if let Some(existing) = queue.requests.iter_mut().find(|request| request.entity == entity) {
+            existing.start = start;
+            existing.goal = goal;
+        } else {
+            queue.requests.push_back(PathRequest {
+                entity,
+                start,
+                goal,
+            });
+        }
         // Mark as pending so the unit waits instead of walking blindly
         commands.entity(entity).insert(NavPending);
+        queued_this_frame += 1;
     }
 }
 
@@ -370,7 +411,13 @@ fn process_path_requests(
     entities: &Entities,
 ) {
     let mut processed = 0;
+    let budget = Duration::from_millis(PATHFINDING_BUDGET_MS);
+    let frame_start = Instant::now();
     while processed < PATHS_PER_FRAME {
+        if processed > 0 && frame_start.elapsed() >= budget {
+            break;
+        }
+
         let Some(request) = queue.requests.pop_front() else {
             break;
         };

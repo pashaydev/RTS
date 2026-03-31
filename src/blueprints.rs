@@ -329,6 +329,52 @@ impl EntityKind {
     }
 }
 
+fn random_unit_display_name(kind: EntityKind, rng: &mut impl Rng) -> String {
+    const PREFIXES: &[&str] = &[
+        "Ash", "Black", "Bright", "Cold", "Dawn", "Deep", "Ember", "Flint", "Golden", "Gray",
+        "Iron", "Oak", "Red", "Stone", "Storm", "Swift", "Vale", "Wolf",
+    ];
+    const SUFFIXES: &[&str] = &[
+        "arrow", "bane", "blade", "brand", "brook", "crest", "fall", "fang", "field", "forge",
+        "guard", "heart", "helm", "mark", "runner", "shade", "song", "watch",
+    ];
+    const FIRST_NAMES: &[&str] = &[
+        "Alden", "Bren", "Cass", "Darian", "Elric", "Fen", "Gareth", "Hale", "Ivor", "Jora",
+        "Kellan", "Lyra", "Mara", "Nora", "Orin", "Perrin", "Rhea", "Soren", "Talia", "Vera",
+    ];
+
+    let title = match kind {
+        EntityKind::Worker => Some("the Builder"),
+        EntityKind::Soldier => Some("the Bold"),
+        EntityKind::Archer => Some("the Keen"),
+        EntityKind::Tank => Some("the Wall"),
+        EntityKind::Knight => Some("the Valiant"),
+        EntityKind::Mage => Some("the Wise"),
+        EntityKind::Priest => Some("the Kindly"),
+        EntityKind::Cavalry => Some("the Swift"),
+        EntityKind::Scout => Some("the Far-Seer"),
+        EntityKind::Catapult => Some("the Breaker"),
+        EntityKind::BatteringRam => Some("the Hammer"),
+        EntityKind::SkeletonMinion => Some("the Bound"),
+        EntityKind::SpiritWolf => Some("the Wild"),
+        EntityKind::FireElemental => Some("the Burning"),
+        _ => None,
+    };
+
+    if rng.random_bool(0.55) {
+        let first = FIRST_NAMES[rng.random_range(0..FIRST_NAMES.len())];
+        if let Some(title) = title {
+            format!("{first} {title}")
+        } else {
+            first.to_string()
+        }
+    } else {
+        let prefix = PREFIXES[rng.random_range(0..PREFIXES.len())];
+        let suffix = SUFFIXES[rng.random_range(0..SUFFIXES.len())];
+        format!("{prefix}{suffix}")
+    }
+}
+
 // ── Stat bundles ──
 
 #[derive(Clone, Debug)]
@@ -2491,7 +2537,7 @@ pub fn build_registry() -> BlueprintRegistry {
                 aggro_range: None,
                 is_ranged: false,
             }),
-            movement: None,
+            movement: Some(MovementStats { speed: 0.0, y_offset: 0.35 }),
             gathering: None,
             vision: Some(VisionStats { range: 10.0 }),
             cost: ResourceCost::new()
@@ -3171,6 +3217,7 @@ pub fn spawn_from_blueprint_with_faction(
             let mut rng = rand::rng();
             entity_cmds.insert((
                 Unit,
+                UnitDisplayName(random_unit_display_name(kind, &mut rng)),
                 UnitState::default(),
                 TaskSource::default(),
                 TaskQueue::default(),
@@ -3291,29 +3338,26 @@ pub fn spawn_from_blueprint_with_faction(
                             harvest_timer: Timer::from_seconds(3.0, TimerMode::Repeating),
                             harvest_accumulator: 0.0,
                         },
-                        ResourceRespawnConfig {
-                            resource_types: vec![ResourceType::Wood],
-                            respawn_timer: Timer::from_seconds(30.0, TimerMode::Repeating),
-                            respawn_radius: 15.0,
-                            max_nodes: 5,
-                            amount_per_node: 200,
+                        {
+                            let mut prod = ProductionState::new(vec![
+                                ProductionRecipe {
+                                    name: "Planks",
+                                    inputs: vec![(ResourceType::Wood, 3)],
+                                    outputs: vec![(ResourceType::Planks, 2)],
+                                    cycle_secs: 8.0,
+                                    requires_level: 1,
+                                },
+                                ProductionRecipe {
+                                    name: "Charcoal",
+                                    inputs: vec![(ResourceType::Wood, 2)],
+                                    outputs: vec![(ResourceType::Charcoal, 1)],
+                                    cycle_secs: 6.0,
+                                    requires_level: 2,
+                                },
+                            ]);
+                            prod.active_recipe = None; // Planks off by default
+                            prod
                         },
-                        ProductionState::new(vec![
-                            ProductionRecipe {
-                                name: "Planks",
-                                inputs: vec![(ResourceType::Wood, 3)],
-                                outputs: vec![(ResourceType::Planks, 2)],
-                                cycle_secs: 8.0,
-                                requires_level: 1,
-                            },
-                            ProductionRecipe {
-                                name: "Charcoal",
-                                inputs: vec![(ResourceType::Wood, 2)],
-                                outputs: vec![(ResourceType::Charcoal, 1)],
-                                cycle_secs: 6.0,
-                                requires_level: 2,
-                            },
-                        ]),
                     ));
                 }
                 EntityKind::Mine => {

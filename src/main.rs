@@ -8,6 +8,9 @@ mod blueprints;
 mod buildings;
 mod camera;
 mod combat;
+mod combat_budget;
+mod combat_intents;
+mod combat_slots;
 mod components;
 mod culling;
 mod debug;
@@ -136,6 +139,9 @@ fn main() {
             combat::CombatPlugin,
             fog::FogPlugin,
         ))
+        .add_plugins(combat_intents::CombatIntentsPlugin)
+        .add_plugins(combat_budget::CombatBudgetPlugin)
+        .add_plugins(combat_slots::CombatSlotsPlugin)
         .add_plugins(abilities::AbilitiesPlugin)
         .add_plugins(spatial::SpatialPlugin)
         .add_plugins(pathfinding::PathfindingPlugin)

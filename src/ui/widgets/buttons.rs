@@ -5,6 +5,7 @@ use game_state::message::{ClientMessage, InputCommand, PlayerInput};
 
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::buildings;
+use crate::combat_intents::{apply_manual_hold_intent, clear_combat_intent};
 use crate::components::*;
 use crate::multiplayer::{ClientNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
@@ -664,10 +665,14 @@ pub fn handle_toggle_auto_attack(
 pub fn handle_assign_worker_button(
     mut commands: Commands,
     interactions: Query<&Interaction, (Changed<Interaction>, With<AssignWorkerButton>)>,
-    selected_buildings: Query<(Entity, &ResourceProcessor), (With<Building>, With<Selected>)>,
-    idle_workers: Query<(Entity, &UnitState, &Faction), (With<Unit>, With<GatherSpeed>)>,
+    selected_buildings: Query<
+        (Entity, &ResourceProcessor, &Transform, Option<&SawmillYard>),
+        (With<Building>, With<Selected>),
+    >,
+    mut idle_workers: Query<(Entity, &UnitState, &Faction, &mut Transform), (With<Unit>, With<GatherSpeed>, Without<Building>)>,
     assigned_workers_q: Query<&AssignedWorkers>,
     active_player: Res<ActivePlayer>,
+    height_map: Res<crate::ground::HeightMap>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -678,7 +683,7 @@ pub fn handle_assign_worker_button(
         ui_clicked.0 = 2;
         ui_press.0 = true;
 
-        for (building_entity, processor) in &selected_buildings {
+        for (building_entity, processor, building_tf, sawmill_yard) in &selected_buildings {
             let current_count = assigned_workers_q
                 .get(building_entity)
                 .map(|aw| aw.workers.len())
@@ -687,9 +692,16 @@ pub fn handle_assign_worker_button(
                 continue;
             }
 
+            // Compute yard center for sawmills so workers can be placed inside the fence
+            let yard_center = if sawmill_yard.is_some() {
+                Some(building_tf.translation + crate::buildings::SAWMILL_YARD_OFFSET)
+            } else {
+                None
+            };
+
             let slots_available = 1; // Assign one worker per click
             let mut assigned = 0;
-            for (worker_entity, state, faction) in &idle_workers {
+            for (worker_entity, state, faction, mut worker_tf) in &mut idle_workers {
                 if *faction != active_player.0 {
                     continue;
                 }
@@ -704,6 +716,19 @@ pub fn handle_assign_worker_button(
                     worker_entity,
                     building_entity,
                 );
+
+                // Teleport worker inside the fence for sawmills
+                if let Some(center) = yard_center {
+                    let slot_idx = current_count + assigned;
+                    let slot_offset = crate::buildings::SAWMILL_TREE_SLOTS
+                        .get(slot_idx)
+                        .copied()
+                        .unwrap_or(Vec3::ZERO);
+                    let target_pos = center + slot_offset * 0.5; // offset slightly from tree
+                    let ground_y = height_map.sample(target_pos.x, target_pos.z);
+                    worker_tf.translation = Vec3::new(target_pos.x, ground_y, target_pos.z);
+                }
+
                 // Also add to AssignedWorkers
                 commands
                     .entity(building_entity)
@@ -1085,6 +1110,7 @@ pub fn handle_hold_position_button(
     active_player: Res<ActivePlayer>,
     mut next_task_id: ResMut<NextTaskId>,
     mut cmd_mode: ResMut<CommandMode>,
+    time: Res<Time>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -1099,6 +1125,7 @@ pub fn handle_hold_position_button(
             if *faction != active_player.0 {
                 continue;
             }
+            apply_manual_hold_intent(&mut commands, entity, time.elapsed_secs_f64());
             commands
                 .entity(entity)
                 .remove::<MoveTarget>()
@@ -1123,6 +1150,7 @@ pub fn handle_stop_button(
     selected_units: Query<(Entity, &Faction), (With<Unit>, With<Selected>)>,
     active_player: Res<ActivePlayer>,
     mut cmd_mode: ResMut<CommandMode>,
+    time: Res<Time>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -1137,6 +1165,7 @@ pub fn handle_stop_button(
             if *faction != active_player.0 {
                 continue;
             }
+            clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
             commands
                 .entity(entity)
                 .remove::<MoveTarget>()

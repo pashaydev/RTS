@@ -141,6 +141,7 @@ pub fn rebuild_selection_panel(
         (
             Entity,
             &EntityKind,
+            Option<&UnitDisplayName>,
             &Health,
             &AttackDamage,
             &AttackRange,
@@ -169,6 +170,7 @@ pub fn rebuild_selection_panel(
     inspected_unit_q: Query<
         (
             &EntityKind,
+            Option<&UnitDisplayName>,
             &Health,
             &AttackDamage,
             &AttackRange,
@@ -220,13 +222,14 @@ pub fn rebuild_selection_panel(
 
     match &*ui_mode {
         UiMode::SelectedUnits(entities) if entities.len() == 1 => {
-            if let Some((entity, kind, health, dmg, rng, spd, stance)) =
+            if let Some((entity, kind, display_name, health, dmg, rng, spd, stance)) =
                 selected_units.iter().next()
             {
                 spawn_friendly_detail_card(
                     &mut commands,
                     panel_entity,
                     entity,
+                    display_name.map(|name| name.0.as_str()),
                     *kind,
                     health,
                     dmg,
@@ -263,13 +266,23 @@ pub fn rebuild_selection_panel(
                 .id();
             commands.entity(panel_entity).add_child(grid_container);
 
-            let mut unit_groups: Vec<(EntityKind, Vec<(Entity, &Health)>)> = Vec::new();
-            for (entity, kind, health, _, _, _, _) in &selected_units {
+            let mut unit_groups: Vec<(
+                EntityKind,
+                Vec<(Entity, Option<&UnitDisplayName>, &Health)>,
+            )> = Vec::new();
+            for (entity, kind, display_name, health, _, _, _, _) in &selected_units {
                 if let Some(group) = unit_groups.iter_mut().find(|(k, _)| *k == *kind) {
-                    group.1.push((entity, health));
+                    group.1.push((entity, display_name, health));
                 } else {
-                    unit_groups.push((*kind, vec![(entity, health)]));
+                    unit_groups.push((*kind, vec![(entity, display_name, health)]));
                 }
+            }
+            for (_, entities) in &mut unit_groups {
+                entities.sort_by(|a, b| {
+                    let a_name = a.1.map_or("", |name| name.0.as_str());
+                    let b_name = b.1.map_or("", |name| name.0.as_str());
+                    a_name.cmp(&b_name)
+                });
             }
             let mut building_groups: Vec<(EntityKind, Vec<(Entity, &Health)>)> = Vec::new();
             for (entity, kind, _state, health) in &selected_buildings {
@@ -311,11 +324,12 @@ pub fn rebuild_selection_panel(
                     .id();
                 commands.entity(grid_container).add_child(grid);
 
-                for (entity, health) in entities {
+                for (entity, display_name, health) in entities {
                     spawn_unit_mini_card(
                         &mut commands,
                         grid,
                         *entity,
+                        display_name.map(|name| name.0.as_str()),
                         *kind,
                         health,
                         &icons,
@@ -360,6 +374,7 @@ pub fn rebuild_selection_panel(
                         &mut commands,
                         grid,
                         *entity,
+                        None,
                         *kind,
                         health,
                         &icons,
@@ -418,7 +433,9 @@ pub fn rebuild_selection_panel(
                 aggro,
                 &icons,
             );
-        } else if let Ok((kind, health, dmg, rng, spd)) = inspected_unit_q.get(inspected_entity) {
+        } else if let Ok((kind, display_name, health, dmg, rng, spd)) =
+            inspected_unit_q.get(inspected_entity)
+        {
             if has_selection {
                 let divider = commands
                     .spawn((
@@ -437,6 +454,7 @@ pub fn rebuild_selection_panel(
                 &mut commands,
                 panel_entity,
                 inspected_entity,
+                display_name.map(|name| name.0.as_str()),
                 *kind,
                 health,
                 dmg,
@@ -499,6 +517,7 @@ pub fn spawn_friendly_detail_card(
     commands: &mut Commands,
     parent: Entity,
     entity: Entity,
+    display_name: Option<&str>,
     kind: EntityKind,
     health: &Health,
     damage: &AttackDamage,
@@ -566,7 +585,7 @@ pub fn spawn_friendly_detail_card(
 
     let name = commands
         .spawn((
-            Text::new(kind.display_name()),
+            Text::new(display_name.unwrap_or(kind.display_name())),
             TextFont {
                 font_size: theme::FONT_LARGE,
                 ..default()
@@ -575,6 +594,20 @@ pub fn spawn_friendly_detail_card(
         ))
         .id();
     commands.entity(info).add_child(name);
+
+    if display_name.is_some() {
+        let unit_type = commands
+            .spawn((
+                Text::new(kind.display_name()),
+                TextFont {
+                    font_size: theme::FONT_SMALL,
+                    ..default()
+                },
+                TextColor(theme::TEXT_SECONDARY),
+            ))
+            .id();
+        commands.entity(info).add_child(unit_type);
+    }
 
     spawn_hp_bar(commands, info, entity, health, 160.0);
 
@@ -881,6 +914,7 @@ fn spawn_unit_mini_card(
     commands: &mut Commands,
     parent: Entity,
     entity: Entity,
+    display_name: Option<&str>,
     kind: EntityKind,
     health: &Health,
     icons: &IconAssets,
@@ -924,6 +958,36 @@ fn spawn_unit_mini_card(
     commands.entity(card).add_child(icon);
 
     spawn_hp_bar(commands, card, entity, health, 54.0);
+
+    let name = commands
+        .spawn((
+            Text::new(display_name.unwrap_or(kind.display_name())),
+            TextFont {
+                font_size: 10.0,
+                ..default()
+            },
+            TextColor(theme::TEXT_PRIMARY),
+            Node {
+                max_width: Val::Px(72.0),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(card).add_child(name);
+
+    if display_name.is_some() {
+        let unit_type = commands
+            .spawn((
+                Text::new(kind.display_name()),
+                TextFont {
+                    font_size: 9.0,
+                    ..default()
+                },
+                TextColor(theme::TEXT_SECONDARY),
+            ))
+            .id();
+        commands.entity(card).add_child(unit_type);
+    }
 
     // Group membership badge(s) — small colored numbers in top-right corner
     if !groups.is_empty() {

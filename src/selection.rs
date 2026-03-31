@@ -13,6 +13,10 @@ use crate::multiplayer::host_systems::execute_input_command;
 use crate::multiplayer::{ClientNetState, HostNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
 use crate::audio::{PlaySfx, SfxKind};
+use crate::combat_intents::{
+    apply_manual_attack_intent, apply_manual_attack_move_intent, apply_manual_hold_intent,
+    apply_manual_move_intent, clear_combat_intent,
+};
 use crate::orders;
 use crate::theme;
 use crate::ui::fonts;
@@ -171,7 +175,11 @@ struct PickResult {
     is_resource: bool,
 }
 
-/// Pick the best entity for click selection — prioritizes units > buildings > resources > mobs.
+/// Pick the best entity for click selection.
+///
+/// Distance should dominate target choice. Type priority is only used to break
+/// near-ties so a nearby unit does not steal hover/selection from a building
+/// that is more directly under the cursor.
 fn pick_for_click(
     ray: &Ray3d,
     pickables: &Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
@@ -216,9 +224,10 @@ fn pick_for_click(
     // Sort by distance
     hits.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    // Among close hits (within 2 units of the closest), prefer units > buildings > resources > mobs
+    // Only apply type priority to genuine near-ties. The previous 2.0-unit
+    // threshold let nearby units win over buildings too aggressively.
     let closest_dist = hits[0].1;
-    let threshold = closest_dist + 2.0;
+    let threshold = closest_dist + 0.35;
     let close_hits: Vec<_> = hits.into_iter().filter(|h| h.1 <= threshold).collect();
 
     // Priority: unit > building > resource > mob
@@ -1298,6 +1307,7 @@ fn handle_right_click_move(
                     execute_input_command(
                         &mut commands,
                         &input,
+                        time.elapsed_secs_f64(),
                         nm,
                         &mut unit_states_q,
                         &mut task_queues,
@@ -1324,11 +1334,16 @@ fn handle_right_click_move(
                             QueuedTask::Attack(target_entity),
                         );
                     } else {
+                        apply_manual_attack_intent(
+                            &mut commands,
+                            *entity,
+                            target_entity,
+                            time.elapsed_secs_f64(),
+                        );
                         let mut ec = commands.entity(*entity);
                         ec.remove::<MoveTarget>()
                             .insert(AttackTarget(target_entity))
-                            .insert(UnitState::Attacking(target_entity))
-                            .insert(TaskSource::Manual);
+                            .insert(UnitState::Attacking(target_entity));
                         set_current_task(
                             &mut task_queues,
                             &mut next_task_id,
@@ -1367,6 +1382,11 @@ fn handle_right_click_move(
                                     if let Ok(gt) =
                                         pickables.get(target_entity).map(|(_, gt, _, _)| gt)
                                     {
+                                        clear_combat_intent(
+                                            &mut commands,
+                                            *entity,
+                                            time.elapsed_secs_f64(),
+                                        );
                                         commands
                                             .entity(*entity)
                                             .remove::<AttackTarget>()
@@ -1389,6 +1409,12 @@ fn handle_right_click_move(
                             } else if let Ok(gt) =
                                 pickables.get(target_entity).map(|(_, gt, _, _)| gt)
                             {
+                                apply_manual_move_intent(
+                                    &mut commands,
+                                    *entity,
+                                    gt.translation(),
+                                    time.elapsed_secs_f64(),
+                                );
                                 commands
                                     .entity(*entity)
                                     .remove::<AttackTarget>()
@@ -1414,6 +1440,11 @@ fn handle_right_click_move(
                                 QueuedTask::Build(target_entity),
                             );
                         } else {
+                            clear_combat_intent(
+                                &mut commands,
+                                *entity,
+                                time.elapsed_secs_f64(),
+                            );
                             commands
                                 .entity(*entity)
                                 .remove::<AttackTarget>()
@@ -1428,6 +1459,12 @@ fn handle_right_click_move(
                             );
                         }
                     } else if let Ok(pos) = construction_pos {
+                        apply_manual_move_intent(
+                            &mut commands,
+                            *entity,
+                            pos,
+                            time.elapsed_secs_f64(),
+                        );
                         commands
                             .entity(*entity)
                             .remove::<AttackTarget>()
@@ -1449,6 +1486,11 @@ fn handle_right_click_move(
                             );
                         } else {
                             if let Ok(gt) = pickables.get(target_entity).map(|(_, gt, _, _)| gt) {
+                                clear_combat_intent(
+                                    &mut commands,
+                                    *entity,
+                                    time.elapsed_secs_f64(),
+                                );
                                 commands
                                     .entity(*entity)
                                     .remove::<AttackTarget>()
@@ -1464,6 +1506,12 @@ fn handle_right_click_move(
                             }
                         }
                     } else if let Ok(gt) = pickables.get(target_entity).map(|(_, gt, _, _)| gt) {
+                        apply_manual_move_intent(
+                            &mut commands,
+                            *entity,
+                            gt.translation(),
+                            time.elapsed_secs_f64(),
+                        );
                         commands
                             .entity(*entity)
                             .remove::<AttackTarget>()
@@ -1500,6 +1548,12 @@ fn handle_right_click_move(
                                 QueuedTask::Move(dest),
                             );
                         } else {
+                            apply_manual_move_intent(
+                                &mut commands,
+                                *entity,
+                                dest,
+                                time.elapsed_secs_f64(),
+                            );
                             commands
                                 .entity(*entity)
                                 .remove::<AttackTarget>()
@@ -1546,6 +1600,11 @@ fn handle_right_click_move(
                                 QueuedTask::Build(site_entity),
                             );
                         } else {
+                            clear_combat_intent(
+                                &mut commands,
+                                *entity,
+                                time.elapsed_secs_f64(),
+                            );
                             commands
                                 .entity(*entity)
                                 .remove::<AttackTarget>()
@@ -1560,6 +1619,12 @@ fn handle_right_click_move(
                             );
                         }
                     } else {
+                        apply_manual_move_intent(
+                            &mut commands,
+                            *entity,
+                            point,
+                            time.elapsed_secs_f64(),
+                        );
                         commands
                             .entity(*entity)
                             .remove::<AttackTarget>()
@@ -1581,6 +1646,12 @@ fn handle_right_click_move(
                             QueuedTask::Move(point),
                         );
                     } else {
+                        apply_manual_move_intent(
+                            &mut commands,
+                            *ent,
+                            point,
+                            time.elapsed_secs_f64(),
+                        );
                         commands
                             .entity(*ent)
                             .remove::<AttackTarget>()
@@ -1618,6 +1689,12 @@ fn handle_right_click_move(
                                 QueuedTask::Move(dest),
                             );
                         } else {
+                            apply_manual_move_intent(
+                                &mut commands,
+                                *entity,
+                                dest,
+                                time.elapsed_secs_f64(),
+                            );
                             commands
                                 .entity(*entity)
                                 .remove::<AttackTarget>()
@@ -1717,6 +1794,7 @@ fn handle_unit_command_hotkeys(
     mut unit_abilities: Query<&mut UnitAbilities>,
     active_player: Res<ActivePlayer>,
     mut formation: ResMut<ActiveFormation>,
+    time: Res<Time>,
     ui_clicked: Res<UiClickedThisFrame>,
     ui_press: Res<UiPressActive>,
     placement: Res<BuildingPlacementState>,
@@ -1740,6 +1818,7 @@ fn handle_unit_command_hotkeys(
                 if *faction != active_player.0 {
                     continue;
                 }
+                apply_manual_hold_intent(&mut commands, entity, time.elapsed_secs_f64());
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
@@ -1762,6 +1841,7 @@ fn handle_unit_command_hotkeys(
                 if *faction != active_player.0 {
                     continue;
                 }
+                clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
@@ -1911,6 +1991,12 @@ fn handle_unit_command_hotkeys(
                         QueuedTask::AttackMove(dest),
                     );
                 } else {
+                    apply_manual_attack_move_intent(
+                        &mut commands,
+                        *entity,
+                        dest,
+                        time.elapsed_secs_f64(),
+                    );
                     commands
                         .entity(*entity)
                         .remove::<AttackTarget>()
@@ -1936,6 +2022,11 @@ fn handle_unit_command_hotkeys(
                         QueuedTask::Patrol(point),
                     );
                 } else {
+                    clear_combat_intent(
+                        &mut commands,
+                        *entity,
+                        time.elapsed_secs_f64(),
+                    );
                     commands
                         .entity(*entity)
                         .remove::<AttackTarget>()

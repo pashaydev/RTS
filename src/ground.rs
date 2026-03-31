@@ -1018,6 +1018,11 @@ fn enqueue_building_terrain_updates(
     }
 }
 
+/// Process at most one terrain shape update per frame to avoid large GPU
+/// re-upload spikes. Each update modifies only a small region of the height
+/// map and mesh, but `meshes.get_mut()` marks the entire asset as changed,
+/// triggering a full GPU re-upload (~3 MB for a large terrain). Limiting to
+/// one per frame spreads this cost across frames.
 fn process_terrain_shape_update_queue(
     mut queue: ResMut<TerrainShapeUpdateQueue>,
     mut height_map: ResMut<HeightMap>,
@@ -1030,57 +1035,47 @@ fn process_terrain_shape_update_queue(
         return;
     }
 
-    let Ok(ground_mesh) = ground_q.single() else {
-        return;
-    };
-    let Some(mesh) = meshes.get_mut(&ground_mesh.0) else {
-        return;
-    };
-
-    // Collect dirty grid bounds across all ops this frame
-    let mut dirty_min_x = usize::MAX;
-    let mut dirty_max_x = 0usize;
-    let mut dirty_min_z = usize::MAX;
-    let mut dirty_max_z = 0usize;
-    let mut any_changed = false;
     let is_client = matches!(net_role.as_deref(), Some(crate::multiplayer::NetRole::Client));
 
-    while let Some(update) = queue.pending.pop_front() {
-        let (_, outer_radius) = foundation_radii(update.footprint, height_map.step);
-        let op_min_x = (((update.center[0] - outer_radius) + height_map.half_map) / height_map.step)
-            .floor()
-            .max(0.0) as usize;
-        let op_max_x = (((update.center[0] + outer_radius) + height_map.half_map) / height_map.step)
-            .ceil()
-            .min((height_map.grid_size - 1) as f32) as usize;
-        let op_min_z = (((update.center[1] - outer_radius) + height_map.half_map) / height_map.step)
-            .floor()
-            .max(0.0) as usize;
-        let op_max_z = (((update.center[1] + outer_radius) + height_map.half_map) / height_map.step)
-            .ceil()
-            .min((height_map.grid_size - 1) as f32) as usize;
+    // Process only ONE update per frame to limit GPU re-upload cost.
+    let Some(update) = queue.pending.pop_front() else {
+        return;
+    };
 
-        if apply_terrain_shape_op(&mut height_map, &update) {
-            dirty_min_x = dirty_min_x.min(op_min_x);
-            dirty_max_x = dirty_max_x.max(op_max_x);
-            dirty_min_z = dirty_min_z.min(op_min_z);
-            dirty_max_z = dirty_max_z.max(op_max_z);
-            any_changed = true;
-        }
+    let (_, outer_radius) = foundation_radii(update.footprint, height_map.step);
+    let op_min_x = (((update.center[0] - outer_radius) + height_map.half_map) / height_map.step)
+        .floor()
+        .max(0.0) as usize;
+    let op_max_x = (((update.center[0] + outer_radius) + height_map.half_map) / height_map.step)
+        .ceil()
+        .min((height_map.grid_size - 1) as f32) as usize;
+    let op_min_z = (((update.center[1] - outer_radius) + height_map.half_map) / height_map.step)
+        .floor()
+        .max(0.0) as usize;
+    let op_max_z = (((update.center[1] + outer_radius) + height_map.half_map) / height_map.step)
+        .ceil()
+        .min((height_map.grid_size - 1) as f32) as usize;
 
-        sync_state.applied_history.insert(update.clone());
-        sync_state.applied_history_ordered.push(update.clone());
-        if !is_client {
-            sync_state.pending_network.push(update);
-        }
+    let changed = apply_terrain_shape_op(&mut height_map, &update);
+
+    sync_state.applied_history.insert(update.clone());
+    sync_state.applied_history_ordered.push(update.clone());
+    if !is_client {
+        sync_state.pending_network.push(update);
     }
 
-    if any_changed {
-        // Expand dirty region by 1 for correct normal recalculation at boundaries
-        let norm_min_x = dirty_min_x.saturating_sub(1);
-        let norm_max_x = (dirty_max_x + 1).min(height_map.grid_size - 1);
-        let norm_min_z = dirty_min_z.saturating_sub(1);
-        let norm_max_z = (dirty_max_z + 1).min(height_map.grid_size - 1);
+    if changed {
+        let Ok(ground_mesh) = ground_q.single() else {
+            return;
+        };
+        let Some(mesh) = meshes.get_mut(&ground_mesh.0) else {
+            return;
+        };
+
+        let norm_min_x = op_min_x.saturating_sub(1);
+        let norm_max_x = (op_max_x + 1).min(height_map.grid_size - 1);
+        let norm_min_z = op_min_z.saturating_sub(1);
+        let norm_max_z = (op_max_z + 1).min(height_map.grid_size - 1);
 
         sync_ground_mesh_partial(mesh, &height_map, norm_min_x, norm_max_x, norm_min_z, norm_max_z);
     }

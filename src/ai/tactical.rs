@@ -3,6 +3,7 @@ use std::collections::HashSet;
 
 use crate::blueprints::EntityKind;
 use crate::components::*;
+use crate::spatial::SpatialHashGrid;
 
 use super::helpers::update_threat;
 use super::types::*;
@@ -20,6 +21,7 @@ pub fn ai_tactical_system(
     ai_controlled: Res<AiControlledFactions>,
     mut ai_state: ResMut<AiState>,
     mut notifications: ResMut<AllyNotifications>,
+    spatial_grid: Res<SpatialHashGrid>,
     own_entities_q: Query<
         (Entity, &Faction, &Transform, &Health),
         Or<(With<Unit>, With<Building>)>,
@@ -35,6 +37,7 @@ pub fn ai_tactical_system(
         ),
         Or<(With<Unit>, With<Mob>)>,
     >,
+    hostile_unit_data_q: Query<(&Faction, &Transform, &Health, Option<&AttackDamage>), Or<(With<Unit>, With<Mob>)>>,
     buildings_q: Query<(&Faction, &Transform), With<Building>>,
 ) {
     let dt = time.delta_secs();
@@ -72,15 +75,19 @@ pub fn ai_tactical_system(
         brain.enemy_strength = 0.0;
         let mut enemies_near_base: u32 = 0;
 
-        for (_, ef, ekind, etf, ehealth, edamage) in enemy_units_q.iter() {
+        for (_, ef, ekind, _etf, ehealth, edamage) in enemy_units_q.iter() {
             if !teams.is_hostile(&faction, ef) {
                 continue;
             }
             *brain.enemy_composition.entry(*ekind).or_default() += 1;
             let unit_strength = ehealth.current * edamage.map_or(5.0, |d: &AttackDamage| d.0);
             brain.enemy_strength += unit_strength;
-
-            if etf.translation.distance(base_pos) < BASE_THREAT_RADIUS * 1.5 {
+        }
+        for (enemy_entity, _) in spatial_grid.query_radius(base_pos, BASE_THREAT_RADIUS * 1.5) {
+            let Ok((ef, _, _, _)) = hostile_unit_data_q.get(enemy_entity) else {
+                continue;
+            };
+            if teams.is_hostile(&faction, ef) {
                 enemies_near_base += 1;
             }
         }
@@ -104,12 +111,12 @@ pub fn ai_tactical_system(
             if let Some(prev_hp) = prev {
                 if health.current < prev_hp {
                     let pos = tf.translation;
-                    for (_, ef, _, etf, _, _) in enemy_units_q.iter() {
-                        if !teams.is_hostile(&faction, ef) {
+                    for (enemy_entity, enemy_pos) in spatial_grid.query_radius(pos, 25.0) {
+                        let Ok((ef, _, _, _)) = hostile_unit_data_q.get(enemy_entity) else {
                             continue;
-                        }
-                        if etf.translation.distance(pos) < 25.0 {
-                            threat_positions.push(etf.translation);
+                        };
+                        if teams.is_hostile(&faction, ef) {
+                            threat_positions.push(enemy_pos);
                             threats_detected = true;
                         }
                     }
@@ -130,7 +137,8 @@ pub fn ai_tactical_system(
             if let Some(pbp) = player_base_pos {
                 detect_threats_near_ally(
                     brain,
-                    &enemy_units_q,
+                    &spatial_grid,
+                    &hostile_unit_data_q,
                     &teams,
                     &faction,
                     pbp,
@@ -224,17 +232,8 @@ pub fn ai_tactical_system(
 /// Detect threats near an allied player's base and record them.
 fn detect_threats_near_ally(
     brain: &mut AiFactionBrain,
-    enemy_units_q: &Query<
-        (
-            Entity,
-            &Faction,
-            &EntityKind,
-            &Transform,
-            &Health,
-            Option<&AttackDamage>,
-        ),
-        Or<(With<Unit>, With<Mob>)>,
-    >,
+    spatial_grid: &SpatialHashGrid,
+    hostile_unit_data_q: &Query<(&Faction, &Transform, &Health, Option<&AttackDamage>), Or<(With<Unit>, With<Mob>)>>,
     teams: &TeamConfig,
     faction: &Faction,
     player_base_pos: Vec3,
@@ -243,7 +242,10 @@ fn detect_threats_near_ally(
     threat_positions: &mut Vec<Vec3>,
     notifications: &mut ResMut<AllyNotifications>,
 ) {
-    for (_, ef, _, etf, health, damage) in enemy_units_q.iter() {
+    for (entity, _) in spatial_grid.query_radius(player_base_pos, BASE_THREAT_RADIUS * 1.5) {
+        let Ok((ef, etf, health, damage)) = hostile_unit_data_q.get(entity) else {
+            continue;
+        };
         if !teams.is_hostile(faction, ef) {
             continue;
         }

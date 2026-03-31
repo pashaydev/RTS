@@ -4,6 +4,12 @@ use std::f32::consts::TAU;
 use crate::blueprints::EntityKind;
 use crate::buildings::is_wall_like_kind;
 use crate::combat::{target_score, TargetScoreInput};
+use crate::combat_budget::CombatBudgetState;
+use crate::combat_intents::{
+    apply_auto_attack_intent, apply_auto_move_intent, apply_manual_attack_intent,
+    apply_manual_attack_move_intent, apply_manual_hold_intent, apply_manual_move_intent,
+    clear_combat_intent, reset_combat_state, set_intent_target_lock,
+};
 use crate::components::*;
 use crate::multiplayer::NetRole;
 use crate::spatial::SpatialHashGrid;
@@ -12,18 +18,35 @@ pub struct UnitAiPlugin;
 
 impl Plugin for UnitAiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DecisionTimer>().add_systems(
-            Update,
-            (
-                cleanup_assigned_workers_system,
-                decision_priority_system,
-                task_queue_advance_system,
-                unit_state_executor_system,
-                leash_return_system,
+        app.init_resource::<DecisionTimer>()
+            .add_systems(
+                Update,
+                cleanup_assigned_workers_system.run_if(in_state(AppState::InGame)),
             )
-                .chain()
-                .run_if(in_state(AppState::InGame)),
-        );
+            .add_systems(
+                Update,
+                decision_priority_system
+                    .after(cleanup_assigned_workers_system)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                task_queue_advance_system
+                    .after(decision_priority_system)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                unit_state_executor_system
+                    .after(task_queue_advance_system)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                leash_return_system
+                    .after(unit_state_executor_system)
+                    .run_if(in_state(AppState::InGame)),
+            );
     }
 }
 
@@ -63,10 +86,31 @@ pub fn cleanup_assigned_workers_system(
 /// 3. Threat response by stance (Defensive/Aggressive auto-engage)
 /// 4. Auto-role behavior (handled by worker_ai_system for Economy)
 /// 5. Idle
+/// Number of frames over which to spread unit AI decisions within one timer period.
+const DECISION_AMORTIZE_FRAMES: usize = 8;
+
+fn stance_scan_multiplier(stance: UnitStance, tuning: &CombatTuning) -> f32 {
+    match stance {
+        UnitStance::Passive => tuning.passive_scan_multiplier,
+        UnitStance::Defensive => tuning.defensive_scan_multiplier,
+        UnitStance::Aggressive => tuning.aggressive_scan_multiplier,
+    }
+}
+
+fn stance_leash_distance(stance: UnitStance, tuning: &CombatTuning) -> f32 {
+    match stance {
+        UnitStance::Passive => tuning.passive_leash_distance,
+        UnitStance::Defensive => tuning.defensive_leash_distance,
+        UnitStance::Aggressive => tuning.aggressive_leash_distance,
+    }
+}
+
 fn decision_priority_system(
     mut commands: Commands,
     time: Res<Time>,
     mut decision_timer: ResMut<DecisionTimer>,
+    combat_tuning: Res<CombatTuning>,
+    budgeting: (Res<CombatBudget>, ResMut<CombatBudgetState>),
     teams: Res<TeamConfig>,
     spatial_grid: Res<SpatialHashGrid>,
     mut units: Query<
@@ -82,12 +126,14 @@ fn decision_priority_system(
             &TaskQueue,
             Option<&TargetingProfile>,
             Option<&DamageType>,
+            Option<&CombatIntent>,
+            Option<&CombatTargetLock>,
+            Option<&mut CombatThinkTimer>,
         ),
         With<Unit>,
     >,
     factions: Query<&Faction>,
-    net_role: Res<NetRole>,
-    active_player: Res<ActivePlayer>,
+    net_state: (Res<NetRole>, Res<ActivePlayer>),
     building_check: Query<(), With<Building>>,
     deposit_points: Query<(Entity, &Transform, &Faction), (With<DepositPoint>, Without<Unit>)>,
     target_data: Query<(
@@ -96,26 +142,58 @@ fn decision_priority_system(
         Option<&ThreatValue>,
         Option<&ReservedIncomingDamage>,
     )>,
+    mut batch_offset: Local<usize>,
+    mut batch_total: Local<usize>,
 ) {
+    let (combat_budget, mut budget_state) = budgeting;
+    let (net_role, active_player) = net_state;
     decision_timer.timer.tick(time.delta());
-    if !decision_timer.timer.just_finished() {
+
+    // On timer tick: start a new amortization cycle.
+    if decision_timer.timer.just_finished() {
+        *batch_offset = 0;
+        *batch_total = units.iter().len();
+    }
+
+    // Nothing to process if cycle is complete.
+    if *batch_offset >= *batch_total || *batch_total == 0 {
         return;
     }
 
+    // Process one chunk of units this frame.
+    let remaining = *batch_total - *batch_offset;
+    let chunk_size = (remaining + DECISION_AMORTIZE_FRAMES - 1) / DECISION_AMORTIZE_FRAMES;
+    let chunk_start = *batch_offset;
+    let chunk_end = (chunk_start + chunk_size).min(*batch_total);
+    *batch_offset = chunk_end;
+
     for (
-        entity,
-        tf,
-        mut state,
-        mut source,
-        stance,
-        faction,
-        health,
-        attack_range,
-        task_queue,
-        opt_targeting_profile,
-        opt_damage_type,
-    ) in &mut units
+        idx,
+        (
+            entity,
+            tf,
+            mut state,
+            mut source,
+            stance,
+            faction,
+            health,
+            attack_range,
+            task_queue,
+            opt_targeting_profile,
+            opt_damage_type,
+            combat_intent,
+            target_lock,
+            opt_think_timer,
+        ),
+    ) in units.iter_mut().enumerate()
     {
+        if idx < chunk_start || idx >= chunk_end {
+            continue;
+        }
+        let now = time.elapsed_secs_f64();
+        if opt_think_timer.is_some_and(|timer| now < timer.next_think_at) {
+            continue;
+        }
         // Client: only process local player's units; remote units are driven by host state sync
         if *net_role == NetRole::Client && *faction != active_player.0 {
             continue;
@@ -164,6 +242,7 @@ fn decision_priority_system(
                 }
 
                 if let Some((retreat_pos, _)) = nearest_depot {
+                    apply_auto_move_intent(&mut commands, entity, retreat_pos);
                     commands
                         .entity(entity)
                         .remove::<AttackTarget>()
@@ -187,15 +266,44 @@ fn decision_priority_system(
         }
 
         if let Some(attack_r) = attack_range {
-            let scan_range = attack_r.0 * stance.scan_multiplier();
+            if budget_state.target_rescans_this_frame >= combat_budget.max_target_rescans_per_frame {
+                continue;
+            }
+            let scan_range = attack_r.0 * stance_scan_multiplier(*stance, &combat_tuning);
             if scan_range <= 0.0 {
                 continue;
+            }
+            if let Some(lock) = target_lock {
+                let lock_still_valid = now <= lock.locked_until
+                    && factions
+                        .get(lock.target)
+                        .ok()
+                        .is_some_and(|target_faction| teams.is_hostile(faction, target_faction));
+                if lock_still_valid {
+                    let current_matches_lock = matches!(
+                        combat_intent,
+                        Some(CombatIntent::Attack(target, IntentSource::Auto)) if *target == lock.target
+                    );
+                    if !current_matches_lock || !matches!(*state, UnitState::Attacking(target) if target == lock.target) {
+                        apply_auto_attack_intent(
+                            &mut commands,
+                            entity,
+                            lock.target,
+                            tf.translation,
+                            now,
+                        );
+                        *state = UnitState::Attacking(lock.target);
+                        *source = TaskSource::Auto;
+                    }
+                    continue;
+                }
             }
 
             let mut best_score = f32::MAX;
             let mut best_target = None;
 
-            let nearby = spatial_grid.query_radius(tf.translation, scan_range);
+            let nearby = spatial_grid.query_radius_limited(tf.translation, scan_range, 16);
+            budget_state.target_rescans_this_frame += 1;
             for (target_entity, target_pos) in &nearby {
                 if *target_entity == entity {
                     continue;
@@ -250,13 +358,18 @@ fn decision_priority_system(
             }
 
             if let Some(target) = best_target {
-                commands
-                    .entity(entity)
-                    .insert(LeashOrigin(tf.translation))
-                    .insert(AttackTarget(target));
+                apply_auto_attack_intent(&mut commands, entity, target, tf.translation, now);
                 *state = UnitState::Attacking(target);
                 *source = TaskSource::Auto;
+            } else if matches!(combat_intent, Some(CombatIntent::Attack(_, IntentSource::Auto))) {
+                reset_combat_state(&mut commands, entity);
             }
+            commands.entity(entity).insert(CombatThinkTimer {
+                next_think_at: now
+                    + 0.16
+                    + ((entity.to_bits() % DECISION_AMORTIZE_FRAMES as u64) as f64 * 0.006),
+                interval_secs: 0.16,
+            });
         }
     }
 }
@@ -264,6 +377,7 @@ fn decision_priority_system(
 /// Leash return system — Defensive units that chased too far return to their origin.
 fn leash_return_system(
     mut commands: Commands,
+    combat_tuning: Res<CombatTuning>,
     net_role: Res<NetRole>,
     active_player: Res<ActivePlayer>,
     mut units: Query<
@@ -295,7 +409,7 @@ fn leash_return_system(
             continue;
         }
 
-        let leash_dist = stance.leash_distance();
+        let leash_dist = stance_leash_distance(*stance, &combat_tuning);
         if leash_dist <= 0.0 {
             commands.entity(entity).remove::<LeashOrigin>();
             continue;
@@ -304,6 +418,7 @@ fn leash_return_system(
         let dist_from_origin = tf.translation.distance(leash_origin.0);
         if dist_from_origin > leash_dist {
             // Exceeded leash — return to origin
+            apply_auto_move_intent(&mut commands, entity, leash_origin.0);
             commands
                 .entity(entity)
                 .remove::<AttackTarget>()
@@ -318,6 +433,7 @@ fn leash_return_system(
 /// When a unit is Idle and has queued tasks, pop the next task and set UnitState accordingly.
 pub fn task_queue_advance_system(
     mut commands: Commands,
+    time: Res<Time>,
     mut units: Query<
         (
             Entity,
@@ -352,17 +468,25 @@ pub fn task_queue_advance_system(
         match task.task {
             QueuedTask::Move(pos) => {
                 *state = UnitState::Moving(pos);
+                apply_manual_move_intent(&mut commands, entity, pos, time.elapsed_secs_f64());
                 commands.entity(entity).insert(MoveTarget(pos));
             }
             QueuedTask::AttackMove(pos) => {
                 *state = UnitState::AttackMoving(pos);
+                apply_manual_attack_move_intent(
+                    &mut commands,
+                    entity,
+                    pos,
+                    time.elapsed_secs_f64(),
+                );
                 commands.entity(entity).insert(MoveTarget(pos));
             }
             QueuedTask::Attack(target) => {
                 *state = UnitState::Attacking(target);
-                commands.entity(entity).insert(AttackTarget(target));
+                apply_manual_attack_intent(&mut commands, entity, target, time.elapsed_secs_f64());
             }
             QueuedTask::Gather(node) => {
+                clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
                 if let Ok(node_tf) = transforms.get(node) {
                     commands
                         .entity(entity)
@@ -371,6 +495,7 @@ pub fn task_queue_advance_system(
                 *state = UnitState::Gathering(node);
             }
             QueuedTask::Build(building) => {
+                clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
                 if let Ok(building_tf) = transforms.get(building) {
                     commands
                         .entity(entity)
@@ -379,6 +504,7 @@ pub fn task_queue_advance_system(
                 *state = UnitState::MovingToBuild(building);
             }
             QueuedTask::Patrol(pos) => {
+                clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
                 if let Ok(unit_tf) = transforms.get(entity) {
                     *state = UnitState::Patrolling {
                         target: pos,
@@ -388,6 +514,7 @@ pub fn task_queue_advance_system(
                 }
             }
             QueuedTask::AssignToProcessor(building) => {
+                clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
                 // Check if building has capacity
                 let can_assign = if let Ok((proc, bstate, _)) = processors.get(building) {
                     if *bstate == BuildingState::Complete {
@@ -418,6 +545,7 @@ pub fn task_queue_advance_system(
                 }
             }
             QueuedTask::HoldPosition => {
+                apply_manual_hold_intent(&mut commands, entity, time.elapsed_secs_f64());
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
@@ -432,11 +560,13 @@ pub fn task_queue_advance_system(
 /// Handles arrival detection, state transitions, and MoveTarget/AttackTarget sync.
 pub fn unit_state_executor_system(
     mut commands: Commands,
-    _time: Res<Time>,
+    time: Res<Time>,
     teams: Res<TeamConfig>,
     spatial_grid: Res<SpatialHashGrid>,
     net_role: Res<NetRole>,
     active_player: Res<ActivePlayer>,
+    combat_budget: Res<CombatBudget>,
+    mut budget_state: ResMut<CombatBudgetState>,
     mut units: Query<
         (
             Entity,
@@ -448,6 +578,7 @@ pub fn unit_state_executor_system(
             &Faction,
             Option<&MoveTarget>,
             Option<&AttackRange>,
+            Option<&mut CombatThinkTimer>,
         ),
         With<Unit>,
     >,
@@ -476,6 +607,7 @@ pub fn unit_state_executor_system(
         faction,
         move_target,
         attack_range,
+        opt_think_timer,
     ) in &mut units
     {
         // Client: only process local player's units; remote units are driven by host state sync
@@ -491,6 +623,9 @@ pub fn unit_state_executor_system(
                     .remove::<MoveTarget>()
                     .remove::<AttackTarget>()
                     .remove::<ChaseTimer>();
+                if matches!(*source, TaskSource::Auto) {
+                    reset_combat_state(&mut commands, entity);
+                }
             }
 
             UnitState::Moving(pos) => {
@@ -499,6 +634,9 @@ pub fn unit_state_executor_system(
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;
+                    if matches!(*source, TaskSource::Auto) {
+                        reset_combat_state(&mut commands, entity);
+                    }
                 } else {
                     // Keep MoveTarget synced
                     commands.entity(entity).insert(MoveTarget(pos));
@@ -508,6 +646,7 @@ pub fn unit_state_executor_system(
             UnitState::Attacking(target) => {
                 // Check target still exists
                 if entity_check.get(target).is_err() {
+                    reset_combat_state(&mut commands, entity);
                     commands
                         .entity(entity)
                         .remove::<AttackTarget>()
@@ -516,8 +655,6 @@ pub fn unit_state_executor_system(
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;
-                } else {
-                    commands.entity(entity).insert(AttackTarget(target));
                 }
             }
 
@@ -533,6 +670,7 @@ pub fn unit_state_executor_system(
                     }
                 } else {
                     // Node gone
+                    reset_combat_state(&mut commands, entity);
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;
@@ -544,6 +682,7 @@ pub fn unit_state_executor_system(
                 gather_node: _,
             } => {
                 if transforms.get(depot).is_err() {
+                    reset_combat_state(&mut commands, entity);
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;
@@ -568,6 +707,7 @@ pub fn unit_state_executor_system(
                 {
                     if *build_state != BuildingState::UnderConstruction {
                         commands.entity(entity).remove::<MoveTarget>();
+                        reset_combat_state(&mut commands, entity);
                         *state = UnitState::Idle;
                         *source = TaskSource::Auto;
                         task_queue.current = None;
@@ -609,6 +749,7 @@ pub fn unit_state_executor_system(
                     }
                 } else {
                     commands.entity(entity).remove::<MoveTarget>();
+                    reset_combat_state(&mut commands, entity);
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;
@@ -620,6 +761,7 @@ pub fn unit_state_executor_system(
                 {
                     if *build_state != BuildingState::UnderConstruction {
                         commands.entity(entity).remove::<MoveTarget>();
+                        reset_combat_state(&mut commands, entity);
                         *state = UnitState::Idle;
                         *source = TaskSource::Auto;
                         task_queue.current = None;
@@ -645,6 +787,7 @@ pub fn unit_state_executor_system(
                     }
                 } else {
                     commands.entity(entity).remove::<MoveTarget>();
+                    reset_combat_state(&mut commands, entity);
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;
@@ -656,6 +799,7 @@ pub fn unit_state_executor_system(
                 if processors.get(building).is_err() {
                     // Building destroyed — unassign worker
                     commands.entity(entity).remove::<BuildingAssignment>();
+                    reset_combat_state(&mut commands, entity);
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;
@@ -665,16 +809,39 @@ pub fn unit_state_executor_system(
             UnitState::AttackMoving(_pos) => {
                 if move_target.is_none() {
                     // Arrived at destination
+                    reset_combat_state(&mut commands, entity);
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;
                 } else {
                     // Scan for enemies en route using spatial hash
-                    if let Some(scan_range) = attack_range.map(|r| r.0 * 2.0) {
+                    let now = time.elapsed_secs_f64();
+                    let can_think = opt_think_timer
+                        .as_ref()
+                        .map_or(true, |timer| now >= timer.next_think_at);
+                    if budget_state.target_rescans_this_frame
+                        >= combat_budget.max_target_rescans_per_frame
+                    {
+                        continue;
+                    }
+                    if let Some(scan_range) = attack_range.map(|r| r.0 * 2.0).filter(|_| can_think)
+                    {
                         let mut closest_dist = f32::MAX;
                         let mut closest_target = None;
 
-                        let nearby = spatial_grid.query_radius(tf.translation, scan_range);
+                        let nearby = move_target
+                            .map(|move_target| {
+                                spatial_grid.query_corridor_limited(
+                                    tf.translation,
+                                    move_target.0,
+                                    scan_range * 0.45,
+                                    10,
+                                )
+                            })
+                            .unwrap_or_else(|| {
+                                spatial_grid.query_radius_limited(tf.translation, scan_range, 10)
+                            });
+                        budget_state.target_rescans_this_frame += 1;
                         for (target_entity, target_pos) in &nearby {
                             if *target_entity == entity {
                                 continue;
@@ -695,10 +862,19 @@ pub fn unit_state_executor_system(
                         }
 
                         if let Some(target) = closest_target {
+                            set_intent_target_lock(
+                                &mut commands,
+                                entity,
+                                target,
+                                IntentSource::Manual,
+                                time.elapsed_secs_f64(),
+                            );
                             commands.entity(entity).remove::<MoveTarget>();
-                            commands.entity(entity).insert(AttackTarget(target));
-                            *state = UnitState::Attacking(target);
                         }
+                        commands.entity(entity).insert(CombatThinkTimer {
+                            next_think_at: now + 0.18,
+                            interval_secs: 0.18,
+                        });
                     }
                 }
             }
@@ -716,7 +892,13 @@ pub fn unit_state_executor_system(
 
                     // Also scan for enemies while patrolling using spatial hash
                     if let Some(scan_range) = attack_range.map(|r| r.0 * 2.0) {
-                        let nearby = spatial_grid.query_radius(tf.translation, scan_range);
+                        if budget_state.target_rescans_this_frame
+                            >= combat_budget.max_target_rescans_per_frame
+                        {
+                            continue;
+                        }
+                        let nearby = spatial_grid.query_radius_limited(tf.translation, scan_range, 8);
+                        budget_state.target_rescans_this_frame += 1;
                         for (target_entity, _target_pos) in &nearby {
                             if *target_entity == entity {
                                 continue;
@@ -727,9 +909,13 @@ pub fn unit_state_executor_system(
                             if !teams.is_hostile(faction, target_faction) {
                                 continue;
                             }
+                            apply_manual_attack_intent(
+                                &mut commands,
+                                entity,
+                                *target_entity,
+                                time.elapsed_secs_f64(),
+                            );
                             commands.entity(entity).remove::<MoveTarget>();
-                            commands.entity(entity).insert(AttackTarget(*target_entity));
-                            *state = UnitState::Attacking(*target_entity);
                             break;
                         }
                     }

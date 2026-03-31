@@ -5,6 +5,8 @@ use rand::SeedableRng;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::combat::approach_attack_target;
+use crate::combat_budget::CombatBudgetState;
+use crate::combat_intents::{apply_auto_attack_intent, reset_combat_state};
 use crate::components::*;
 use crate::ground::{is_in_mountain_border, BorderSettings, HeightMap};
 use crate::model_assets::UnitModelAssets;
@@ -690,14 +692,21 @@ fn mob_patrol(
             &UnitSpeed,
             &EntityKind,
             &mut Health,
+            Option<&CombatIntent>,
+            Option<&CombatTargetLock>,
         ),
-        (With<Mob>, Without<AttackTarget>),
+        With<Mob>,
     >,
 ) {
     const SEPARATION_RADIUS: f32 = 2.5;
     const SEPARATION_STRENGTH: f32 = 6.0;
 
-    for (entity, mut tf, mut patrol, speed, kind, mut health) in &mut mobs {
+    for (entity, mut tf, mut patrol, speed, kind, _health, intent, lock) in &mut mobs {
+        if matches!(intent, Some(CombatIntent::Attack(_, _) | CombatIntent::AttackMove(_, _)))
+            || lock.is_some()
+        {
+            continue;
+        }
         let y_off = registry
             .get(*kind)
             .movement
@@ -769,10 +778,6 @@ fn mob_patrol(
                 }
             }
             PatrolStateKind::Returning => {
-                // Regenerate health while returning home (10% max HP per second)
-                health.current =
-                    (health.current + health.max * 0.1 * time.delta_secs()).min(health.max);
-
                 let dir = Vec3::new(
                     patrol.center.x - tf.translation.x,
                     0.0,
@@ -780,8 +785,7 @@ fn mob_patrol(
                 );
                 let dist = dir.length();
                 if dist < 2.0 {
-                    // Fully heal when arriving home
-                    health.current = health.max;
+                    // Reaching home only resets patrol state; don't erase combat progress.
                     patrol.state = PatrolStateKind::Idle;
                 } else {
                     // Move faster when returning (1.5x speed)
@@ -799,11 +803,35 @@ fn mob_patrol(
 
 fn mob_aggro(
     mut commands: Commands,
-    mobs: Query<(Entity, &Transform, &AggroRange), (With<Mob>, Without<AttackTarget>)>,
+    time: Res<Time>,
+    combat_budget: Res<CombatBudget>,
+    mut budget_state: ResMut<CombatBudgetState>,
+    mut mobs: Query<
+        (
+            Entity,
+            &Transform,
+            &AggroRange,
+            Option<&CombatIntent>,
+            Option<&CombatTargetLock>,
+            Option<&mut CombatThinkTimer>,
+        ),
+        With<Mob>,
+    >,
+    pack_mobs: Query<(Entity, &Transform), With<Mob>>,
     players: Query<(Entity, &Transform, &Faction), With<Unit>>,
     buildings: Query<(Entity, &Transform, &Faction), (With<Building>, Without<Unit>)>,
 ) {
-    for (mob_entity, mob_tf, aggro) in &mobs {
+    let now = time.elapsed_secs_f64();
+    for (mob_entity, mob_tf, aggro, intent, lock, opt_think_timer) in &mut mobs {
+        if budget_state.target_rescans_this_frame >= combat_budget.max_target_rescans_per_frame {
+            break;
+        }
+        if opt_think_timer.is_some_and(|timer| now < timer.next_think_at) {
+            continue;
+        }
+        if matches!(intent, Some(CombatIntent::Attack(_, _))) && lock.is_some_and(|lock| now <= lock.locked_until) {
+            continue;
+        }
         // Prefer units over buildings: only target buildings if no unit is in range
         let mut closest_unit_dist = f32::MAX;
         let mut closest_unit = None;
@@ -834,20 +862,42 @@ fn mob_aggro(
 
         // Strongly prefer units — only target buildings if no unit is within aggro range
         let target = closest_unit.or(closest_building);
+        budget_state.target_rescans_this_frame += 1;
 
         if let Some(target) = target {
-            commands.entity(mob_entity).insert(AttackTarget(target));
+            apply_auto_attack_intent(&mut commands, mob_entity, target, mob_tf.translation, now);
+            commands.entity(mob_entity).insert(CombatThinkTimer {
+                next_think_at: now + 0.5 + (mob_entity.to_bits() % 5) as f64 * 0.03,
+                interval_secs: 0.5,
+            });
 
             // Pack aggro: alert nearby mobs to chase the same target
             let mob_pos = mob_tf.translation;
-            for (other_entity, other_tf, _) in &mobs {
+            let mut alerted = 0;
+            for (other_entity, other_tf) in &pack_mobs {
                 if other_entity == mob_entity {
                     continue;
                 }
-                if mob_pos.distance(other_tf.translation) < 15.0 {
-                    commands.entity(other_entity).insert(AttackTarget(target));
+                if mob_pos.distance(other_tf.translation) < 15.0 && alerted < 4 {
+                    apply_auto_attack_intent(
+                        &mut commands,
+                        other_entity,
+                        target,
+                        other_tf.translation,
+                        now,
+                    );
+                    commands.entity(other_entity).insert(CombatThinkTimer {
+                        next_think_at: now + 0.75,
+                        interval_secs: 0.5,
+                    });
+                    alerted += 1;
                 }
             }
+        } else {
+            commands.entity(mob_entity).insert(CombatThinkTimer {
+                next_think_at: now + 0.5 + (mob_entity.to_bits() % 5) as f64 * 0.03,
+                interval_secs: 0.5,
+            });
         }
     }
 }
@@ -864,17 +914,30 @@ fn mob_leash(
             Entity,
             &Transform,
             &mut PatrolState,
+            Option<&CombatIntent>,
+            Option<&CombatTargetLock>,
             Option<&AttackWindup>,
             Option<&AttackRecovery>,
         ),
-        (With<Mob>, With<AttackTarget>),
+        With<Mob>,
     >,
     targets: Query<&Transform, Without<Mob>>,
 ) {
     const LEASH_DISTANCE: f32 = 40.0;
     const MAX_CHASE_SECS: f32 = 15.0;
 
-    for (mob_entity, tf, mut patrol, windup, recovery) in &mut mobs {
+    for (mob_entity, tf, mut patrol, intent, lock, windup, recovery) in &mut mobs {
+        let target_entity = match intent {
+            Some(CombatIntent::Attack(target, _)) => Some(*target),
+            Some(CombatIntent::AttackMove(_, _)) => lock.map(|lock| lock.target),
+            _ => lock.map(|lock| lock.target),
+        };
+        if target_entity.is_none() {
+            if matches!(patrol.state, PatrolStateKind::Chasing | PatrolStateKind::Attacking) {
+                patrol.state = PatrolStateKind::Returning;
+            }
+            continue;
+        }
         patrol.chase_elapsed += time.delta_secs();
 
         let dist_from_home = Vec2::new(
@@ -884,16 +947,13 @@ fn mob_leash(
         .length();
 
         // Target gone or leash exceeded → return home
-        let target_gone = !targets.contains(mob_entity); // AttackTarget checked by filter
+        let target_gone = target_entity.is_some_and(|target| !targets.contains(target));
         if target_gone || dist_from_home > LEASH_DISTANCE || patrol.chase_elapsed > MAX_CHASE_SECS
         {
             patrol.state = PatrolStateKind::Returning;
             patrol.chase_elapsed = 0.0;
-            commands
-                .entity(mob_entity)
-                .remove::<AttackTarget>()
-                .remove::<MoveTarget>()
-                .remove::<ChaseTimer>();
+            reset_combat_state(&mut commands, mob_entity);
+            commands.entity(mob_entity).remove::<MoveTarget>().remove::<ChaseTimer>();
             continue;
         }
 
@@ -905,4 +965,3 @@ fn mob_leash(
         }
     }
 }
-

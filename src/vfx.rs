@@ -134,30 +134,38 @@ fn update_projectiles(
     let Some(vfx) = vfx_assets else { return };
 
     for (proj_entity, mut proj_tf, projectile, opt_aoe) in &mut projectiles {
-        let Ok((target_tf, mut health, opt_armor, _, opt_reserved)) =
-            targets.get_mut(projectile.target)
-        else {
+        let Ok((target_tf, _, _, _, _)) = targets.get(projectile.target) else {
             // Target gone, despawn projectile
             commands.entity(proj_entity).try_despawn();
             continue;
         };
 
         let target_pos = target_tf.translation;
+        let target_scale = target_tf.scale;
         let dir = target_pos - proj_tf.translation;
         let dist = dir.length();
 
         if dist < 0.5 {
-            // Hit! Clear damage reservation from this projectile's source
-            if let Some(mut reserved) = opt_reserved {
-                let src = projectile.source;
-                reserved.reservations.retain(|(s, _, _)| *s != src);
-            }
+            {
+                let Ok((_, mut health, opt_armor, _, opt_reserved)) =
+                    targets.get_mut(projectile.target)
+                else {
+                    commands.entity(proj_entity).try_despawn();
+                    continue;
+                };
 
-            // Apply damage with armor multiplier
-            let multiplier = opt_armor
-                .map(|armor| projectile.damage_type.multiplier_vs(*armor))
-                .unwrap_or(1.0);
-            health.current -= projectile.damage * multiplier;
+                // Hit! Clear damage reservation from this projectile's source
+                if let Some(mut reserved) = opt_reserved {
+                    let src = projectile.source;
+                    reserved.reservations.retain(|(s, _, _)| *s != src);
+                }
+
+                // Apply damage with armor multiplier
+                let multiplier = opt_armor
+                    .map(|armor| projectile.damage_type.multiplier_vs(*armor))
+                    .unwrap_or(1.0);
+                health.current -= projectile.damage * multiplier;
+            }
 
             // AoE splash damage if present
             if let Some(aoe) = opt_aoe {
@@ -217,8 +225,11 @@ fn update_projectiles(
             let hit_dir_flat = Vec3::new(-hit_dir.x, 0.0, -hit_dir.z); // projectile dir is toward target
             commands.entity(projectile.target).insert(HitRecoil {
                 direction: hit_dir_flat,
-                timer: Timer::from_seconds(0.12, TimerMode::Once),
-                strength: 0.12,
+                timer: Timer::from_seconds(0.14, TimerMode::Once),
+                strength: (0.1 + projectile.damage * 0.003).min(0.26),
+                lift: (0.02 + projectile.damage * 0.001).min(0.07),
+                base_scale: target_scale,
+                applied_offset: Vec3::ZERO,
             });
             commands
                 .entity(projectile.target)
@@ -504,16 +515,19 @@ fn animate_spawn(
 pub fn animate_attack_lunge(
     mut commands: Commands,
     time: Res<Time>,
-    mut lungers: Query<(Entity, &mut Transform, &mut AttackLunge), Without<ProceduralMob>>,
+    mut lungers: Query<(Entity, &mut Transform, &mut AttackLunge)>,
 ) {
     for (entity, mut tf, mut lunge) in &mut lungers {
         lunge.timer.tick(time.delta());
         let t = lunge.timer.fraction();
-        // Ease-out: peak at start, settle back
-        let offset_frac = (1.0 - t) * (1.0 - t); // quadratic ease-out (inverted)
-        tf.translation += lunge.direction * lunge.strength * offset_frac * time.delta_secs() * 8.0;
+        // Apply a temporary forward offset and remove it cleanly as the timer ends.
+        let offset_frac = (1.0 - t) * (1.0 - t);
+        let desired_offset = lunge.direction * lunge.strength * offset_frac;
+        tf.translation += desired_offset - lunge.applied_offset;
+        lunge.applied_offset = desired_offset;
 
         if lunge.timer.is_finished() {
+            tf.translation -= lunge.applied_offset;
             commands.entity(entity).remove::<AttackLunge>();
         }
     }
@@ -528,15 +542,19 @@ pub fn animate_hit_recoil(
     for (entity, mut tf, mut recoil) in &mut recoiling {
         recoil.timer.tick(time.delta());
         let t = recoil.timer.fraction();
-        // Push back with ease-out
+        // Apply a temporary hit offset and remove it cleanly as the timer ends.
         let push_frac = (1.0 - t) * (1.0 - t);
-        tf.translation += recoil.direction * recoil.strength * push_frac * time.delta_secs() * 8.0;
-        // Brief scale pulse (5% at start, settling back)
-        let scale_boost = 1.0 + 0.05 * (1.0 - t);
-        let base = tf.scale.x / scale_boost.max(0.001); // approximate base
-        tf.scale = Vec3::splat(base * (1.0 + 0.05 * (1.0 - t)));
+        let desired_offset =
+            recoil.direction * recoil.strength * push_frac + Vec3::Y * recoil.lift * push_frac;
+        tf.translation += desired_offset - recoil.applied_offset;
+        recoil.applied_offset = desired_offset;
+        // Brief scale pulse from a stable base scale.
+        let scale_boost = 1.0 + 0.08 * (1.0 - t);
+        tf.scale = recoil.base_scale * scale_boost;
 
         if recoil.timer.is_finished() {
+            tf.translation -= recoil.applied_offset;
+            tf.scale = recoil.base_scale;
             commands.entity(entity).remove::<HitRecoil>();
         }
     }

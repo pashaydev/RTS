@@ -515,11 +515,20 @@ fn wall_auto_tile_system(
         return;
     };
 
+    // Deduplicate dirty cells, then process a limited budget per frame to
+    // avoid scene-swap spikes when many wall segments spawn at once.
+    const AUTO_TILE_BUDGET: usize = 8;
+
     let dirty: Vec<(i32, i32)> = wall_grid.dirty.drain(..).collect();
-    // Deduplicate
-    let mut dirty_set = std::collections::HashSet::new();
-    for coord in dirty {
-        dirty_set.insert(coord);
+    let mut dirty_set: Vec<(i32, i32)> = {
+        let mut set = std::collections::HashSet::new();
+        dirty.into_iter().filter(|c| set.insert(*c)).collect()
+    };
+
+    // Re-queue cells beyond the budget for the next frame.
+    if dirty_set.len() > AUTO_TILE_BUDGET {
+        let deferred = dirty_set.split_off(AUTO_TILE_BUDGET);
+        wall_grid.dirty.extend(deferred);
     }
 
     for (gx, gz) in dirty_set {
@@ -688,6 +697,8 @@ impl Plugin for BuildingsPlugin {
                     level_indicator_system,
                     sync_storage_on_spend,
                     update_storage_piles,
+                    sawmill_yard_system,
+                    yard_tree_regrowth_system,
                     clear_vegetation_around_buildings,
                 )
                     .in_set(GameFlowSet::Simulation)
@@ -3010,6 +3021,7 @@ fn demolish_system(
     mut all_resources: ResMut<AllPlayerResources>,
     mut wall_grid: ResMut<WallGrid>,
     grid_coord_q: Query<&WallGridCoord>,
+    yard_q: Query<&SawmillYard>,
     mut buildings: Query<
         (
             Entity,
@@ -3053,6 +3065,13 @@ fn demolish_system(
                 // Mark neighbors dirty so they re-tile
                 for (nx, nz) in WallGrid::cardinal_neighbors(gx, gz) {
                     wall_grid.dirty.push((nx, nz));
+                }
+            }
+
+            // Clean up sawmill yard entities
+            if let Ok(yard) = yard_q.get(entity) {
+                for &e in yard.fence_entities.iter().chain(yard.tree_entities.iter()) {
+                    commands.entity(e).try_despawn();
                 }
             }
 
@@ -3364,6 +3383,260 @@ fn update_storage_piles(
     }
 }
 
+// ── Sawmill Tree Yard ──
+
+// Yard center is placed east of the sawmill, outside the 3.0 footprint
+pub const SAWMILL_YARD_OFFSET: Vec3 = Vec3::new(5.5, 0.0, 0.0);
+const SAWMILL_YARD_HALF_X: f32 = 2.0;
+const SAWMILL_YARD_HALF_Z: f32 = 2.0;
+const SAWMILL_MINI_TREE_SCALE: f32 = 0.06;
+
+fn sawmill_yard_max_trees(level: u8) -> u8 {
+    // Level 1: 2 trees, Level 2: 3, Level 3: 4
+    1 + level
+}
+
+pub const SAWMILL_TREE_SLOTS: [Vec3; 4] = [
+    Vec3::new(-0.8, 0.0, -0.8),
+    Vec3::new(0.8, 0.0, -0.8),
+    Vec3::new(-0.8, 0.0, 0.8),
+    Vec3::new(0.8, 0.0, 0.8),
+];
+
+fn sawmill_yard_system(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    height_map: Res<HeightMap>,
+    model_assets: Option<Res<ModelAssets>>,
+    new_sawmills: Query<
+        (Entity, &Transform, &BuildingLevel, &BuildingState),
+        (
+            With<Building>,
+            Without<SawmillYard>,
+        ),
+    >,
+    mut upgraded_sawmills: Query<
+        (Entity, &Transform, &BuildingLevel, &mut SawmillYard),
+        (With<Building>, Changed<BuildingLevel>),
+    >,
+    kind_q: Query<&EntityKind>,
+) {
+    let fence_mat = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.35, 0.22, 0.1),
+        perceptual_roughness: 0.9,
+        ..default()
+    });
+
+    // Spawn yard for newly completed sawmills
+    for (entity, transform, level, state) in &new_sawmills {
+        if *state != BuildingState::Complete {
+            continue;
+        }
+        let Ok(kind) = kind_q.get(entity) else { continue };
+        if *kind != EntityKind::Sawmill {
+            continue;
+        }
+
+        let center = transform.translation + SAWMILL_YARD_OFFSET;
+        let mut fence_entities = Vec::new();
+
+        // Fence corner positions (local to yard center)
+        let corners = [
+            Vec3::new(-SAWMILL_YARD_HALF_X, 0.0, -SAWMILL_YARD_HALF_Z),
+            Vec3::new(SAWMILL_YARD_HALF_X, 0.0, -SAWMILL_YARD_HALF_Z),
+            Vec3::new(SAWMILL_YARD_HALF_X, 0.0, SAWMILL_YARD_HALF_Z),
+            Vec3::new(-SAWMILL_YARD_HALF_X, 0.0, SAWMILL_YARD_HALF_Z),
+        ];
+
+        let post_mesh = meshes.add(Cylinder::new(0.05, 0.8));
+
+        // Spawn fence posts at corners
+        for local_pos in corners.iter() {
+            let world_pos = center + *local_pos;
+            let ground_y = height_map.sample(world_pos.x, world_pos.z);
+            let post = commands
+                .spawn((
+                    Mesh3d(post_mesh.clone()),
+                    MeshMaterial3d(fence_mat.clone()),
+                    Transform::from_translation(Vec3::new(
+                        world_pos.x,
+                        ground_y + 0.4,
+                        world_pos.z,
+                    )),
+                    NotShadowCaster,
+                    NotShadowReceiver,
+                    GameWorld,
+                ))
+                .id();
+            fence_entities.push(post);
+        }
+
+        // Spawn fence rails between consecutive corners
+        let rail_height_offsets = [0.25, 0.55]; // two horizontal rails
+        for i in 0..4 {
+            let a = corners[i];
+            let b = corners[(i + 1) % 4];
+            let mid = (a + b) * 0.5;
+            let span = (b - a).length();
+            let world_mid = center + mid;
+            let ground_y = height_map.sample(world_mid.x, world_mid.z);
+
+            // Determine rotation: rails along X or Z
+            let angle = if (b.z - a.z).abs() > (b.x - a.x).abs() {
+                std::f32::consts::FRAC_PI_2
+            } else {
+                0.0
+            };
+
+            for &h in &rail_height_offsets {
+                let rail_mesh = meshes.add(Cuboid::new(span, 0.06, 0.06));
+                let rail = commands
+                    .spawn((
+                        Mesh3d(rail_mesh),
+                        MeshMaterial3d(fence_mat.clone()),
+                        Transform::from_translation(Vec3::new(
+                            world_mid.x,
+                            ground_y + h,
+                            world_mid.z,
+                        ))
+                        .with_rotation(Quat::from_rotation_y(angle)),
+                        NotShadowCaster,
+                        NotShadowReceiver,
+                        GameWorld,
+                    ))
+                    .id();
+                fence_entities.push(rail);
+            }
+        }
+
+        // Spawn initial mini trees (as harvestable ResourceNodes)
+        let max_trees = sawmill_yard_max_trees(level.0);
+        let mut tree_entities = Vec::new();
+        spawn_mini_trees(
+            &mut commands,
+            &height_map,
+            model_assets.as_deref(),
+            center,
+            0,
+            max_trees,
+            &mut tree_entities,
+            entity,
+        );
+
+        commands.entity(entity).insert(SawmillYard {
+            fence_entities,
+            tree_entities,
+            current_tree_count: max_trees,
+        });
+    }
+
+    // Handle level upgrades — add more trees
+    for (entity, transform, level, mut yard) in &mut upgraded_sawmills {
+        let Ok(kind) = kind_q.get(entity) else { continue };
+        if *kind != EntityKind::Sawmill {
+            continue;
+        }
+
+        let new_max = sawmill_yard_max_trees(level.0);
+        if new_max <= yard.current_tree_count {
+            continue;
+        }
+
+        let center = transform.translation + SAWMILL_YARD_OFFSET;
+        spawn_mini_trees(
+            &mut commands,
+            &height_map,
+            model_assets.as_deref(),
+            center,
+            yard.current_tree_count,
+            new_max,
+            &mut yard.tree_entities,
+            entity,
+        );
+        yard.current_tree_count = new_max;
+    }
+}
+
+const YARD_TREE_WOOD_AMOUNT: u32 = 80;
+
+fn spawn_mini_trees(
+    commands: &mut Commands,
+    height_map: &HeightMap,
+    model_assets: Option<&ModelAssets>,
+    yard_center: Vec3,
+    from_slot: u8,
+    to_slot: u8,
+    tree_entities: &mut Vec<Entity>,
+    sawmill_entity: Entity,
+) {
+    let Some(assets) = model_assets else { return };
+    if assets.trees.is_empty() {
+        return;
+    }
+
+    for slot_idx in from_slot..to_slot.min(SAWMILL_TREE_SLOTS.len() as u8) {
+        let local = SAWMILL_TREE_SLOTS[slot_idx as usize];
+        let world_pos = yard_center + local;
+        let ground_y = height_map.sample(world_pos.x, world_pos.z);
+
+        // Pick a random tree variant based on slot index for determinism
+        let tree_idx = slot_idx as usize % assets.trees.len();
+        let scene = assets.trees[tree_idx].clone();
+        let y_rotation = (slot_idx as f32) * 1.57; // vary rotation per slot
+
+        let tree = commands
+            .spawn((
+                SceneRoot(scene),
+                Transform::from_translation(Vec3::new(world_pos.x, ground_y, world_pos.z))
+                    .with_rotation(Quat::from_rotation_y(y_rotation))
+                    .with_scale(Vec3::splat(SAWMILL_MINI_TREE_SCALE)),
+                NotShadowCaster,
+                GameWorld,
+                ResourceNode {
+                    resource_type: ResourceType::Wood,
+                    amount_remaining: YARD_TREE_WOOD_AMOUNT,
+                },
+                YardResourceNode(sawmill_entity),
+            ))
+            .id();
+        tree_entities.push(tree);
+    }
+}
+
+// ── Yard tree regrowth ──
+
+const YARD_TREE_REGROW_SECS: f32 = 20.0;
+
+/// Regrows depleted yard trees over time so the sawmill has a renewable wood supply.
+fn yard_tree_regrowth_system(
+    time: Res<Time>,
+    sawmills: Query<(&SawmillYard, &BuildingState), With<Building>>,
+    mut nodes: Query<&mut ResourceNode, With<YardResourceNode>>,
+    mut timers: Local<std::collections::HashMap<Entity, f32>>,
+) {
+    for (yard, state) in &sawmills {
+        if *state != BuildingState::Complete {
+            continue;
+        }
+        for &tree_entity in &yard.tree_entities {
+            let Ok(mut node) = nodes.get_mut(tree_entity) else {
+                continue;
+            };
+            if node.amount_remaining > 0 {
+                timers.remove(&tree_entity);
+                continue;
+            }
+            let elapsed = timers.entry(tree_entity).or_insert(0.0);
+            *elapsed += time.delta_secs();
+            if *elapsed >= YARD_TREE_REGROW_SECS {
+                node.amount_remaining = YARD_TREE_WOOD_AMOUNT;
+                timers.remove(&tree_entity);
+            }
+        }
+    }
+}
+
 // ── Vegetation clearing around buildings ──
 
 /// Removes grass and decoration geometry within a building's footprint.
@@ -3371,6 +3644,12 @@ fn update_storage_piles(
 /// Operates on merged chunk meshes: for each triangle whose centroid falls
 /// inside the clear radius, the triangle's indices are dropped and the mesh
 /// is rebuilt.  Empty chunks are despawned entirely.
+/// Max buildings to clear vegetation for per frame — spreads GPU re-upload
+/// cost when many buildings spawn at once (e.g. AI wall lines).
+const VEGETATION_CLEAR_BUDGET: usize = 2;
+/// Chunk world-space size used for AABB pre-filtering (must match resources.rs).
+const VEG_CHUNK_SIZE: f32 = 32.0;
+
 fn clear_vegetation_around_buildings(
     mut commands: Commands,
     new_buildings: Query<
@@ -3381,7 +3660,13 @@ fn clear_vegetation_around_buildings(
     deco_chunks: Query<(Entity, &DecoChunk, &Transform, &Mesh3d), Without<Building>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
+    let mut processed = 0;
     for (building_entity, building_tf, footprint) in &new_buildings {
+        if processed >= VEGETATION_CLEAR_BUDGET {
+            break;
+        }
+        processed += 1;
+
         let bx = building_tf.translation.x;
         let bz = building_tf.translation.z;
         // Clear a bit beyond the footprint so there is a visible gap.
@@ -3389,7 +3674,25 @@ fn clear_vegetation_around_buildings(
         let clear_r2 = clear_radius * clear_radius;
 
         // ── Grass chunks (vertices in world space, Transform::default) ──
-        for (chunk_entity, _chunk, mesh_handle) in &grass_chunks {
+        for (chunk_entity, chunk, mesh_handle) in &grass_chunks {
+            // AABB pre-check: skip chunks that can't intersect the clear radius.
+            let chunk_cx = (chunk.chunk_x as f32 + 0.5) * VEG_CHUNK_SIZE;
+            let chunk_cz = (chunk.chunk_z as f32 + 0.5) * VEG_CHUNK_SIZE;
+            let half = VEG_CHUNK_SIZE * 0.5 + clear_radius;
+            if (bx - chunk_cx).abs() > half || (bz - chunk_cz).abs() > half {
+                continue;
+            }
+            // Read-only check first: only mutate (triggering GPU re-upload) if
+            // there are actually triangles to remove.
+            let needs_strip = {
+                let Some(mesh) = meshes.get(&mesh_handle.0) else {
+                    continue;
+                };
+                has_triangles_in_radius(mesh, bx, bz, clear_r2, 0.0, 0.0)
+            };
+            if !needs_strip {
+                continue;
+            }
             let Some(mesh) = meshes.get_mut(&mesh_handle.0) else {
                 continue;
             };
@@ -3399,12 +3702,28 @@ fn clear_vegetation_around_buildings(
         }
 
         // ── Deco chunks (vertices in local space relative to chunk transform) ──
-        for (chunk_entity, _chunk, chunk_tf, mesh_handle) in &deco_chunks {
+        for (chunk_entity, chunk, chunk_tf, mesh_handle) in &deco_chunks {
+            let ox = chunk_tf.translation.x;
+            let oz = chunk_tf.translation.z;
+            // AABB pre-check using chunk grid coords.
+            let chunk_cx = (chunk.chunk_x as f32 + 0.5) * VEG_CHUNK_SIZE;
+            let chunk_cz = (chunk.chunk_z as f32 + 0.5) * VEG_CHUNK_SIZE;
+            let half = VEG_CHUNK_SIZE * 0.5 + clear_radius;
+            if (bx - chunk_cx).abs() > half || (bz - chunk_cz).abs() > half {
+                continue;
+            }
+            let needs_strip = {
+                let Some(mesh) = meshes.get(&mesh_handle.0) else {
+                    continue;
+                };
+                has_triangles_in_radius(mesh, bx, bz, clear_r2, ox, oz)
+            };
+            if !needs_strip {
+                continue;
+            }
             let Some(mesh) = meshes.get_mut(&mesh_handle.0) else {
                 continue;
             };
-            let ox = chunk_tf.translation.x;
-            let oz = chunk_tf.translation.z;
             if strip_triangles_in_radius(mesh, bx, bz, clear_r2, ox, oz) {
                 commands.entity(chunk_entity).despawn();
             }
@@ -3414,10 +3733,40 @@ fn clear_vegetation_around_buildings(
     }
 }
 
-/// Remove triangles whose centroid (in world XZ) falls within `radius_sq` of
-/// `(cx, cz)`.  `offset_x/z` are added to vertex positions to convert from
-/// local to world space.  Returns `true` when the mesh is left with zero
-/// indices (caller should despawn the entity).
+/// Read-only check: are there any triangles whose centroid falls within radius?
+/// Does NOT clone data or mutate the mesh — much cheaper than strip_triangles_in_radius.
+fn has_triangles_in_radius(
+    mesh: &Mesh,
+    cx: f32,
+    cz: f32,
+    radius_sq: f32,
+    offset_x: f32,
+    offset_z: f32,
+) -> bool {
+    let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+    else {
+        return false;
+    };
+    let Some(bevy::mesh::Indices::U32(indices)) = mesh.indices() else {
+        return false;
+    };
+    for tri in indices.chunks_exact(3) {
+        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+        if i0 >= positions.len() || i1 >= positions.len() || i2 >= positions.len() {
+            continue;
+        }
+        let ax = (positions[i0][0] + positions[i1][0] + positions[i2][0]) / 3.0 + offset_x;
+        let az = (positions[i0][2] + positions[i1][2] + positions[i2][2]) / 3.0 + offset_z;
+        let dx = ax - cx;
+        let dz = az - cz;
+        if dx * dx + dz * dz <= radius_sq {
+            return true;
+        }
+    }
+    false
+}
+
 fn strip_triangles_in_radius(
     mesh: &mut Mesh,
     cx: f32,
