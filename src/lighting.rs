@@ -2,12 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 #[cfg(not(target_arch = "wasm32"))]
 use bevy::light::VolumetricLight;
+use bevy::camera::primitives::{Frustum, Sphere as FrustumSphere};
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
 
 use crate::components::{
-    AppState, Building, GameSetupConfig, GameWorld, GhostBuilding, GraphicsSettings,
-    ShadowQuality, Unit, WallCornerPiece, WallPostPiece, WallSegmentPiece,
+    AppState, Building, CullingSourceCamera, GameSetupConfig, GameWorld, GhostBuilding,
+    GraphicsSettings, ShadowQuality, Unit, WallCornerPiece, WallPostPiece, WallSegmentPiece,
 };
 
 pub struct LightingPlugin;
@@ -558,12 +559,17 @@ const UNIT_RANGE: f32 = 15.0;
 const BUILDING_Y_OFFSET: f32 = 4.0;
 const UNIT_Y_OFFSET: f32 = 3.0;
 
+/// Padding around cluster light spheres for frustum testing.
+/// Generous so lights don't pop in/out at screen edges.
+const FRUSTUM_LIGHT_PADDING: f32 = 30.0;
+
 fn manage_cluster_lights(
     mut commands: Commands,
     grid: Res<EntityLightGrid>,
     cycle: Res<DayCycle>,
     config: Res<EntityLightConfig>,
     time: Res<Time>,
+    camera_q: Query<&Frustum, With<CullingSourceCamera>>,
     mut existing: Query<(
         Entity,
         &mut EntityClusterLight,
@@ -579,6 +585,7 @@ fn manage_cluster_lights(
         return;
     }
 
+    let frustum = camera_q.single().ok();
     let factor = entity_light_factor(cycle.time, &config);
     let dt = time.delta_secs();
 
@@ -601,12 +608,55 @@ fn manage_cluster_lights(
             .then(|| grid.cells.get(&cluster.cell))
             .flatten()
         {
-            // Cell is still active — reset stale counter, fade in
             matched_cells.insert(cluster.cell);
+
+            // Frustum cull: if light is outside camera view, fade it out fast
+            let range = if cell_data.has_building {
+                BUILDING_RANGE
+            } else {
+                UNIT_RANGE
+            };
+            let y_offset = if cell_data.has_building {
+                BUILDING_Y_OFFSET
+            } else {
+                UNIT_Y_OFFSET
+            };
+            let light_pos = Vec3::new(
+                cell_data.centroid.x,
+                cell_data.centroid.y + y_offset,
+                cell_data.centroid.z,
+            );
+
+            let in_frustum = frustum
+                .map(|f| {
+                    f.intersects_sphere(
+                        &FrustumSphere {
+                            center: light_pos.into(),
+                            radius: range + FRUSTUM_LIGHT_PADDING,
+                        },
+                        true,
+                    )
+                })
+                .unwrap_or(true);
+
+            if !in_frustum {
+                // Outside frustum — fade out and despawn when invisible
+                cluster.stale_frames = cluster.stale_frames.saturating_add(1);
+                if cluster.stale_frames >= STALE_THRESHOLD {
+                    cluster.fade = (cluster.fade - dt * FADE_OUT_SPEED).max(0.0);
+                    light.intensity = light.intensity * cluster.fade;
+                    if cluster.fade <= 0.01 {
+                        commands.entity(entity).try_despawn();
+                    }
+                }
+                continue;
+            }
+
+            // Cell is still active and in view — reset stale counter, fade in
             cluster.stale_frames = 0;
             cluster.fade = (cluster.fade + dt * FADE_IN_SPEED).min(1.0);
 
-            let (color, base_intensity, range, y_offset) = if cell_data.has_building {
+            let (color, base_intensity) = if cell_data.has_building {
                 (
                     Color::srgb(
                         BUILDING_LIGHT_COLOR.0,
@@ -614,15 +664,11 @@ fn manage_cluster_lights(
                         BUILDING_LIGHT_COLOR.2,
                     ),
                     config.building_base_intensity,
-                    BUILDING_RANGE,
-                    BUILDING_Y_OFFSET,
                 )
             } else {
                 (
                     Color::srgb(UNIT_LIGHT_COLOR.0, UNIT_LIGHT_COLOR.1, UNIT_LIGHT_COLOR.2),
                     config.unit_base_intensity,
-                    UNIT_RANGE,
-                    UNIT_Y_OFFSET,
                 )
             };
 
@@ -631,12 +677,7 @@ fn manage_cluster_lights(
             light.range = range;
             light.shadows_enabled = false;
 
-            let target = Vec3::new(
-                cell_data.centroid.x,
-                cell_data.centroid.y + y_offset,
-                cell_data.centroid.z,
-            );
-            tf.translation = tf.translation.lerp(target, 0.1);
+            tf.translation = tf.translation.lerp(light_pos, 0.1);
         } else {
             // Cell no longer active — fade out after stale threshold
             cluster.stale_frames = cluster.stale_frames.saturating_add(1);
@@ -678,6 +719,29 @@ fn manage_cluster_lights(
             )
         };
 
+        let light_pos = Vec3::new(
+            cell_data.centroid.x,
+            cell_data.centroid.y + y_offset,
+            cell_data.centroid.z,
+        );
+
+        // Don't spawn lights outside the camera frustum
+        let in_frustum = frustum
+            .map(|f| {
+                f.intersects_sphere(
+                    &FrustumSphere {
+                        center: light_pos.into(),
+                        radius: range + FRUSTUM_LIGHT_PADDING,
+                    },
+                    true,
+                )
+            })
+            .unwrap_or(true);
+
+        if !in_frustum {
+            continue;
+        }
+
         commands.spawn((
             EntityClusterLight {
                 cell: *cell,
@@ -691,11 +755,7 @@ fn manage_cluster_lights(
                 shadows_enabled: false,
                 ..default()
             },
-            Transform::from_translation(Vec3::new(
-                cell_data.centroid.x,
-                cell_data.centroid.y + y_offset,
-                cell_data.centroid.z,
-            )),
+            Transform::from_translation(light_pos),
         ));
     }
 }

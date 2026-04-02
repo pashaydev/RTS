@@ -23,6 +23,7 @@ struct TerrainSettings {
     snow_height: f32,
     amplitude: f32,
     tile_scale: f32,
+    floor_blend: f32,
 };
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> settings: TerrainSettings;
@@ -33,6 +34,7 @@ struct TerrainSettings {
 @group(#{MATERIAL_BIND_GROUP}) @binding(104) var rock_sampler: sampler;
 @group(#{MATERIAL_BIND_GROUP}) @binding(105) var sand_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(106) var sand_sampler: sampler;
+// For terrain: snow texture. For floors (floor_blend > 0): reused as floor stone texture.
 @group(#{MATERIAL_BIND_GROUP}) @binding(107) var snow_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(108) var snow_sampler: sampler;
 
@@ -149,6 +151,46 @@ fn fragment(
         0.0,
         (h0 - hz) * bump_strength
     ));
+
+    // ── Floor blending ──
+    if settings.floor_blend > 0.0 {
+        // Floor tile mesh: vertex_color.a encodes edge distance (0 = edge, 1 = center).
+        // Floor texture is passed via the snow_texture slot (floors don't need snow).
+        let floor_uv = world_pos.xz * 0.3;
+        let tex_floor = textureSample(snow_texture, snow_sampler, floor_uv).rgb;
+
+        let edge_raw = vertex_color.a;
+        let edge_factor = smoothstep(0.0, 0.6, edge_raw);
+
+        let blend_noise = simplex2d(world_pos.xz * 3.0) * 0.08;
+        let blend_t = clamp(edge_factor + blend_noise, 0.0, 1.0);
+
+        let floor_detail = 1.0 + simplex2d(world_pos.xz * 6.0) * 0.06;
+        let floor_color = tex_floor * floor_detail * 0.95;
+
+        color = mix(color, floor_color, blend_t);
+    } else {
+        // Main terrain: vertex_color.a < 1.0 signals floor blend amount.
+        // 0.0 = full floor, 1.0 = no floor (default).
+        let floor_alpha = vertex_color.a;
+        if floor_alpha < 0.99 {
+            // Reuse the rock texture at a tighter tiling to approximate stone floor
+            let floor_uv = world_pos.xz * 0.3;
+            let tex_floor_rock = textureSample(rock_texture, rock_sampler, floor_uv).rgb;
+
+            let floor_t = 1.0 - floor_alpha;
+            // Add noise to break up the blend seam for organic edges
+            let blend_noise = simplex2d(world_pos.xz * 3.0) * 0.12;
+            let blend_t = clamp(floor_t + blend_noise, 0.0, 1.0);
+
+            // Warm stone tint applied to rock texture for a paved look
+            let stone_tint = vec3<f32>(0.55, 0.50, 0.42);
+            let floor_detail = 1.0 + simplex2d(world_pos.xz * 6.0) * 0.06;
+            let floor_color = tex_floor_rock * stone_tint * floor_detail * 1.6;
+
+            color = mix(color, floor_color, blend_t);
+        }
+    }
 
     // ── Hook into Bevy PBR pipeline ──
     var pbr_input = pbr_input_from_standard_material(in, is_front);

@@ -128,7 +128,7 @@ pub fn compute_ui_mode(
         PlacementMode::None
         | PlacementMode::PlotWall { .. }
         | PlacementMode::PlotGate
-        | PlacementMode::PlotFloor { .. } => {
+        | PlacementMode::PlotFloor => {
             if let Ok(building_entity) = selected_buildings.single() {
                 UiMode::SelectedBuilding(building_entity)
             } else {
@@ -170,16 +170,9 @@ fn placement_default_hint(mode: PlacementMode) -> Option<String> {
         PlacementMode::PlotGate => Some(
             "Gatehouse: Hover owned wall and left-click (Right-click/Escape to cancel)".to_string(),
         ),
-        PlacementMode::PlotFloor { start } => {
-            if start == Vec3::ZERO {
-                Some("Floor: Click ground to start brush (Right-click/Escape to cancel)".to_string())
-            } else {
-                Some(
-                    "Floor: Move cursor, then left-click to stamp rectangle (Right-click/Escape to cancel)"
-                        .to_string(),
-                )
-            }
-        }
+        PlacementMode::PlotFloor => Some(
+            "Floor: Hold left-click and drag to paint (Right-click/Escape to cancel)".to_string(),
+        ),
     }
 }
 

@@ -2,9 +2,9 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use crate::blueprints::IsRanged;
-use crate::combat::attack_surface_distance;
-use crate::combat_budget::CombatBudgetState;
 use crate::components::*;
+
+use super::{approach_attack_target, attack_surface_distance, CombatBudgetState};
 
 pub struct CombatSlotsPlugin;
 
@@ -18,7 +18,7 @@ impl Plugin for CombatSlotsPlugin {
             )
                 .chain()
                 .in_set(GameFlowSet::Simulation)
-                .before(crate::combat::approach_attack_target)
+                .before(approach_attack_target)
                 .run_if(in_state(AppState::InGame)),
         );
     }

@@ -3123,7 +3123,7 @@ pub enum PlacementMode {
     PlotBase,
     PlotWall { start: Vec3 },
     PlotGate,
-    PlotFloor { start: Vec3 },
+    PlotFloor,
 }
 
 #[derive(Resource)]

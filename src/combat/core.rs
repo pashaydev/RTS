@@ -2,11 +2,11 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
 use crate::blueprints::{EntityKind, IsRanged};
-use crate::combat_budget::CombatBudgetState;
-use crate::combat_slots::slot_anchor;
 use crate::components::*;
 use crate::multiplayer::NetRole;
 use crate::spatial::WallSpatialGrid;
+
+use super::{slot_anchor, CombatBudgetState};
 
 pub struct CombatPlugin;
 

@@ -824,6 +824,7 @@ pub fn client_apply_entity_sync(
                     &mut floor_grid,
                     faction,
                     &[(gx, gz)],
+                    None,
                 )
                 .into_iter()
                 .next()

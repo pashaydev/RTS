@@ -5,7 +5,7 @@ use super::core::fonts::UiFonts;
 use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
-use crate::combat_intents::clear_combat_intent;
+use crate::combat::clear_combat_intent;
 use crate::components::*;
 use crate::theme::{self, Theme};
 

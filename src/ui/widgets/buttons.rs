@@ -6,7 +6,7 @@ use game_state::message::{ClientMessage, InputCommand, PlayerInput};
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::buildings;
 use crate::camera;
-use crate::combat_intents::{apply_manual_hold_intent, clear_combat_intent};
+use crate::combat::{apply_manual_hold_intent, clear_combat_intent};
 use crate::components::*;
 use crate::multiplayer::{ClientNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
@@ -144,10 +144,10 @@ pub fn handle_build_buttons(
             }
 
             if kind == EntityKind::Floor && founded {
-                placement.mode = PlacementMode::PlotFloor { start: Vec3::ZERO };
+                placement.mode = PlacementMode::PlotFloor;
                 placement.awaiting_release = false;
                 placement.hint_text = Some(
-                    "Click ground to start floor brush (Right-click/Escape to cancel)"
+                    "Hold left-click and drag to paint floor (Right-click/Escape to cancel)"
                         .to_string(),
                 );
                 continue;

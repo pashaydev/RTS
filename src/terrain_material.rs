@@ -27,6 +27,7 @@ pub struct TerrainExtension {
     #[sampler(106)]
     pub sand_texture: Option<Handle<Image>>,
 
+    /// For terrain: snow texture. For floors (floor_blend > 0): floor stone texture.
     #[texture(107)]
     #[sampler(108)]
     pub snow_texture: Option<Handle<Image>>,
@@ -39,6 +40,9 @@ pub struct TerrainSettings {
     pub snow_height: f32,
     pub amplitude: f32,
     pub tile_scale: f32,
+    /// >0 means this is a floor surface: blend floor texture with terrain at edges.
+    /// Vertex color alpha encodes edge distance (0 = edge, 1 = center).
+    pub floor_blend: f32,
 }
 
 impl MaterialExtension for TerrainExtension {
@@ -55,6 +59,7 @@ impl Default for TerrainSettings {
             snow_height: 12.0,
             amplitude: 18.0,
             tile_scale: 0.15,
+            floor_blend: 0.0,
         }
     }
 }

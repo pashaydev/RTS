@@ -303,13 +303,18 @@ pub(crate) fn apply_graphics_settings(
     graphics: &GraphicsSettings,
     window: &mut Window,
 ) {
+    let (w, h) = graphics.resolution;
+
     window.mode = if graphics.fullscreen {
         bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current)
     } else {
-        let (w, h) = graphics.resolution;
-        window.resolution.set(w as f32, h as f32);
         bevy::window::WindowMode::Windowed
     };
+
+    // Set logical resolution so the window size matches what the user selected,
+    // regardless of display scale factor (Retina 2x, Windows HiDPI 1.5x, etc.).
+    // set() takes logical dimensions; Bevy multiplies by scale_factor for physical.
+    window.resolution.set(w as f32, h as f32);
     window.present_mode = if graphics.vsync {
         PresentMode::AutoVsync
     } else {

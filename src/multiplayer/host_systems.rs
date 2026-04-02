@@ -13,7 +13,7 @@ use game_state::message::{
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
 use crate::buildings;
-use crate::combat_intents::{
+use crate::combat::{
     apply_manual_attack_intent, apply_manual_attack_move_intent, apply_manual_hold_intent,
     apply_manual_move_intent, clear_combat_intent,
 };

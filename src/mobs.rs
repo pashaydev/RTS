@@ -4,9 +4,9 @@ use rand::Rng;
 use rand::SeedableRng;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
-use crate::combat::approach_attack_target;
-use crate::combat_budget::CombatBudgetState;
-use crate::combat_intents::{apply_auto_attack_intent, reset_combat_state};
+use crate::combat::{
+    apply_auto_attack_intent, approach_attack_target, reset_combat_state, CombatBudgetState,
+};
 use crate::components::*;
 use crate::ground::{is_in_mountain_border, BorderSettings, HeightMap};
 use crate::model_assets::UnitModelAssets;

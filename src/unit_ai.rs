@@ -3,12 +3,11 @@ use std::f32::consts::TAU;
 
 use crate::blueprints::EntityKind;
 use crate::buildings::is_wall_like_kind;
-use crate::combat::{target_score, TargetScoreInput};
-use crate::combat_budget::CombatBudgetState;
-use crate::combat_intents::{
+use crate::combat::{
     apply_auto_attack_intent, apply_auto_move_intent, apply_manual_attack_intent,
     apply_manual_attack_move_intent, apply_manual_hold_intent, apply_manual_move_intent,
-    clear_combat_intent, reset_combat_state, set_intent_target_lock,
+    clear_combat_intent, reset_combat_state, set_intent_target_lock, target_score,
+    CombatBudgetState, TargetScoreInput,
 };
 use crate::components::*;
 use crate::multiplayer::NetRole;

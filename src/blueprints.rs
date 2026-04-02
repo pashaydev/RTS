@@ -1,3 +1,4 @@
+use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline, OutlineStencil, OutlineVolume};
@@ -1039,6 +1040,7 @@ impl BlueprintRegistry {
 
 // ── Entity Visual Cache ──
 
+
 #[derive(Resource, Default)]
 pub struct EntityVisualCache {
     pub meshes: HashMap<EntityKind, Handle<Mesh>>,
@@ -1046,215 +1048,223 @@ pub struct EntityVisualCache {
     pub materials_selected: HashMap<EntityKind, Handle<StandardMaterial>>,
     pub materials_hovered: HashMap<EntityKind, Handle<StandardMaterial>>,
     pub floor_piece_meshes: HashMap<FloorPieceKind, Handle<Mesh>>,
-}
-
-fn fill_floor_rect(
-    occupancy: &mut [bool],
-    grid: usize,
-    world_size: f32,
-    min_x: f32,
-    max_x: f32,
-    min_z: f32,
-    max_z: f32,
-) {
-    let cell = world_size / grid as f32;
-    let half = world_size * 0.5;
-    for gz in 0..grid {
-        for gx in 0..grid {
-            let x = -half + (gx as f32 + 0.5) * cell;
-            let z = -half + (gz as f32 + 0.5) * cell;
-            if x >= min_x && x <= max_x && z >= min_z && z <= max_z {
-                occupancy[gz * grid + gx] = true;
-            }
-        }
-    }
-}
-
-fn build_floor_shape_occupancy(
-    kind: FloorPieceKind,
-    grid: usize,
-    world_size: f32,
-    inset: f32,
-) -> Vec<bool> {
-    let mut occupancy = vec![false; grid * grid];
-
-    let mut north = false;
-    let mut east = false;
-    let mut south = false;
-    let mut west = false;
-    match kind {
-        FloorPieceKind::Isolated => {}
-        FloorPieceKind::End => north = true,
-        FloorPieceKind::Straight => {
-            north = true;
-            south = true;
-        }
-        FloorPieceKind::Corner => {
-            north = true;
-            east = true;
-        }
-        FloorPieceKind::Tee => {
-            north = true;
-            east = true;
-            west = true;
-        }
-        FloorPieceKind::Cross => {
-            north = true;
-            east = true;
-            south = true;
-            west = true;
-        }
-    }
-
-    let tile_half = world_size * 0.5;
-    let edge = tile_half - 0.04 - inset;
-    let retract = (0.28 + inset).min(tile_half - 0.2);
-
-    let min_x = if west { -edge } else { -tile_half + retract };
-    let max_x = if east { edge } else { tile_half - retract };
-    let min_z = if north { -edge } else { -tile_half + retract };
-    let max_z = if south { edge } else { tile_half - retract };
-
-    fill_floor_rect(
-        &mut occupancy,
-        grid,
-        world_size,
-        min_x,
-        max_x,
-        min_z,
-        max_z,
-    );
-
-    occupancy
-}
-
-fn emit_occupancy_prism(
-    positions: &mut Vec<[f32; 3]>,
-    normals: &mut Vec<[f32; 3]>,
-    uvs: &mut Vec<[f32; 2]>,
-    indices: &mut Vec<u32>,
-    occupancy: &[bool],
-    grid: usize,
-    world_size: f32,
-    bottom_y: f32,
-    top_y: f32,
-    emit_bottom: bool,
-) {
-    let cell = world_size / grid as f32;
-    let half = world_size * 0.5;
-    let idx_of = |gx: usize, gz: usize| gz * grid + gx;
-    let occupied = |gx: isize, gz: isize| -> bool {
-        if gx < 0 || gz < 0 || gx >= grid as isize || gz >= grid as isize {
-            return false;
-        }
-        occupancy[idx_of(gx as usize, gz as usize)]
-    };
-    let mut push_quad =
-        |verts: [[f32; 3]; 4], normal: [f32; 3], uv_rect: [[f32; 2]; 4]| {
-            let base = positions.len() as u32;
-            positions.extend_from_slice(&verts);
-            normals.extend_from_slice(&[normal; 4]);
-            uvs.extend_from_slice(&uv_rect);
-            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
-        };
-
-    for gz in 0..grid {
-        for gx in 0..grid {
-            if !occupancy[idx_of(gx, gz)] {
-                continue;
-            }
-
-            let x0 = -half + gx as f32 * cell;
-            let x1 = x0 + cell;
-            let z0 = -half + gz as f32 * cell;
-            let z1 = z0 + cell;
-
-            push_quad(
-                [[x0, top_y, z0], [x1, top_y, z0], [x1, top_y, z1], [x0, top_y, z1]],
-                [0.0, 1.0, 0.0],
-                [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-            );
-
-            if emit_bottom {
-                push_quad(
-                    [[x0, bottom_y, z1], [x1, bottom_y, z1], [x1, bottom_y, z0], [x0, bottom_y, z0]],
-                    [0.0, -1.0, 0.0],
-                    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                );
-            }
-
-            if !occupied(gx as isize, gz as isize - 1) {
-                push_quad(
-                    [[x0, bottom_y, z0], [x1, bottom_y, z0], [x1, top_y, z0], [x0, top_y, z0]],
-                    [0.0, 0.0, -1.0],
-                    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                );
-            }
-            if !occupied(gx as isize + 1, gz as isize) {
-                push_quad(
-                    [[x1, bottom_y, z0], [x1, bottom_y, z1], [x1, top_y, z1], [x1, top_y, z0]],
-                    [1.0, 0.0, 0.0],
-                    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                );
-            }
-            if !occupied(gx as isize, gz as isize + 1) {
-                push_quad(
-                    [[x1, bottom_y, z1], [x0, bottom_y, z1], [x0, top_y, z1], [x1, top_y, z1]],
-                    [0.0, 0.0, 1.0],
-                    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                );
-            }
-            if !occupied(gx as isize - 1, gz as isize) {
-                push_quad(
-                    [[x0, bottom_y, z1], [x0, bottom_y, z0], [x0, top_y, z0], [x0, top_y, z1]],
-                    [-1.0, 0.0, 0.0],
-                    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
-                );
-            }
-        }
-    }
+    /// Flat plane mesh for the floor brush indicator (no side walls / shadow issues).
+    pub floor_brush_indicator: Option<Handle<Mesh>>,
 }
 
 fn build_floor_piece_mesh(kind: FloorPieceKind) -> Mesh {
-    let mut positions = Vec::new();
-    let mut normals = Vec::new();
-    let mut uvs = Vec::new();
-    let mut indices = Vec::new();
+    let half = WALL_CELL_SIZE * 0.5; // 1.5
+    let bot_y = -0.5_f32;  // extend well below surface to hide terrain
+    let top_y = 0.06_f32;  // surface height
+    let lip_y = 0.12_f32;  // raised lip on exposed edges
+    let lip_inset = 0.06_f32;
+    let lip_width = 0.12_f32;
 
-    let world_size = 3.12;
-    let grid = 18;
-    let base = build_floor_shape_occupancy(kind, grid, world_size, 0.0);
-    let cap = build_floor_shape_occupancy(kind, grid, world_size, 0.12);
+    // Determine which edges have a neighbor (connected = flush, no side wall)
+    let (n_conn, e_conn, s_conn, w_conn) = match kind {
+        FloorPieceKind::Isolated => (false, false, false, false),
+        FloorPieceKind::End => (true, false, false, false),
+        FloorPieceKind::Straight => (true, false, true, false),
+        FloorPieceKind::Corner => (true, true, false, false),
+        FloorPieceKind::Tee => (true, true, false, true),
+        FloorPieceKind::Cross => (true, true, true, true),
+    };
+    let connected = [n_conn, e_conn, s_conn, w_conn];
 
-    emit_occupancy_prism(
-        &mut positions,
-        &mut normals,
-        &mut uvs,
-        &mut indices,
-        &base,
-        grid,
-        world_size,
-        -0.12,
-        0.0,
-        true,
+    let mut positions: Vec<[f32; 3]> = Vec::new();
+    let mut normals: Vec<[f32; 3]> = Vec::new();
+    let mut uvs: Vec<[f32; 2]> = Vec::new();
+    let mut colors: Vec<[f32; 4]> = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+
+    let push_quad =
+        |pos: &mut Vec<[f32; 3]>,
+         nrm: &mut Vec<[f32; 3]>,
+         uv: &mut Vec<[f32; 2]>,
+         col: &mut Vec<[f32; 4]>,
+         idx: &mut Vec<u32>,
+         verts: [[f32; 3]; 4],
+         normal: [f32; 3],
+         uv_rect: [[f32; 2]; 4],
+         vert_colors: [[f32; 4]; 4]| {
+            let base = pos.len() as u32;
+            pos.extend_from_slice(&verts);
+            nrm.extend_from_slice(&[normal; 4]);
+            uv.extend_from_slice(&uv_rect);
+            col.extend_from_slice(&vert_colors);
+            idx.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        };
+
+    // Compute per-vertex edge-distance alpha for the top face.
+    // Alpha = min distance to any *exposed* (unconnected) edge, normalized 0..1.
+    // connected[0]=N(-Z), [1]=E(+X), [2]=S(+Z), [3]=W(-X)
+    let cell_size = half * 2.0;
+    let corner_positions = [
+        (-half, -half), // TL: x=-half, z=-half
+        ( half, -half), // TR: x=+half, z=-half
+        ( half,  half), // BR: x=+half, z=+half
+        (-half,  half), // BL: x=-half, z=+half
+    ];
+    let mut top_colors = [[1.0_f32; 4]; 4];
+    for (vi, &(vx, vz)) in corner_positions.iter().enumerate() {
+        let mut min_dist = 1.0_f32;
+        // North edge (z = -half): distance is (vz - (-half)) / cell_size
+        if !connected[0] {
+            min_dist = min_dist.min((vz + half) / cell_size);
+        }
+        // East edge (x = +half): distance is (half - vx) / cell_size
+        if !connected[1] {
+            min_dist = min_dist.min((half - vx) / cell_size);
+        }
+        // South edge (z = +half): distance is (half - vz) / cell_size
+        if !connected[2] {
+            min_dist = min_dist.min((half - vz) / cell_size);
+        }
+        // West edge (x = -half): distance is (vx + half) / cell_size
+        if !connected[3] {
+            min_dist = min_dist.min((vx + half) / cell_size);
+        }
+        top_colors[vi] = [0.5, 0.5, 0.5, min_dist];
+    }
+
+    let side_color = [0.5, 0.5, 0.5, 0.0_f32]; // sides are at the edge
+    // ── Top face (full cell) ──
+    push_quad(
+        &mut positions, &mut normals, &mut uvs, &mut colors, &mut indices,
+        [[-half, top_y, -half], [half, top_y, -half], [half, top_y, half], [-half, top_y, half]],
+        [0.0, 1.0, 0.0],
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        top_colors,
     );
-    emit_occupancy_prism(
-        &mut positions,
-        &mut normals,
-        &mut uvs,
-        &mut indices,
-        &cap,
-        grid,
-        world_size,
-        0.0,
-        0.06,
-        false,
+
+    // ── Bottom face (full cell) ──
+    push_quad(
+        &mut positions, &mut normals, &mut uvs, &mut colors, &mut indices,
+        [[-half, bot_y, half], [half, bot_y, half], [half, bot_y, -half], [-half, bot_y, -half]],
+        [0.0, -1.0, 0.0],
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        [side_color; 4],
     );
+
+    // Edge definitions: (normal, 4 verts for side wall, lip top quad, lip side quad)
+    // Order: North(-Z), East(+X), South(+Z), West(-X)
+    struct EdgeDef {
+        side_verts: [[f32; 3]; 4],
+        side_normal: [f32; 3],
+        lip_top_verts: [[f32; 3]; 4],
+        lip_outer_verts: [[f32; 3]; 4],
+        lip_outer_normal: [f32; 3],
+        lip_inner_verts: [[f32; 3]; 4],
+        lip_inner_normal: [f32; 3],
+        lip_end_a_verts: [[f32; 3]; 4],
+        lip_end_a_normal: [f32; 3],
+        lip_end_b_verts: [[f32; 3]; 4],
+        lip_end_b_normal: [f32; 3],
+    }
+
+    let li = lip_inset;
+    let lw = lip_width;
+    let edges = [
+        // North (-Z edge, z = -half)
+        EdgeDef {
+            side_verts: [[-half, bot_y, -half], [half, bot_y, -half], [half, top_y, -half], [-half, top_y, -half]],
+            side_normal: [0.0, 0.0, -1.0],
+            lip_top_verts: [[-half + li, lip_y, -half + li], [half - li, lip_y, -half + li], [half - li, lip_y, -half + li + lw], [-half + li, lip_y, -half + li + lw]],
+            lip_outer_verts: [[-half + li, top_y, -half + li], [half - li, top_y, -half + li], [half - li, lip_y, -half + li], [-half + li, lip_y, -half + li]],
+            lip_outer_normal: [0.0, 0.0, -1.0],
+            lip_inner_verts: [[half - li, top_y, -half + li + lw], [-half + li, top_y, -half + li + lw], [-half + li, lip_y, -half + li + lw], [half - li, lip_y, -half + li + lw]],
+            lip_inner_normal: [0.0, 0.0, 1.0],
+            lip_end_a_verts: [[-half + li, top_y, -half + li], [-half + li, top_y, -half + li + lw], [-half + li, lip_y, -half + li + lw], [-half + li, lip_y, -half + li]],
+            lip_end_a_normal: [-1.0, 0.0, 0.0],
+            lip_end_b_verts: [[half - li, top_y, -half + li + lw], [half - li, top_y, -half + li], [half - li, lip_y, -half + li], [half - li, lip_y, -half + li + lw]],
+            lip_end_b_normal: [1.0, 0.0, 0.0],
+        },
+        // East (+X edge, x = half)
+        EdgeDef {
+            side_verts: [[half, bot_y, -half], [half, bot_y, half], [half, top_y, half], [half, top_y, -half]],
+            side_normal: [1.0, 0.0, 0.0],
+            lip_top_verts: [[half - li - lw, lip_y, -half + li], [half - li, lip_y, -half + li], [half - li, lip_y, half - li], [half - li - lw, lip_y, half - li]],
+            lip_outer_verts: [[half - li, top_y, -half + li], [half - li, top_y, half - li], [half - li, lip_y, half - li], [half - li, lip_y, -half + li]],
+            lip_outer_normal: [1.0, 0.0, 0.0],
+            lip_inner_verts: [[half - li - lw, top_y, half - li], [half - li - lw, top_y, -half + li], [half - li - lw, lip_y, -half + li], [half - li - lw, lip_y, half - li]],
+            lip_inner_normal: [-1.0, 0.0, 0.0],
+            lip_end_a_verts: [[half - li - lw, top_y, -half + li], [half - li, top_y, -half + li], [half - li, lip_y, -half + li], [half - li - lw, lip_y, -half + li]],
+            lip_end_a_normal: [0.0, 0.0, -1.0],
+            lip_end_b_verts: [[half - li, top_y, half - li], [half - li - lw, top_y, half - li], [half - li - lw, lip_y, half - li], [half - li, lip_y, half - li]],
+            lip_end_b_normal: [0.0, 0.0, 1.0],
+        },
+        // South (+Z edge, z = half)
+        EdgeDef {
+            side_verts: [[half, bot_y, half], [-half, bot_y, half], [-half, top_y, half], [half, top_y, half]],
+            side_normal: [0.0, 0.0, 1.0],
+            lip_top_verts: [[half - li, lip_y, half - li - lw], [-half + li, lip_y, half - li - lw], [-half + li, lip_y, half - li], [half - li, lip_y, half - li]],
+            lip_outer_verts: [[half - li, top_y, half - li], [-half + li, top_y, half - li], [-half + li, lip_y, half - li], [half - li, lip_y, half - li]],
+            lip_outer_normal: [0.0, 0.0, 1.0],
+            lip_inner_verts: [[-half + li, top_y, half - li - lw], [half - li, top_y, half - li - lw], [half - li, lip_y, half - li - lw], [-half + li, lip_y, half - li - lw]],
+            lip_inner_normal: [0.0, 0.0, -1.0],
+            lip_end_a_verts: [[half - li, top_y, half - li - lw], [half - li, top_y, half - li], [half - li, lip_y, half - li], [half - li, lip_y, half - li - lw]],
+            lip_end_a_normal: [1.0, 0.0, 0.0],
+            lip_end_b_verts: [[-half + li, top_y, half - li], [-half + li, top_y, half - li - lw], [-half + li, lip_y, half - li - lw], [-half + li, lip_y, half - li]],
+            lip_end_b_normal: [-1.0, 0.0, 0.0],
+        },
+        // West (-X edge, x = -half)
+        EdgeDef {
+            side_verts: [[-half, bot_y, half], [-half, bot_y, -half], [-half, top_y, -half], [-half, top_y, half]],
+            side_normal: [-1.0, 0.0, 0.0],
+            lip_top_verts: [[-half + li, lip_y, -half + li], [-half + li + lw, lip_y, -half + li], [-half + li + lw, lip_y, half - li], [-half + li, lip_y, half - li]],
+            lip_outer_verts: [[-half + li, top_y, half - li], [-half + li, top_y, -half + li], [-half + li, lip_y, -half + li], [-half + li, lip_y, half - li]],
+            lip_outer_normal: [-1.0, 0.0, 0.0],
+            lip_inner_verts: [[-half + li + lw, top_y, -half + li], [-half + li + lw, top_y, half - li], [-half + li + lw, lip_y, half - li], [-half + li + lw, lip_y, -half + li]],
+            lip_inner_normal: [1.0, 0.0, 0.0],
+            lip_end_a_verts: [[-half + li, top_y, -half + li], [-half + li + lw, top_y, -half + li], [-half + li + lw, lip_y, -half + li], [-half + li, lip_y, -half + li]],
+            lip_end_a_normal: [0.0, 0.0, -1.0],
+            lip_end_b_verts: [[-half + li + lw, top_y, half - li], [-half + li, top_y, half - li], [-half + li, lip_y, half - li], [-half + li + lw, lip_y, half - li]],
+            lip_end_b_normal: [0.0, 0.0, 1.0],
+        },
+    ];
+
+    let uv_full = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+
+    for (i, edge) in edges.iter().enumerate() {
+        if connected[i] {
+            continue; // neighbor present — no side wall, no lip
+        }
+        // Side wall — at the edge, alpha = 0
+        push_quad(
+            &mut positions, &mut normals, &mut uvs, &mut colors, &mut indices,
+            edge.side_verts, edge.side_normal, uv_full, [side_color; 4],
+        );
+        // Lip: top, outer side, inner side, two end caps — all near edge
+        push_quad(
+            &mut positions, &mut normals, &mut uvs, &mut colors, &mut indices,
+            edge.lip_top_verts, [0.0, 1.0, 0.0], uv_full, [side_color; 4],
+        );
+        push_quad(
+            &mut positions, &mut normals, &mut uvs, &mut colors, &mut indices,
+            edge.lip_outer_verts, edge.lip_outer_normal, uv_full, [side_color; 4],
+        );
+        push_quad(
+            &mut positions, &mut normals, &mut uvs, &mut colors, &mut indices,
+            edge.lip_inner_verts, edge.lip_inner_normal, uv_full, [side_color; 4],
+        );
+        push_quad(
+            &mut positions, &mut normals, &mut uvs, &mut colors, &mut indices,
+            edge.lip_end_a_verts, edge.lip_end_a_normal, uv_full, [side_color; 4],
+        );
+        push_quad(
+            &mut positions, &mut normals, &mut uvs, &mut colors, &mut indices,
+            edge.lip_end_b_verts, edge.lip_end_b_normal, uv_full, [side_color; 4],
+        );
+    }
 
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_COLOR,
+        VertexAttributeValues::Float32x4(colors),
+    );
     mesh.insert_indices(bevy::mesh::Indices::U32(indices));
     mesh
 }
@@ -2385,7 +2395,7 @@ pub fn build_registry() -> BlueprintRegistry {
             train_time_secs: 0.0,
             building: Some(BuildingData {
                 construction_time_secs: 0.0,
-                half_height: 0.12,
+                half_height: 0.04,
                 trains: vec![],
                 prerequisite: Some(EntityKind::Base),
                 level_upgrades: vec![],
@@ -2393,9 +2403,9 @@ pub fn build_registry() -> BlueprintRegistry {
             mob_ai: None,
             visual: VisualDef {
                 mesh_kind: MeshKind::Cuboid {
-                    x: 3.04,
-                    y: 0.24,
-                    z: 3.04,
+                    x: 3.0,
+                    y: 0.10,
+                    z: 3.0,
                 },
                 color: Color::srgb(0.56, 0.47, 0.35),
                 selected_color: Color::srgb(0.72, 0.62, 0.46),
@@ -3946,6 +3956,11 @@ pub fn build_visual_cache(
             .insert(piece, meshes.add(build_floor_piece_mesh(piece)));
     }
 
+    // Flat plane mesh for the floor brush indicator (no side walls)
+    cache.floor_brush_indicator = Some(meshes.add(
+        Plane3d::default().mesh().size(WALL_CELL_SIZE, WALL_CELL_SIZE),
+    ));
+
     cache
 }
 
@@ -3969,3 +3984,4 @@ fn setup_blueprints(
     commands.insert_resource(registry);
     commands.insert_resource(cache);
 }
+

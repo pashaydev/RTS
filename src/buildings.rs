@@ -13,7 +13,11 @@ use crate::blueprints::{
 };
 use crate::camera;
 use crate::components::*;
-use crate::ground::{BorderSettings, HeightMap};
+use crate::ground::{
+    apply_terrain_shape_op, foundation_radii, sync_ground_mesh_partial, BorderSettings, HeightMap,
+    TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
+};
+use game_state::message::TerrainShapeOp;
 use crate::model_assets::{BuildingConstructionAssets, BuildingModelAssets, UnitModelAssets};
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
 
@@ -217,23 +221,13 @@ pub fn spawn_wall_line(
 
 pub fn spawn_floor_grid_cells(
     commands: &mut Commands,
-    cache: &EntityVisualCache,
+    _cache: &EntityVisualCache,
     height_map: &HeightMap,
     floor_grid: &mut FloorGrid,
     faction: Faction,
     cells: &[(i32, i32)],
+    shared_height: Option<f32>,
 ) -> Vec<Entity> {
-    let mesh = cache
-        .floor_piece_meshes
-        .get(&FloorPieceKind::Isolated)
-        .expect("Missing floor piece mesh")
-        .clone();
-    let material = cache
-        .materials_default
-        .get(&EntityKind::Floor)
-        .expect("Missing floor material")
-        .clone();
-    let half_height = 0.12;
     let footprint = footprint_for_kind(EntityKind::Floor);
     let mut spawned = Vec::new();
 
@@ -243,7 +237,11 @@ pub fn spawn_floor_grid_cells(
         }
 
         let world = WallGrid::grid_to_world(gx, gz);
-        let ground_y = height_map.foundation_target_height(world.x, world.z, footprint);
+        let ground_y = shared_height.unwrap_or_else(|| {
+            height_map.foundation_target_height(world.x, world.z, footprint)
+        });
+        // Floor tiles are invisible — the terrain blend handles the visuals.
+        // Entity is kept for game logic (FloorGrid, FloorTile filtering, etc.)
         let entity = commands
             .spawn((
                 GameWorld,
@@ -254,10 +252,8 @@ pub fn spawn_floor_grid_cells(
                 FloorGridCoord(gx, gz),
                 BuildingFootprint(footprint),
                 VegetationCleared,
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(material.clone()),
-                Transform::from_translation(Vec3::new(world.x, ground_y + half_height, world.z)),
-                Visibility::default(),
+                Transform::from_translation(Vec3::new(world.x, ground_y, world.z)),
+                Visibility::Hidden,
             ))
             .id();
 
@@ -356,7 +352,7 @@ pub fn footprint_for_kind(kind: EntityKind) -> f32 {
         | EntityKind::BombardTower
         | EntityKind::Storage
         | EntityKind::House => 2.0,           // towers ~1.5, Granary 1.6, House 1.7 @ 0.75
-        EntityKind::Floor => 1.5,
+        EntityKind::Floor => 2.2,
         EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner => 1.5,
         _ => 2.5,
     }
@@ -410,7 +406,11 @@ fn blocks_construction_overlap(kind: EntityKind) -> bool {
 pub fn uses_terrain_foundation(kind: EntityKind) -> bool {
     !matches!(
         kind,
-        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner | EntityKind::OilRig
+        EntityKind::WallSegment
+            | EntityKind::WallPost
+            | EntityKind::WallCorner
+            | EntityKind::OilRig
+            | EntityKind::Floor // floor batch-flattens in confirm_floor_plot instead
     )
 }
 
@@ -804,49 +804,28 @@ fn wall_auto_tile_system(
 }
 
 fn floor_auto_tile_system(
-    mut commands: Commands,
     mut floor_grid: ResMut<FloorGrid>,
-    cache: Res<EntityVisualCache>,
-    transform_q: Query<&Transform>,
 ) {
-    const AUTO_TILE_BUDGET: usize = 24;
-
+    // Floor tiles have no geometry — just update the grid metadata for neighbor tracking.
     let dirty: Vec<(i32, i32)> = floor_grid.dirty.drain(..).collect();
     let mut dirty_set: Vec<(i32, i32)> = {
         let mut set = std::collections::HashSet::new();
         dirty.into_iter().filter(|c| set.insert(*c)).collect()
     };
 
+    const AUTO_TILE_BUDGET: usize = 64;
     if dirty_set.len() > AUTO_TILE_BUDGET {
         let deferred = dirty_set.split_off(AUTO_TILE_BUDGET);
         floor_grid.dirty.extend(deferred);
     }
 
     for (gx, gz) in dirty_set {
-        let Some(cell) = floor_grid.cells.get(&(gx, gz)).cloned() else {
-            continue;
-        };
-
         let mask = floor_grid.neighbor_mask(gx, gz);
         let (new_piece, new_rot) = floor_piece_and_rotation(mask);
 
-        if new_piece == cell.piece_kind && (new_rot - cell.rotation_y).abs() < 0.01 {
-            continue;
-        }
-
-        if let Some(cell_mut) = floor_grid.cells.get_mut(&(gx, gz)) {
-            cell_mut.piece_kind = new_piece;
-            cell_mut.rotation_y = new_rot;
-        }
-
-        if let Some(mesh) = cache.floor_piece_meshes.get(&new_piece) {
-            commands.entity(cell.entity).insert(Mesh3d(mesh.clone()));
-        }
-
-        if let Ok(current_tf) = transform_q.get(cell.entity) {
-            let mut new_tf = *current_tf;
-            new_tf.rotation = Quat::from_rotation_y(new_rot);
-            commands.entity(cell.entity).insert(new_tf);
+        if let Some(cell) = floor_grid.cells.get_mut(&(gx, gz)) {
+            cell.piece_kind = new_piece;
+            cell.rotation_y = new_rot;
         }
     }
 }
@@ -916,6 +895,7 @@ impl Plugin for BuildingsPlugin {
                     update_storage_piles,
                     sawmill_yard_system,
                     yard_tree_regrowth_system,
+                    sync_environment_to_terrain_changes,
                     clear_vegetation_around_buildings,
                 )
                     .in_set(GameFlowSet::Simulation)
@@ -929,6 +909,7 @@ impl Plugin for BuildingsPlugin {
 fn sync_obstacle_grid(
     mut grid: ResMut<ObstacleGrid>,
     trees: Query<&Transform, Or<(With<Sapling>, With<GrowingTree>, With<MatureTree>)>>,
+    resource_nodes: Query<&Transform, (With<ResourceNode>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>)>,
     height_map: Res<HeightMap>,
 ) {
     grid.cells.clear();
@@ -936,9 +917,115 @@ fn sync_obstacle_grid(
         let (gx, gz) = WallGrid::world_to_grid(tf.translation);
         grid.cells.insert((gx, gz));
     }
+    // Resource nodes (iron, copper, trees, etc.) also block floor/wall placement
+    for tf in &resource_nodes {
+        let (gx, gz) = WallGrid::world_to_grid(tf.translation);
+        grid.cells.insert((gx, gz));
+    }
     // Compute playable boundary from border hill settings
     let border = BorderSettings::from_map_size(height_map.map_size);
     grid.playable_half = height_map.half_map - border.thickness - border.transition;
+}
+
+fn sync_environment_to_terrain_changes(
+    mut commands: Commands,
+    mut dirty_areas: ResMut<TerrainSurfaceDirtyQueue>,
+    height_map: Res<HeightMap>,
+    registry: Res<BlueprintRegistry>,
+    mut trees: Query<
+        &mut Transform,
+        (
+            Or<(With<Sapling>, With<GrowingTree>, With<MatureTree>)>,
+            Without<Building>,
+        ),
+    >,
+    mut building_q: Query<(&mut Transform, &EntityKind, &BuildingFootprint), With<Building>>,
+    grass_chunks: Query<(Entity, &GrassChunk, &Mesh3d)>,
+    deco_chunks: Query<
+        (Entity, &DecoChunk, &Transform, &Mesh3d),
+        (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
+    >,
+    mut meshes: ResMut<Assets<Mesh>>,
+) {
+    while let Some(area) = dirty_areas.pending.pop_front() {
+        sync_building_heights_for_area(&height_map, &registry, area, &mut building_q);
+        sync_tree_heights_for_area(&height_map, area, &mut trees);
+        clear_vegetation_in_radius(
+            &mut commands,
+            &grass_chunks,
+            &deco_chunks,
+            &mut meshes,
+            area.center.x,
+            area.center.y,
+            area.radius + 2.0,
+        );
+    }
+}
+
+fn sync_building_heights_for_area(
+    height_map: &HeightMap,
+    registry: &BlueprintRegistry,
+    area: TerrainSurfaceDirtyArea,
+    building_q: &mut Query<(&mut Transform, &EntityKind, &BuildingFootprint), With<Building>>,
+) {
+    let area_r2 = area.radius * area.radius;
+
+    for (mut transform, kind, footprint) in building_q.iter_mut() {
+        let dx = transform.translation.x - area.center.x;
+        let dz = transform.translation.z - area.center.y;
+        let reach = area.radius + footprint.0;
+        if dx * dx + dz * dz > reach * reach {
+            continue;
+        }
+
+        let bp = registry.get(*kind);
+        let half_height = if bp.visual.mesh_kind.is_gltf() && !bp.visual.mesh_kind.is_gltf_character()
+        {
+            0.0
+        } else {
+            bp.building.as_ref().map(|b| b.half_height).unwrap_or(0.0)
+        };
+        let ground_y = if uses_terrain_foundation(*kind) {
+            height_map.foundation_target_height(
+                transform.translation.x,
+                transform.translation.z,
+                footprint.0,
+            )
+        } else {
+            height_map.sample(transform.translation.x, transform.translation.z)
+        };
+
+        if (transform.translation.y - (ground_y + half_height)).abs() > 0.001
+            || dx * dx + dz * dz <= area_r2
+        {
+            transform.translation.y = ground_y + half_height;
+        }
+    }
+}
+
+fn sync_tree_heights_for_area(
+    height_map: &HeightMap,
+    area: TerrainSurfaceDirtyArea,
+    trees: &mut Query<
+        &mut Transform,
+        (
+            Or<(With<Sapling>, With<GrowingTree>, With<MatureTree>)>,
+            Without<Building>,
+        ),
+    >,
+) {
+    let area_r2 = area.radius * area.radius;
+
+    for mut transform in trees.iter_mut() {
+        let dx = transform.translation.x - area.center.x;
+        let dz = transform.translation.z - area.center.y;
+        if dx * dx + dz * dz > area_r2 {
+            continue;
+        }
+
+        transform.translation.y =
+            height_map.sample(transform.translation.x, transform.translation.z);
+    }
 }
 
 // ── Asset creation (ghost materials only) ──
@@ -1045,66 +1132,7 @@ fn cursor_ground_pos(
 }
 
 fn cursor_terrain_hit(ray: Ray3d, height_map: &HeightMap) -> Option<Vec3> {
-    let half_map = height_map.half_map;
-    let max_dist = height_map.map_size * 4.0;
-    let step = height_map.step.max(1.0);
-
-    let in_bounds = |point: Vec3| point.x.abs() <= half_map && point.z.abs() <= half_map;
-    let terrain_delta = |point: Vec3| point.y - height_map.sample(point.x, point.z);
-
-    let mut prev_t = 0.0_f32;
-    let mut prev_delta = None;
-
-    let mut t = 0.0_f32;
-    while t <= max_dist {
-        let point = ray.get_point(t);
-        if in_bounds(point) {
-            let delta = terrain_delta(point);
-            if delta <= 0.0 {
-                let mut low_t = prev_t;
-                let mut high_t = t;
-
-                if prev_delta.is_none() {
-                    low_t = 0.0;
-                }
-
-                for _ in 0..12 {
-                    let mid_t = (low_t + high_t) * 0.5;
-                    let mid_point = ray.get_point(mid_t);
-                    let mid_delta = terrain_delta(mid_point);
-                    if mid_delta > 0.0 {
-                        low_t = mid_t;
-                    } else {
-                        high_t = mid_t;
-                    }
-                }
-
-                let hit = ray.get_point((low_t + high_t) * 0.5);
-                return Some(Vec3::new(hit.x, height_map.sample(hit.x, hit.z), hit.z));
-            }
-
-            prev_t = t;
-            prev_delta = Some(delta);
-        } else if prev_delta.is_some() {
-            break;
-        } else {
-            prev_t = t;
-        }
-
-        t += step;
-    }
-
-    let dist = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))?;
-    let fallback = ray.get_point(dist);
-    if in_bounds(fallback) {
-        Some(Vec3::new(
-            fallback.x,
-            height_map.sample(fallback.x, fallback.z),
-            fallback.z,
-        ))
-    } else {
-        None
-    }
+    height_map.raycast(ray)
 }
 
 fn is_pointer_over_ui(ui_interactions: &Query<&Interaction, With<Node>>) -> bool {
@@ -1260,7 +1288,7 @@ fn placement_kind(mode: PlacementMode) -> Option<EntityKind> {
         PlacementMode::None
         | PlacementMode::PlotWall { .. }
         | PlacementMode::PlotGate
-        | PlacementMode::PlotFloor { .. } => None,
+        | PlacementMode::PlotFloor => None,
     }
 }
 
@@ -1810,118 +1838,68 @@ fn update_floor_plot_preview(
     obstacle_grid: Res<ObstacleGrid>,
 ) {
     let (camera_q, windows, graphics) = viewport;
-    if !matches!(placement.mode, PlacementMode::PlotFloor { .. }) {
+    if !matches!(placement.mode, PlacementMode::PlotFloor) {
         if floor_preview.start.is_some() || !floor_preview.ghost_entities.is_empty() {
             clear_floor_preview(&mut commands, &mut floor_preview);
         }
         return;
     }
 
+    // Clear old brush indicator each frame
     clear_floor_preview(&mut commands, &mut floor_preview);
-
-    let start = match placement.mode {
-        PlacementMode::PlotFloor { start } if start != Vec3::ZERO => start,
-        _ => {
-            placement.hint_text = Some("Click ground to start floor brush".to_string());
-            return;
-        }
-    };
 
     let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) else {
         return;
     };
 
-    let cells = floor_layout_grid_cells(start, Vec3::new(world_pos.x, 0.0, world_pos.z));
-    if cells.is_empty() {
-        placement.hint_text = Some("Move cursor to paint floor".to_string());
-        return;
-    }
+    let (gx, gz) = WallGrid::world_to_grid(Vec3::new(world_pos.x, 0.0, world_pos.z));
+    let world = WallGrid::grid_to_world(gx, gz);
 
-    let new_cells: Vec<(i32, i32)> = cells
-        .iter()
-        .copied()
-        .filter(|cell| !floor_grid.cells.contains_key(cell))
-        .collect();
-    if new_cells.is_empty() {
-        placement.hint_text = Some("All cells already have floor".to_string());
-        return;
-    }
-
-    let half_height = registry
-        .get(EntityKind::Floor)
-        .building
-        .as_ref()
-        .map(|b| b.half_height)
-        .unwrap_or(0.08);
-    let footprint = footprint_for_kind(EntityKind::Floor);
-
-    floor_preview.start = Some(start);
-    floor_preview.cells = new_cells.clone();
-    floor_preview.total_cost = floor_cost_from_cells(&new_cells, &floor_grid, &registry);
-    floor_preview.valid = true;
-
-    let mut merged: std::collections::HashSet<(i32, i32)> =
-        floor_grid.cells.keys().copied().collect();
-    for &cell in &new_cells {
-        merged.insert(cell);
-    }
-
+    let already_placed = floor_grid.cells.contains_key(&(gx, gz));
+    let blocked = obstacle_grid.is_cell_blocked(gx, gz);
     let half_map = height_map.half_map;
-    for &(gx, gz) in &new_cells {
-        let world = WallGrid::grid_to_world(gx, gz);
-        let mut valid = true;
+    let out_of_bounds = world.x.abs() > half_map - 5.0 || world.z.abs() > half_map - 5.0;
+    let valid = !already_placed && !blocked && !out_of_bounds;
 
-        if obstacle_grid.is_cell_blocked(gx, gz) {
-            valid = false;
-        }
+    let y = height_map.sample(world.x, world.z) + 0.08;
 
-        if world.x.abs() > half_map - 5.0 || world.z.abs() > half_map - 5.0 {
-            valid = false;
-        }
+    // Flat plane brush indicator — no side walls, no shadow artifacts
+    let Some(mesh_handle) = cache.floor_brush_indicator.clone() else {
+        return;
+    };
 
-        floor_preview.valid &= valid;
-
-        let mut mask = 0u8;
-        for (i, (nx, nz)) in WallGrid::cardinal_neighbors(gx, gz).iter().enumerate() {
-            if merged.contains(&(*nx, *nz)) {
-                mask |= 1 << i;
-            }
-        }
-        let (piece_kind, rotation_y) = floor_piece_and_rotation(mask);
-        let mesh = cache
-            .floor_piece_meshes
-            .get(&piece_kind)
-            .expect("Missing floor piece mesh")
-            .clone();
-        let y = height_map.foundation_target_height(world.x, world.z, footprint) + half_height;
-        let ghost = commands
-            .spawn((
-                GhostBuilding,
-                GhostValid(valid),
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(if valid {
-                    ghost_mats.ghost_valid.clone()
-                } else {
-                    ghost_mats.ghost_invalid.clone()
-                }),
-                Transform::from_translation(Vec3::new(world.x, y, world.z))
-                    .with_rotation(Quat::from_rotation_y(rotation_y)),
-                NotShadowCaster,
-                NotShadowReceiver,
-            ))
-            .id();
-        floor_preview.ghost_entities.push(ghost);
-    }
-
-    let count = floor_preview.cells.len();
-    let cost = &floor_preview.total_cost;
-    let wood = cost.get(ResourceType::Wood);
-    let stone = cost.get(ResourceType::Stone);
-    placement.hint_text = Some(if floor_preview.valid {
-        format!("Floor: {count} tiles | Cost: {wood}W {stone}S")
+    let mat = if valid {
+        ghost_mats.ghost_valid.clone()
     } else {
-        "Floor area blocked".to_string()
-    });
+        ghost_mats.ghost_invalid.clone()
+    };
+
+    let ghost = commands
+        .spawn((
+            GhostBuilding,
+            GhostValid(valid),
+            Mesh3d(mesh_handle),
+            MeshMaterial3d(mat),
+            Transform::from_translation(Vec3::new(world.x, y, world.z)),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ))
+        .id();
+    floor_preview.ghost_entities.push(ghost);
+
+    if valid {
+        let cost = registry.get(EntityKind::Floor).cost.clone();
+        let wood = cost.get(ResourceType::Wood);
+        let stone = cost.get(ResourceType::Stone);
+        placement.hint_text =
+            Some(format!("Floor brush | Cost per tile: {wood}W {stone}S"));
+    } else if already_placed {
+        placement.hint_text = Some("Already has floor".to_string());
+    } else if blocked {
+        placement.hint_text = Some("Blocked by resource".to_string());
+    } else {
+        placement.hint_text = Some("Out of bounds".to_string());
+    }
 }
 
 /// Overrides materials on all mesh descendants of ghost buildings to ghost_valid/ghost_invalid.
@@ -2490,17 +2468,29 @@ fn confirm_floor_plot(
         Res<GraphicsSettings>,
     ),
     ui_interactions: Query<&Interaction, With<Node>>,
-    height_map: Res<HeightMap>,
-    cache: Res<EntityVisualCache>,
-    registry: Res<BlueprintRegistry>,
-    obstacle_grid: Res<ObstacleGrid>,
+    mut height_map: ResMut<HeightMap>,
+    resources_and_queries: (
+        Res<EntityVisualCache>,
+        Res<BlueprintRegistry>,
+        Res<ObstacleGrid>,
+    ),
+    ground_q: Query<&Mesh3d, With<Ground>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    terrain_and_decos: (
+        ResMut<crate::ground::TerrainShapeSyncState>,
+        ResMut<TerrainSurfaceDirtyQueue>,
+    ),
+    bush_decorations: Query<(Entity, &Transform), With<Decoration>>,
 ) {
+    let (cache, registry, obstacle_grid) = resources_and_queries;
+    let (mut sync_state, mut dirty_areas) = terrain_and_decos;
     let (camera_q, windows, graphics) = viewport;
-    if !matches!(placement.mode, PlacementMode::PlotFloor { .. }) || placement.awaiting_release {
+    if !matches!(placement.mode, PlacementMode::PlotFloor) || placement.awaiting_release {
         return;
     }
 
-    if !mouse.just_pressed(MouseButton::Left) {
+    // Brush mode: paint while holding left mouse button
+    if !mouse.pressed(MouseButton::Left) {
         return;
     }
 
@@ -2508,46 +2498,88 @@ fn confirm_floor_plot(
         return;
     }
 
-    if let PlacementMode::PlotFloor { start } = placement.mode {
-        if start == Vec3::ZERO {
-            if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) {
-                let (gx, gz) = WallGrid::world_to_grid(Vec3::new(world_pos.x, 0.0, world_pos.z));
-                let first = WallGrid::grid_to_world(gx, gz);
-                floor_preview.start = Some(first);
-                placement.mode = PlacementMode::PlotFloor { start: first };
-                placement.hint_text =
-                    Some("Move cursor and click again to stamp floor".to_string());
-            }
-            return;
-        }
-    }
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) else {
+        return;
+    };
 
-    if floor_preview.cells.is_empty() || !floor_preview.valid {
+    let (gx, gz) = WallGrid::world_to_grid(Vec3::new(world_pos.x, 0.0, world_pos.z));
+    let world = WallGrid::grid_to_world(gx, gz);
+
+    // Skip if already placed, blocked, or out of bounds
+    if floor_grid.cells.contains_key(&(gx, gz)) {
+        return;
+    }
+    if obstacle_grid.is_cell_blocked(gx, gz) {
+        return;
+    }
+    let half_map = height_map.half_map;
+    if world.x.abs() > half_map - 5.0 || world.z.abs() > half_map - 5.0 {
         return;
     }
 
     let faction = active_player.0;
-    let cells: Vec<(i32, i32)> = floor_preview
-        .cells
-        .iter()
-        .copied()
-        .filter(|(gx, gz)| !obstacle_grid.is_cell_blocked(*gx, *gz))
-        .filter(|cell| !floor_grid.cells.contains_key(cell))
-        .collect();
-    if cells.is_empty() {
-        clear_floor_preview(&mut commands, &mut floor_preview);
-        placement.mode = PlacementMode::None;
-        placement.hint_text = Some("Floor area blocked by trees".to_string());
+    let cells = vec![(gx, gz)];
+    let cell_cost = floor_cost_from_cells(&cells, &floor_grid, &registry);
+    let player_res = all_resources.get(&faction);
+    if !cell_cost.can_afford(player_res) {
+        placement.hint_text = Some("Not enough resources".to_string());
         return;
+    }
+    cell_cost.deduct(all_resources.get_mut(&faction));
+
+    let cx = world.x;
+    let cz = world.z;
+    let footprint = footprint_for_kind(EntityKind::Floor);
+    let shared_height = height_map.foundation_target_height(cx, cz, footprint);
+
+    // Flatten terrain for single cell
+    let op = TerrainShapeOp {
+        center: [cx, cz],
+        footprint,
+        target_height: shared_height,
+    };
+    let (_, outer_radius) = foundation_radii(op.footprint, height_map.step);
+
+    let changed = apply_terrain_shape_op(&mut height_map, &op);
+    sync_state.applied_history.insert(op.clone());
+    sync_state.applied_history_ordered.push(op.clone());
+    sync_state.pending_network.push(op);
+
+    if changed {
+        if let Ok(ground_mesh) = ground_q.single() {
+            if let Some(mesh) = meshes.get_mut(&ground_mesh.0) {
+                let op_min_x = (((cx - outer_radius) + half_map) / height_map.step)
+                    .floor()
+                    .max(0.0) as usize;
+                let op_max_x = (((cx + outer_radius) + half_map) / height_map.step)
+                    .ceil()
+                    .min((height_map.grid_size - 1) as f32) as usize;
+                let op_min_z = (((cz - outer_radius) + half_map) / height_map.step)
+                    .floor()
+                    .max(0.0) as usize;
+                let op_max_z = (((cz + outer_radius) + half_map) / height_map.step)
+                    .ceil()
+                    .min((height_map.grid_size - 1) as f32) as usize;
+                let norm_min_x = op_min_x.saturating_sub(1);
+                let norm_max_x = (op_max_x + 1).min(height_map.grid_size - 1);
+                let norm_min_z = op_min_z.saturating_sub(1);
+                let norm_max_z = (op_max_z + 1).min(height_map.grid_size - 1);
+                sync_ground_mesh_partial(
+                    mesh,
+                    &height_map,
+                    norm_min_x,
+                    norm_max_x,
+                    norm_min_z,
+                    norm_max_z,
+                );
+            }
+        }
     }
 
-    let final_cost = floor_cost_from_cells(&cells, &floor_grid, &registry);
-    let player_res = all_resources.get(&faction);
-    if !final_cost.can_afford(player_res) {
-        placement.hint_text = Some("Not enough resources for floor".to_string());
-        return;
-    }
-    final_cost.deduct(all_resources.get_mut(&faction));
+    dirty_areas.pending.push_back(TerrainSurfaceDirtyArea {
+        center: Vec2::new(cx, cz),
+        radius: outer_radius,
+    });
 
     spawn_floor_grid_cells(
         &mut commands,
@@ -2556,12 +2588,34 @@ fn confirm_floor_plot(
         &mut floor_grid,
         faction,
         &cells,
+        Some(shared_height),
     );
 
-    clear_floor_preview(&mut commands, &mut floor_preview);
-    placement.mode = PlacementMode::None;
-    placement.preview_entity = None;
-    placement.hint_text = None;
+    // Paint floor stone texture on the ground mesh
+    if let Ok(ground_mesh) = ground_q.single() {
+        if let Some(mesh) = meshes.get_mut(&ground_mesh.0) {
+            let floor_cell_half = WALL_CELL_SIZE * 0.5;
+            let transition = WALL_CELL_SIZE * 0.8;
+            crate::ground::paint_floor_blend_on_ground(
+                mesh,
+                &height_map,
+                cx,
+                cz,
+                floor_cell_half,
+                transition,
+            );
+        }
+    }
+
+    // Despawn bush decorations inside the painted cell
+    let clear_r2 = (footprint + 2.0) * (footprint + 2.0);
+    for (deco_entity, deco_tf) in &bush_decorations {
+        let dx = deco_tf.translation.x - cx;
+        let dz = deco_tf.translation.z - cz;
+        if dx * dx + dz * dz <= clear_r2 {
+            commands.entity(deco_entity).try_despawn();
+        }
+    }
 }
 
 fn cancel_placement(
@@ -4390,7 +4444,10 @@ fn clear_vegetation_around_buildings(
         (With<Building>, Without<VegetationCleared>),
     >,
     grass_chunks: Query<(Entity, &GrassChunk, &Mesh3d)>,
-    deco_chunks: Query<(Entity, &DecoChunk, &Transform, &Mesh3d), Without<Building>>,
+    deco_chunks: Query<
+        (Entity, &DecoChunk, &Transform, &Mesh3d),
+        (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
+    >,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let mut processed = 0;
@@ -4403,66 +4460,88 @@ fn clear_vegetation_around_buildings(
         let bx = building_tf.translation.x;
         let bz = building_tf.translation.z;
         // Clear a bit beyond the footprint so there is a visible gap.
-        let clear_radius = footprint.0 + 2.0;
-        let clear_r2 = clear_radius * clear_radius;
-
-        // ── Grass chunks (vertices in world space, Transform::default) ──
-        for (chunk_entity, chunk, mesh_handle) in &grass_chunks {
-            // AABB pre-check: skip chunks that can't intersect the clear radius.
-            let chunk_cx = (chunk.chunk_x as f32 + 0.5) * VEG_CHUNK_SIZE;
-            let chunk_cz = (chunk.chunk_z as f32 + 0.5) * VEG_CHUNK_SIZE;
-            let half = VEG_CHUNK_SIZE * 0.5 + clear_radius;
-            if (bx - chunk_cx).abs() > half || (bz - chunk_cz).abs() > half {
-                continue;
-            }
-            // Read-only check first: only mutate (triggering GPU re-upload) if
-            // there are actually triangles to remove.
-            let needs_strip = {
-                let Some(mesh) = meshes.get(&mesh_handle.0) else {
-                    continue;
-                };
-                has_triangles_in_radius(mesh, bx, bz, clear_r2, 0.0, 0.0)
-            };
-            if !needs_strip {
-                continue;
-            }
-            let Some(mesh) = meshes.get_mut(&mesh_handle.0) else {
-                continue;
-            };
-            if strip_triangles_in_radius(mesh, bx, bz, clear_r2, 0.0, 0.0) {
-                commands.entity(chunk_entity).despawn();
-            }
-        }
-
-        // ── Deco chunks (vertices in local space relative to chunk transform) ──
-        for (chunk_entity, chunk, chunk_tf, mesh_handle) in &deco_chunks {
-            let ox = chunk_tf.translation.x;
-            let oz = chunk_tf.translation.z;
-            // AABB pre-check using chunk grid coords.
-            let chunk_cx = (chunk.chunk_x as f32 + 0.5) * VEG_CHUNK_SIZE;
-            let chunk_cz = (chunk.chunk_z as f32 + 0.5) * VEG_CHUNK_SIZE;
-            let half = VEG_CHUNK_SIZE * 0.5 + clear_radius;
-            if (bx - chunk_cx).abs() > half || (bz - chunk_cz).abs() > half {
-                continue;
-            }
-            let needs_strip = {
-                let Some(mesh) = meshes.get(&mesh_handle.0) else {
-                    continue;
-                };
-                has_triangles_in_radius(mesh, bx, bz, clear_r2, ox, oz)
-            };
-            if !needs_strip {
-                continue;
-            }
-            let Some(mesh) = meshes.get_mut(&mesh_handle.0) else {
-                continue;
-            };
-            if strip_triangles_in_radius(mesh, bx, bz, clear_r2, ox, oz) {
-                commands.entity(chunk_entity).despawn();
-            }
-        }
+        clear_vegetation_in_radius(
+            &mut commands,
+            &grass_chunks,
+            &deco_chunks,
+            &mut meshes,
+            bx,
+            bz,
+            footprint.0 + 2.0,
+        );
 
         commands.entity(building_entity).insert(VegetationCleared);
+    }
+}
+
+fn clear_vegetation_in_radius(
+    commands: &mut Commands,
+    grass_chunks: &Query<(Entity, &GrassChunk, &Mesh3d)>,
+    deco_chunks: &Query<
+        (Entity, &DecoChunk, &Transform, &Mesh3d),
+        (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
+    >,
+    meshes: &mut Assets<Mesh>,
+    bx: f32,
+    bz: f32,
+    clear_radius: f32,
+) {
+    let clear_r2 = clear_radius * clear_radius;
+
+    // Grass chunks store vertices directly in world space.
+    for (chunk_entity, chunk, mesh_handle) in grass_chunks.iter() {
+        let chunk_cx = (chunk.chunk_x as f32 + 0.5) * VEG_CHUNK_SIZE;
+        let chunk_cz = (chunk.chunk_z as f32 + 0.5) * VEG_CHUNK_SIZE;
+        let half = VEG_CHUNK_SIZE * 0.5 + clear_radius;
+        if (bx - chunk_cx).abs() > half || (bz - chunk_cz).abs() > half {
+            continue;
+        }
+
+        let needs_strip = {
+            let Some(mesh) = meshes.get(&mesh_handle.0) else {
+                continue;
+            };
+            has_triangles_in_radius(mesh, bx, bz, clear_r2, 0.0, 0.0)
+        };
+        if !needs_strip {
+            continue;
+        }
+
+        let Some(mesh) = meshes.get_mut(&mesh_handle.0) else {
+            continue;
+        };
+        if strip_triangles_in_radius(mesh, bx, bz, clear_r2, 0.0, 0.0) {
+            commands.entity(chunk_entity).despawn();
+        }
+    }
+
+    // Deco chunks store vertices relative to the chunk transform.
+    for (chunk_entity, chunk, chunk_tf, mesh_handle) in deco_chunks.iter() {
+        let ox = chunk_tf.translation.x;
+        let oz = chunk_tf.translation.z;
+        let chunk_cx = (chunk.chunk_x as f32 + 0.5) * VEG_CHUNK_SIZE;
+        let chunk_cz = (chunk.chunk_z as f32 + 0.5) * VEG_CHUNK_SIZE;
+        let half = VEG_CHUNK_SIZE * 0.5 + clear_radius;
+        if (bx - chunk_cx).abs() > half || (bz - chunk_cz).abs() > half {
+            continue;
+        }
+
+        let needs_strip = {
+            let Some(mesh) = meshes.get(&mesh_handle.0) else {
+                continue;
+            };
+            has_triangles_in_radius(mesh, bx, bz, clear_r2, ox, oz)
+        };
+        if !needs_strip {
+            continue;
+        }
+
+        let Some(mesh) = meshes.get_mut(&mesh_handle.0) else {
+            continue;
+        };
+        if strip_triangles_in_radius(mesh, bx, bz, clear_r2, ox, oz) {
+            commands.entity(chunk_entity).despawn();
+        }
     }
 }
 
