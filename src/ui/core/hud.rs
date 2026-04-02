@@ -151,7 +151,7 @@ fn placement_default_hint(mode: PlacementMode) -> Option<String> {
     match mode {
         PlacementMode::None => None,
         PlacementMode::Placing(kind) => Some(format!(
-            "Placing {}: Left-click ground to place (Right-click/Escape to cancel)",
+            "Placing {}: Left-click ground to place (Right-click/Escape to cancel, H/J to rotate)",
             kind.display_name()
         )),
         PlacementMode::PlotBase => Some(

@@ -855,6 +855,7 @@ impl Plugin for BuildingsPlugin {
                     update_gate_plot_preview,
                     update_floor_plot_preview,
                     apply_ghost_materials,
+                    animate_placement_preview_vfx,
                     confirm_placement,
                     confirm_wall_plot,
                     confirm_gate_plot,
@@ -1035,32 +1036,49 @@ fn create_ghost_materials(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    // Create a procedural green grid texture for the placement ground plane
+    // Create a procedural hologram grid texture for the placement ground plane.
     let grid_tex = {
         use bevy::image::{ImageAddressMode, ImageSamplerDescriptor};
-        const TEX_SIZE: u32 = 64;
+        const TEX_SIZE: u32 = 128;
+        const MINOR_CELLS: f32 = 12.0;
+        const MAJOR_CELLS: f32 = 3.0;
         let mut data = vec![0u8; (TEX_SIZE * TEX_SIZE * 4) as usize];
-        let line_width = 2u32;
+
+        let line_strength = |coord: f32, cells: f32, width: f32| -> f32 {
+            let frac = (coord * cells).fract();
+            let dist = (frac - 0.5).abs() * 2.0;
+            ((width - dist) / width).clamp(0.0, 1.0)
+        };
+
         for y in 0..TEX_SIZE {
             for x in 0..TEX_SIZE {
-                let on_edge = x < line_width
-                    || x >= TEX_SIZE - line_width
-                    || y < line_width
-                    || y >= TEX_SIZE - line_width;
+                let u = (x as f32 + 0.5) / TEX_SIZE as f32;
+                let v = (y as f32 + 0.5) / TEX_SIZE as f32;
+                let centered_x = u * 2.0 - 1.0;
+                let centered_y = v * 2.0 - 1.0;
+                let radial = (centered_x * centered_x + centered_y * centered_y).sqrt();
+                let center_glow = (1.0 - radial).clamp(0.0, 1.0).powf(1.6);
+                let edge_fade = (1.0 - radial * 0.85).clamp(0.0, 1.0).powf(2.2);
+                let minor_grid = line_strength(u, MINOR_CELLS, 0.18)
+                    .max(line_strength(v, MINOR_CELLS, 0.18));
+                let major_grid = line_strength(u, MAJOR_CELLS, 0.28)
+                    .max(line_strength(v, MAJOR_CELLS, 0.28));
+                let border = centered_x.abs().max(centered_y.abs());
+                let border_glow = ((border - 0.78) / 0.22).clamp(0.0, 1.0).powf(1.5);
                 let idx = ((y * TEX_SIZE + x) * 4) as usize;
-                if on_edge {
-                    // Bright green grid lines
-                    data[idx] = 50;
-                    data[idx + 1] = 220;
-                    data[idx + 2] = 80;
-                    data[idx + 3] = 200;
-                } else {
-                    // Transparent fill with slight green tint
-                    data[idx] = 30;
-                    data[idx + 1] = 180;
-                    data[idx + 2] = 50;
-                    data[idx + 3] = 40;
-                }
+
+                let line_mix = (minor_grid * 0.45 + major_grid * 0.85 + border_glow * 0.55)
+                    .clamp(0.0, 1.0);
+                let alpha = (12.0 + edge_fade * 40.0 + center_glow * 36.0 + line_mix * 150.0)
+                    .clamp(0.0, 255.0);
+                let red = (18.0 + center_glow * 20.0 + major_grid * 14.0).clamp(0.0, 255.0);
+                let green = (90.0 + edge_fade * 48.0 + line_mix * 108.0).clamp(0.0, 255.0);
+                let blue = (70.0 + center_glow * 44.0 + line_mix * 118.0).clamp(0.0, 255.0);
+
+                data[idx] = red as u8;
+                data[idx + 1] = green as u8;
+                data[idx + 2] = blue as u8;
+                data[idx + 3] = alpha as u8;
             }
         }
         let mut img = Image::new_fill(
@@ -1085,13 +1103,15 @@ fn create_ghost_materials(
 
     commands.insert_resource(BuildingGhostMaterials {
         ghost_valid: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.2, 0.8, 0.3, 0.4),
+            base_color: Color::srgba(0.35, 0.98, 0.72, 0.34),
+            emissive: LinearRgba::new(0.18, 0.72, 0.45, 1.0),
             alpha_mode: AlphaMode::Blend,
             unlit: true,
             ..default()
         }),
         ghost_invalid: materials.add(StandardMaterial {
-            base_color: Color::srgba(0.8, 0.2, 0.2, 0.4),
+            base_color: Color::srgba(1.0, 0.38, 0.22, 0.34),
+            emissive: LinearRgba::new(0.82, 0.16, 0.08, 1.0),
             alpha_mode: AlphaMode::Blend,
             unlit: true,
             ..default()
@@ -1102,8 +1122,9 @@ fn create_ghost_materials(
             ..default()
         }),
         grid_plane: materials.add(StandardMaterial {
-            base_color: Color::WHITE,
+            base_color: Color::srgba(0.82, 1.0, 0.96, 0.9),
             base_color_texture: Some(grid_tex),
+            emissive: LinearRgba::new(0.18, 0.56, 0.42, 1.0),
             alpha_mode: AlphaMode::Blend,
             unlit: true,
             double_sided: true,
@@ -1944,6 +1965,58 @@ fn apply_ghost_materials(
                 }
             }
         }
+    }
+}
+
+fn animate_placement_preview_vfx(
+    time: Res<Time>,
+    ghost_mats: Res<BuildingGhostMaterials>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    ghost_valid_q: Query<&GhostValid, With<GhostBuilding>>,
+    mut grid_planes: Query<&mut Transform, With<GhostGridPlane>>,
+) {
+    let pulse = (time.elapsed_secs() * 3.6).sin() * 0.5 + 0.5;
+    let intensity = 0.82 + pulse * 0.18;
+    let invalid_active = ghost_valid_q.iter().any(|valid| !valid.0);
+
+    if let Some(material) = materials.get_mut(&ghost_mats.ghost_valid) {
+        material.base_color = Color::srgba(0.35, 0.98, 0.72, 0.28 + pulse * 0.1);
+        material.emissive = LinearRgba::new(
+            0.14 * intensity,
+            0.72 * intensity,
+            0.44 * intensity,
+            1.0,
+        );
+    }
+
+    if let Some(material) = materials.get_mut(&ghost_mats.ghost_invalid) {
+        material.base_color = Color::srgba(1.0, 0.38, 0.22, 0.28 + pulse * 0.12);
+        material.emissive = LinearRgba::new(
+            0.82 * intensity,
+            0.18 * intensity,
+            0.08 * intensity,
+            1.0,
+        );
+    }
+
+    if let Some(material) = materials.get_mut(&ghost_mats.grid_plane) {
+        let (base_color, emissive) = if invalid_active {
+            (
+                Color::srgba(1.0, 0.8, 0.72, 0.94),
+                LinearRgba::new(0.58 * intensity, 0.17 * intensity, 0.08 * intensity, 1.0),
+            )
+        } else {
+            (
+                Color::srgba(0.82, 1.0, 0.96, 0.9),
+                LinearRgba::new(0.16 * intensity, 0.56 * intensity, 0.42 * intensity, 1.0),
+            )
+        };
+        material.base_color = base_color;
+        material.emissive = emissive;
+    }
+
+    for mut transform in &mut grid_planes {
+        transform.translation.y = 0.02 + pulse * 0.035;
     }
 }
 

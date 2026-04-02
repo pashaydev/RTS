@@ -10,6 +10,7 @@ mod camera;
 mod combat;
 mod components;
 mod culling;
+mod database;
 mod debug;
 mod entity_labels;
 mod fog;
@@ -120,6 +121,7 @@ fn main() {
         .insert_resource(GameSetupConfig::default())
         .insert_resource(theme::Theme::from_mode(graphics.theme_mode))
         .insert_resource(graphics)
+        .add_plugins(database::DatabasePlugin)
         .add_plugins(menu::MenuPlugin)
         .add_plugins(blueprints::BlueprintPlugin)
         .add_plugins((

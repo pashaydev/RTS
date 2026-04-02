@@ -3994,6 +3994,10 @@ pub struct FactionStatus {
 #[derive(Resource)]
 pub struct RestartRequested;
 
+/// Records the `Time::elapsed_secs_f64()` when a match begins, for duration calculation.
+#[derive(Resource)]
+pub struct MatchStartTime(pub f64);
+
 // ── Overlay UI markers ──
 
 #[derive(Component)]

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use crate::blueprints::EntityKind;
 use crate::components::BuildingState;
 use crate::components::*;
+use crate::database::{ActiveProfile, GameDatabase};
 use crate::multiplayer::NetRole;
 use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
 
@@ -17,6 +18,7 @@ impl Plugin for VictoryPlugin {
             Update,
             (
                 victory_check_system,
+                record_match_system,
                 victory_ui_spawn_system,
                 victory_ui_button_system,
             )
@@ -278,6 +280,84 @@ fn victory_check_system(
                         winner_team: wt,
                     });
             }
+        }
+    }
+}
+
+fn record_match_system(
+    db: Res<GameDatabase>,
+    profile: Res<ActiveProfile>,
+    victory: Res<VictoryState>,
+    game_config: Res<GameSetupConfig>,
+    active_player: Res<ActivePlayer>,
+    net_role: Res<NetRole>,
+    faction_stats: Res<FactionStats>,
+    all_resources: Res<AllPlayerResources>,
+    time: Res<Time>,
+    match_start: Option<Res<MatchStartTime>>,
+    mut recorded: Local<bool>,
+) {
+    if !victory.game_over || *recorded || !db.is_available() {
+        return;
+    }
+    *recorded = true;
+
+    let duration = match match_start {
+        Some(start) => time.elapsed_secs_f64() - start.0,
+        None => 0.0,
+    };
+
+    if let Some(match_id) = db.record_match(
+        &profile.id,
+        &game_config,
+        &victory,
+        &active_player,
+        &net_role,
+        &faction_stats,
+        &all_resources,
+        duration,
+    ) {
+        info!("Match recorded (id={match_id}, duration={duration:.0}s)");
+
+        // Update ELO rating
+        let local_won = victory
+            .winner
+            .map(|w| {
+                if victory.winner_team.is_some() {
+                    victory
+                        .faction_status
+                        .get(&active_player.0)
+                        .map(|s| *s != FactionStatus::Eliminated)
+                        .unwrap_or(false)
+                } else {
+                    w == active_player.0
+                }
+            })
+            .unwrap_or(false);
+
+        // Determine opponent rating for ELO
+        let opponent_rating = if *net_role != NetRole::Offline {
+            // Multiplayer: use default 1200 as opponent baseline
+            1200
+        } else {
+            // Single-player: use strongest AI's rating
+            game_config
+                .slots
+                .iter()
+                .filter_map(|s| match s {
+                    SlotOccupant::Ai(diff) => Some(GameDatabase::ai_elo_rating(*diff)),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(1200)
+        };
+
+        // Only rate games vs AI Medium+ or multiplayer
+        let is_rated = *net_role != NetRole::Offline
+            || game_config.slots.iter().any(|s| matches!(s, SlotOccupant::Ai(d) if *d != AiDifficulty::Easy));
+
+        if is_rated {
+            db.update_elo(&profile.id, match_id, local_won, opponent_rating);
         }
     }
 }
