@@ -225,7 +225,10 @@ fn seed_spatial_grid(
     mut grid: ResMut<SpatialHashGrid>,
     units: Query<(Entity, &Transform), With<Unit>>,
     mobs: Query<(Entity, &Transform), (With<Mob>, Without<Unit>)>,
-    buildings: Query<(Entity, &Transform), (With<Building>, Without<Unit>, Without<Mob>)>,
+    buildings: Query<
+        (Entity, &Transform),
+        (With<Building>, Without<Unit>, Without<Mob>, Without<FloorTile>),
+    >,
 ) {
     grid.cells.clear();
     grid.entity_cells.clear();
@@ -253,6 +256,7 @@ fn update_spatial_grid(
             With<Building>,
             Without<Unit>,
             Without<Mob>,
+            Without<FloorTile>,
             Or<(Added<Building>, Changed<Transform>)>,
         ),
     >,

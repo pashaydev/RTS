@@ -7,7 +7,7 @@ use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
 use crate::components::*;
 use crate::fog::FogTweakSettings;
 use crate::ground::{is_in_mountain_border, BorderSettings, HeightMap};
-use crate::theme;
+use crate::theme::{self, Theme};
 use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
@@ -179,7 +179,7 @@ fn primary_resource_for(
     match biome {
         Biome::Grassland => Some((
             ResourceType::Stone,
-            350,
+            175,
             stone_mesh.clone(),
             mats.stone.clone(),
             0.6,
@@ -200,14 +200,14 @@ fn primary_resource_for(
         )),
         Biome::Beach => Some((
             ResourceType::Stone,
-            250,
+            125,
             stone_mesh.clone(),
             mats.stone.clone(),
             0.4,
         )),
         Biome::Wetland => Some((
             ResourceType::Iron,
-            800,
+            1000,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.4,
@@ -221,7 +221,7 @@ fn primary_resource_for(
         )),
         Biome::Mountain => Some((
             ResourceType::Stone,
-            500,
+            250,
             stone_mesh.clone(),
             mats.stone.clone(),
             0.5,
@@ -253,7 +253,7 @@ fn secondary_resource_for(
         )),
         (Biome::Grassland, 1) => Some((
             ResourceType::Iron,
-            440,
+            550,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.45,
@@ -267,21 +267,21 @@ fn secondary_resource_for(
         )),
         (Biome::Forest, 1) => Some((
             ResourceType::Iron,
-            420,
+            525,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.45,
         )),
         (Biome::Desert, 0) => Some((
             ResourceType::Iron,
-            600,
+            750,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.4,
         )),
         (Biome::Desert, 1) => Some((
             ResourceType::Stone,
-            280,
+            140,
             ore_mesh.clone(),
             mats.stone.clone(),
             0.45,
@@ -295,7 +295,7 @@ fn secondary_resource_for(
         )),
         (Biome::Beach, 1) => Some((
             ResourceType::Iron,
-            360,
+            450,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.45,
@@ -309,14 +309,14 @@ fn secondary_resource_for(
         )),
         (Biome::Wetland, 1) => Some((
             ResourceType::Stone,
-            260,
+            130,
             ore_mesh.clone(),
             mats.stone.clone(),
             0.45,
         )),
         (Biome::Mountain, 0) => Some((
             ResourceType::Iron,
-            680,
+            850,
             ore_mesh.clone(),
             mats.iron.clone(),
             0.4,
@@ -389,6 +389,9 @@ fn spawn_resource_nodes(
 
     let spawn_positions = config.spawn_positions(map_seed.0);
 
+    let mut biome_counts: std::collections::HashMap<Biome, u32> = std::collections::HashMap::new();
+    let mut resource_counts: std::collections::HashMap<ResourceType, u32> = std::collections::HashMap::new();
+
     let mut x = -half + 5.0;
     while x < half - 5.0 {
         let mut z = -half + 5.0;
@@ -414,6 +417,7 @@ fn spawn_resource_nodes(
             }
 
             let biome = biome_map.get_biome(x, z);
+            *biome_counts.entry(biome).or_insert(0) += 1;
             let noise_val = placement_noise.get([x as f64 * 0.1, z as f64 * 0.1]) as f32;
             let threshold = biome_spawn_threshold(biome) / density_mult;
 
@@ -439,6 +443,7 @@ fn spawn_resource_nodes(
                     &stone_mesh,
                     &node_mats,
                 ) {
+                    *resource_counts.entry(rt).or_insert(0) += 1;
                     let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
                     let scale_factor = rng.random_range(0.8_f32..1.2);
 
@@ -532,6 +537,7 @@ fn spawn_resource_nodes(
                     if let Some((rt, amount, mesh, mat, half_h)) = secondary_resource_for(
                         biome, tier, &wood_mesh, &ore_mesh, &gold_mesh, &node_mats,
                     ) {
+                        *resource_counts.entry(rt).or_insert(0) += 1;
                         let offset_x = x + 3.0 + tier as f32 * 2.5;
                         let offset_z = z + 2.0 - tier as f32 * 2.0;
                         let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
@@ -606,6 +612,9 @@ fn spawn_resource_nodes(
         }
         x += spacing;
     }
+
+    info!("Biome cell counts: {:?}", biome_counts);
+    info!("Resource node counts: {:?}", resource_counts);
 }
 
 // ── Decoration spawning ──
@@ -651,7 +660,7 @@ fn spawn_decorations(
     let mut count = 0u32;
 
     // Collect pending placements for chunk-merged decorations
-    let mut pending_bushes: Vec<(usize, Vec3, f32, f32)> = Vec::new();
+    let pending_bushes: Vec<(usize, Vec3, f32, f32)> = Vec::new();
     let mut pending_rocks: Vec<(usize, Vec3, f32, f32)> = Vec::new();
     let mut pending_grass: Vec<(usize, Vec3, f32, f32)> = Vec::new();
 
@@ -727,7 +736,7 @@ fn spawn_decorations(
                 let pos = Vec3::new(ox, y, oz);
 
                 if matches!(kind, DecoKind::DeadTree) {
-                    // Dead trees are harvestable — keep as individual entities
+                    // Dead trees are harvestable — keep as individual entities.
                     commands.spawn((
                         GameWorld,
                         ResourceNode {
@@ -742,14 +751,27 @@ fn spawn_decorations(
                             .with_rotation(Quat::from_rotation_y(y_rotation))
                             .with_scale(Vec3::splat(scale)),
                     ));
+                } else if matches!(kind, DecoKind::Bush) {
+                    // Bushes need per-instance fog hiding; chunk merging reveals too much.
+                    commands.spawn((
+                        GameWorld,
+                        Decoration,
+                        FogHideable::Object,
+                        CullingBounds::new((2.0 * scale).max(1.5)),
+                        CullReason::default(),
+                        SceneRoot(models[variant_idx].clone()),
+                        NotShadowCaster,
+                        Transform::from_translation(pos)
+                            .with_rotation(Quat::from_rotation_y(y_rotation))
+                            .with_scale(Vec3::splat(scale)),
+                    ));
                 } else {
-                    // Bushes, grass, rocks → collect for chunk merging
+                    // Grass and rocks → collect for chunk merging.
                     let placement = (variant_idx, pos, scale, y_rotation);
                     match kind {
-                        DecoKind::Bush => pending_bushes.push(placement),
                         DecoKind::Rock => pending_rocks.push(placement),
                         DecoKind::Grass => pending_grass.push(placement),
-                        DecoKind::DeadTree => unreachable!(),
+                        DecoKind::Bush | DecoKind::DeadTree => unreachable!(),
                     }
                 }
                 count += 1;

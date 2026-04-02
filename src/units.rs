@@ -213,7 +213,10 @@ fn steer_avoidance(
         ),
         (Or<(With<Unit>, With<Mob>)>, Without<Building>),
     >,
-    buildings: Query<(&Transform, &BuildingFootprint), (With<Building>, Without<Unit>)>,
+    buildings: Query<
+        (&Transform, &BuildingFootprint),
+        (With<Building>, Without<Unit>, Without<FloorTile>),
+    >,
 ) {
     let moving_avoidance_radius = 2.6;
     let idle_avoidance_radius = 3.2;
@@ -340,6 +343,7 @@ fn move_units(
     time: Res<Time>,
     teams: Res<TeamConfig>,
     wall_grid: Res<WallSpatialGrid>,
+    floor_grid: Res<FloorGrid>,
     net_role: Res<crate::multiplayer::NetRole>,
     active_player: Res<ActivePlayer>,
     mut query: Query<
@@ -349,6 +353,7 @@ fn move_units(
             &MoveTarget,
             &UnitSpeed,
             &Faction,
+            Has<Unit>,
             Option<&Carrying>,
             Option<&CarryCapacity>,
             Option<&AttackTarget>,
@@ -367,6 +372,7 @@ fn move_units(
         target,
         unit_speed,
         faction,
+        is_unit,
         carrying,
         capacity,
         attack_target,
@@ -463,7 +469,18 @@ fn move_units(
             };
 
             let slow_factor = opt_status.map_or(1.0, |s| s.slow_factor());
-            let base_max_speed = unit_speed.0 * speed_mult * slow_factor;
+            let floor_speed_mult = if is_unit {
+                let current_cell = WallGrid::world_to_grid(transform.translation);
+                let next_cell = WallGrid::world_to_grid(immediate_target);
+                if floor_grid.cells.contains_key(&current_cell) || floor_grid.cells.contains_key(&next_cell) {
+                    1.35
+                } else {
+                    1.0
+                }
+            } else {
+                1.0
+            };
+            let base_max_speed = unit_speed.0 * speed_mult * slow_factor * floor_speed_mult;
 
             // Compute effective speed with acceleration/deceleration smoothing
             let effective_speed = if let Some(mut smoothing) = opt_smoothing {

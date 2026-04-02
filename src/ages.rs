@@ -75,7 +75,8 @@ pub fn required_age_for_building(kind: EntityKind) -> Age {
         | EntityKind::Outpost
         | EntityKind::WallSegment
         | EntityKind::WallPost
-        | EntityKind::WallCorner => Age::Settlement,
+        | EntityKind::WallCorner
+        | EntityKind::Floor => Age::Settlement,
 
         // Age II: Expansion — specialized military and processing
         EntityKind::Workshop
@@ -162,4 +163,3 @@ fn age_research_system(
         }
     }
 }
-

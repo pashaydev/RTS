@@ -1,7 +1,12 @@
+use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::RenderLayers;
+use bevy::camera::RenderTarget;
+use bevy::image::ImageSampler;
 use bevy::ecs::message::MessageReader;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::light::cluster::{ClusterConfig, ClusterZConfig};
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::post_process::{
     auto_exposure::AutoExposure,
     bloom::Bloom,
@@ -30,6 +35,19 @@ const PITCH_MIN: f32 = 0.4;
 const PITCH_MAX: f32 = 1.1;
 const DISTANCE_MIN: f32 = 10.0;
 const DISTANCE_MAX: f32 = 100.0;
+pub(crate) const PRESENTATION_LAYER: usize = 1;
+
+#[derive(Resource, Clone)]
+pub struct InternalRenderTarget {
+    pub image: Handle<Image>,
+    pub size: UVec2,
+}
+
+#[derive(Component)]
+struct PresentationSprite;
+
+#[derive(Component)]
+struct PresentationCamera;
 
 #[derive(Resource, Default)]
 pub struct LastSelection {
@@ -46,6 +64,10 @@ impl Plugin for CameraPlugin {
             .init_resource::<FrustumDebugMode>()
             .add_systems(
                 OnEnter(AppState::InGame),
+                setup_internal_render_target.before(spawn_camera),
+            )
+            .add_systems(
+                OnEnter(AppState::InGame),
                 spawn_camera
                     .after(crate::ground::spawn_ground)
                     .after(crate::multiplayer::configure_multiplayer_ai),
@@ -53,6 +75,7 @@ impl Plugin for CameraPlugin {
             .add_systems(
                 Update,
                 (
+                    update_presentation_display,
                     sync_camera_post_process_settings,
                     update_cursor_over_ui,
                     track_last_selection,
@@ -86,6 +109,7 @@ fn spawn_camera(
     graphics: Res<GraphicsSettings>,
     map_seed: Res<MapSeed>,
     active_player: Res<ActivePlayer>,
+    render_target: Res<InternalRenderTarget>,
 ) {
     // Start camera at the active player's spawn position
     let positions = config.spawn_positions(map_seed.0);
@@ -121,6 +145,11 @@ fn spawn_camera(
             pan_velocity: Vec3::ZERO,
         },
         Camera3d::default(),
+        Camera {
+            order: -1,
+            ..default()
+        },
+        RenderTarget::Image(render_target.image.clone().into()),
         Hdr,
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
         bevy::core_pipeline::tonemapping::DebandDither::Enabled,
@@ -142,6 +171,164 @@ fn spawn_camera(
     }
 
     insert_post_process_effects(entity.id(), &mut commands, &graphics);
+}
+
+fn create_internal_render_image(images: &mut Assets<Image>, size: UVec2) -> Handle<Image> {
+    let extent = Extent3d {
+        width: size.x.max(1),
+        height: size.y.max(1),
+        depth_or_array_layers: 1,
+    };
+    let mut image = Image::new_fill(
+        extent,
+        TextureDimension::D2,
+        &[0, 0, 0, 255],
+        TextureFormat::Bgra8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
+    );
+    image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING
+        | TextureUsages::COPY_DST
+        | TextureUsages::RENDER_ATTACHMENT;
+    image.sampler = ImageSampler::linear();
+    images.add(image)
+}
+
+fn setup_internal_render_target(
+    mut commands: Commands,
+    graphics: Res<GraphicsSettings>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let size = internal_render_size(&graphics);
+    let image = create_internal_render_image(&mut images, size);
+
+    commands.insert_resource(InternalRenderTarget {
+        image: image.clone(),
+        size,
+    });
+
+    commands.spawn((
+        GameWorld,
+        PresentationSprite,
+        Sprite::from_image(image),
+        RenderLayers::layer(PRESENTATION_LAYER),
+        Transform::default(),
+    ));
+
+    commands.spawn((
+        GameWorld,
+        PresentationCamera,
+        Camera2d,
+        Camera {
+            clear_color: ClearColorConfig::Custom(Color::BLACK),
+            ..default()
+        },
+        Msaa::Off,
+        RenderLayers::layer(PRESENTATION_LAYER),
+    ));
+}
+
+fn update_presentation_display(
+    graphics: Res<GraphicsSettings>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut images: ResMut<Assets<Image>>,
+    mut render_target: ResMut<InternalRenderTarget>,
+    mut sprites: Query<(&mut Sprite, &mut Transform), With<PresentationSprite>>,
+    mut camera_targets: Query<&mut RenderTarget, (With<RtsCamera>, With<Camera3d>)>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+
+    let desired_size = internal_render_size(&graphics);
+    if render_target.size != desired_size {
+        let new_image = create_internal_render_image(&mut images, desired_size);
+        render_target.image = new_image.clone();
+        render_target.size = desired_size;
+
+        for (mut sprite, _) in &mut sprites {
+            sprite.image = new_image.clone();
+        }
+        for mut target in &mut camera_targets {
+            *target = RenderTarget::Image(new_image.clone().into());
+        }
+    }
+
+    let rect = presentation_rect(window, &graphics);
+    let window_size = Vec2::new(window.width().max(1.0), window.height().max(1.0));
+    let center = rect.center();
+    let world_x = center.x - window_size.x * 0.5;
+    let world_y = window_size.y * 0.5 - center.y;
+
+    for (mut sprite, mut transform) in &mut sprites {
+        sprite.custom_size = Some(rect.size());
+        transform.translation = Vec3::new(world_x, world_y, 0.0);
+    }
+}
+
+pub(crate) fn internal_render_size(graphics: &GraphicsSettings) -> UVec2 {
+    UVec2::new(graphics.resolution.0.max(1), graphics.resolution.1.max(1))
+}
+
+pub(crate) fn presentation_rect(window: &Window, graphics: &GraphicsSettings) -> Rect {
+    let target = internal_render_size(graphics).as_vec2();
+    let window_size = Vec2::new(window.width().max(1.0), window.height().max(1.0));
+    let scale = (window_size.x / target.x).min(window_size.y / target.y);
+    let size = target * scale.max(0.0001);
+    let min = (window_size - size) * 0.5;
+    Rect {
+        min,
+        max: min + size,
+    }
+}
+
+pub(crate) fn window_to_render_position(
+    window: &Window,
+    graphics: &GraphicsSettings,
+    window_position: Vec2,
+) -> Option<Vec2> {
+    let rect = presentation_rect(window, graphics);
+    if window_position.x < rect.min.x
+        || window_position.x > rect.max.x
+        || window_position.y < rect.min.y
+        || window_position.y > rect.max.y
+    {
+        return None;
+    }
+
+    let uv = (window_position - rect.min) / rect.size();
+    Some(uv * internal_render_size(graphics).as_vec2())
+}
+
+pub(crate) fn render_to_window_position(
+    window: &Window,
+    graphics: &GraphicsSettings,
+    render_position: Vec2,
+) -> Vec2 {
+    let rect = presentation_rect(window, graphics);
+    let uv = render_position / internal_render_size(graphics).as_vec2();
+    rect.min + uv * rect.size()
+}
+
+pub(crate) fn viewport_ray_from_window_cursor(
+    camera: &Camera,
+    cam_gt: &GlobalTransform,
+    window: &Window,
+    graphics: &GraphicsSettings,
+) -> Option<Ray3d> {
+    let cursor = window.cursor_position()?;
+    let render_cursor = window_to_render_position(window, graphics, cursor)?;
+    camera.viewport_to_world(cam_gt, render_cursor).ok()
+}
+
+pub(crate) fn world_to_window_viewport(
+    camera: &Camera,
+    cam_gt: &GlobalTransform,
+    world_pos: Vec3,
+    window: &Window,
+    graphics: &GraphicsSettings,
+) -> Option<Vec2> {
+    let render_pos = camera.world_to_viewport(cam_gt, world_pos).ok()?;
+    Some(render_to_window_position(window, graphics, render_pos))
 }
 
 fn brightness_exposure(brightness: f32) -> bevy::camera::Exposure {
@@ -412,6 +599,11 @@ fn camera_zoom_input(
     mut scroll_events: MessageReader<MouseWheel>,
     keyboard: Res<ButtonInput<KeyCode>>,
     cursor_over_ui: Res<CursorOverUi>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    widget_q: Query<
+        (&ComputedNode, &UiGlobalTransform),
+        With<crate::ui::core::framework::Widget>,
+    >,
     time: Res<Time>,
     mut query: Query<&mut RtsCamera>,
     debug_mode: Res<FrustumDebugMode>,
@@ -424,12 +616,22 @@ fn camera_zoom_input(
         return;
     }
 
-    if !cursor_over_ui.0 {
-        for ev in scroll_events.read() {
-            let scroll = match ev.unit {
-                MouseScrollUnit::Line => ev.y,
-                MouseScrollUnit::Pixel => ev.y / 16.0,
-            };
+    let cursor_in_widget = windows
+        .single()
+        .ok()
+        .and_then(|window| window.physical_cursor_position())
+        .is_some_and(|cursor_phys| {
+            widget_q
+                .iter()
+                .any(|(computed, ui_tf)| computed.contains_point(*ui_tf, cursor_phys))
+        });
+
+    for ev in scroll_events.read() {
+        let scroll = match ev.unit {
+            MouseScrollUnit::Line => ev.y,
+            MouseScrollUnit::Pixel => ev.y / 16.0,
+        };
+        if !cursor_over_ui.0 && !cursor_in_widget {
             cam.target_distance *= 1.0 - scroll * ZOOM_SENSITIVITY;
         }
     }

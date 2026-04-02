@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::components::*;
-use crate::theme;
+use crate::theme::Theme;
 
 /// Root UI container that holds all widgets
 #[derive(Component)]
@@ -15,7 +15,7 @@ pub struct MainHudRoot;
 #[derive(Component)]
 pub struct PlacementHintLabel;
 
-pub fn spawn_hud_roots(mut commands: Commands, existing_roots: Query<Entity, With<UiRoot>>) {
+pub fn spawn_hud_roots(mut commands: Commands, theme: Res<Theme>, existing_roots: Query<Entity, With<UiRoot>>) {
     if !existing_roots.is_empty() {
         return;
     }
@@ -90,10 +90,10 @@ pub fn spawn_hud_roots(mut commands: Commands, existing_roots: Query<Entity, Wit
             WorldOverlayFrontItem,
             Text::new(""),
             TextFont {
-                font_size: theme::FONT_BODY,
+                font_size: theme.typography.body,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(theme.colors.text_secondary),
             Node {
                 position_type: PositionType::Absolute,
                 left: Val::Px(0.0),
@@ -125,7 +125,10 @@ pub fn compute_ui_mode(
     let new_mode = match placement.mode {
         PlacementMode::Placing(kind) => UiMode::PlacingBuilding(kind),
         PlacementMode::PlotBase => UiMode::PlacingBuilding(crate::blueprints::EntityKind::Base),
-        PlacementMode::None | PlacementMode::PlotWall { .. } | PlacementMode::PlotGate => {
+        PlacementMode::None
+        | PlacementMode::PlotWall { .. }
+        | PlacementMode::PlotGate
+        | PlacementMode::PlotFloor { .. } => {
             if let Ok(building_entity) = selected_buildings.single() {
                 UiMode::SelectedBuilding(building_entity)
             } else {
@@ -167,6 +170,16 @@ fn placement_default_hint(mode: PlacementMode) -> Option<String> {
         PlacementMode::PlotGate => Some(
             "Gatehouse: Hover owned wall and left-click (Right-click/Escape to cancel)".to_string(),
         ),
+        PlacementMode::PlotFloor { start } => {
+            if start == Vec3::ZERO {
+                Some("Floor: Click ground to start brush (Right-click/Escape to cancel)".to_string())
+            } else {
+                Some(
+                    "Floor: Move cursor, then left-click to stamp rectangle (Right-click/Escape to cancel)"
+                        .to_string(),
+                )
+            }
+        }
     }
 }
 
@@ -182,6 +195,7 @@ pub fn update_placement_hint(
     placement: Res<BuildingPlacementState>,
     windows: Query<&Window, With<PrimaryWindow>>,
     ui_scale: Res<UiScale>,
+    theme: Res<Theme>,
     mut hint_q: Query<
         (&mut Text, &mut TextColor, &mut Node, &mut Visibility),
         With<PlacementHintLabel>,
@@ -199,9 +213,9 @@ pub fn update_placement_hint(
     if let Some(hint) = hint {
         **text = hint.clone();
         *color = TextColor(if is_error_hint(&hint) {
-            theme::DESTRUCTIVE
+            theme.colors.destructive
         } else {
-            theme::TEXT_SECONDARY
+            theme.colors.text_secondary
         });
 
         if let Ok(window) = windows.single() {

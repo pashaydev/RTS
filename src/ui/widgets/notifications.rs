@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use super::core::hud::MainHudRoot;
 use crate::components::*;
-use crate::theme;
+use crate::theme::{self, Theme};
 
 pub struct NotificationsWidgetPlugin;
 
@@ -59,6 +59,7 @@ pub fn spawn_notification_container(commands: &mut Commands, parent: Entity) {
 pub fn update_ally_notifications(
     mut commands: Commands,
     time: Res<Time>,
+    theme: Res<Theme>,
     mut notifications: ResMut<AllyNotifications>,
     container_q: Query<Entity, With<AllyNotificationContainer>>,
     existing_toasts: Query<(Entity, &AllyNotificationToast)>,
@@ -120,7 +121,7 @@ pub fn update_ally_notifications(
                     toast.spawn((
                         Text::new(notif.message.clone()),
                         TextFont {
-                            font_size: theme::FONT_MEDIUM,
+                            font_size: theme.typography.medium,
                             ..default()
                         },
                         TextColor(color),

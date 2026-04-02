@@ -2,12 +2,13 @@ use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 
 use crate::components::*;
-use crate::theme;
+use crate::theme::Theme;
 
 pub fn show_action_tooltips(
     mut commands: Commands,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui_scale: Res<UiScale>,
+    theme: Res<Theme>,
     triggers: Query<(Entity, &Interaction, &ActionTooltipTrigger), Changed<Interaction>>,
     existing_tooltips: Query<(Entity, &ActionTooltip)>,
 ) {
@@ -54,7 +55,7 @@ pub fn show_action_tooltips(
                         GlobalZIndex(100),
                     ))
                     .with_children(|tt| {
-                        spawn_tooltip_content(tt, &trigger.text);
+                        spawn_tooltip_content(tt, &trigger.text, &theme);
                     });
             }
             _ => {
@@ -130,7 +131,7 @@ fn tooltip_anchor_under_cursor(
     (left, top)
 }
 
-fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
+fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str, theme: &Theme) {
     let lines: Vec<&str> = text.split('\n').collect();
     for (i, line) in lines.iter().enumerate() {
         if line.is_empty() {
@@ -142,10 +143,10 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
             tt.spawn((
                 Text::new(*line),
                 TextFont {
-                    font_size: theme::FONT_SMALL,
+                    font_size: theme.typography.small,
                     ..default()
                 },
-                TextColor(theme::TEXT_PRIMARY),
+                TextColor(theme.colors.text_primary),
             ));
             tt.spawn((
                 Node {
@@ -160,13 +161,13 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
         }
 
         let (color, font_size) = if line.starts_with("Not enough") {
-            (theme::DESTRUCTIVE, theme::FONT_CAPTION)
+            (theme.colors.destructive, theme.typography.caption)
         } else if line.starts_with("Requires:") {
-            (theme::WARNING, theme::FONT_CAPTION)
+            (theme.colors.warning, theme.typography.caption)
         } else if line.starts_with("Cost:") {
-            (theme::TEXT_SECONDARY, theme::FONT_CAPTION)
+            (theme.colors.text_secondary, theme.typography.caption)
         } else if line.starts_with("HP:") || line.starts_with("DMG:") {
-            (theme::STAT_DMG, theme::FONT_CAPTION)
+            (theme.colors.stat_dmg, theme.typography.caption)
         } else if *line == "Click to place"
             || *line == "Click to train"
             || *line == "Click ground to place"
@@ -180,11 +181,11 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str) {
                 },
                 BackgroundColor(Color::srgba(0.30, 0.30, 0.35, 0.4)),
             ));
-            (Color::srgba(0.45, 0.65, 1.0, 0.7), theme::FONT_TINY)
+            (Color::srgba(0.45, 0.65, 1.0, 0.7), theme.typography.tiny)
         } else if line.starts_with("Build time:") || line.starts_with("Train:") {
-            (theme::TEXT_SECONDARY, theme::FONT_CAPTION)
+            (theme.colors.text_secondary, theme.typography.caption)
         } else {
-            (Color::srgba(0.65, 0.65, 0.65, 0.9), theme::FONT_CAPTION)
+            (Color::srgba(0.65, 0.65, 0.65, 0.9), theme.typography.caption)
         };
 
         tt.spawn((

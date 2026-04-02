@@ -200,17 +200,17 @@ fn animate_goblin(
 ) {
     match phase {
         MobAnimPhase::Idle => {
-            let bounce = 0.05 * (p * 3.0).sin();
+            let bounce = 0.02 * (p * 3.0).sin();
             tf.translation.y = base_y + bounce;
         }
         MobAnimPhase::Moving => {
-            let hop = 0.2 * (p * 8.0).sin().abs();
+            let hop = 0.08 * (p * 8.0).sin().abs();
             tf.translation.y = base_y + hop;
             let hop_phase = (p * 8.0).sin();
             if hop_phase < 0.2 {
-                tf.scale.y = base_scale.y * 0.9;
-                tf.scale.x = base_scale.x * 1.05;
-                tf.scale.z = base_scale.z * 1.05;
+                tf.scale.y = base_scale.y * 0.95;
+                tf.scale.x = base_scale.x * 1.02;
+                tf.scale.z = base_scale.z * 1.02;
             }
         }
         MobAnimPhase::Attacking => {
@@ -219,16 +219,14 @@ fn animate_goblin(
                 let t = timer.fraction();
                 if t < 0.5 {
                     let squash = t * 2.0;
-                    tf.scale.y = base_scale.y * (1.0 - 0.3 * squash);
-                    tf.scale.x = base_scale.x * (1.0 + 0.3 * squash);
-                    tf.scale.z = base_scale.z * (1.0 + 0.3 * squash);
-                    let forward = tf.forward().as_vec3();
-                    tf.translation += forward * 0.3 * squash;
+                    tf.scale.y = base_scale.y * (1.0 - 0.15 * squash);
+                    tf.scale.x = base_scale.x * (1.0 + 0.15 * squash);
+                    tf.scale.z = base_scale.z * (1.0 + 0.15 * squash);
                 } else {
                     let recover = (t - 0.5) * 2.0;
-                    tf.scale.y = base_scale.y * (0.7 + 0.3 * recover);
-                    tf.scale.x = base_scale.x * (1.3 - 0.3 * recover);
-                    tf.scale.z = base_scale.z * (1.3 - 0.3 * recover);
+                    tf.scale.y = base_scale.y * (0.85 + 0.15 * recover);
+                    tf.scale.x = base_scale.x * (1.15 - 0.15 * recover);
+                    tf.scale.z = base_scale.z * (1.15 - 0.15 * recover);
                 }
             }
         }
@@ -236,8 +234,8 @@ fn animate_goblin(
             let progress = proc_mob.dying_progress;
             let shrink = (1.0 - progress).max(0.0);
             tf.scale = base_scale * shrink;
-            tf.rotation *= Quat::from_rotation_y(progress * PI * 4.0);
-            tf.translation.y = base_y;
+            tf.rotation *= Quat::from_rotation_y(progress * PI * 1.5);
+            tf.translation.y = base_y - progress * 0.2;
         }
     }
 }
@@ -251,8 +249,8 @@ fn animate_skeleton(
     time: f32,
     proc_mob: &ProceduralMob,
 ) {
-    let jitter_x = 0.02 * (time * 15.0 + p * 3.7).sin();
-    let jitter_z = 0.02 * (time * 13.0 + p * 5.1).cos();
+    let jitter_x = 0.01 * (time * 15.0 + p * 3.7).sin();
+    let jitter_z = 0.01 * (time * 13.0 + p * 5.1).cos();
 
     match phase {
         MobAnimPhase::Idle => {
@@ -262,20 +260,20 @@ fn animate_skeleton(
         }
         MobAnimPhase::Moving => {
             tf.translation.y = base_y;
-            tf.translation.x += jitter_x * 2.0;
-            tf.translation.z += jitter_z * 2.0;
-            tf.rotation *= Quat::from_rotation_z(0.03 * (p * 12.0).sin());
+            tf.translation.x += jitter_x * 1.5;
+            tf.translation.z += jitter_z * 1.5;
+            tf.rotation *= Quat::from_rotation_z(0.015 * (p * 12.0).sin());
         }
         MobAnimPhase::Attacking => {
             tf.translation.y = base_y;
             if let Some(ref timer) = proc_mob.attack_timer {
                 let t = timer.fraction();
-                let osc = (t * PI * 3.0).sin();
-                tf.scale.y = base_scale.y * (1.0 + 0.5 * osc);
-                tf.scale.x = base_scale.x * (1.0 + 0.2 * osc.abs());
-                tf.scale.z = base_scale.z * (1.0 + 0.2 * osc.abs());
-                tf.translation.x += jitter_x * 3.0;
-                tf.translation.z += jitter_z * 3.0;
+                let osc = (t * PI * 2.0).sin();
+                tf.scale.y = base_scale.y * (1.0 + 0.25 * osc);
+                tf.scale.x = base_scale.x * (1.0 + 0.1 * osc.abs());
+                tf.scale.z = base_scale.z * (1.0 + 0.1 * osc.abs());
+                tf.translation.x += jitter_x * 2.0;
+                tf.translation.z += jitter_z * 2.0;
             }
         }
         MobAnimPhase::Dying => {
@@ -316,19 +314,19 @@ fn animate_orc(
                 let t = timer.fraction();
                 if t < 0.33 {
                     let rise = t / 0.33;
-                    tf.scale.y = base_scale.y * (1.0 + 0.3 * rise);
-                    tf.scale.x = base_scale.x * (1.0 - 0.1 * rise);
-                    tf.scale.z = base_scale.z * (1.0 - 0.1 * rise);
+                    tf.scale.y = base_scale.y * (1.0 + 0.15 * rise);
+                    tf.scale.x = base_scale.x * (1.0 - 0.05 * rise);
+                    tf.scale.z = base_scale.z * (1.0 - 0.05 * rise);
                 } else if t < 0.66 {
                     let slam = (t - 0.33) / 0.33;
-                    tf.scale.y = base_scale.y * (1.3 - 0.7 * slam);
-                    tf.scale.x = base_scale.x * (0.9 + 0.5 * slam);
-                    tf.scale.z = base_scale.z * (0.9 + 0.5 * slam);
+                    tf.scale.y = base_scale.y * (1.15 - 0.35 * slam);
+                    tf.scale.x = base_scale.x * (0.95 + 0.25 * slam);
+                    tf.scale.z = base_scale.z * (0.95 + 0.25 * slam);
                 } else {
                     let recover = (t - 0.66) / 0.34;
-                    tf.scale.y = base_scale.y * (0.6 + 0.4 * recover);
-                    tf.scale.x = base_scale.x * (1.4 - 0.4 * recover);
-                    tf.scale.z = base_scale.z * (1.4 - 0.4 * recover);
+                    tf.scale.y = base_scale.y * (0.8 + 0.2 * recover);
+                    tf.scale.x = base_scale.x * (1.2 - 0.2 * recover);
+                    tf.scale.z = base_scale.z * (1.2 - 0.2 * recover);
                 }
             }
         }
@@ -357,7 +355,7 @@ fn animate_demon(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
-    let hover_offset = 0.5 + 0.15 * (p * 2.0).sin();
+    let hover_offset = 0.3 + 0.1 * (p * 2.0).sin();
 
     match phase {
         MobAnimPhase::Idle => {
@@ -373,9 +371,9 @@ fn animate_demon(
             if let Some(ref timer) = proc_mob.attack_timer {
                 let t = timer.fraction();
                 let pulse = if t < 0.5 {
-                    1.0 + 0.4 * (t * 2.0)
+                    1.0 + 0.25 * (t * 2.0)
                 } else {
-                    1.4 - 0.4 * ((t - 0.5) * 2.0)
+                    1.25 - 0.25 * ((t - 0.5) * 2.0)
                 };
                 tf.scale = base_scale * pulse;
 

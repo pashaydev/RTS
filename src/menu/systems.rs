@@ -5,7 +5,7 @@ use rand::Rng;
 
 use super::helpers::*;
 use crate::components::*;
-use crate::theme;
+use crate::theme::Theme;
 use crate::ui::core::interactions::UiClickEvent;
 use crate::ui::fonts::UiFonts;
 
@@ -29,6 +29,7 @@ pub(crate) fn spawn_menu(
     lobby: Res<LobbyState>,
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
+    theme: Res<Theme>,
 ) {
     if restart.is_some() {
         commands.remove_resource::<RestartRequested>();
@@ -41,7 +42,7 @@ pub(crate) fn spawn_menu(
         DespawnOnExit(AppState::MainMenu),
         Camera2d,
         Camera {
-            clear_color: ClearColorConfig::Custom(theme::BG_MENU),
+            clear_color: ClearColorConfig::Custom(theme.colors.bg_menu),
             ..default()
         },
     ));
@@ -58,11 +59,11 @@ pub(crate) fn spawn_menu(
                 flex_direction: FlexDirection::Column,
                 ..default()
             },
-            BackgroundColor(theme::BG_MENU),
+            BackgroundColor(theme.colors.bg_menu),
         ))
         .id();
 
-    let panel = spawn_menu_panel(&mut commands);
+    let panel = spawn_menu_panel(&mut commands, &theme);
     let content = commands
         .spawn((
             MenuContentRoot,
@@ -88,6 +89,7 @@ pub(crate) fn spawn_menu(
         &lobby,
         &net_role,
         &client_state,
+        &theme,
     );
 }
 
@@ -102,20 +104,21 @@ fn dispatch_page(
     lobby: &LobbyState,
     net_role: &Option<Res<NetRole>>,
     client_state: &Option<Res<ClientNetState>>,
+    theme: &Theme,
 ) {
     match *page {
-        MenuPage::Title => pages::spawn_title_page(commands, container, fonts),
-        MenuPage::NewGame => pages::spawn_new_game_page(commands, container, config, fonts),
-        MenuPage::Options => pages::spawn_options_page(commands, container, graphics, audio_settings, fonts),
-        MenuPage::Multiplayer => multiplayer::spawn_multiplayer_page(commands, container, fonts),
+        MenuPage::Title => pages::spawn_title_page(commands, container, fonts, theme),
+        MenuPage::NewGame => pages::spawn_new_game_page(commands, container, config, fonts, theme),
+        MenuPage::Options => pages::spawn_options_page(commands, container, graphics, audio_settings, fonts, theme),
+        MenuPage::Multiplayer => multiplayer::spawn_multiplayer_page(commands, container, fonts, theme),
         MenuPage::HostLobby => {
-            multiplayer::spawn_host_lobby_page(commands, container, config, fonts, lobby)
+            multiplayer::spawn_host_lobby_page(commands, container, config, fonts, lobby, theme)
         }
         MenuPage::JoinLobby => {
             let role = net_role.as_ref().map(|r| **r).unwrap_or(NetRole::Offline);
             let my_faction = client_state.as_ref().map(|c| c.my_faction);
             multiplayer::spawn_join_lobby_page(
-                commands, container, config, fonts, lobby, role, my_faction,
+                commands, container, config, fonts, lobby, role, my_faction, theme,
             )
         }
     }
@@ -134,6 +137,7 @@ pub(crate) fn refresh_menu_page(
     lobby: Res<LobbyState>,
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
+    theme: Res<Theme>,
 ) {
     if !page.is_changed() {
         return;
@@ -160,6 +164,7 @@ pub(crate) fn refresh_menu_page(
         &lobby,
         &net_role,
         &client_state,
+        &theme,
     );
 }
 
@@ -176,6 +181,7 @@ pub(crate) fn rebuild_dirty_menu(
     lobby: Res<LobbyState>,
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
+    theme: Res<Theme>,
 ) {
     if dirty.is_none() {
         return;
@@ -203,6 +209,7 @@ pub(crate) fn rebuild_dirty_menu(
         &lobby,
         &net_role,
         &client_state,
+        &theme,
     );
 }
 
@@ -216,6 +223,7 @@ pub(crate) fn handle_menu_buttons(
     mut config: ResMut<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
     audio_settings: Res<crate::audio::AudioSettings>,
+    mut theme: ResMut<crate::theme::Theme>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
     mut windows: Query<&mut Window>,
@@ -243,6 +251,7 @@ pub(crate) fn handle_menu_buttons(
                 next_state.set(AppState::InGame);
             }
             MenuAction::ApplySettings => {
+                theme.set_mode(graphics.theme_mode);
                 graphics.save();
                 audio_settings.save();
                 if let Ok(mut window) = windows.single_mut() {
@@ -294,6 +303,15 @@ pub(crate) fn handle_menu_buttons(
     }
 }
 
+pub(crate) fn apply_window_settings_on_menu_enter(
+    graphics: Res<GraphicsSettings>,
+    mut windows: Query<&mut Window>,
+) {
+    if let Ok(mut window) = windows.single_mut() {
+        super::options::apply_graphics_settings(&graphics, &mut window);
+    }
+}
+
 /// Rebuild only the slot cards inside their wrapper, avoiding a full page rebuild
 /// (which would replay panel fade-in / section-divider animations).
 fn rebuild_slot_cards(
@@ -301,13 +319,14 @@ fn rebuild_slot_cards(
     slots_q: &Query<(Entity, &Children), With<SlotCardsContainer>>,
     config: &GameSetupConfig,
     is_multiplayer: bool,
+    theme: &Theme,
 ) {
     if let Ok((container, children)) = slots_q.single() {
         for child in children.iter() {
             commands.entity(child).try_despawn();
         }
         for i in 0..4 {
-            pages::spawn_slot_card(commands, container, i, config, is_multiplayer);
+            pages::spawn_slot_card(commands, container, i, config, is_multiplayer, theme);
         }
     }
 }
@@ -325,6 +344,7 @@ pub(crate) fn handle_selector_clicks(
     page: Res<MenuPage>,
     mut commands: Commands,
     slots_container: Query<(Entity, &Children), With<SlotCardsContainer>>,
+    theme: Res<Theme>,
 ) {
     // Collect selectors to process from both mouse interactions and keyboard events
     let mut to_process: Vec<MenuSelector> = Vec::new();
@@ -394,6 +414,7 @@ pub(crate) fn handle_selector_clicks(
                         &slots_container,
                         &config,
                         *page == MenuPage::HostLobby,
+                        &theme,
                     );
                 }
             }
@@ -479,7 +500,8 @@ pub(crate) fn handle_selector_clicks(
             | SelectorField::AutoExposure
             | SelectorField::DepthOfField
             | SelectorField::ChromaticAberration
-            | SelectorField::UiScale => {
+            | SelectorField::UiScale
+            | SelectorField::ThemeMode => {
                 super::options::apply_selector_change(&selector.field, selector.index, &mut graphics);
             }
             SelectorField::MusicVolume | SelectorField::SfxVolume => {
@@ -517,6 +539,7 @@ pub(crate) fn update_selector_visuals(
     )>,
     mut text_colors: Query<&mut TextColor>,
     mut commands: Commands,
+    theme: Res<Theme>,
 ) {
     for (selector, mut bg, children, entity, was_selected, anim_state) in &mut selectors {
         let is_multiplayer = matches!(*page, MenuPage::HostLobby | MenuPage::JoinLobby);
@@ -646,6 +669,13 @@ pub(crate) fn update_selector_visuals(
             SelectorField::UiScale => UI_SCALE_OPTIONS
                 .get(selector.index)
                 .map_or(false, |&(v, _)| (v - graphics.ui_scale).abs() < 0.01),
+            SelectorField::ThemeMode => {
+                selector.index
+                    == match graphics.theme_mode {
+                        crate::theme::ThemeMode::Dark => 0,
+                        crate::theme::ThemeMode::Light => 1,
+                    }
+            }
             SelectorField::MusicVolume | SelectorField::SfxVolume => false,
             SelectorField::SlotTeam(slot_idx) => {
                 slot_idx < 4 && selector.index == config.player_teams[slot_idx] as usize
@@ -717,14 +747,14 @@ pub(crate) fn update_selector_visuals(
         }
 
         let new_bg = if should_be_selected {
-            theme::ACCENT
+            theme.colors.accent
         } else {
-            theme::BTN_PRIMARY
+            theme.colors.btn_primary
         };
         let text_col = if should_be_selected {
             Color::WHITE
         } else {
-            theme::TEXT_SECONDARY
+            theme.colors.text_secondary
         };
 
         *bg = BackgroundColor(new_bg);
@@ -902,7 +932,10 @@ pub(crate) fn menu_selector_keyboard_nav(
     keyboard: Res<ButtonInput<KeyCode>>,
     focused: Query<(Entity, &Children), With<NavFocused>>,
     selectors: Query<(Entity, &MenuSelector, Option<&SelectedOption>)>,
+    sliders: Query<&RangeSlider>,
     mut click_events: MessageWriter<UiClickEvent>,
+    mut graphics: ResMut<GraphicsSettings>,
+    mut audio_settings: ResMut<crate::audio::AudioSettings>,
     menu_btns: Query<&MenuButton>,
     text_focus: Query<&TextInputFocused>,
 ) {
@@ -935,6 +968,51 @@ pub(crate) fn menu_selector_keyboard_nav(
         child_selectors.sort_by_key(|&(_, idx, _)| idx);
 
         if child_selectors.is_empty() {
+            let mut handled_slider = false;
+            for child in children.iter() {
+                let Ok(slider) = sliders.get(child) else {
+                    continue;
+                };
+
+                match slider.field {
+                    SelectorField::Resolution => {
+                        let current_index = super::options::resolution_index(graphics.resolution);
+                        let new_index = if left {
+                            super::options::step_resolution_index(current_index, -1)
+                        } else {
+                            super::options::step_resolution_index(current_index, 1)
+                        };
+                        if new_index != current_index {
+                            super::options::apply_selector_change(
+                                &SelectorField::Resolution,
+                                new_index,
+                                &mut graphics,
+                            );
+                        }
+                        handled_slider = true;
+                    }
+                    SelectorField::MusicVolume => {
+                        let delta = if left { -0.01 } else { 0.01 };
+                        audio_settings.music_volume =
+                            (audio_settings.music_volume + delta).clamp(0.0, 1.0);
+                        audio_settings.save();
+                        handled_slider = true;
+                    }
+                    SelectorField::SfxVolume => {
+                        let delta = if left { -0.01 } else { 0.01 };
+                        audio_settings.sfx_volume =
+                            (audio_settings.sfx_volume + delta).clamp(0.0, 1.0);
+                        audio_settings.save();
+                        handled_slider = true;
+                    }
+                    _ => {}
+                }
+            }
+
+            if handled_slider {
+                continue;
+            }
+
             continue;
         }
 
@@ -970,6 +1048,7 @@ pub(crate) fn menu_nav_focus_visuals(
     mut commands: Commands,
     children_q: Query<&Children>,
     mut text_colors: Query<&mut TextColor>,
+    theme: Res<Theme>,
 ) {
     if focused.is_empty() {
         return;
@@ -978,7 +1057,7 @@ pub(crate) fn menu_nav_focus_visuals(
     // Style newly focused items
     for entity in &focused {
         commands.entity(entity).insert((
-            BorderColor::all(theme::ACCENT),
+            BorderColor::all(theme.colors.accent),
             BoxShadow::new(
                 Color::srgba(0.29, 0.62, 1.0, 0.4),
                 Val::Px(0.0),
@@ -1039,12 +1118,13 @@ pub(crate) fn volume_slider_system(
     mouse: Res<ButtonInput<MouseButton>>,
     sliders: Query<(
         Entity,
-        &VolumeSlider,
+        &RangeSlider,
         &Interaction,
         &RelativeCursorPosition,
     )>,
-    mut fills: Query<(&ChildOf, &mut Node), With<VolumeSliderFill>>,
-    mut labels: Query<(&VolumeSliderLabel, &mut Text)>,
+    mut fills: Query<(&ChildOf, &mut Node), With<RangeSliderFill>>,
+    mut labels: Query<(&RangeSliderLabel, &mut Text)>,
+    mut graphics: ResMut<GraphicsSettings>,
     mut audio_settings: ResMut<crate::audio::AudioSettings>,
     mut drag: ResMut<SliderDragState>,
 ) {
@@ -1089,27 +1169,94 @@ pub(crate) fn volume_slider_system(
     };
     let t = (normalized.x + 0.5).clamp(0.0, 1.0);
 
-    // Snap to 1% increments.
-    let value = (t * 100.0).round() / 100.0;
-
-    // Apply value.
-    match slider.0 {
-        SelectorField::MusicVolume => audio_settings.music_volume = value,
-        SelectorField::SfxVolume => audio_settings.sfx_volume = value,
-        _ => {}
-    }
+    let (pct, value_label) = match slider.field {
+        SelectorField::Resolution => {
+            let steps = slider.steps.unwrap_or(super::options::RESOLUTION_OPTIONS.len());
+            if steps == 0 {
+                return;
+            }
+            let max_index = steps.saturating_sub(1) as f32;
+            let index = (t * max_index).round() as usize;
+            super::options::apply_selector_change(
+                &SelectorField::Resolution,
+                index,
+                &mut graphics,
+            );
+            let (w, h) = graphics.resolution;
+            let pct = super::options::resolution_slider_value(
+                super::options::resolution_index(graphics.resolution),
+            ) * 100.0;
+            (pct, format!("{w}x{h}"))
+        }
+        SelectorField::MusicVolume => {
+            let value = (t * 100.0).round() / 100.0;
+            audio_settings.music_volume = value;
+            let pct = value * 100.0;
+            (pct, format!("{pct:.0}%"))
+        }
+        SelectorField::SfxVolume => {
+            let value = (t * 100.0).round() / 100.0;
+            audio_settings.sfx_volume = value;
+            let pct = value * 100.0;
+            (pct, format!("{pct:.0}%"))
+        }
+        _ => return,
+    };
 
     // Update fill bar width and label.
-    let pct = value * 100.0;
     for (parent, mut node) in fills.iter_mut() {
         if parent.parent() == slider_entity {
             node.width = Val::Percent(pct);
         }
     }
-    let field = slider.0;
+    let field = slider.field;
     for (lbl, mut text) in labels.iter_mut() {
         if lbl.0 == field {
-            **text = format!("{pct:.0}%");
+            **text = value_label.clone();
+        }
+    }
+}
+
+pub(crate) fn sync_range_slider_visuals(
+    graphics: Res<GraphicsSettings>,
+    audio_settings: Res<crate::audio::AudioSettings>,
+    sliders: Query<(Entity, &RangeSlider)>,
+    mut fills: Query<(&ChildOf, &mut Node), With<RangeSliderFill>>,
+    mut labels: Query<(&RangeSliderLabel, &mut Text)>,
+) {
+    if !graphics.is_changed() && !audio_settings.is_changed() {
+        return;
+    }
+
+    for (slider_entity, slider) in &sliders {
+        let (pct, value_label) = match slider.field {
+            SelectorField::Resolution => {
+                let index = super::options::resolution_index(graphics.resolution);
+                let pct = super::options::resolution_slider_value(index) * 100.0;
+                let (w, h) = graphics.resolution;
+                (pct, format!("{w}x{h}"))
+            }
+            SelectorField::MusicVolume => {
+                let pct = (audio_settings.music_volume * 100.0).round();
+                (pct, format!("{pct:.0}%"))
+            }
+            SelectorField::SfxVolume => {
+                let pct = (audio_settings.sfx_volume * 100.0).round();
+                (pct, format!("{pct:.0}%"))
+            }
+            _ => continue,
+        };
+
+        for (parent, mut node) in fills.iter_mut() {
+            if parent.parent() == slider_entity {
+                node.width = Val::Percent(pct);
+            }
+        }
+
+        for (label, mut text) in labels.iter_mut() {
+            if label.0 == slider.field {
+                **text = value_label.clone();
+            }
         }
     }
 }

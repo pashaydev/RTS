@@ -5,11 +5,12 @@ use game_state::message::{ClientMessage, InputCommand, PlayerInput};
 
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::buildings;
+use crate::camera;
 use crate::combat_intents::{apply_manual_hold_intent, clear_combat_intent};
 use crate::components::*;
 use crate::multiplayer::{ClientNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
-use crate::theme;
+use crate::theme::{self, Theme};
 
 #[derive(SystemParam)]
 pub(crate) struct OnlineInputParams<'w> {
@@ -137,6 +138,16 @@ pub fn handle_build_buttons(
                 placement.awaiting_release = false;
                 placement.hint_text = Some(
                     "Hover an owned wall segment and left-click (Right-click/Escape to cancel)"
+                        .to_string(),
+                );
+                continue;
+            }
+
+            if kind == EntityKind::Floor && founded {
+                placement.mode = PlacementMode::PlotFloor { start: Vec3::ZERO };
+                placement.awaiting_release = false;
+                placement.hint_text = Some(
+                    "Click ground to start floor brush (Right-click/Escape to cancel)"
                         .to_string(),
                 );
                 continue;
@@ -307,6 +318,7 @@ pub fn handle_upgrade_button(
 
 pub fn handle_demolish_button(
     mut commands: Commands,
+    theme: Res<Theme>,
     interactions: Query<&Interaction, (Changed<Interaction>, With<DemolishButton>)>,
     action_bar: Query<Entity, With<ActionBarInner>>,
     selected_buildings: Query<
@@ -366,24 +378,24 @@ pub fn handle_demolish_button(
                         border_radius: BorderRadius::all(Val::Px(6.0)),
                         ..default()
                     },
-                    BackgroundColor(theme::BG_PANEL),
+                    BackgroundColor(theme.colors.bg_panel),
                 ))
                 .with_children(|panel| {
                     panel.spawn((
                         Text::new("Demolish?"),
                         TextFont {
-                            font_size: theme::FONT_MEDIUM,
+                            font_size: theme.typography.medium,
                             ..default()
                         },
-                        TextColor(theme::DESTRUCTIVE),
+                        TextColor(theme.colors.destructive),
                     ));
                     panel.spawn((
                         Text::new(refund_str),
                         TextFont {
-                            font_size: theme::FONT_SMALL,
+                            font_size: theme.typography.small,
                             ..default()
                         },
-                        TextColor(theme::TEXT_SECONDARY),
+                        TextColor(theme.colors.text_secondary),
                     ));
                     panel
                         .spawn(Node {
@@ -401,16 +413,16 @@ pub fn handle_demolish_button(
                                     border_radius: BorderRadius::all(Val::Px(4.0)),
                                     ..default()
                                 },
-                                BackgroundColor(theme::DESTRUCTIVE),
+                                BackgroundColor(theme.colors.destructive),
                             ))
                             .with_children(|btn| {
                                 btn.spawn((
                                     Text::new("Yes"),
                                     TextFont {
-                                        font_size: theme::FONT_BODY,
+                                        font_size: theme.typography.body,
                                         ..default()
                                     },
-                                    TextColor(theme::TEXT_PRIMARY),
+                                    TextColor(theme.colors.text_primary),
                                 ));
                             });
 
@@ -423,16 +435,16 @@ pub fn handle_demolish_button(
                                     border_radius: BorderRadius::all(Val::Px(4.0)),
                                     ..default()
                                 },
-                                BackgroundColor(theme::BTN_PRIMARY),
+                                BackgroundColor(theme.colors.btn_primary),
                             ))
                             .with_children(|btn| {
                                 btn.spawn((
                                     Text::new("No"),
                                     TextFont {
-                                        font_size: theme::FONT_BODY,
+                                        font_size: theme.typography.body,
                                         ..default()
                                     },
-                                    TextColor(theme::TEXT_PRIMARY),
+                                    TextColor(theme.colors.text_primary),
                                 ));
                             });
                         });
@@ -575,6 +587,7 @@ pub fn handle_rally_point_button(
     mouse: Res<ButtonInput<MouseButton>>,
     camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    graphics: Res<GraphicsSettings>,
     selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
@@ -589,13 +602,10 @@ pub fn handle_rally_point_button(
 
     if rally_mode.0 && mouse.just_pressed(MouseButton::Left) {
         let Ok(window) = windows.single() else { return };
-        let Some(cursor) = window.cursor_position() else {
-            return;
-        };
         let Ok((camera, cam_gt)) = camera_q.single() else {
             return;
         };
-        let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
+        let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics) else {
             return;
         };
         let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) else {
@@ -993,6 +1003,7 @@ pub fn update_training_queue_display(
 }
 
 pub fn update_train_cost_colors(
+    theme: Res<Theme>,
     all_resources: Res<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
     carried_totals: Res<CarriedResourceTotals>,
@@ -1016,9 +1027,9 @@ pub fn update_train_cost_colors(
     for (cost_text, mut color) in &mut cost_texts {
         let bp = registry.get(cost_text.kind);
         if bp.cost.can_afford_with_carried(player_res, carried) && unit_cap.has_room(1) {
-            *color = TextColor(theme::TEXT_SECONDARY);
+            *color = TextColor(theme.colors.text_secondary);
         } else {
-            *color = TextColor(theme::DESTRUCTIVE);
+            *color = TextColor(theme.colors.destructive);
         }
     }
 }

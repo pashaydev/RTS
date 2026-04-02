@@ -7,7 +7,7 @@ use super::core::framework::{
 use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
 use crate::components::*;
-use crate::theme;
+use crate::theme::{self, Theme};
 
 pub struct ArmyOverviewWidgetPlugin;
 
@@ -36,6 +36,7 @@ fn spawn_army_overview_widget(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
+    theme: Res<Theme>,
     root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
     let Ok(hud_root) = root_q.single() else {
@@ -48,6 +49,7 @@ fn spawn_army_overview_widget(
         registry.slots.get(&WidgetId::ArmyOverview).unwrap(),
         registry.is_visible(WidgetId::ArmyOverview),
         &fonts,
+        &theme,
     );
 }
 
@@ -158,6 +160,7 @@ fn handle_army_overview_click(
 fn update_army_overview(
     mut commands: Commands,
     active_player: Res<ActivePlayer>,
+    theme: Res<Theme>,
     icons: Res<IconAssets>,
     mut render_state: ResMut<ArmyOverviewRenderState>,
     widget_q: Query<(&Widget, &Children)>,
@@ -232,7 +235,7 @@ fn update_army_overview(
                     border_radius: BorderRadius::all(Val::Px(4.0)),
                     ..default()
                 },
-                BackgroundColor(theme::BG_SURFACE),
+                BackgroundColor(theme.colors.bg_surface),
                 BorderColor::all(Color::NONE),
             ))
             .id();
@@ -254,10 +257,10 @@ fn update_army_overview(
             .spawn((
                 Text::new(format!("x{}", count.total)),
                 TextFont {
-                    font_size: theme::FONT_CAPTION,
+                    font_size: theme.typography.caption,
                     ..default()
                 },
-                TextColor(theme::TEXT_PRIMARY),
+                TextColor(theme.colors.text_primary),
             ))
             .id();
         commands.entity(entry).add_child(count_text);
@@ -267,10 +270,10 @@ fn update_army_overview(
                 .spawn((
                     Text::new(format!("({})", count.idle_workers)),
                     TextFont {
-                        font_size: theme::FONT_TINY,
+                        font_size: theme.typography.tiny,
                         ..default()
                     },
-                    TextColor(theme::WARNING),
+                    TextColor(theme.colors.warning),
                 ))
                 .id();
             commands.entity(entry).add_child(idle_badge);
@@ -283,10 +286,10 @@ fn update_army_overview(
             ArmyOverviewContent,
             Text::new(format!("Total: {} / {}", total, unit_cap.cap)),
             TextFont {
-                font_size: theme::FONT_CAPTION,
+                font_size: theme.typography.caption,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(theme.colors.text_secondary),
             Node {
                 margin: UiRect::top(Val::Px(2.0)),
                 ..default()
@@ -322,10 +325,10 @@ fn update_army_overview(
                         if idle_count == 1 { "" } else { "s" }
                     )),
                     TextFont {
-                        font_size: theme::FONT_CAPTION,
+                        font_size: theme.typography.caption,
                         ..default()
                     },
-                    TextColor(theme::WARNING),
+                    TextColor(theme.colors.warning),
                 ));
             })
             .id();

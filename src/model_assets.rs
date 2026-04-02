@@ -547,6 +547,10 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
         scenes.insert(*kind, handle);
     }
 
+    // Goblin mob (standalone GLB model)
+    let goblin_scene = asset_server.load("models/Goblin.glb#Scene0");
+    scenes.insert(EntityKind::Goblin, goblin_scene);
+
     // (kind, scale, y_offset, facing_rotation)
     // calibration y_offset must be the exact negative of blueprint y_offset
     // so the model's feet sit at terrain level
@@ -566,6 +570,8 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
         (EntityKind::BatteringRam, 0.4, -0.8, 0.0),
         // Summons on TTP rigs (mobs now use procedural cubes)
         (EntityKind::SkeletonMinion, 0.4, -0.7, 0.0),
+        // Goblin mob (standalone GLB)
+        (EntityKind::Goblin, 0.7, -0.8, 0.0),
     ];
     let calibration: HashMap<_, _> = calibration_data
         .iter()
@@ -681,6 +687,7 @@ pub enum TtpAnimSet {
     Staff,
     Cavalry,
     Machine,
+    GoblinMob,
 }
 
 pub fn ttp_anim_set(kind: EntityKind) -> Option<TtpAnimSet> {
@@ -697,6 +704,7 @@ pub fn ttp_anim_set(kind: EntityKind) -> Option<TtpAnimSet> {
         EntityKind::Catapult => Some(TtpAnimSet::Machine),
         EntityKind::BatteringRam => Some(TtpAnimSet::Machine),
         EntityKind::SkeletonMinion => Some(TtpAnimSet::Infantry),
+        EntityKind::Goblin => Some(TtpAnimSet::GoblinMob),
         _ => None,
     }
 }
@@ -742,6 +750,16 @@ fn ttp_clip_mapping(anim_set: TtpAnimSet) -> Vec<(&'static str, AnimState)> {
             ("damage", AnimState::Damage),
             ("death", AnimState::DeathA),
         ],
+        TtpAnimSet::GoblinMob => vec![
+            ("Happy.002", AnimState::Idle),
+            ("Walk-fast", AnimState::Walk),
+            ("Run-flee", AnimState::Run),
+            ("Attack-two handed.002", AnimState::AttackA),
+            ("Attack-two handedAction", AnimState::AttackB),
+            ("cry.001", AnimState::Damage),
+            ("Die-jump-ground-face4 test", AnimState::DeathA),
+            ("Die-jump-ground-face4 test", AnimState::DeathB),
+        ],
     }
 }
 
@@ -772,6 +790,10 @@ fn load_ttp_gltf_handles(asset_server: &AssetServer) -> TtpGltfHandles {
         let handle: Handle<bevy::gltf::Gltf> = asset_server.load(format!("{base_path}/{filename}"));
         units.insert(*kind, handle);
     }
+
+    // Goblin mob (standalone GLB)
+    let goblin_gltf: Handle<bevy::gltf::Gltf> = asset_server.load("models/Goblin.glb");
+    units.insert(EntityKind::Goblin, goblin_gltf);
 
     TtpGltfHandles { units }
 }

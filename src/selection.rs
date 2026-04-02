@@ -5,6 +5,7 @@ use bevy_mod_outline::OutlineVolume;
 use game_state::message::{ClientMessage, InputCommand, PlayerInput, ServerMessage};
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache};
+use crate::camera;
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::hover_material::{HoverRingMaterial, HoverRingSettings};
@@ -18,16 +19,11 @@ use crate::combat_intents::{
     apply_manual_move_intent, clear_combat_intent,
 };
 use crate::orders;
-use crate::theme;
-use crate::ui::fonts;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SelectionSet;
 
 pub struct SelectionPlugin;
-
-#[derive(Component)]
-struct HoverTooltipText;
 
 impl Plugin for SelectionPlugin {
     fn build(&self, app: &mut App) {
@@ -83,7 +79,7 @@ impl Plugin for SelectionPlugin {
             )
             .add_systems(
                 Update,
-                (update_hover_ring, update_hover_tooltip)
+                update_hover_ring
                     .in_set(GameFlowSet::Presentation)
                     .after(SelectionSet)
                     .run_if(in_state(AppState::InGame)),
@@ -165,6 +161,35 @@ fn ray_sphere_dist(ray: &Ray3d, center: Vec3, radius: f32) -> Option<f32> {
     }
 }
 
+/// Returns the distance along `ray` to the closest intersection with an AABB,
+/// or `None` if the ray misses. The box spans `[center.x ± half_xz, y_min..y_max, center.z ± half_xz]`.
+fn ray_aabb_dist(ray: &Ray3d, center: Vec3, half_xz: f32, y_min: f32, y_max: f32) -> Option<f32> {
+    let min = Vec3::new(center.x - half_xz, y_min, center.z - half_xz);
+    let max = Vec3::new(center.x + half_xz, y_max, center.z + half_xz);
+
+    let dir = *ray.direction;
+    let inv = Vec3::new(
+        if dir.x.abs() > 1e-8 { 1.0 / dir.x } else { f32::INFINITY.copysign(dir.x) },
+        if dir.y.abs() > 1e-8 { 1.0 / dir.y } else { f32::INFINITY.copysign(dir.y) },
+        if dir.z.abs() > 1e-8 { 1.0 / dir.z } else { f32::INFINITY.copysign(dir.z) },
+    );
+
+    let t1 = (min.x - ray.origin.x) * inv.x;
+    let t2 = (max.x - ray.origin.x) * inv.x;
+    let t3 = (min.y - ray.origin.y) * inv.y;
+    let t4 = (max.y - ray.origin.y) * inv.y;
+    let t5 = (min.z - ray.origin.z) * inv.z;
+    let t6 = (max.z - ray.origin.z) * inv.z;
+
+    let tmin = t1.min(t2).max(t3.min(t4)).max(t5.min(t6));
+    let tmax = t1.max(t2).min(t3.max(t4)).min(t5.max(t6));
+
+    if tmax < 0.0 || tmin > tmax {
+        return None;
+    }
+    Some(if tmin < 0.0 { 0.0 } else { tmin })
+}
+
 /// Categorized pick result for click selection.
 #[allow(dead_code)]
 struct PickResult {
@@ -184,9 +209,10 @@ fn pick_for_click(
     ray: &Ray3d,
     pickables: &Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     units: &Query<Entity, With<Unit>>,
-    buildings: &Query<Entity, With<Building>>,
+    buildings: &Query<(Entity, &BuildingFootprint, &BuildingHeight), With<Building>>,
     mobs: &Query<Entity, With<Mob>>,
     resource_nodes: &Query<Entity, With<ResourceNode>>,
+    height_map: &HeightMap,
 ) -> Option<PickResult> {
     let mut hits: Vec<(Entity, f32, bool, bool, bool, bool)> = Vec::new();
 
@@ -205,15 +231,18 @@ fn pick_for_click(
         }
 
         let center = gt.translation();
-        if let Some(dist) = ray_sphere_dist(ray, center, pick_r.0) {
-            hits.push((
-                entity,
-                dist,
-                is_unit,
-                is_building,
-                is_mob,
-                is_resource,
-            ));
+        let dist = if is_building {
+            if let Ok((_, footprint, bld_h)) = buildings.get(entity) {
+                let terrain_y = height_map.sample(center.x, center.z);
+                ray_aabb_dist(ray, center, footprint.0, terrain_y, terrain_y + bld_h.0)
+            } else {
+                ray_sphere_dist(ray, center, pick_r.0)
+            }
+        } else {
+            ray_sphere_dist(ray, center, pick_r.0)
+        };
+        if let Some(d) = dist {
+            hits.push((entity, d, is_unit, is_building, is_mob, is_resource));
         }
     }
 
@@ -263,15 +292,6 @@ fn pick_for_click(
             entity: h.0,
             is_unit: false,
             is_building: false,
-            is_mob: false,
-            is_resource: false,
-        });
-    }
-    if let Some(h) = close_hits.iter().find(|h| h.4) {
-        return Some(PickResult {
-            entity: h.0,
-            is_unit: false,
-            is_building: false,
             is_mob: true,
             is_resource: false,
         });
@@ -296,51 +316,10 @@ fn clear_ui_press_on_release(
 fn setup_hover_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
-    fonts: Res<fonts::UiFonts>,
 ) {
     // Flat plane that will show the ring shader — sized 3x3 units
     let ring_mesh = meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(1.5)));
     commands.insert_resource(HoverRingAssets { mesh: ring_mesh });
-
-    // Spawn tooltip UI (hidden by default)
-    commands
-        .spawn((
-            HoverTooltip,
-            Node {
-                position_type: PositionType::Absolute,
-                padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
-                border_radius: BorderRadius::all(Val::Px(5.0)),
-                border: UiRect::all(Val::Px(1.0)),
-                min_width: Val::Px(96.0),
-                max_width: Val::Px(168.0),
-                ..default()
-            },
-            BackgroundColor(theme::BG_PANEL),
-            BorderColor::all(Color::srgba(0.25, 0.25, 0.30, 0.6)),
-            BoxShadow::new(
-                Color::srgba(0.0, 0.0, 0.0, 0.6),
-                Val::Px(0.0),
-                Val::Px(2.0),
-                Val::Px(0.0),
-                Val::Px(8.0),
-            ),
-            GlobalZIndex(100),
-            Visibility::Hidden,
-            GlobalTransform::default(),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                HoverTooltipText,
-                Text::new(""),
-                fonts::body_emphasis(&fonts, theme::FONT_LARGE),
-                TextColor(theme::TEXT_PRIMARY),
-                TextLayout::new_with_justify(Justify::Left),
-                Node {
-                    max_width: Val::Px(148.0),
-                    ..default()
-                },
-            ));
-        });
 }
 
 fn spawn_selection_box(mut commands: Commands) {
@@ -444,14 +423,16 @@ fn update_hover(
     mut commands: Commands,
     camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    graphics: Res<GraphicsSettings>,
     pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     units: Query<Entity, With<Unit>>,
-    buildings: Query<Entity, With<Building>>,
+    buildings: Query<(Entity, &BuildingFootprint, &BuildingHeight), With<Building>>,
     mobs: Query<Entity, With<Mob>>,
     resource_nodes: Query<Entity, With<ResourceNode>>,
     hovered: Query<Entity, With<Hovered>>,
     placement: Res<BuildingPlacementState>,
     ui_interactions: Query<&Interaction, With<Node>>,
+    height_map: Res<HeightMap>,
 ) {
     // Remove previous hover
     for entity in &hovered {
@@ -471,13 +452,10 @@ fn update_hover(
     let Ok(window) = windows.single() else {
         return;
     };
-    let Some(cursor) = window.cursor_position() else {
-        return;
-    };
     let Ok((camera, cam_gt)) = camera_q.single() else {
         return;
     };
-    let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
+    let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics) else {
         return;
     };
 
@@ -488,6 +466,7 @@ fn update_hover(
         &buildings,
         &mobs,
         &resource_nodes,
+        &height_map,
     ) {
         commands.entity(result.entity).insert(Hovered);
     }
@@ -499,12 +478,15 @@ fn handle_click_select(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut state: (ResMut<DragState>, ResMut<InspectedEnemy>),
     placement: Res<BuildingPlacementState>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    viewport: (
+        Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+        Query<&Window, With<PrimaryWindow>>,
+        Res<GraphicsSettings>,
+    ),
     pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     entity_queries: (
         Query<Entity, With<Unit>>,
-        Query<Entity, With<Building>>,
+        Query<(Entity, &BuildingFootprint, &BuildingHeight), With<Building>>,
         Query<Entity, With<Mob>>,
         Query<Entity, With<ResourceNode>>,
     ),
@@ -518,6 +500,7 @@ fn handle_click_select(
     ui_interactions: Query<&Interaction, With<Node>>,
     active_player: Res<ActivePlayer>,
     faction_q: Query<&Faction>,
+    height_map: Res<HeightMap>,
     mut extra: (
         Res<Time<Real>>,
         ResMut<DoubleClickDetector>,
@@ -525,6 +508,7 @@ fn handle_click_select(
         bevy::ecs::message::MessageWriter<PlaySfx>,
     ),
 ) {
+    let (ref camera_q, ref windows, ref graphics) = viewport;
     let (ref mut drag, ref mut inspected) = state;
     let (ref units, ref buildings, ref mobs, ref resource_nodes) = entity_queries;
     let (ref minimap_interaction, ref ui_clicked, ref ui_press) = flags;
@@ -595,7 +579,9 @@ fn handle_click_select(
                 }
                 // Workers assigned to buildings are now visible, so no need to skip them
                 if let Ok(gt) = unit_transforms.get(entity) {
-                    if let Ok(screen_pos) = camera.world_to_viewport(cam_gt, gt.translation()) {
+                    if let Some(screen_pos) =
+                        camera::world_to_window_viewport(camera, cam_gt, gt.translation(), window, &graphics)
+                    {
                         if screen_pos.x >= min_x
                             && screen_pos.x <= max_x
                             && screen_pos.y >= min_y
@@ -608,10 +594,7 @@ fn handle_click_select(
             }
         }
     } else {
-        let Some(cursor) = window.cursor_position() else {
-            return;
-        };
-        let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
+        let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics) else {
             return;
         };
 
@@ -622,6 +605,7 @@ fn handle_click_select(
             &buildings,
             &mobs,
             &resource_nodes,
+            &height_map,
         );
 
         if let Some(result) = pick {
@@ -679,7 +663,15 @@ fn handle_click_select(
                                     }
                                 }
                                 if let Ok(gt) = unit_transforms.get(entity) {
-                                    if camera.world_to_viewport(cam_gt, gt.translation()).is_ok() {
+                                    if camera::world_to_window_viewport(
+                                        camera,
+                                        cam_gt,
+                                        gt.translation(),
+                                        window,
+                                        &graphics,
+                                    )
+                                    .is_some()
+                                    {
                                         commands.entity(entity).insert(Selected);
                                     }
                                 }
@@ -915,83 +907,6 @@ fn update_hover_ring(
     }
 }
 
-/// Update tooltip position and text based on hovered entity.
-fn update_hover_tooltip(
-    mut tooltip_q: Query<(&mut Node, &mut Visibility), With<HoverTooltip>>,
-    mut tooltip_text_q: Query<&mut Text, With<HoverTooltipText>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    ui_scale: Res<UiScale>,
-    hovered_entities: Query<Entity, With<Hovered>>,
-    entity_kinds: Query<&EntityKind>,
-    resource_nodes: Query<&ResourceNode>,
-    healths: Query<&Health>,
-    building_levels: Query<&BuildingLevel>,
-) {
-    let Ok((mut node, mut vis)) = tooltip_q.single_mut() else {
-        return;
-    };
-    let Ok(mut text) = tooltip_text_q.single_mut() else {
-        return;
-    };
-
-    let Ok(window) = windows.single() else {
-        *vis = Visibility::Hidden;
-        return;
-    };
-
-    let Some(cursor) = window.cursor_position() else {
-        *vis = Visibility::Hidden;
-        return;
-    };
-
-    let Ok(entity) = hovered_entities.single() else {
-        *vis = Visibility::Hidden;
-        return;
-    };
-
-    // Build tooltip text
-    let mut label = String::new();
-
-    if let Ok(kind) = entity_kinds.get(entity) {
-        label.push_str(kind.display_name());
-        if let Ok(level) = building_levels.get(entity) {
-            label.push_str(&format!(" (Lv {})", level.0));
-        }
-    } else if let Ok(rn) = resource_nodes.get(entity) {
-        label.push_str(&format!(
-            "{} ({})",
-            rn.resource_type.display_name(),
-            rn.amount_remaining
-        ));
-    }
-
-    if label.is_empty() {
-        *vis = Visibility::Hidden;
-        return;
-    }
-
-    if let Ok(health) = healths.get(entity) {
-        label.push_str(&format!(
-            "\nHP: {}/{}",
-            health.current as u32, health.max as u32
-        ));
-    }
-
-    *text = Text::new(label);
-
-    // Position tooltip near cursor with offset
-    let scale = ui_scale.0.max(0.001);
-    let ui_w = window.width() / scale;
-    let ui_h = window.height() / scale;
-    let mut x = (cursor.x + 16.0) / scale;
-    let mut y = (cursor.y + 18.0) / scale;
-    x = x.clamp(6.0, (ui_w - 260.0).max(6.0));
-    y = y.clamp(6.0, (ui_h - 120.0).max(6.0));
-    node.left = Val::Px(x);
-    node.top = Val::Px(y);
-    *vis = Visibility::Visible;
-}
-
 fn handle_right_click_move(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -1021,7 +936,11 @@ fn handle_right_click_move(
         Query<(Entity, &Faction), (With<Unit>, Without<Selected>)>,
         Query<(Entity, &Faction, &BuildingState), (With<Building>, Without<ConstructionProgress>)>,
     ),
-    assigned_workers_q: Query<&AssignedWorkers>,
+    picking_extra: (
+        Query<&AssignedWorkers>,
+        Query<(&BuildingFootprint, &BuildingHeight), With<Building>>,
+        Res<HeightMap>,
+    ),
     ui_flags: (
         Res<MinimapInteraction>,
         Res<UiClickedThisFrame>,
@@ -1045,6 +964,7 @@ fn handle_right_click_move(
     let (mobs, resource_nodes, construction_q, processor_buildings) =
         target_queries;
     let (other_units, other_buildings) = enemy_detect;
+    let (assigned_workers_q, building_aabb_q, height_map) = picking_extra;
     let (minimap_interaction, ui_clicked, ui_press, mut sfx) = ui_flags;
     let (
         net_role,
@@ -1113,7 +1033,13 @@ fn handle_right_click_move(
         }
 
         let center = gt.translation();
-        let Some(dist) = ray_sphere_dist(&ray, center, pick_r.0) else {
+        let dist = if let Ok((footprint, bld_h)) = building_aabb_q.get(entity) {
+            let terrain_y = height_map.sample(center.x, center.z);
+            ray_aabb_dist(&ray, center, footprint.0, terrain_y, terrain_y + bld_h.0)
+        } else {
+            ray_sphere_dist(&ray, center, pick_r.0)
+        };
+        let Some(dist) = dist else {
             continue;
         };
 
@@ -1249,6 +1175,7 @@ fn handle_right_click_move(
                 let point = ground_point?;
                 commands.push(InputCommand::Move {
                     target: [point.x, point.y, point.z],
+                    formation: Some(formation.formation.to_net_u8()),
                 });
             }
         }
@@ -1716,62 +1643,6 @@ fn handle_right_click_move(
     }
 }
 
-/// Compute formation offsets for a group of units.
-fn formation_offsets(formation: FormationType, count: usize, facing: Vec2) -> Vec<Vec2> {
-    let spacing = 2.0;
-    // Perpendicular vector (rotate 90 degrees)
-    let perp = Vec2::new(-facing.y, facing.x);
-
-    match formation {
-        FormationType::None => {
-            // Default circular spread
-            let radius = (spacing * count as f32 / std::f32::consts::TAU).max(1.0);
-            (0..count)
-                .map(|i| {
-                    let angle = i as f32 / count as f32 * std::f32::consts::TAU;
-                    Vec2::new(angle.cos() * radius, angle.sin() * radius)
-                })
-                .collect()
-        }
-        FormationType::Line => {
-            // Units spread perpendicular to movement direction
-            (0..count)
-                .map(|i| {
-                    let offset = (i as f32 - (count as f32 - 1.0) / 2.0) * spacing;
-                    perp * offset
-                })
-                .collect()
-        }
-        FormationType::Box => {
-            // N x M grid formation
-            let cols = (count as f32).sqrt().ceil() as usize;
-            let spacing_val = spacing * 1.25;
-            (0..count)
-                .map(|i| {
-                    let col = i % cols;
-                    let row = i / cols;
-                    let x = (col as f32 - (cols as f32 - 1.0) / 2.0) * spacing_val;
-                    let y = -(row as f32) * spacing_val; // rows go backward
-                    perp * x + facing * y
-                })
-                .collect()
-        }
-        FormationType::Wedge => {
-            // V-shape with leader at front
-            let mut offsets = Vec::with_capacity(count);
-            offsets.push(Vec2::ZERO); // Leader at tip
-            for i in 1..count {
-                let side = if i % 2 == 1 { 1.0 } else { -1.0 };
-                let depth = ((i + 1) / 2) as f32;
-                let lateral = depth * spacing * 0.8;
-                let backward = depth * spacing * 0.6;
-                offsets.push(perp * side * lateral - facing * backward);
-            }
-            offsets
-        }
-    }
-}
-
 /// Hotkey-based unit commands:
 /// - `A` → enter attack-move mode (next left-click issues attack-move)
 /// - `P` → enter patrol mode (next left-click issues patrol to position)
@@ -1787,8 +1658,11 @@ fn handle_unit_command_hotkeys(
     mouse: Res<ButtonInput<MouseButton>>,
     mut cmd_mode: ResMut<CommandMode>,
     mut next_task_id: ResMut<NextTaskId>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    viewport: (
+        Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+        Query<&Window, With<PrimaryWindow>>,
+        Res<GraphicsSettings>,
+    ),
     selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
     mut task_queues: Query<&mut TaskQueue, With<Unit>>,
     mut unit_abilities: Query<&mut UnitAbilities>,
@@ -1799,6 +1673,7 @@ fn handle_unit_command_hotkeys(
     ui_press: Res<UiPressActive>,
     placement: Res<BuildingPlacementState>,
 ) {
+    let (ref camera_q, ref windows, ref graphics) = viewport;
     if placement.mode != PlacementMode::None {
         return;
     }
@@ -1939,13 +1814,10 @@ fn handle_unit_command_hotkeys(
     let Ok(window) = windows.single() else {
         return;
     };
-    let Some(cursor) = window.cursor_position() else {
-        return;
-    };
     let Ok((camera, cam_gt)) = camera_q.single() else {
         return;
     };
-    let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
+    let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics) else {
         return;
     };
     let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) else {

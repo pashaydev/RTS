@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::components::{ButtonAnimState, ButtonStyle};
-use crate::theme;
+use crate::theme::Theme;
 
 pub type UiButtonChrome = (ButtonAnimState, ButtonStyle, BackgroundColor, BorderColor);
 
@@ -12,11 +12,11 @@ pub enum UiTone {
     Destructive,
 }
 
-fn tone_color(tone: UiTone) -> Color {
+fn tone_color(theme: &Theme, tone: UiTone) -> Color {
     match tone {
-        UiTone::Neutral => theme::BTN_PRIMARY,
-        UiTone::Accent => theme::ACCENT,
-        UiTone::Destructive => theme::DESTRUCTIVE,
+        UiTone::Neutral => theme.colors.btn_primary,
+        UiTone::Accent => theme.colors.accent,
+        UiTone::Destructive => theme.colors.destructive,
     }
 }
 
@@ -38,8 +38,8 @@ fn tone_shadow(tone: UiTone, alpha: f32) -> Color {
     }
 }
 
-pub fn filled_button_chrome(tone: UiTone) -> UiButtonChrome {
-    let bg = tone_color(tone);
+pub fn filled_button_chrome(theme: &Theme, tone: UiTone) -> UiButtonChrome {
+    let bg = tone_color(theme, tone);
     (
         ButtonAnimState::new(bg.to_srgba().to_f32_array()),
         ButtonStyle::Filled,
@@ -48,7 +48,7 @@ pub fn filled_button_chrome(tone: UiTone) -> UiButtonChrome {
     )
 }
 
-pub fn ghost_button_chrome(tone: UiTone) -> UiButtonChrome {
+pub fn ghost_button_chrome(_theme: &Theme, tone: UiTone) -> UiButtonChrome {
     (
         ButtonAnimState::new([0.0, 0.0, 0.0, 0.0]),
         match tone {
@@ -116,10 +116,10 @@ pub fn input_node(width: f32, height: f32) -> Node {
     }
 }
 
-pub fn input_chrome() -> (BackgroundColor, BorderColor, BoxShadow) {
+pub fn input_chrome(theme: &Theme) -> (BackgroundColor, BorderColor, BoxShadow) {
     (
-        BackgroundColor(theme::INPUT_BG),
-        BorderColor::all(theme::INPUT_BORDER),
+        BackgroundColor(theme.colors.input_bg),
+        BorderColor::all(theme.colors.input_border),
         BoxShadow::new(
             Color::srgba(0.0, 0.0, 0.0, 0.16),
             Val::Px(0.0),
@@ -143,9 +143,9 @@ pub fn card_node() -> Node {
     }
 }
 
-pub fn card_chrome(border: Color) -> (BackgroundColor, BorderColor, BoxShadow) {
+pub fn card_chrome(theme: &Theme, border: Color) -> (BackgroundColor, BorderColor, BoxShadow) {
     (
-        BackgroundColor(theme::BG_SURFACE),
+        BackgroundColor(theme.colors.bg_surface),
         BorderColor::all(border),
         BoxShadow::new(
             Color::srgba(0.0, 0.0, 0.0, 0.18),

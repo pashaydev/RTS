@@ -44,7 +44,7 @@ pub fn ai_military_system(
             ),
         >,
         Query<&Health>,
-        Query<(&Faction, &Transform), With<Building>>,
+        Query<(&Faction, &Transform), (With<Building>, Without<FloorTile>)>,
         Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
         Query<(&Faction, &EntityKind, &mut TrainingQueue), With<Building>>,
     ),

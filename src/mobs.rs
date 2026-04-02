@@ -819,7 +819,10 @@ fn mob_aggro(
     >,
     pack_mobs: Query<(Entity, &Transform), With<Mob>>,
     players: Query<(Entity, &Transform, &Faction), With<Unit>>,
-    buildings: Query<(Entity, &Transform, &Faction), (With<Building>, Without<Unit>)>,
+    buildings: Query<
+        (Entity, &Transform, &Faction),
+        (With<Building>, Without<Unit>, Without<FloorTile>),
+    >,
 ) {
     let now = time.elapsed_secs_f64();
     for (mob_entity, mob_tf, aggro, intent, lock, opt_think_timer) in &mut mobs {

@@ -13,6 +13,7 @@ use game_state::message::{
 use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache,
 };
+use crate::buildings::spawn_floor_grid_cells;
 use crate::components::*;
 use crate::ground::{
     apply_terrain_shape_op, reset_terrain_to_natural, sync_ground_mesh_to_height_map,
@@ -767,10 +768,12 @@ pub fn client_apply_entity_sync(
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
     height_map: Res<HeightMap>,
+    mut floor_grid: ResMut<FloorGrid>,
     building_models: Option<Res<BuildingModelAssets>>,
     unit_models: Option<Res<UnitModelAssets>>,
     existing_with_id: Query<(Entity, &NetworkId)>,
     mut transforms: Query<&mut Transform>,
+    floor_coords: Query<&FloorGridCoord>,
 ) {
     net_stats.pending_spawns = pending.spawns.len() as u32;
     net_stats.pending_despawns = pending.despawns.len() as u32;
@@ -812,17 +815,38 @@ pub fn client_apply_entity_sync(
             let pos = Vec3::new(spawn_data.pos[0], spawn_data.pos[1], spawn_data.pos[2]);
 
             // Deterministic: always spawn fresh from blueprint, no distance heuristic
-            let entity = spawn_from_blueprint_with_faction(
-                &mut commands,
-                &cache,
-                kind,
-                pos,
-                &registry,
-                building_models.as_deref(),
-                unit_models.as_deref(),
-                &height_map,
-                faction,
-            );
+            let entity = if kind == EntityKind::Floor {
+                let (gx, gz) = WallGrid::world_to_grid(pos);
+                match spawn_floor_grid_cells(
+                    &mut commands,
+                    &cache,
+                    &height_map,
+                    &mut floor_grid,
+                    faction,
+                    &[(gx, gz)],
+                )
+                .into_iter()
+                .next()
+                {
+                    Some(entity) => entity,
+                    None => {
+                        skipped_known += 1;
+                        continue;
+                    }
+                }
+            } else {
+                spawn_from_blueprint_with_faction(
+                    &mut commands,
+                    &cache,
+                    kind,
+                    pos,
+                    &registry,
+                    building_models.as_deref(),
+                    unit_models.as_deref(),
+                    &height_map,
+                    faction,
+                )
+            };
             commands.entity(entity).insert(NetworkId(spawn_data.net_id));
             if let Ok(mut transform) = transforms.get_mut(entity) {
                 transform.translation = pos;
@@ -847,6 +871,10 @@ pub fn client_apply_entity_sync(
         let mut removed = 0u32;
         for net_id in &despawns {
             if let Some(&ecs_entity) = net_map.to_ecs.get(net_id) {
+                if let Ok(coord) = floor_coords.get(ecs_entity) {
+                    floor_grid.cells.remove(&(coord.0, coord.1));
+                    floor_grid.mark_dirty(coord.0, coord.1);
+                }
                 commands.entity(ecs_entity).try_despawn();
                 removed += 1;
             }

@@ -11,7 +11,7 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
 use crate::components::*;
-use crate::theme;
+use crate::theme::Theme;
 
 use super::interactions::UiClickEvent;
 
@@ -71,16 +71,17 @@ pub fn scroll_panel_system(
 pub fn spawn_text_input_children(
     builder: &mut ChildSpawnerCommands,
     initial_value: &str,
+    theme: &Theme,
 ) {
     let font = TextFont {
-        font_size: theme::FONT_MEDIUM,
+        font_size: theme.typography.medium,
         ..default()
     };
     builder
         .spawn((
             Text::new(initial_value),
             font.clone(),
-            TextColor(theme::TEXT_PRIMARY),
+            TextColor(theme.colors.text_primary),
             Pickable::IGNORE,
         ))
         .with_children(|text_root| {
@@ -106,7 +107,7 @@ pub fn spawn_text_input_children(
                 TextInputPostText,
                 TextSpan::new(""),
                 font,
-                TextColor(theme::TEXT_PRIMARY),
+                TextColor(theme.colors.text_primary),
             ));
         });
 }
@@ -127,6 +128,7 @@ pub fn text_input_system(
     mut config: ResMut<GameSetupConfig>,
     mut keyboard_events: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
+    theme: Res<Theme>,
 ) {
     // ── Focus management via click ──
     let mut clicked_entity: Option<Entity> = None;
@@ -143,13 +145,13 @@ pub fn text_input_system(
                     commands.entity(entity).insert(TextInputFocused);
                     commands
                         .entity(entity)
-                        .insert(BorderColor::all(theme::INPUT_BORDER_FOCUSED));
+                        .insert(BorderColor::all(theme.colors.input_border_focused));
                 }
             } else if focused.is_some() {
                 commands.entity(entity).remove::<TextInputFocused>();
                 commands
                     .entity(entity)
-                    .insert(BorderColor::all(theme::INPUT_BORDER));
+                    .insert(BorderColor::all(theme.colors.input_border));
             }
         }
     }
@@ -321,7 +323,7 @@ pub fn text_input_system(
                     commands.entity(_entity).remove::<TextInputFocused>();
                     commands
                         .entity(_entity)
-                        .insert(BorderColor::all(theme::INPUT_BORDER));
+                        .insert(BorderColor::all(theme.colors.input_border));
                 }
                 _ => {
                     // Use logical_key for character input (supports all keyboard layouts)
@@ -480,6 +482,7 @@ pub fn text_input_render_system(
 
 pub fn animate_text_input_chrome(
     mut commands: Commands,
+    theme: Res<Theme>,
     query: Query<
         (
             Entity,
@@ -503,7 +506,7 @@ pub fn animate_text_input_chrome(
         } else if is_hovered {
             Color::srgba(0.13, 0.14, 0.17, 0.94)
         } else {
-            theme::INPUT_BG
+            theme.colors.input_bg
         });
 
         *border = BorderColor::all(if is_pressed || is_focused {
@@ -511,7 +514,7 @@ pub fn animate_text_input_chrome(
         } else if is_hovered {
             Color::srgba(0.35, 0.50, 0.72, 0.55)
         } else {
-            theme::INPUT_BORDER
+            theme.colors.input_border
         });
 
         commands.entity(entity).insert(BoxShadow::new(
@@ -635,6 +638,7 @@ pub fn clipboard_write(text: &str) {
 
 pub fn text_input_cursor_blink(
     time: Res<Time>,
+    theme: Res<Theme>,
     focused: Query<&Children, With<TextInputFocused>>,
     not_focused: Query<&Children, (With<TextInputField>, Without<TextInputFocused>)>,
     children_q: Query<&Children>,
@@ -647,7 +651,7 @@ pub fn text_input_cursor_blink(
             if let Ok(mut color) = span_color.get_mut(child) {
                 let t = time.elapsed_secs();
                 let blink = (t * 3.0).sin() * 0.5 + 0.5;
-                let c = theme::ACCENT.to_srgba();
+                let c = theme.colors.accent.to_srgba();
                 color.0 = Color::srgba(c.red, c.green, c.blue, blink);
                 continue;
             }
@@ -657,7 +661,7 @@ pub fn text_input_cursor_blink(
                     if let Ok(mut color) = span_color.get_mut(gc) {
                         let t = time.elapsed_secs();
                         let blink = (t * 3.0).sin() * 0.5 + 0.5;
-                        let c = theme::ACCENT.to_srgba();
+                        let c = theme.colors.accent.to_srgba();
                         color.0 = Color::srgba(c.red, c.green, c.blue, blink);
                     }
                 }

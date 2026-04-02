@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::fonts::{self, UiFonts};
 use super::interactions::{UiClickEvent, UiInteractPhase, UiInteractState};
 use crate::components::AppState;
-use crate::theme;
+use crate::theme::Theme;
 
 // ── Widget Identifiers ──
 
@@ -235,6 +235,7 @@ pub fn spawn_widget_frame(
     slot: &GridSlot,
     visible: bool,
     fonts: &UiFonts,
+    theme: &Theme,
 ) -> Entity {
     let mut node = grid_to_style(slot);
     node.padding = UiRect::all(Val::Px(2.0));
@@ -245,8 +246,8 @@ pub fn spawn_widget_frame(
             Interaction::None,
             ZIndex(0),
             node,
-            BackgroundColor(theme::BG_PANEL),
-            BorderColor::all(theme::SEPARATOR),
+            BackgroundColor(theme.colors.bg_panel),
+            BorderColor::all(theme.colors.separator),
             if visible {
                 Visibility::Inherited
             } else {
@@ -276,8 +277,8 @@ pub fn spawn_widget_frame(
             // Title text
             bar.spawn((
                 Text::new(id.display_name().to_uppercase()),
-                fonts::heading(fonts, theme::FONT_SMALL),
-                TextColor(theme::TEXT_SECONDARY),
+                fonts::heading(fonts, theme.typography.small),
+                TextColor(theme.colors.text_secondary),
             ));
 
             // Close button
@@ -297,8 +298,8 @@ pub fn spawn_widget_frame(
             .with_children(|close| {
                 close.spawn((
                     Text::new("X"),
-                    fonts::body_emphasis(fonts, theme::FONT_TINY),
-                    TextColor(theme::TEXT_DISABLED),
+                    fonts::body_emphasis(fonts, theme.typography.tiny),
+                    TextColor(theme.colors.text_disabled),
                 ));
             });
         })
@@ -313,7 +314,7 @@ pub fn spawn_widget_frame(
                 height: Val::Px(1.0),
                 ..default()
             },
-            BackgroundColor(theme::SEPARATOR),
+            BackgroundColor(theme.colors.separator),
         ))
         .id();
     commands.entity(widget_entity).add_child(sep);
@@ -452,7 +453,7 @@ pub fn handle_widget_scroll(
 
 // ── Grid Overlay ──
 
-pub fn spawn_grid_overlay(mut commands: Commands, existing: Query<Entity, With<GridOverlay>>) {
+pub fn spawn_grid_overlay(mut commands: Commands, theme: Res<Theme>, existing: Query<Entity, With<GridOverlay>>) {
     if !existing.is_empty() {
         return;
     }
@@ -485,7 +486,7 @@ pub fn spawn_grid_overlay(mut commands: Commands, existing: Query<Entity, With<G
                         height: Val::Percent(100.0),
                         ..default()
                     },
-                    BackgroundColor(theme::GRID_LINE),
+                    BackgroundColor(theme.colors.grid_line),
                 ));
             }
             // 13 horizontal lines (at each row boundary 0..=12)
@@ -501,7 +502,7 @@ pub fn spawn_grid_overlay(mut commands: Commands, existing: Query<Entity, With<G
                         height: Val::Px(1.0),
                         ..default()
                     },
-                    BackgroundColor(theme::GRID_LINE),
+                    BackgroundColor(theme.colors.grid_line),
                 ));
             }
         });
@@ -747,17 +748,15 @@ pub fn handle_widget_resize(
 }
 
 pub fn update_resize_handle_visuals(
+    theme: Res<Theme>,
     mut handles: Query<(&UiInteractState, &mut BackgroundColor), With<WidgetResizeHandle>>,
 ) {
     for (state, mut bg) in &mut handles {
         match state.phase {
             UiInteractPhase::Pressed => {
-                *bg = BackgroundColor(Color::srgba(
-                    0.29,
-                    0.62,
-                    1.0,
-                    0.35 + 0.55 * state.hold_progress,
-                ))
+                *bg = BackgroundColor(
+                    theme.colors.accent.with_alpha(0.35 + 0.55 * state.hold_progress),
+                )
             }
             UiInteractPhase::Hovered => *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.4)),
             UiInteractPhase::Idle | UiInteractPhase::Disabled => {

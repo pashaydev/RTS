@@ -63,6 +63,7 @@ fn spawn_external_widget_frames(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
+    theme: Res<crate::theme::Theme>,
     root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
     let Ok(hud_root) = root_q.single() else {
@@ -76,6 +77,7 @@ fn spawn_external_widget_frames(
         registry.slots.get(&WidgetId::Minimap).unwrap(),
         registry.is_visible(WidgetId::Minimap),
         &fonts,
+        &theme,
     );
     commands
         .entity(minimap_content)
@@ -88,6 +90,7 @@ fn spawn_external_widget_frames(
         registry.slots.get(&WidgetId::Debug).unwrap(),
         registry.is_visible(WidgetId::Debug),
         &fonts,
+        &theme,
     );
     crate::debug::spawn_debug_content(&mut commands, debug_content);
 }

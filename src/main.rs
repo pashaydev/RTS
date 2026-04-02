@@ -14,6 +14,7 @@ mod combat_slots;
 mod components;
 mod culling;
 mod debug;
+mod entity_labels;
 mod fog;
 mod fog_material;
 mod ground;
@@ -83,7 +84,7 @@ fn main() {
                         resolution: (w, h).into(),
                         mode: if graphics.fullscreen {
                             bevy::window::WindowMode::BorderlessFullscreen(
-                                MonitorSelection::Current,
+                                bevy::window::MonitorSelection::Current,
                             )
                         } else {
                             bevy::window::WindowMode::Windowed
@@ -119,6 +120,7 @@ fn main() {
                 .chain(),
         )
         .insert_resource(GameSetupConfig::default())
+        .insert_resource(theme::Theme::from_mode(graphics.theme_mode))
         .insert_resource(graphics)
         .add_plugins(menu::MenuPlugin)
         .add_plugins(blueprints::BlueprintPlugin)
@@ -158,5 +160,6 @@ fn main() {
         .add_plugins(victory::VictoryPlugin)
         .add_plugins(ages::AgesPlugin)
         .add_plugins(audio::GameAudioPlugin)
+        .add_plugins(entity_labels::EntityLabelPlugin)
         .run();
 }

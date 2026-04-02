@@ -5,7 +5,7 @@ use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
 use crate::components::*;
-use crate::theme;
+use crate::theme::{self, Theme};
 
 pub struct ResourcesWidgetPlugin;
 
@@ -30,6 +30,7 @@ fn spawn_resources_widget(
     icons: Res<IconAssets>,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
+    theme: Res<Theme>,
     root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
     let Ok(hud_root) = root_q.single() else {
@@ -42,6 +43,7 @@ fn spawn_resources_widget(
         registry.slots.get(&WidgetId::Resources).unwrap(),
         registry.is_visible(WidgetId::Resources),
         &fonts,
+        &theme,
     );
     spawn_resource_content(&mut commands, content, &icons);
 }

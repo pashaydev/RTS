@@ -236,6 +236,10 @@ impl Plugin for MenuPlugin {
                 OnEnter(AppState::MainMenu),
                 multiplayer::cleanup_network_on_enter_menu.before(systems::spawn_menu),
             )
+            .add_systems(
+                OnEnter(AppState::MainMenu),
+                systems::apply_window_settings_on_menu_enter,
+            )
             .add_systems(OnEnter(AppState::MainMenu), systems::spawn_menu)
             .add_systems(
                 Update,
@@ -267,7 +271,11 @@ impl Plugin for MenuPlugin {
             )
             .add_systems(
                 Update,
-                multiplayer::update_lobby_ui.in_set(MenuSet::Visuals),
+                (
+                    multiplayer::update_lobby_ui,
+                    systems::sync_range_slider_visuals,
+                )
+                    .in_set(MenuSet::Visuals),
             )
             .add_systems(
                 Update,

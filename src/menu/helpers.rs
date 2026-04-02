@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 
 use crate::components::*;
-use crate::theme;
+use crate::theme::Theme;
 use crate::ui::core::components as ui_components;
 use crate::ui::core::fonts::{self, UiFonts};
 use crate::ui::core::text_input::{spawn_text_input_children, ScrollablePanel};
@@ -44,6 +44,7 @@ pub enum SelectorField {
     MusicVolume,
     SfxVolume,
     PreferredFaction,
+    ThemeMode,
 }
 
 #[derive(Component)]
@@ -62,7 +63,7 @@ pub struct SlotCardsContainer;
 
 // ── Panel ──
 
-pub fn spawn_menu_panel(commands: &mut Commands) -> Entity {
+pub fn spawn_menu_panel(commands: &mut Commands, theme: &Theme) -> Entity {
     commands
         .spawn((
             ScrollablePanel,
@@ -79,7 +80,7 @@ pub fn spawn_menu_panel(commands: &mut Commands) -> Entity {
                 ..default()
             },
             BackgroundColor(Color::srgba(0.07, 0.07, 0.07, 0.0)),
-            BorderColor::all(theme::SEPARATOR),
+            BorderColor::all(theme.colors.separator),
             BoxShadow::new(
                 Color::srgba(0.0, 0.0, 0.0, 0.6),
                 Val::Px(0.0),
@@ -107,8 +108,9 @@ pub fn spawn_styled_button(
     marker: impl Bundle,
     accent: bool,
     fonts: &UiFonts,
+    theme: &Theme,
 ) -> Entity {
-    spawn_styled_button_nav(commands, label, marker, accent, fonts, None)
+    spawn_styled_button_nav(commands, label, marker, accent, fonts, None, theme)
 }
 
 pub fn spawn_styled_button_nav(
@@ -118,6 +120,7 @@ pub fn spawn_styled_button_nav(
     accent: bool,
     fonts: &UiFonts,
     nav_index: Option<usize>,
+    theme: &Theme,
 ) -> Entity {
     let bg = if accent {
         ui_components::UiTone::Accent
@@ -132,7 +135,7 @@ pub fn spawn_styled_button_nav(
         marker,
         Button,
         node,
-        ui_components::filled_button_chrome(bg),
+        ui_components::filled_button_chrome(theme, bg),
     ));
     if let Some(idx) = nav_index {
         entity_commands.insert(NavFocusable(idx));
@@ -140,7 +143,7 @@ pub fn spawn_styled_button_nav(
     if accent {
         entity_commands.insert((
             UiGlowPulse {
-                color: theme::ACCENT,
+                color: theme.colors.accent,
                 intensity: 0.5,
             },
             BoxShadow::new(
@@ -155,7 +158,7 @@ pub fn spawn_styled_button_nav(
     entity_commands.with_children(|parent| {
         parent.spawn((
             Text::new(label),
-            fonts::heading(fonts, theme::FONT_BUTTON),
+            fonts::heading(fonts, theme.typography.button),
             TextColor(Color::WHITE),
             Pickable::IGNORE,
         ));
@@ -164,7 +167,7 @@ pub fn spawn_styled_button_nav(
 }
 
 /// Spawns a controls hint row at the bottom-left of the screen.
-pub fn spawn_controls_hint(commands: &mut Commands, container: Entity, fonts: &UiFonts) {
+pub fn spawn_controls_hint(commands: &mut Commands, container: Entity, fonts: &UiFonts, theme: &Theme) {
     let hint = commands
         .spawn((
             ControlsHint,
@@ -202,17 +205,17 @@ pub fn spawn_controls_hint(commands: &mut Commands, container: Entity, fonts: &U
                                 ..default()
                             },
                             BackgroundColor(Color::srgba(0.15, 0.15, 0.15, 0.9)),
-                            BorderColor::all(theme::TEXT_DISABLED),
+                            BorderColor::all(theme.colors.text_disabled),
                         ))
                         .with_children(|badge| {
                             badge.spawn((
                                 Text::new(key),
                                 TextFont {
                                     font: fonts.body_emphasis.clone(),
-                                    font_size: theme::FONT_TINY,
+                                    font_size: theme.typography.tiny,
                                     ..default()
                                 },
-                                TextColor(theme::TEXT_SECONDARY),
+                                TextColor(theme.colors.text_secondary),
                             ));
                         });
                         // Action label
@@ -220,10 +223,10 @@ pub fn spawn_controls_hint(commands: &mut Commands, container: Entity, fonts: &U
                             Text::new(action),
                             TextFont {
                                 font: fonts.body.clone(),
-                                font_size: theme::FONT_TINY,
+                                font_size: theme.typography.tiny,
                                 ..default()
                             },
-                            TextColor(theme::TEXT_DISABLED),
+                            TextColor(theme.colors.text_disabled),
                         ));
                     });
             }
@@ -240,6 +243,7 @@ pub fn spawn_page_header<B: Bundle>(
     title: &str,
     back_marker: B,
     fonts: &UiFonts,
+    theme: &Theme,
 ) {
     let row = commands
         .spawn(Node {
@@ -255,20 +259,20 @@ pub fn spawn_page_header<B: Bundle>(
                     back_marker,
                     Button,
                     ui_components::compact_button_node(12.0, 6.0),
-                    ui_components::ghost_button_chrome(ui_components::UiTone::Neutral),
+                    ui_components::ghost_button_chrome(theme, ui_components::UiTone::Neutral),
                 ))
                 .with_children(|btn| {
                     btn.spawn((
                         Text::new("<< BACK"),
-                        fonts::body_emphasis(fonts, theme::FONT_MEDIUM),
-                        TextColor(theme::TEXT_SECONDARY),
+                        fonts::body_emphasis(fonts, theme.typography.medium),
+                        TextColor(theme.colors.text_secondary),
                         Pickable::IGNORE,
                     ));
                 });
 
             parent.spawn((
                 Text::new(title),
-                fonts::heading(fonts, theme::FONT_HEADING),
+                fonts::heading(fonts, theme.typography.heading),
                 TextColor(Color::WHITE),
             ));
         })
@@ -283,6 +287,7 @@ pub fn spawn_animated_section_divider(
     container: Entity,
     label: &str,
     fonts: &UiFonts,
+    theme: &Theme,
 ) {
     let row = commands
         .spawn(Node {
@@ -304,13 +309,13 @@ pub fn spawn_animated_section_divider(
                     margin: UiRect::right(Val::Px(8.0)),
                     ..default()
                 },
-                BackgroundColor(theme::SEPARATOR),
+                BackgroundColor(theme.colors.separator),
             ));
 
             parent.spawn((
                 Text::new(label),
-                fonts::heading(fonts, theme::FONT_SMALL),
-                TextColor(theme::TEXT_SECONDARY),
+                fonts::heading(fonts, theme.typography.small),
+                TextColor(theme.colors.text_secondary),
                 Node {
                     margin: UiRect::horizontal(Val::Px(4.0)),
                     ..default()
@@ -329,7 +334,7 @@ pub fn spawn_animated_section_divider(
                     margin: UiRect::left(Val::Px(8.0)),
                     ..default()
                 },
-                BackgroundColor(theme::SEPARATOR),
+                BackgroundColor(theme.colors.separator),
             ));
         })
         .id();
@@ -345,8 +350,9 @@ pub fn spawn_selector_row(
     options: &[&str],
     selected: usize,
     field: SelectorField,
+    theme: &Theme,
 ) {
-    spawn_selector_row_nav(commands, container, label, options, selected, field, None);
+    spawn_selector_row_nav(commands, container, label, options, selected, field, None, theme);
 }
 
 pub fn spawn_selector_row_nav(
@@ -357,6 +363,7 @@ pub fn spawn_selector_row_nav(
     selected: usize,
     field: SelectorField,
     nav_index: Option<usize>,
+    theme: &Theme,
 ) {
     let mut ec = commands.spawn(Node {
         width: Val::Percent(100.0),
@@ -375,10 +382,10 @@ pub fn spawn_selector_row_nav(
             parent.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: theme::FONT_MEDIUM,
+                    font_size: theme.typography.medium,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme.colors.text_secondary),
                 Node {
                     width: Val::Px(120.0),
                     ..default()
@@ -390,7 +397,7 @@ pub fn spawn_selector_row_nav(
                 let text_color = if is_selected {
                     Color::WHITE
                 } else {
-                    theme::TEXT_SECONDARY
+                    theme.colors.text_secondary
                 };
 
                 let mut btn = parent.spawn((
@@ -398,9 +405,9 @@ pub fn spawn_selector_row_nav(
                     Button,
                     ui_components::compact_button_node_with_margin(14.0, 7.0, 2.0),
                     if is_selected {
-                        ui_components::filled_button_chrome(ui_components::UiTone::Accent)
+                        ui_components::filled_button_chrome(theme, ui_components::UiTone::Accent)
                     } else {
-                        ui_components::filled_button_chrome(ui_components::UiTone::Neutral)
+                        ui_components::filled_button_chrome(theme, ui_components::UiTone::Neutral)
                     },
                 ));
                 if is_selected {
@@ -410,7 +417,7 @@ pub fn spawn_selector_row_nav(
                     btn_parent.spawn((
                         Text::new(opt),
                         TextFont {
-                            font_size: theme::FONT_MEDIUM,
+                            font_size: theme.typography.medium,
                             ..default()
                         },
                         TextColor(text_color),
@@ -423,19 +430,22 @@ pub fn spawn_selector_row_nav(
     commands.entity(container).add_child(row);
 }
 
-// ── Volume Slider ──
+// ── Range Slider ──
 
 /// Marker on the slider track container. Stores which field it controls.
 #[derive(Component, Clone, Copy)]
-pub struct VolumeSlider(pub SelectorField);
+pub struct RangeSlider {
+    pub field: SelectorField,
+    pub steps: Option<usize>,
+}
 
 /// The filled portion of the slider bar.
 #[derive(Component)]
-pub struct VolumeSliderFill;
+pub struct RangeSliderFill;
 
-/// The percentage label to the right of the slider.
+/// The value label to the right of the slider.
 #[derive(Component)]
-pub struct VolumeSliderLabel(pub SelectorField);
+pub struct RangeSliderLabel(pub SelectorField);
 
 /// State for active slider drag.
 #[derive(Resource, Default)]
@@ -443,16 +453,29 @@ pub struct SliderDragState {
     pub active: Option<Entity>,
 }
 
-/// Spawns a volume slider row: `[Label:] [====■-----------] [50%]`
-pub fn spawn_volume_slider(
+fn slider_fill_percent(value: f32, steps: Option<usize>) -> f32 {
+    match steps {
+        Some(steps) if steps > 1 => (value.clamp(0.0, 1.0) * (steps - 1) as f32).round()
+            / (steps - 1) as f32
+            * 100.0,
+        _ => value.clamp(0.0, 1.0) * 100.0,
+    }
+}
+
+/// Spawns a range slider row: `[Label:] [====-----------] [Value]`
+pub fn spawn_range_slider(
     commands: &mut Commands,
     container: Entity,
     label: &str,
     value: f32,
+    value_label: impl Into<String>,
     field: SelectorField,
+    steps: Option<usize>,
     nav_index: Option<usize>,
+    theme: &Theme,
 ) {
-    let pct = (value * 100.0).round();
+    let pct = slider_fill_percent(value, steps);
+    let value_label = value_label.into();
 
     let mut ec = commands.spawn(Node {
         width: Val::Percent(100.0),
@@ -473,10 +496,10 @@ pub fn spawn_volume_slider(
             parent.spawn((
                 Text::new(label),
                 TextFont {
-                    font_size: theme::FONT_MEDIUM,
+                    font_size: theme.typography.medium,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme.colors.text_secondary),
                 Node {
                     width: Val::Px(120.0),
                     ..default()
@@ -486,7 +509,7 @@ pub fn spawn_volume_slider(
             // Slider track (clickable area)
             parent
                 .spawn((
-                    VolumeSlider(field),
+                    RangeSlider { field, steps },
                     Button,
                     Interaction::None,
                     RelativeCursorPosition::default(),
@@ -499,34 +522,34 @@ pub fn spawn_volume_slider(
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.10, 0.10, 0.10, 0.94)),
-                    BorderColor::all(theme::SEPARATOR),
+                    BorderColor::all(theme.colors.separator),
                 ))
                 .with_children(|track| {
                     // Filled bar
                     track.spawn((
-                        VolumeSliderFill,
+                        RangeSliderFill,
                         Node {
                             width: Val::Percent(pct),
                             height: Val::Percent(100.0),
                             border_radius: BorderRadius::all(Val::Px(3.0)),
                             ..default()
                         },
-                        BackgroundColor(theme::ACCENT),
+                        BackgroundColor(theme.colors.accent),
                         Pickable::IGNORE,
                     ));
                 });
 
-            // Percentage label
+            // Value label
             parent.spawn((
-                VolumeSliderLabel(field),
-                Text::new(format!("{pct:.0}%")),
+                RangeSliderLabel(field),
+                Text::new(value_label),
                 TextFont {
-                    font_size: theme::FONT_MEDIUM,
+                    font_size: theme.typography.medium,
                     ..default()
                 },
                 TextColor(Color::WHITE),
                 Node {
-                    width: Val::Px(45.0),
+                    width: Val::Px(110.0),
                     margin: UiRect::left(Val::Px(8.0)),
                     ..default()
                 },
@@ -536,9 +559,33 @@ pub fn spawn_volume_slider(
     commands.entity(container).add_child(row);
 }
 
+/// Spawns a volume slider row: `[Label:] [====-----------] [50%]`
+pub fn spawn_volume_slider(
+    commands: &mut Commands,
+    container: Entity,
+    label: &str,
+    value: f32,
+    field: SelectorField,
+    nav_index: Option<usize>,
+    theme: &Theme,
+) {
+    let pct = (value * 100.0).round();
+    spawn_range_slider(
+        commands,
+        container,
+        label,
+        value,
+        format!("{pct:.0}%"),
+        field,
+        None,
+        nav_index,
+        theme,
+    );
+}
+
 // ── Name Input Row ──
 
-pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Entity {
+pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str, theme: &Theme) -> Entity {
     commands
         .spawn(Node {
             width: Val::Percent(100.0),
@@ -551,10 +598,10 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Enti
             parent.spawn((
                 Text::new("Name:"),
                 TextFont {
-                    font_size: theme::FONT_MEDIUM,
+                    font_size: theme.typography.medium,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme.colors.text_secondary),
                 Node {
                     width: Val::Px(120.0),
                     ..default()
@@ -571,10 +618,10 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Enti
                     },
                     Button,
                     ui_components::input_node(280.0, 32.0),
-                    ui_components::input_chrome(),
+                    ui_components::input_chrome(theme),
                 ))
                 .with_children(|input| {
-                    spawn_text_input_children(input, current_name);
+                    spawn_text_input_children(input, current_name, theme);
                 });
 
             parent
@@ -586,20 +633,19 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str) -> Enti
                         node.margin = UiRect::left(Val::Px(6.0));
                         node
                     },
-                    ui_components::ghost_button_chrome(ui_components::UiTone::Neutral),
+                    ui_components::ghost_button_chrome(theme, ui_components::UiTone::Neutral),
                 ))
                 .with_children(|btn| {
                     btn.spawn((
                         Text::new("Random"),
                         TextFont {
-                            font_size: theme::FONT_MEDIUM,
+                            font_size: theme.typography.medium,
                             ..default()
                         },
-                        TextColor(theme::ACCENT),
+                        TextColor(theme.colors.accent),
                         Pickable::IGNORE,
                     ));
                 });
         })
         .id()
 }
-

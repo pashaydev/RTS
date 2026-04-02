@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use super::super::helpers::*;
 use crate::components::*;
 use crate::multiplayer::{LobbyState, LobbyStatus, NetRole};
-use crate::theme;
+use crate::theme::Theme;
 use crate::ui::core::components as ui_components;
 use crate::ui::fonts::{self, UiFonts};
 
@@ -12,16 +12,17 @@ use super::super::*;
 
 // ── Multiplayer Page ──
 
-pub(crate) fn spawn_multiplayer_page(commands: &mut Commands, container: Entity, fonts: &UiFonts) {
+pub(crate) fn spawn_multiplayer_page(commands: &mut Commands, container: Entity, fonts: &UiFonts, theme: &Theme) {
     spawn_page_header(
         commands,
         container,
         "MULTIPLAYER",
         MenuButton(MenuAction::Back),
         fonts,
+        theme,
     );
 
-    spawn_animated_section_divider(commands, container, "NETWORK GAME", fonts);
+    spawn_animated_section_divider(commands, container, "NETWORK GAME", fonts, theme);
 
     let desc_text = if cfg!(target_arch = "wasm32") {
         "Join a hosted session from the web client"
@@ -32,10 +33,10 @@ pub(crate) fn spawn_multiplayer_page(commands: &mut Commands, container: Entity,
         .spawn((
             Text::new(desc_text),
             TextFont {
-                font_size: theme::FONT_MEDIUM,
+                font_size: theme.typography.medium,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(theme.colors.text_secondary),
             Node {
                 margin: UiRect::bottom(Val::Px(20.0)),
                 ..default()
@@ -52,6 +53,7 @@ pub(crate) fn spawn_multiplayer_page(commands: &mut Commands, container: Entity,
             MenuButton(MenuAction::HostGame),
             true,
             fonts,
+            theme,
         );
         commands.entity(container).add_child(host_btn);
     }
@@ -62,6 +64,7 @@ pub(crate) fn spawn_multiplayer_page(commands: &mut Commands, container: Entity,
         MenuButton(MenuAction::JoinGame),
         false,
         fonts,
+        theme,
     );
     commands.entity(container).add_child(join_btn);
 }
@@ -74,6 +77,7 @@ pub(crate) fn spawn_host_lobby_page(
     config: &GameSetupConfig,
     fonts: &UiFonts,
     lobby: &LobbyState,
+    theme: &Theme,
 ) {
     spawn_page_header(
         commands,
@@ -81,9 +85,10 @@ pub(crate) fn spawn_host_lobby_page(
         "HOST LOBBY",
         MenuButton(MenuAction::CancelHost),
         fonts,
+        theme,
     );
 
-    spawn_animated_section_divider(commands, container, "SESSION CODE", fonts);
+    spawn_animated_section_divider(commands, container, "SESSION CODE", fonts, theme);
 
     let code_row = commands
         .spawn(Node {
@@ -107,24 +112,24 @@ pub(crate) fn spawn_host_lobby_page(
                     font_size: 24.0,
                     ..default()
                 },
-                TextColor(theme::ACCENT),
+                TextColor(theme.colors.accent),
             ));
             parent
                 .spawn((
                     CopyCodeButton,
                     Button,
                     ui_components::compact_button_node(14.0, 7.0),
-                    ui_components::filled_button_chrome(ui_components::UiTone::Neutral),
+                    ui_components::filled_button_chrome(theme, ui_components::UiTone::Neutral),
                 ))
                 .with_children(|btn| {
                     btn.spawn((
                         CopyCodeLabel,
                         Text::new("COPY"),
                         TextFont {
-                            font_size: theme::FONT_MEDIUM,
+                            font_size: theme.typography.medium,
                             ..default()
                         },
-                        TextColor(theme::TEXT_SECONDARY),
+                        TextColor(theme.colors.text_secondary),
                         Pickable::IGNORE,
                     ));
                 });
@@ -136,10 +141,10 @@ pub(crate) fn spawn_host_lobby_page(
         .spawn((
             Text::new("Share this code with native players on your network\nFor VPN/Hamachi: use the VPN IP shown below"),
             TextFont {
-                font_size: theme::FONT_SMALL,
+                font_size: theme.typography.small,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(theme.colors.text_secondary),
             Node {
                 margin: UiRect::bottom(Val::Px(4.0)),
                 ..default()
@@ -154,7 +159,7 @@ pub(crate) fn spawn_host_lobby_page(
             WebClientUrlText,
             Text::new(""),
             TextFont {
-                font_size: theme::FONT_MEDIUM,
+                font_size: theme.typography.medium,
                 ..default()
             },
             TextColor(Color::srgb(0.4, 0.9, 0.4)),
@@ -188,12 +193,12 @@ pub(crate) fn spawn_host_lobby_page(
                 let color = if *is_vpn {
                     Color::srgb(0.4, 0.9, 0.4)
                 } else {
-                    theme::TEXT_SECONDARY
+                    theme.colors.text_secondary
                 };
                 parent.spawn((
                     Text::new(label),
                     TextFont {
-                        font_size: theme::FONT_SMALL,
+                        font_size: theme.typography.small,
                         ..default()
                     },
                     TextColor(color),
@@ -203,7 +208,7 @@ pub(crate) fn spawn_host_lobby_page(
         .id();
     commands.entity(container).add_child(ip_list);
 
-    spawn_animated_section_divider(commands, container, "FACTIONS", fonts);
+    spawn_animated_section_divider(commands, container, "FACTIONS", fonts, theme);
 
     let slots_wrap = commands
         .spawn((
@@ -218,12 +223,12 @@ pub(crate) fn spawn_host_lobby_page(
     commands.entity(container).add_child(slots_wrap);
 
     for i in 0..4 {
-        pages::spawn_slot_card(commands, slots_wrap, i, config, true);
+        pages::spawn_slot_card(commands, slots_wrap, i, config, true, theme);
     }
 
     // ── World Settings ──
 
-    spawn_animated_section_divider(commands, container, "WORLD", fonts);
+    spawn_animated_section_divider(commands, container, "WORLD", fonts, theme);
 
     let map_idx = match config.map_size {
         MapSize::Small => 0,
@@ -237,6 +242,7 @@ pub(crate) fn spawn_host_lobby_page(
         &["Small", "Medium", "Large"],
         map_idx,
         SelectorField::MapSize,
+        theme,
     );
 
     let res_idx = match config.resource_density {
@@ -251,6 +257,7 @@ pub(crate) fn spawn_host_lobby_page(
         &["Sparse", "Normal", "Dense"],
         res_idx,
         SelectorField::ResourceDensity,
+        theme,
     );
 
     let day_idx = DAY_CYCLE_OPTIONS
@@ -265,6 +272,7 @@ pub(crate) fn spawn_host_lobby_page(
         &day_labels,
         day_idx,
         SelectorField::DayCycle,
+        theme,
     );
 
     let start_idx = STARTING_RES_OPTIONS
@@ -279,19 +287,20 @@ pub(crate) fn spawn_host_lobby_page(
         &start_labels,
         start_idx,
         SelectorField::StartingRes,
+        theme,
     );
 
-    spawn_animated_section_divider(commands, container, "", fonts);
+    spawn_animated_section_divider(commands, container, "", fonts, theme);
 
     let status = commands
         .spawn((
             LobbyStatusText,
             Text::new("Waiting for players..."),
             TextFont {
-                font_size: theme::FONT_MEDIUM,
+                font_size: theme.typography.medium,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(theme.colors.text_secondary),
             Node {
                 margin: UiRect::vertical(Val::Px(8.0)),
                 ..default()
@@ -304,10 +313,10 @@ pub(crate) fn spawn_host_lobby_page(
         .spawn((
             MenuButton(MenuAction::StartMultiplayer),
             Button,
-            ButtonAnimState::new(theme::ACCENT.to_srgba().to_f32_array()),
+            ButtonAnimState::new(theme.colors.accent.to_srgba().to_f32_array()),
             ButtonStyle::Filled,
             UiGlowPulse {
-                color: theme::ACCENT,
+                color: theme.colors.accent,
                 intensity: 0.6,
             },
             Node {
@@ -318,7 +327,7 @@ pub(crate) fn spawn_host_lobby_page(
                 margin: UiRect::top(Val::Px(12.0)),
                 ..default()
             },
-            BackgroundColor(theme::ACCENT),
+            BackgroundColor(theme.colors.accent),
             BoxShadow::new(
                 Color::srgba(0.29, 0.62, 1.0, 0.3),
                 Val::Px(0.0),
@@ -330,7 +339,7 @@ pub(crate) fn spawn_host_lobby_page(
         .with_children(|parent| {
             parent.spawn((
                 Text::new("START GAME"),
-                fonts::heading(fonts, theme::FONT_BUTTON),
+                fonts::heading(fonts, theme.typography.button),
                 TextColor(Color::WHITE),
                 Pickable::IGNORE,
             ));
@@ -349,6 +358,7 @@ pub(crate) fn spawn_join_lobby_page(
     lobby: &LobbyState,
     role: NetRole,
     my_faction: Option<Faction>,
+    theme: &Theme,
 ) {
     let is_connected = matches!(lobby.status, LobbyStatus::Connected) || role == NetRole::Client;
     let is_connecting = matches!(lobby.status, LobbyStatus::Connecting);
@@ -360,35 +370,36 @@ pub(crate) fn spawn_join_lobby_page(
         "JOIN GAME",
         MenuButton(MenuAction::BackToMultiplayer),
         fonts,
+        theme,
     );
 
     // ── Connection state banner ──
     let (banner_dot_color, banner_text, banner_text_color, banner_bg) = if is_connected {
         (
-            theme::SUCCESS,
+            theme.colors.success,
             "CONNECTED".to_string(),
-            theme::SUCCESS,
+            theme.colors.success,
             Color::srgba(0.15, 0.35, 0.15, 0.4),
         )
     } else if is_connecting {
         (
-            theme::WARNING,
+            theme.colors.warning,
             "CONNECTING...".to_string(),
-            theme::WARNING,
+            theme.colors.warning,
             Color::srgba(0.35, 0.25, 0.1, 0.4),
         )
     } else if is_failed {
         (
-            theme::DESTRUCTIVE,
+            theme.colors.destructive,
             "DISCONNECTED".to_string(),
-            theme::DESTRUCTIVE,
+            theme.colors.destructive,
             Color::srgba(0.35, 0.15, 0.15, 0.4),
         )
     } else {
         (
-            theme::TEXT_SECONDARY,
+            theme.colors.text_secondary,
             "NOT CONNECTED".to_string(),
-            theme::TEXT_SECONDARY,
+            theme.colors.text_secondary,
             Color::srgba(0.2, 0.2, 0.2, 0.4),
         )
     };
@@ -424,14 +435,14 @@ pub(crate) fn spawn_join_lobby_page(
             ));
             if is_connecting {
                 dot.insert(UiGlowPulse {
-                    color: theme::WARNING,
+                    color: theme.colors.warning,
                     intensity: 0.8,
                 });
             }
             parent.spawn((
                 Text::new(banner_text),
                 TextFont {
-                    font_size: theme::FONT_MEDIUM,
+                    font_size: theme.typography.medium,
                     ..default()
                 },
                 TextColor(banner_text_color),
@@ -441,7 +452,7 @@ pub(crate) fn spawn_join_lobby_page(
         .id();
     commands.entity(container).add_child(banner);
 
-    spawn_animated_section_divider(commands, container, "SESSION CODE", fonts);
+    spawn_animated_section_divider(commands, container, "SESSION CODE", fonts, theme);
 
     // ── Conditional input vs read-only display ──
     if is_connected || is_connecting {
@@ -464,18 +475,18 @@ pub(crate) fn spawn_join_lobby_page(
                 parent.spawn((
                     Text::new("Session:"),
                     TextFont {
-                        font_size: theme::FONT_MEDIUM,
+                        font_size: theme.typography.medium,
                         ..default()
                     },
-                    TextColor(theme::TEXT_SECONDARY),
+                    TextColor(theme.colors.text_secondary),
                 ));
                 parent.spawn((
                     Text::new(code_display),
                     TextFont {
-                        font_size: theme::FONT_MEDIUM,
+                        font_size: theme.typography.medium,
                         ..default()
                     },
-                    TextColor(theme::ACCENT),
+                    TextColor(theme.colors.accent),
                 ));
             })
             .id();
@@ -495,10 +506,10 @@ pub(crate) fn spawn_join_lobby_page(
                 parent.spawn((
                     Text::new("Code:"),
                     TextFont {
-                        font_size: theme::FONT_MEDIUM,
+                        font_size: theme.typography.medium,
                         ..default()
                     },
-                    TextColor(theme::TEXT_SECONDARY),
+                    TextColor(theme.colors.text_secondary),
                     Node {
                         width: Val::Px(80.0),
                         ..default()
@@ -516,10 +527,10 @@ pub(crate) fn spawn_join_lobby_page(
                         },
                         Button,
                         ui_components::input_node(240.0, 32.0),
-                        ui_components::input_chrome(),
+                        ui_components::input_chrome(theme),
                     ))
                     .with_children(|input| {
-                        crate::ui::core::text_input::spawn_text_input_children(input, "");
+                        crate::ui::core::text_input::spawn_text_input_children(input, "", theme);
                     });
 
                 // Paste button
@@ -528,16 +539,16 @@ pub(crate) fn spawn_join_lobby_page(
                         PasteCodeButton,
                         Button,
                         ui_components::compact_button_node(10.0, 6.0),
-                        ui_components::filled_button_chrome(ui_components::UiTone::Neutral),
+                        ui_components::filled_button_chrome(theme, ui_components::UiTone::Neutral),
                     ))
                     .with_children(|btn| {
                         btn.spawn((
                             Text::new("PASTE"),
                             TextFont {
-                                font_size: theme::FONT_SMALL,
+                                font_size: theme.typography.small,
                                 ..default()
                             },
-                            TextColor(theme::TEXT_PRIMARY),
+                            TextColor(theme.colors.text_primary),
                             Pickable::IGNORE,
                         ));
                     });
@@ -548,16 +559,16 @@ pub(crate) fn spawn_join_lobby_page(
                         ClearCodeButton,
                         Button,
                         ui_components::compact_button_node(10.0, 6.0),
-                        ui_components::ghost_button_chrome(ui_components::UiTone::Neutral),
+                        ui_components::ghost_button_chrome(theme, ui_components::UiTone::Neutral),
                     ))
                     .with_children(|btn| {
                         btn.spawn((
                             Text::new("CLEAR"),
                             TextFont {
-                                font_size: theme::FONT_SMALL,
+                                font_size: theme.typography.small,
                                 ..default()
                             },
-                            TextColor(theme::TEXT_SECONDARY),
+                            TextColor(theme.colors.text_secondary),
                             Pickable::IGNORE,
                         ));
                     });
@@ -581,13 +592,13 @@ pub(crate) fn spawn_join_lobby_page(
                         node.border_radius = BorderRadius::all(Val::Px(8.0));
                         node
                     },
-                    ui_components::ghost_button_chrome(ui_components::UiTone::Neutral),
+                    ui_components::ghost_button_chrome(theme, ui_components::UiTone::Neutral),
                 ))
                 .with_children(|parent| {
                     parent.spawn((
                         Text::new("FIND LAN HOSTS"),
-                        fonts::heading(fonts, theme::FONT_MEDIUM),
-                        TextColor(theme::TEXT_PRIMARY),
+                        fonts::heading(fonts, theme.typography.medium),
+                        TextColor(theme.colors.text_primary),
                         Pickable::IGNORE,
                     ));
                 })
@@ -620,6 +631,7 @@ pub(crate) fn spawn_join_lobby_page(
             &["Any", "1", "2", "3", "4"],
             0,
             SelectorField::PreferredFaction,
+            theme,
         );
     }
 
@@ -629,7 +641,7 @@ pub(crate) fn spawn_join_lobby_page(
             .spawn((
                 MenuButton(MenuAction::Disconnect),
                 Button,
-                ButtonAnimState::new(theme::DESTRUCTIVE.to_srgba().to_f32_array()),
+                ButtonAnimState::new(theme.colors.destructive.to_srgba().to_f32_array()),
                 ButtonStyle::Filled,
                 Node {
                     width: Val::Px(220.0),
@@ -639,12 +651,12 @@ pub(crate) fn spawn_join_lobby_page(
                     margin: UiRect::vertical(Val::Px(6.0)),
                     ..default()
                 },
-                BackgroundColor(theme::DESTRUCTIVE),
+                BackgroundColor(theme.colors.destructive),
             ))
             .with_children(|parent| {
                 parent.spawn((
                     Text::new("DISCONNECT"),
-                    fonts::heading(fonts, theme::FONT_BUTTON),
+                    fonts::heading(fonts, theme.typography.button),
                     TextColor(Color::WHITE),
                     Pickable::IGNORE,
                 ));
@@ -658,27 +670,28 @@ pub(crate) fn spawn_join_lobby_page(
             MenuButton(MenuAction::ConnectToHost),
             true,
             fonts,
+            theme,
         );
         commands.entity(container).add_child(connect_btn);
     }
 
-    spawn_animated_section_divider(commands, container, "STATUS", fonts);
+    spawn_animated_section_divider(commands, container, "STATUS", fonts, theme);
 
     // ── Color-coded status text ──
     let (status_text, status_color) = match &lobby.status {
         LobbyStatus::Connected => (
             "Connected! Waiting for host to start...".to_string(),
-            theme::SUCCESS,
+            theme.colors.success,
         ),
-        LobbyStatus::Connecting => ("Connecting...".to_string(), theme::WARNING),
-        LobbyStatus::Failed(e) => (format!("Failed: {}", e), theme::DESTRUCTIVE),
+        LobbyStatus::Connecting => ("Connecting...".to_string(), theme.colors.warning),
+        LobbyStatus::Failed(e) => (format!("Failed: {}", e), theme.colors.destructive),
         LobbyStatus::Waiting => (
             if cfg!(target_arch = "wasm32") {
                 "Enter a hosted session code and press CONNECT".to_string()
             } else {
                 "Enter the host's session code or scan your LAN and press CONNECT".to_string()
             },
-            theme::TEXT_SECONDARY,
+            theme.colors.text_secondary,
         ),
     };
 
@@ -687,7 +700,7 @@ pub(crate) fn spawn_join_lobby_page(
             LobbyStatusText,
             Text::new(status_text),
             TextFont {
-                font_size: theme::FONT_MEDIUM,
+                font_size: theme.typography.medium,
                 ..default()
             },
             TextColor(status_color),
@@ -706,10 +719,10 @@ pub(crate) fn spawn_join_lobby_page(
                 ConnectionElapsedText,
                 Text::new("Elapsed: 0s"),
                 TextFont {
-                    font_size: theme::FONT_SMALL,
+                    font_size: theme.typography.small,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme.colors.text_secondary),
                 Node {
                     margin: UiRect::bottom(Val::Px(8.0)),
                     ..default()
@@ -726,10 +739,10 @@ pub(crate) fn spawn_join_lobby_page(
                 LobbyPingText,
                 Text::new("Ping: --ms"),
                 TextFont {
-                    font_size: theme::FONT_SMALL,
+                    font_size: theme.typography.small,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme.colors.text_secondary),
                 Node {
                     margin: UiRect::bottom(Val::Px(8.0)),
                     ..default()
@@ -739,10 +752,10 @@ pub(crate) fn spawn_join_lobby_page(
         commands.entity(container).add_child(ping);
     }
 
-    spawn_animated_section_divider(commands, container, "FACTIONS", fonts);
+    spawn_animated_section_divider(commands, container, "FACTIONS", fonts, theme);
 
     for i in 0..4 {
-        spawn_client_slot_card(commands, container, i, config, lobby, my_faction);
+        spawn_client_slot_card(commands, container, i, config, lobby, my_faction, theme);
     }
 }
 
@@ -756,6 +769,7 @@ fn spawn_client_slot_card(
     config: &GameSetupConfig,
     lobby: &LobbyState,
     my_faction: Option<Faction>,
+    theme: &Theme,
 ) {
     let slot = config.slots[slot_index];
     let faction = Faction::PLAYERS[slot_index];
@@ -798,9 +812,9 @@ fn spawn_client_slot_card(
         .unwrap_or(team_colors[0]);
 
     let border_color = if is_me {
-        theme::ACCENT
+        theme.colors.accent
     } else {
-        theme::SEPARATOR
+        theme.colors.separator
     };
 
     let card = commands
@@ -816,14 +830,14 @@ fn spawn_client_slot_card(
                 column_gap: Val::Px(8.0),
                 ..default()
             },
-            ui_components::card_chrome(border_color),
+            ui_components::card_chrome(theme, border_color),
         ))
         .with_children(|card| {
             if let Some(player) = lobby_player {
                 let dot_color = if player.connected {
-                    theme::SUCCESS
+                    theme.colors.success
                 } else {
-                    theme::DESTRUCTIVE
+                    theme.colors.destructive
                 };
                 card.spawn((
                     ui_components::badge_node(8.0, 4.0),
@@ -837,18 +851,18 @@ fn spawn_client_slot_card(
             card.spawn((
                 Text::new(display_name),
                 TextFont {
-                    font_size: theme::FONT_MEDIUM,
+                    font_size: theme.typography.medium,
                     ..default()
                 },
-                TextColor(if is_me { theme::ACCENT } else { faction_color }),
+                TextColor(if is_me { theme.colors.accent } else { faction_color }),
             ));
             card.spawn((
                 Text::new(type_label),
                 TextFont {
-                    font_size: theme::FONT_SMALL,
+                    font_size: theme.typography.small,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme.colors.text_secondary),
             ));
             card.spawn(Node {
                 flex_grow: 1.0,

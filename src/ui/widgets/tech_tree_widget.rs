@@ -5,7 +5,7 @@ use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
 use crate::blueprints::BlueprintRegistry;
 use crate::components::*;
-use crate::theme;
+use crate::theme::{self, Theme};
 
 pub struct TechTreeWidgetPlugin;
 
@@ -25,6 +25,7 @@ fn spawn_tech_tree_widget(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
+    theme: Res<Theme>,
     root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
     let Ok(hud_root) = root_q.single() else {
@@ -37,6 +38,7 @@ fn spawn_tech_tree_widget(
         registry.slots.get(&WidgetId::TechTree).unwrap(),
         registry.is_visible(WidgetId::TechTree),
         &fonts,
+        &theme,
     );
 }
 
@@ -48,6 +50,7 @@ pub fn update_tech_tree(
     active_player: Res<ActivePlayer>,
     base_state: Res<FactionBaseState>,
     icons: Res<IconAssets>,
+    theme: Res<Theme>,
     widget_q: Query<(&super::widget_framework::Widget, &Children)>,
     content_q: Query<Entity, With<super::widget_framework::WidgetContent>>,
     existing: Query<Entity, With<TechTreeContent>>,
@@ -114,11 +117,11 @@ pub fn update_tech_tree(
         };
 
         let (border_color, text_color) = if is_built {
-            (theme::SUCCESS, theme::TEXT_PRIMARY)
+            (theme.colors.success, theme.colors.text_primary)
         } else if prereq_met {
-            (theme::WARNING, theme::TEXT_PRIMARY)
+            (theme.colors.warning, theme.colors.text_primary)
         } else {
-            (theme::TEXT_DISABLED, theme::TEXT_DISABLED)
+            (theme.colors.text_disabled, theme.colors.text_disabled)
         };
 
         // Indent based on prerequisite depth
@@ -225,9 +228,9 @@ pub fn update_tech_tree(
     commands.entity(content).add_child(legend);
 
     for (color, label) in [
-        (theme::SUCCESS, "Built"),
-        (theme::WARNING, "Available"),
-        (theme::TEXT_DISABLED, "Locked"),
+        (theme.colors.success, "Built"),
+        (theme.colors.warning, "Available"),
+        (theme.colors.text_disabled, "Locked"),
     ] {
         let item = commands
             .spawn(Node {
@@ -259,7 +262,7 @@ pub fn update_tech_tree(
                     font_size: theme::FONT_TINY,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme.colors.text_secondary),
             ))
             .id();
         commands.entity(item).add_child(text);

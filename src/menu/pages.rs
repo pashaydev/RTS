@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use super::helpers::*;
 use crate::components::*;
-use crate::theme;
+use crate::theme::Theme;
 use crate::ui::core::components as ui_components;
 use crate::ui::fonts::{self, UiFonts};
 
@@ -11,12 +11,12 @@ use super::*;
 
 // ── Title Page ──
 
-pub(crate) fn spawn_title_page(commands: &mut Commands, container: Entity, fonts: &UiFonts) {
+pub(crate) fn spawn_title_page(commands: &mut Commands, container: Entity, fonts: &UiFonts, theme: &Theme) {
     let title = commands
         .spawn((
             TitleShimmer { phase_offset: 0.0 },
             Text::new("RTS PROTOTYPE"),
-            fonts::heading(fonts, theme::FONT_DISPLAY),
+            fonts::heading(fonts, theme.typography.display),
             TextColor(Color::WHITE),
             Node {
                 margin: UiRect::bottom(Val::Px(8.0)),
@@ -34,8 +34,8 @@ pub(crate) fn spawn_title_page(commands: &mut Commands, container: Entity, fonts
     let subtitle = commands
         .spawn((
             Text::new("COMMAND YOUR EMPIRE"),
-            fonts::body_emphasis(fonts, theme::FONT_BODY),
-            TextColor(theme::TEXT_SECONDARY),
+            fonts::body_emphasis(fonts, theme.typography.body),
+            TextColor(theme.colors.text_secondary),
             Node {
                 margin: UiRect::bottom(Val::Px(16.0)),
                 ..default()
@@ -57,7 +57,7 @@ pub(crate) fn spawn_title_page(commands: &mut Commands, container: Entity, fonts
                 align_self: AlignSelf::Center,
                 ..default()
             },
-            BackgroundColor(theme::ACCENT),
+            BackgroundColor(theme.colors.accent),
         ))
         .id();
     commands.entity(container).add_child(sep);
@@ -72,18 +72,18 @@ pub(crate) fn spawn_title_page(commands: &mut Commands, container: Entity, fonts
     .enumerate()
     {
         let btn =
-            spawn_styled_button_nav(commands, label, MenuButton(*action), false, fonts, Some(i));
+            spawn_styled_button_nav(commands, label, MenuButton(*action), false, fonts, Some(i), theme);
         commands.entity(container).add_child(btn);
     }
 
     // Controls hint
-    spawn_controls_hint(commands, container, fonts);
+    spawn_controls_hint(commands, container, fonts, theme);
 
     let ver = commands
         .spawn((
             Text::new("v0.1"),
-            fonts::body(fonts, theme::FONT_BODY),
-            TextColor(theme::TEXT_SECONDARY),
+            fonts::body(fonts, theme.typography.body),
+            TextColor(theme.colors.text_secondary),
             Node {
                 margin: UiRect::top(Val::Px(20.0)),
                 ..default()
@@ -100,6 +100,7 @@ pub(crate) fn spawn_new_game_page(
     container: Entity,
     config: &GameSetupConfig,
     fonts: &UiFonts,
+    theme: &Theme,
 ) {
     spawn_page_header(
         commands,
@@ -107,14 +108,15 @@ pub(crate) fn spawn_new_game_page(
         "NEW GAME",
         MenuButton(MenuAction::Back),
         fonts,
+        theme,
     );
 
-    spawn_animated_section_divider(commands, container, "PLAYER", fonts);
+    spawn_animated_section_divider(commands, container, "PLAYER", fonts, theme);
 
-    let name_row = spawn_name_input_row(commands, &config.player_name);
+    let name_row = spawn_name_input_row(commands, &config.player_name, theme);
     commands.entity(container).add_child(name_row);
 
-    spawn_animated_section_divider(commands, container, "FACTIONS", fonts);
+    spawn_animated_section_divider(commands, container, "FACTIONS", fonts, theme);
 
     let slots_wrap = commands
         .spawn((
@@ -129,7 +131,7 @@ pub(crate) fn spawn_new_game_page(
     commands.entity(container).add_child(slots_wrap);
 
     for i in 0..4 {
-        spawn_slot_card(commands, slots_wrap, i, config, false);
+        spawn_slot_card(commands, slots_wrap, i, config, false, theme);
     }
 
     let team_idx = match config.team_mode {
@@ -145,9 +147,10 @@ pub(crate) fn spawn_new_game_page(
         team_idx,
         SelectorField::TeamMode,
         Some(1),
+        theme,
     );
 
-    spawn_animated_section_divider(commands, container, "WORLD", fonts);
+    spawn_animated_section_divider(commands, container, "WORLD", fonts, theme);
 
     let map_idx = match config.map_size {
         MapSize::Small => 0,
@@ -162,6 +165,7 @@ pub(crate) fn spawn_new_game_page(
         map_idx,
         SelectorField::MapSize,
         Some(2),
+        theme,
     );
 
     let res_idx = match config.resource_density {
@@ -177,6 +181,7 @@ pub(crate) fn spawn_new_game_page(
         res_idx,
         SelectorField::ResourceDensity,
         Some(3),
+        theme,
     );
 
     let day_idx = DAY_CYCLE_OPTIONS
@@ -192,6 +197,7 @@ pub(crate) fn spawn_new_game_page(
         day_idx,
         SelectorField::DayCycle,
         Some(4),
+        theme,
     );
 
     let start_idx = STARTING_RES_OPTIONS
@@ -207,6 +213,7 @@ pub(crate) fn spawn_new_game_page(
         start_idx,
         SelectorField::StartingRes,
         Some(5),
+        theme,
     );
 
     // Seed row
@@ -227,10 +234,10 @@ pub(crate) fn spawn_new_game_page(
             parent.spawn((
                 Text::new("Seed:"),
                 TextFont {
-                    font_size: theme::FONT_MEDIUM,
+                    font_size: theme.typography.medium,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme.colors.text_secondary),
                 Node {
                     width: Val::Px(120.0),
                     ..default()
@@ -240,10 +247,10 @@ pub(crate) fn spawn_new_game_page(
                 SeedDisplay,
                 Text::new(seed_text),
                 TextFont {
-                    font_size: theme::FONT_MEDIUM,
+                    font_size: theme.typography.medium,
                     ..default()
                 },
-                TextColor(theme::TEXT_PRIMARY),
+                TextColor(theme.colors.text_primary),
                 Node {
                     width: Val::Px(140.0),
                     ..default()
@@ -253,23 +260,23 @@ pub(crate) fn spawn_new_game_page(
                 .spawn((
                     RandomizeSeedButton,
                     Button,
-                    ButtonAnimState::new(theme::BTN_PRIMARY.to_srgba().to_f32_array()),
+                    ButtonAnimState::new(theme.colors.btn_primary.to_srgba().to_f32_array()),
                     ButtonStyle::Filled,
                     Node {
                         padding: UiRect::axes(Val::Px(14.0), Val::Px(7.0)),
                         margin: UiRect::horizontal(Val::Px(2.0)),
                         ..default()
                     },
-                    BackgroundColor(theme::BTN_PRIMARY),
+                    BackgroundColor(theme.colors.btn_primary),
                 ))
                 .with_children(|btn| {
                     btn.spawn((
                         Text::new("Randomize"),
                         TextFont {
-                            font_size: theme::FONT_MEDIUM,
+                            font_size: theme.typography.medium,
                             ..default()
                         },
-                        TextColor(theme::TEXT_SECONDARY),
+                        TextColor(theme.colors.text_secondary),
                         Pickable::IGNORE,
                     ));
                 });
@@ -283,10 +290,10 @@ pub(crate) fn spawn_new_game_page(
             MenuButton(MenuAction::StartGame),
             NavFocusable(6),
             Button,
-            ButtonAnimState::new(theme::ACCENT.to_srgba().to_f32_array()),
+            ButtonAnimState::new(theme.colors.accent.to_srgba().to_f32_array()),
             ButtonStyle::Filled,
             UiGlowPulse {
-                color: theme::ACCENT,
+                color: theme.colors.accent,
                 intensity: 0.6,
             },
             Node {
@@ -302,7 +309,7 @@ pub(crate) fn spawn_new_game_page(
                 border: UiRect::all(Val::Px(2.0)),
                 ..default()
             },
-            BackgroundColor(theme::ACCENT),
+            BackgroundColor(theme.colors.accent),
             BorderColor::all(Color::NONE),
             BoxShadow::new(
                 Color::srgba(0.29, 0.62, 1.0, 0.3),
@@ -315,7 +322,7 @@ pub(crate) fn spawn_new_game_page(
         .with_children(|parent| {
             parent.spawn((
                 Text::new("START GAME"),
-                fonts::heading(fonts, theme::FONT_BUTTON),
+                fonts::heading(fonts, theme.typography.button),
                 TextColor(Color::WHITE),
                 Pickable::IGNORE,
             ));
@@ -338,6 +345,7 @@ pub(crate) fn spawn_slot_card(
     slot_index: usize,
     config: &GameSetupConfig,
     is_multiplayer: bool,
+    theme: &Theme,
 ) {
     let slot = config.slots[slot_index];
     let faction_color = Faction::PLAYERS[slot_index].color();
@@ -375,16 +383,16 @@ pub(crate) fn spawn_slot_card(
     let is_local = slot_index == config.local_player_slot && matches!(slot, SlotOccupant::Human);
 
     let border_col = if is_local || is_you {
-        theme::ACCENT
+        theme.colors.accent
     } else {
-        theme::SEPARATOR
+        theme.colors.separator
     };
 
     let card = commands
         .spawn((
             SlotCardContainer(slot_index),
             ui_components::card_node(),
-            ui_components::card_chrome(border_col),
+            ui_components::card_chrome(theme, border_col),
         ))
         .with_children(|card| {
             // Row 1: faction dot + label + type selector + team toggle
@@ -420,7 +428,7 @@ pub(crate) fn spawn_slot_card(
                 row.spawn((
                     Text::new(faction_label),
                     TextFont {
-                        font_size: theme::FONT_MEDIUM,
+                        font_size: theme.typography.medium,
                         ..default()
                     },
                     TextColor(faction_color),
@@ -437,7 +445,7 @@ pub(crate) fn spawn_slot_card(
                     let text_color = if is_selected {
                         Color::WHITE
                     } else {
-                        theme::TEXT_SECONDARY
+                        theme.colors.text_secondary
                     };
 
                     let mut btn = row.spawn((
@@ -448,9 +456,9 @@ pub(crate) fn spawn_slot_card(
                         Button,
                         ui_components::compact_button_node_with_margin(10.0, 5.0, 1.0),
                         if is_selected {
-                            ui_components::filled_button_chrome(ui_components::UiTone::Accent)
+                            ui_components::filled_button_chrome(theme, ui_components::UiTone::Accent)
                         } else {
-                            ui_components::filled_button_chrome(ui_components::UiTone::Neutral)
+                            ui_components::filled_button_chrome(theme, ui_components::UiTone::Neutral)
                         },
                     ));
                     if is_selected {
@@ -460,7 +468,7 @@ pub(crate) fn spawn_slot_card(
                         btn_parent.spawn((
                             Text::new(opt),
                             TextFont {
-                                font_size: theme::FONT_SMALL,
+                                font_size: theme.typography.small,
                                 ..default()
                             },
                             TextColor(text_color),
@@ -544,13 +552,13 @@ pub(crate) fn spawn_slot_card(
                             node.margin = UiRect::left(Val::Px(4.0));
                             node
                         },
-                        ui_components::filled_button_chrome(ui_components::UiTone::Destructive),
+                        ui_components::filled_button_chrome(theme, ui_components::UiTone::Destructive),
                     ))
                     .with_children(|btn| {
                         btn.spawn((
                             Text::new("X"),
                             TextFont {
-                                font_size: theme::FONT_TINY,
+                                font_size: theme.typography.tiny,
                                 ..default()
                             },
                             TextColor(Color::WHITE),
@@ -577,10 +585,10 @@ pub(crate) fn spawn_slot_card(
                     row.spawn((
                         Text::new("Difficulty:"),
                         TextFont {
-                            font_size: theme::FONT_MEDIUM,
+                            font_size: theme.typography.medium,
                             ..default()
                         },
-                        TextColor(theme::TEXT_SECONDARY),
+                        TextColor(theme.colors.text_secondary),
                         Node {
                             width: Val::Px(80.0),
                             margin: UiRect::right(Val::Px(10.0)),
@@ -594,7 +602,7 @@ pub(crate) fn spawn_slot_card(
                         let text_color = if is_selected {
                             Color::WHITE
                         } else {
-                            theme::TEXT_SECONDARY
+                            theme.colors.text_secondary
                         };
 
                         let mut btn = row.spawn((
@@ -605,9 +613,9 @@ pub(crate) fn spawn_slot_card(
                             Button,
                             ui_components::compact_button_node_with_margin(14.0, 7.0, 2.0),
                             if is_selected {
-                                ui_components::filled_button_chrome(ui_components::UiTone::Accent)
+                                ui_components::filled_button_chrome(theme, ui_components::UiTone::Accent)
                             } else {
-                                ui_components::filled_button_chrome(ui_components::UiTone::Neutral)
+                                ui_components::filled_button_chrome(theme, ui_components::UiTone::Neutral)
                             },
                         ));
                         if is_selected {
@@ -617,7 +625,7 @@ pub(crate) fn spawn_slot_card(
                             btn_parent.spawn((
                                 Text::new(opt),
                                 TextFont {
-                                    font_size: theme::FONT_MEDIUM,
+                                    font_size: theme.typography.medium,
                                     ..default()
                                 },
                                 TextColor(text_color),

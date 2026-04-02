@@ -157,6 +157,8 @@ fn distance_lod_system(
             Has<MatureTree>,
             Has<GrowingTree>,
             Has<Sapling>,
+            Has<WaterPlane>,
+            Option<&CullingBounds>,
             Option<&mut CullReason>,
         ),
         Or<(
@@ -178,14 +180,24 @@ fn distance_lod_system(
     };
     let cam_pos = cam_gtf.translation();
 
-    for (gtf, mut visibility, is_decoration, is_deco_chunk, is_frustum_culled, is_mature_tree, is_growing_tree, is_sapling, cull_reason) in
+    for (gtf, mut visibility, is_decoration, is_deco_chunk, is_frustum_culled, is_mature_tree, is_growing_tree, is_sapling, is_water, bounds, cull_reason) in
         &mut entities
     {
         if is_frustum_culled {
             continue;
         }
 
-        let pos = gtf.translation();
+        // Water planes are large terrain features — skip distance LOD entirely.
+        // They are already handled by frustum culling with proper bounding spheres.
+        if is_water {
+            continue;
+        }
+
+        let pos = if let Some(b) = bounds {
+            gtf.translation() + b.center_offset
+        } else {
+            gtf.translation()
+        };
         let dist_sq = (cam_pos - pos).length_squared();
         let is_tree = is_mature_tree || is_growing_tree || is_sapling;
         let threshold = if is_decoration || is_deco_chunk {

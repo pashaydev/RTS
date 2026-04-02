@@ -5,7 +5,7 @@ use super::core::framework::{WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
 use super::core::interactions::UiClickEvent;
 use crate::components::AppState;
-use crate::theme;
+use crate::theme::{self, Theme};
 use crate::ui::fonts::{self, UiFonts};
 
 pub struct WidgetToolbarPlugin;
@@ -28,12 +28,13 @@ impl Plugin for WidgetToolbarPlugin {
 fn spawn_toolbar_widget(
     mut commands: Commands,
     fonts: Res<UiFonts>,
+    theme: Res<Theme>,
     root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
     let Ok(hud_root) = root_q.single() else {
         return;
     };
-    spawn_toolbar(&mut commands, hud_root, &fonts);
+    spawn_toolbar(&mut commands, hud_root, &fonts, &theme);
 }
 
 #[derive(Component)]
@@ -46,7 +47,7 @@ pub struct WidgetToolbarButton(pub WidgetId);
 #[derive(Component)]
 pub struct ToolbarContainer;
 
-pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts) {
+pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts, theme: &Theme) {
     let anchor = commands
         .spawn((
             ToolbarContainer,
@@ -120,7 +121,7 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts) {
                 btn.spawn((
                     Text::new(format!("{} {}", id.icon(), hotkey_name)),
                     fonts::toolbar(fonts),
-                    TextColor(theme::TEXT_SECONDARY),
+                    TextColor(theme.colors.text_secondary),
                 ));
             })
             .id();

@@ -10,7 +10,7 @@ use crate::multiplayer::{
     matchbox_transport::{self, MatchboxInbox, PeerMap},
     ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole,
 };
-use crate::theme;
+use crate::theme::Theme;
 use crate::ui::core::text_input::{clipboard_read, clipboard_write};
 
 use super::super::*;
@@ -58,6 +58,7 @@ pub(crate) fn update_lobby_ui(
         Option<Res<PreferredFaction>>,
         Option<ResMut<CountdownState>>,
     ),
+    theme: Res<Theme>,
 ) {
     let (mut socket, mut peer_map, mut inbox) = matchbox;
     let (pending_start, pending_broadcast) = pending;
@@ -84,13 +85,13 @@ pub(crate) fn update_lobby_ui(
                     let color = if *is_vpn {
                         Color::srgb(0.4, 0.9, 0.4)
                     } else {
-                        theme::TEXT_SECONDARY
+                        theme.colors.text_secondary
                     };
                     let child = commands
                         .spawn((
                             Text::new(label),
                             TextFont {
-                                font_size: theme::FONT_SMALL,
+                                font_size: theme.typography.small,
                                 ..default()
                             },
                             TextColor(color),
@@ -113,10 +114,10 @@ pub(crate) fn update_lobby_ui(
                     .spawn((
                         Text::new(lobby.discovery_status.clone()),
                         TextFont {
-                            font_size: theme::FONT_SMALL,
+                            font_size: theme.typography.small,
                             ..default()
                         },
-                        TextColor(theme::TEXT_SECONDARY),
+                        TextColor(theme.colors.text_secondary),
                     ))
                     .id();
                 commands.entity(list_entity).add_child(status);
@@ -135,26 +136,26 @@ pub(crate) fn update_lobby_ui(
                             border: UiRect::all(Val::Px(1.0)),
                             ..default()
                         },
-                        BackgroundColor(theme::BG_SURFACE),
-                        BorderColor::all(theme::SEPARATOR),
+                        BackgroundColor(theme.colors.bg_surface),
+                        BorderColor::all(theme.colors.separator),
                     ))
                     .with_children(|parent| {
                         parent.spawn((
                             Text::new(host.name.clone()),
                             TextFont {
-                                font_size: theme::FONT_MEDIUM,
+                                font_size: theme.typography.medium,
                                 ..default()
                             },
-                            TextColor(theme::TEXT_PRIMARY),
+                            TextColor(theme.colors.text_primary),
                             Pickable::IGNORE,
                         ));
                         parent.spawn((
                             Text::new(host.session_code.clone()),
                             TextFont {
-                                font_size: theme::FONT_SMALL,
+                                font_size: theme.typography.small,
                                 ..default()
                             },
-                            TextColor(theme::ACCENT),
+                            TextColor(theme.colors.accent),
                             Pickable::IGNORE,
                         ));
                     })

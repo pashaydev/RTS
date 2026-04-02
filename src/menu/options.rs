@@ -4,6 +4,7 @@ use bevy::window::PresentMode;
 use super::helpers::*;
 use super::*;
 use crate::components::*;
+use crate::theme::Theme;
 use crate::ui::fonts::UiFonts;
 
 // ── Resolution Options ──
@@ -22,6 +23,26 @@ fn resolution_label(w: u32, h: u32) -> String {
     format!("{w}x{h}")
 }
 
+pub(crate) fn resolution_index(resolution: (u32, u32)) -> usize {
+    RESOLUTION_OPTIONS
+        .iter()
+        .position(|&r| r == resolution)
+        .unwrap_or(3)
+}
+
+pub(crate) fn resolution_slider_value(index: usize) -> f32 {
+    if RESOLUTION_OPTIONS.len() <= 1 {
+        0.0
+    } else {
+        index.min(RESOLUTION_OPTIONS.len() - 1) as f32 / (RESOLUTION_OPTIONS.len() - 1) as f32
+    }
+}
+
+pub(crate) fn step_resolution_index(current_index: usize, delta: isize) -> usize {
+    let max_index = RESOLUTION_OPTIONS.len().saturating_sub(1) as isize;
+    (current_index as isize + delta).clamp(0, max_index) as usize
+}
+
 // ── Options Page ──
 
 pub(crate) fn spawn_options_page(
@@ -30,6 +51,7 @@ pub(crate) fn spawn_options_page(
     graphics: &GraphicsSettings,
     audio_settings: &crate::audio::AudioSettings,
     fonts: &UiFonts,
+    theme: &Theme,
 ) {
     spawn_page_header(
         commands,
@@ -37,26 +59,42 @@ pub(crate) fn spawn_options_page(
         "OPTIONS",
         MenuButton(MenuAction::Back),
         fonts,
+        theme,
+    );
+
+    // ── Theme Section ──
+
+    spawn_animated_section_divider(commands, container, "THEME", fonts, theme);
+
+    let theme_idx = match graphics.theme_mode {
+        crate::theme::ThemeMode::Dark => 0,
+        crate::theme::ThemeMode::Light => 1,
+    };
+    spawn_selector_row(
+        commands,
+        container,
+        "Color Mode:",
+        &["Dark", "Light"],
+        theme_idx,
+        SelectorField::ThemeMode,
+        theme,
     );
 
     // ── Graphics Section ──
 
-    spawn_animated_section_divider(commands, container, "GRAPHICS", fonts);
+    spawn_animated_section_divider(commands, container, "GRAPHICS", fonts, theme);
 
-    let res_labels: Vec<String> = RESOLUTION_OPTIONS.iter().map(|&(w, h)| resolution_label(w, h)).collect();
-    let res_label_refs: Vec<&str> = res_labels.iter().map(|s| s.as_str()).collect();
-    let res_idx = RESOLUTION_OPTIONS
-        .iter()
-        .position(|&r| r == graphics.resolution)
-        .unwrap_or(3); // default to 1920x1080
-    spawn_selector_row_nav(
+    let res_idx = resolution_index(graphics.resolution);
+    spawn_range_slider(
         commands,
         container,
         "Resolution:",
-        &res_label_refs,
-        res_idx,
+        resolution_slider_value(res_idx),
+        resolution_label(graphics.resolution.0, graphics.resolution.1),
         SelectorField::Resolution,
+        Some(RESOLUTION_OPTIONS.len()),
         Some(0),
+        theme,
     );
 
     let fs_idx = if graphics.fullscreen { 0 } else { 1 };
@@ -68,6 +106,7 @@ pub(crate) fn spawn_options_page(
         fs_idx,
         SelectorField::Fullscreen,
         Some(1),
+        theme,
     );
 
     let vsync_idx = if graphics.vsync { 0 } else { 1 };
@@ -79,6 +118,7 @@ pub(crate) fn spawn_options_page(
         vsync_idx,
         SelectorField::Vsync,
         Some(2),
+        theme,
     );
 
     let shadow_idx = match graphics.shadow_quality {
@@ -94,6 +134,7 @@ pub(crate) fn spawn_options_page(
         shadow_idx,
         SelectorField::Shadows,
         Some(3),
+        theme,
     );
 
     let lights_idx = if graphics.entity_lights { 0 } else { 1 };
@@ -105,6 +146,7 @@ pub(crate) fn spawn_options_page(
         lights_idx,
         SelectorField::EntityLights,
         Some(4),
+        theme,
     );
 
     let aa_idx = match graphics.anti_aliasing {
@@ -119,6 +161,7 @@ pub(crate) fn spawn_options_page(
         aa_idx,
         SelectorField::AntiAliasing,
         Some(5),
+        theme,
     );
 
     let bloom_idx = match graphics.bloom {
@@ -135,6 +178,7 @@ pub(crate) fn spawn_options_page(
         bloom_idx,
         SelectorField::Bloom,
         Some(6),
+        theme,
     );
 
     let brightness_labels: Vec<&str> = BRIGHTNESS_OPTIONS.iter().map(|&(_, s)| s).collect();
@@ -150,6 +194,7 @@ pub(crate) fn spawn_options_page(
         brightness_idx,
         SelectorField::Brightness,
         Some(7),
+        theme,
     );
 
     let auto_exposure_idx = if graphics.auto_exposure { 0 } else { 1 };
@@ -161,6 +206,7 @@ pub(crate) fn spawn_options_page(
         auto_exposure_idx,
         SelectorField::AutoExposure,
         Some(8),
+        theme,
     );
 
     let dof_idx = match graphics.depth_of_field {
@@ -177,6 +223,7 @@ pub(crate) fn spawn_options_page(
         dof_idx,
         SelectorField::DepthOfField,
         Some(9),
+        theme,
     );
 
     let chromatic_idx = match graphics.chromatic_aberration {
@@ -193,6 +240,7 @@ pub(crate) fn spawn_options_page(
         chromatic_idx,
         SelectorField::ChromaticAberration,
         Some(10),
+        theme,
     );
 
     let scale_labels: Vec<&str> = UI_SCALE_OPTIONS.iter().map(|&(_, s)| s).collect();
@@ -208,11 +256,12 @@ pub(crate) fn spawn_options_page(
         scale_idx,
         SelectorField::UiScale,
         Some(11),
+        theme,
     );
 
     // ── Audio Section ──
 
-    spawn_animated_section_divider(commands, container, "AUDIO", fonts);
+    spawn_animated_section_divider(commands, container, "AUDIO", fonts, theme);
 
     spawn_volume_slider(
         commands,
@@ -221,6 +270,7 @@ pub(crate) fn spawn_options_page(
         audio_settings.music_volume,
         SelectorField::MusicVolume,
         Some(12),
+        theme,
     );
 
     spawn_volume_slider(
@@ -230,6 +280,7 @@ pub(crate) fn spawn_options_page(
         audio_settings.sfx_volume,
         SelectorField::SfxVolume,
         Some(13),
+        theme,
     );
 
     // ── Apply Button ──
@@ -241,6 +292,7 @@ pub(crate) fn spawn_options_page(
         true,
         fonts,
         Some(14),
+        theme,
     );
     commands.entity(container).add_child(apply_btn);
 }
@@ -251,11 +303,11 @@ pub(crate) fn apply_graphics_settings(
     graphics: &GraphicsSettings,
     window: &mut Window,
 ) {
-    let (w, h) = graphics.resolution;
-    window.resolution.set(w as f32, h as f32);
     window.mode = if graphics.fullscreen {
-        bevy::window::WindowMode::BorderlessFullscreen(MonitorSelection::Current)
+        bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current)
     } else {
+        let (w, h) = graphics.resolution;
+        window.resolution.set(w as f32, h as f32);
         bevy::window::WindowMode::Windowed
     };
     window.present_mode = if graphics.vsync {
@@ -336,6 +388,12 @@ pub(crate) fn apply_selector_change(
             if index < UI_SCALE_OPTIONS.len() {
                 graphics.ui_scale = UI_SCALE_OPTIONS[index].0;
             }
+        }
+        SelectorField::ThemeMode => {
+            graphics.theme_mode = match index {
+                0 => crate::theme::ThemeMode::Dark,
+                _ => crate::theme::ThemeMode::Light,
+            };
         }
         _ => {}
     }

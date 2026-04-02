@@ -5,7 +5,7 @@ use super::core::fonts::UiFonts;
 use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
 use crate::components::{ActivePlayer, AppState, Faction, RtsCamera, TeamConfig};
-use crate::theme;
+use crate::theme::{self, Theme};
 
 pub struct EventLogWidgetPlugin;
 
@@ -36,6 +36,7 @@ fn spawn_event_log_widget(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
+    theme: Res<Theme>,
     root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
     let Ok(hud_root) = root_q.single() else {
@@ -48,6 +49,7 @@ fn spawn_event_log_widget(
         registry.slots.get(&WidgetId::EventLog).unwrap(),
         registry.is_visible(WidgetId::EventLog),
         &fonts,
+        &theme,
     );
 }
 
@@ -71,11 +73,11 @@ impl LogLevel {
         }
     }
 
-    pub fn color(self) -> Color {
+    pub fn color(self, theme: &Theme) -> Color {
         match self {
             LogLevel::Info => Color::srgb(0.4, 0.75, 1.0),
-            LogLevel::Warning => theme::WARNING,
-            LogLevel::Error => theme::HP_LOW,
+            LogLevel::Warning => theme.colors.warning,
+            LogLevel::Error => theme.colors.hp_low(),
         }
     }
 }
@@ -96,12 +98,12 @@ pub enum EventCategory {
 }
 
 impl EventCategory {
-    pub fn color(self) -> Color {
+    pub fn color(self, theme: &Theme) -> Color {
         match self {
-            EventCategory::Combat => theme::HP_LOW,
-            EventCategory::Construction => theme::ACCENT,
-            EventCategory::Training => theme::SUCCESS,
-            EventCategory::Alert => theme::WARNING,
+            EventCategory::Combat => theme.colors.hp_low(),
+            EventCategory::Construction => theme.colors.accent,
+            EventCategory::Training => theme.colors.success,
+            EventCategory::Alert => theme.colors.warning,
             EventCategory::Resource => Color::srgb(0.4, 0.75, 1.0),
             EventCategory::Upgrade => Color::srgb(0.9, 0.7, 0.2),
             EventCategory::Demolish => Color::srgb(0.8, 0.3, 0.3),
@@ -257,6 +259,7 @@ pub fn handle_log_level_pills(
 pub fn update_event_log(
     mut commands: Commands,
     event_log: Res<GameEventLog>,
+    theme: Res<Theme>,
     mut render_state: ResMut<EventLogRenderState>,
     filter: Res<EventLogFilter>,
     active_player: Res<ActivePlayer>,
@@ -320,14 +323,14 @@ pub fn update_event_log(
     for &level in LogLevel::ALL {
         let active = filter.is_visible(level);
         let bg = if active {
-            level.color().with_alpha(0.25)
+            level.color(&theme).with_alpha(0.25)
         } else {
             Color::srgba(0.2, 0.2, 0.2, 0.3)
         };
         let text_col = if active {
-            level.color()
+            level.color(&theme)
         } else {
-            theme::TEXT_DISABLED
+            theme.colors.text_disabled
         };
 
         let pill = commands
@@ -348,7 +351,7 @@ pub fn update_event_log(
             .spawn((
                 Text::new(level.label()),
                 TextFont {
-                    font_size: theme::FONT_MICRO,
+                    font_size: theme.typography.micro,
                     ..default()
                 },
                 TextColor(text_col),
@@ -378,10 +381,10 @@ pub fn update_event_log(
             .spawn((
                 Text::new("No events yet"),
                 TextFont {
-                    font_size: theme::FONT_CAPTION,
+                    font_size: theme.typography.caption,
                     ..default()
                 },
-                TextColor(theme::TEXT_DISABLED),
+                TextColor(theme.colors.text_disabled),
             ))
             .id();
         commands.entity(container).add_child(empty);
@@ -410,10 +413,10 @@ pub fn update_event_log(
         .spawn((
             Text::new(format!("Events: {} (showing {})", total, showing)),
             TextFont {
-                font_size: theme::FONT_MICRO,
+                font_size: theme.typography.micro,
                 ..default()
             },
-            TextColor(theme::TEXT_DISABLED),
+            TextColor(theme.colors.text_disabled),
         ))
         .id();
     commands.entity(header).add_child(header_text);
@@ -444,10 +447,10 @@ pub fn update_event_log(
             .spawn((
                 Text::new("\u{2022}"),
                 TextFont {
-                    font_size: theme::FONT_MICRO,
+                    font_size: theme.typography.micro,
                     ..default()
                 },
-                TextColor(event.level.color()),
+                TextColor(event.level.color(&theme)),
             ))
             .id();
         commands.entity(row).add_child(level_dot);
@@ -457,10 +460,10 @@ pub fn update_event_log(
             .spawn((
                 Text::new(event.category.prefix()),
                 TextFont {
-                    font_size: theme::FONT_TINY,
+                    font_size: theme.typography.tiny,
                     ..default()
                 },
-                TextColor(event.category.color()),
+                TextColor(event.category.color(&theme)),
             ))
             .id();
         commands.entity(row).add_child(prefix);
@@ -473,10 +476,10 @@ pub fn update_event_log(
             .spawn((
                 Text::new(time_str),
                 TextFont {
-                    font_size: theme::FONT_MICRO,
+                    font_size: theme.typography.micro,
                     ..default()
                 },
-                TextColor(theme::TEXT_DISABLED),
+                TextColor(theme.colors.text_disabled),
             ))
             .id();
         commands.entity(row).add_child(time_text);
@@ -487,7 +490,7 @@ pub fn update_event_log(
                 .spawn((
                     Text::new(faction.display_name()),
                     TextFont {
-                        font_size: theme::FONT_MICRO,
+                        font_size: theme.typography.micro,
                         ..default()
                     },
                     TextColor(faction.color()),
@@ -501,10 +504,10 @@ pub fn update_event_log(
             .spawn((
                 Text::new(&event.message),
                 TextFont {
-                    font_size: theme::FONT_TINY,
+                    font_size: theme.typography.tiny,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme.colors.text_secondary),
             ))
             .id();
         commands.entity(row).add_child(msg);

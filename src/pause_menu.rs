@@ -5,7 +5,7 @@ use crate::components::*;
 use crate::fog::FogTweakSettings;
 use crate::multiplayer::{HostNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
-use crate::theme;
+use crate::theme::{self, Theme};
 use crate::ui::core::interactions::UiClickEvent;
 use crate::ui::fonts::UiFonts;
 
@@ -81,6 +81,7 @@ fn handle_escape_key(
     placement: Res<BuildingPlacementState>,
     pause_roots: Query<Entity, With<PauseOverlayRoot>>,
     fonts: Res<UiFonts>,
+    theme: Res<Theme>,
     net_role: Res<NetRole>,
     mut pause_nav: ResMut<PauseNavFocus>,
 ) {
@@ -100,7 +101,7 @@ fn handle_escape_key(
                 return;
             }
             *overlay = InGameOverlay::PauseMenu;
-            spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
+            spawn_pause_overlay(&mut commands, &fonts, &theme, PausePanel::Main, *net_role);
         }
         InGameOverlay::PauseMenu => {
             *overlay = InGameOverlay::None;
@@ -113,21 +114,21 @@ fn handle_escape_key(
             for e in &pause_roots {
                 commands.entity(e).try_despawn();
             }
-            spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
+            spawn_pause_overlay(&mut commands, &fonts, &theme, PausePanel::Main, *net_role);
         }
         InGameOverlay::PauseConfirmEndMatch => {
             *overlay = InGameOverlay::PauseMenu;
             for e in &pause_roots {
                 commands.entity(e).try_despawn();
             }
-            spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
+            spawn_pause_overlay(&mut commands, &fonts, &theme, PausePanel::Main, *net_role);
         }
         InGameOverlay::DeathScreen => {
             // Can't dismiss death screen with Escape
         }
         InGameOverlay::Spectating => {
             *overlay = InGameOverlay::PauseMenu;
-            spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
+            spawn_pause_overlay(&mut commands, &fonts, &theme, PausePanel::Main, *net_role);
         }
     }
 }
@@ -137,6 +138,7 @@ fn handle_escape_key(
 fn spawn_pause_overlay(
     commands: &mut Commands,
     fonts: &UiFonts,
+    theme: &Theme,
     panel_kind: PausePanel,
     role: NetRole,
 ) {
@@ -171,8 +173,13 @@ fn spawn_pause_overlay(
                 // border_radius: BorderRadius::all(Val::Px(12.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.07, 0.07, 0.07, 0.96)),
-            BorderColor::all(theme::SEPARATOR),
+            BackgroundColor(Color::srgba(
+                theme.colors.bg_panel.to_srgba().red,
+                theme.colors.bg_panel.to_srgba().green,
+                theme.colors.bg_panel.to_srgba().blue,
+                0.96,
+            )),
+            BorderColor::all(theme.colors.separator),
             BoxShadow::new(
                 Color::srgba(0.0, 0.0, 0.0, 0.6),
                 Val::Px(0.0),
@@ -191,13 +198,13 @@ fn spawn_pause_overlay(
     commands.entity(root).add_child(panel);
 
     match panel_kind {
-        PausePanel::Main => spawn_pause_content(commands, panel, fonts, role),
-        PausePanel::Options => spawn_options_content(commands, panel, fonts),
-        PausePanel::HostEndConfirm => spawn_host_end_confirm_content(commands, panel, fonts),
+        PausePanel::Main => spawn_pause_content(commands, panel, fonts, theme, role),
+        PausePanel::Options => spawn_options_content(commands, panel, fonts, theme),
+        PausePanel::HostEndConfirm => spawn_host_end_confirm_content(commands, panel, fonts, theme),
     }
 }
 
-fn spawn_pause_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts, role: NetRole) {
+fn spawn_pause_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts, theme: &Theme, role: NetRole) {
     // // Title
     // let title = commands
     //     .spawn((
@@ -230,24 +237,24 @@ fn spawn_pause_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts, 
     ];
 
     for (i, (label, action, accent)) in buttons.into_iter().enumerate() {
-        let btn = spawn_overlay_button(commands, label, action, accent, fonts, Some(i));
+        let btn = spawn_overlay_button(commands, label, action, accent, fonts, theme, Some(i));
         commands.entity(panel).add_child(btn);
     }
 
     // Controls hint
-    spawn_pause_controls_hint(commands, panel, fonts);
+    spawn_pause_controls_hint(commands, panel, fonts, theme);
 }
 
-fn spawn_options_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts) {
+fn spawn_options_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts, theme: &Theme) {
     let title = commands
         .spawn((
             Text::new("OPTIONS"),
             TextFont {
                 font: fonts.heading.clone(),
-                font_size: theme::FONT_HEADING,
+                font_size: theme.typography.heading,
                 ..default()
             },
-            TextColor(theme::TEXT_PRIMARY),
+            TextColor(theme.colors.text_primary),
             Node {
                 margin: UiRect::bottom(Val::Px(24.0)),
                 ..default()
@@ -262,10 +269,10 @@ fn spawn_options_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts
             Text::new("(Settings can be changed from the main menu)"),
             TextFont {
                 font: fonts.body.clone(),
-                font_size: theme::FONT_BODY,
+                font_size: theme.typography.body,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(theme.colors.text_secondary),
             Node {
                 margin: UiRect::bottom(Val::Px(24.0)),
                 ..default()
@@ -274,20 +281,20 @@ fn spawn_options_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts
         .id();
     commands.entity(panel).add_child(placeholder);
 
-    let btn = spawn_overlay_button(commands, "Back", PauseAction::BackFromOptions, true, fonts, Some(0));
+    let btn = spawn_overlay_button(commands, "Back", PauseAction::BackFromOptions, true, fonts, theme, Some(0));
     commands.entity(panel).add_child(btn);
 }
 
-fn spawn_host_end_confirm_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts) {
+fn spawn_host_end_confirm_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts, theme: &Theme) {
     let title = commands
         .spawn((
             Text::new("END MATCH FOR EVERYONE?"),
             TextFont {
                 font: fonts.heading.clone(),
-                font_size: theme::FONT_HEADING,
+                font_size: theme.typography.heading,
                 ..default()
             },
-            TextColor(theme::WARNING),
+            TextColor(theme.colors.warning),
             Node {
                 margin: UiRect::bottom(Val::Px(16.0)),
                 ..default()
@@ -301,10 +308,10 @@ fn spawn_host_end_confirm_content(commands: &mut Commands, panel: Entity, fonts:
             Text::new("All connected clients will be forced back to main menu."),
             TextFont {
                 font: fonts.body.clone(),
-                font_size: theme::FONT_BODY,
+                font_size: theme.typography.body,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(theme.colors.text_secondary),
             Node {
                 margin: UiRect::bottom(Val::Px(20.0)),
                 ..default()
@@ -314,13 +321,14 @@ fn spawn_host_end_confirm_content(commands: &mut Commands, panel: Entity, fonts:
     commands.entity(panel).add_child(body);
 
     let cancel_btn =
-        spawn_overlay_button(commands, "Cancel", PauseAction::CancelHostEnd, false, fonts, Some(0));
+        spawn_overlay_button(commands, "Cancel", PauseAction::CancelHostEnd, false, fonts, theme, Some(0));
     let confirm_btn = spawn_overlay_button(
         commands,
         "End Match",
         PauseAction::ConfirmHostEnd,
         true,
         fonts,
+        theme,
         Some(1),
     );
     commands
@@ -334,12 +342,13 @@ fn spawn_overlay_button(
     action: PauseAction,
     accent: bool,
     fonts: &UiFonts,
+    theme: &Theme,
     nav_index: Option<usize>,
 ) -> Entity {
     let bg = if accent {
-        theme::ACCENT
+        theme.colors.accent
     } else {
-        theme::BTN_PRIMARY
+        theme.colors.btn_primary
     };
 
     let mut ec = commands.spawn((
@@ -367,13 +376,13 @@ fn spawn_overlay_button(
         Text::new(label),
         TextFont {
             font: fonts.body_emphasis.clone(),
-            font_size: theme::FONT_BUTTON,
+            font_size: theme.typography.button,
             ..default()
         },
         TextColor(if accent {
             Color::WHITE
         } else {
-            theme::TEXT_PRIMARY
+            theme.colors.text_primary
         }),
         Pickable::IGNORE,
     ));
@@ -394,6 +403,7 @@ fn handle_pause_buttons(
     death_roots: Query<Entity, With<DeathScreenRoot>>,
     _spectator_roots: Query<Entity, With<SpectatorHudRoot>>,
     fonts: Res<UiFonts>,
+    theme: Res<Theme>,
     mut fog_settings: ResMut<FogTweakSettings>,
     mut fog_map: Option<ResMut<FogOfWarMap>>,
     faction_stats: Res<FactionStats>,
@@ -440,6 +450,7 @@ fn handle_pause_buttons(
                     spawn_pause_overlay(
                         &mut commands,
                         &fonts,
+                        &theme,
                         PausePanel::HostEndConfirm,
                         *net_role,
                     );
@@ -452,7 +463,7 @@ fn handle_pause_buttons(
                 for e in &pause_roots {
                     commands.entity(e).try_despawn();
                 }
-                spawn_pause_overlay(&mut commands, &fonts, PausePanel::Options, *net_role);
+                spawn_pause_overlay(&mut commands, &fonts, &theme, PausePanel::Options, *net_role);
             }
             PauseAction::Quit => {
                 exit.write(AppExit::Success);
@@ -462,7 +473,7 @@ fn handle_pause_buttons(
                 for e in &pause_roots {
                     commands.entity(e).try_despawn();
                 }
-                spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
+                spawn_pause_overlay(&mut commands, &fonts, &theme, PausePanel::Main, *net_role);
             }
             PauseAction::ApplySettings => {
                 // Handled same as BackFromOptions for now
@@ -470,7 +481,7 @@ fn handle_pause_buttons(
                 for e in &pause_roots {
                     commands.entity(e).try_despawn();
                 }
-                spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
+                spawn_pause_overlay(&mut commands, &fonts, &theme, PausePanel::Main, *net_role);
             }
             PauseAction::ConfirmHostEnd => {
                 if *net_role == NetRole::Host {
@@ -487,7 +498,7 @@ fn handle_pause_buttons(
                 for e in &pause_roots {
                     commands.entity(e).try_despawn();
                 }
-                spawn_pause_overlay(&mut commands, &fonts, PausePanel::Main, *net_role);
+                spawn_pause_overlay(&mut commands, &fonts, &theme, PausePanel::Main, *net_role);
             }
             PauseAction::Spectate => {
                 *overlay = InGameOverlay::Spectating;
@@ -508,7 +519,7 @@ fn handle_pause_buttons(
                     }
                 }
                 // Spawn spectator HUD
-                spawn_spectator_hud(&mut commands, &fonts, &faction_stats);
+                spawn_spectator_hud(&mut commands, &fonts, &theme, &faction_stats);
             }
         }
     }
@@ -538,7 +549,7 @@ fn broadcast_host_shutdown(
 
 // ── Death Screen ──
 
-fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, faction_stats: &FactionStats) {
+fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, theme: &Theme, faction_stats: &FactionStats) {
     let root = commands
         .spawn((
             DeathScreenRoot,
@@ -568,7 +579,7 @@ fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, faction_stats: &
                 font_size: 72.0,
                 ..default()
             },
-            TextColor(theme::DESTRUCTIVE),
+            TextColor(theme.colors.destructive),
             Node {
                 margin: UiRect::bottom(Val::Px(32.0)),
                 ..default()
@@ -593,8 +604,8 @@ fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, faction_stats: &
                 border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.07, 0.07, 0.07, 0.9)),
-            BorderColor::all(theme::SEPARATOR),
+            BackgroundColor(theme.colors.bg_panel),
+            BorderColor::all(theme.colors.separator),
         ))
         .id();
     commands.entity(root).add_child(stats_panel);
@@ -605,10 +616,10 @@ fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, faction_stats: &
             Text::new("Battle Results"),
             TextFont {
                 font: fonts.body_emphasis.clone(),
-                font_size: theme::FONT_LARGE,
+                font_size: theme.typography.large,
                 ..default()
             },
-            TextColor(theme::TEXT_PRIMARY),
+            TextColor(theme.colors.text_primary),
             Node {
                 margin: UiRect::bottom(Val::Px(12.0)),
                 ..default()
@@ -649,10 +660,10 @@ fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, faction_stats: &
                     Text::new(faction.display_name()),
                     TextFont {
                         font: fonts.body.clone(),
-                        font_size: theme::FONT_BODY,
+                        font_size: theme.typography.body,
                         ..default()
                     },
-                    TextColor(theme::TEXT_PRIMARY),
+                    TextColor(theme.colors.text_primary),
                     Node {
                         width: Val::Px(100.0),
                         ..default()
@@ -666,10 +677,10 @@ fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, faction_stats: &
                     Text::new(format!("{} units", status.unit_count)),
                     TextFont {
                         font: fonts.body.clone(),
-                        font_size: theme::FONT_BODY,
+                        font_size: theme.typography.body,
                         ..default()
                     },
-                    TextColor(theme::TEXT_SECONDARY),
+                    TextColor(theme.colors.text_secondary),
                     Node {
                         width: Val::Px(80.0),
                         ..default()
@@ -683,10 +694,10 @@ fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, faction_stats: &
                     Text::new(format!("{} bldg", status.building_count)),
                     TextFont {
                         font: fonts.body.clone(),
-                        font_size: theme::FONT_BODY,
+                        font_size: theme.typography.body,
                         ..default()
                     },
-                    TextColor(theme::TEXT_SECONDARY),
+                    TextColor(theme.colors.text_secondary),
                     Node {
                         width: Val::Px(80.0),
                         ..default()
@@ -696,16 +707,16 @@ fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, faction_stats: &
 
             // Status badge
             let (badge_text, badge_color) = if status.eliminated {
-                ("ELIMINATED", theme::DESTRUCTIVE)
+                ("ELIMINATED", theme.colors.destructive)
             } else {
-                ("ALIVE", theme::SUCCESS)
+                ("ALIVE", theme.colors.success)
             };
             let badge = commands
                 .spawn((
                     Text::new(badge_text),
                     TextFont {
                         font: fonts.body_emphasis.clone(),
-                        font_size: theme::FONT_SMALL,
+                        font_size: theme.typography.small,
                         ..default()
                     },
                     TextColor(badge_color),
@@ -730,14 +741,14 @@ fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, faction_stats: &
         .id();
     commands.entity(root).add_child(btn_row);
 
-    let menu_btn = spawn_overlay_button(commands, "Main Menu", PauseAction::MainMenu, false, fonts, Some(0));
-    let spec_btn = spawn_overlay_button(commands, "Spectate", PauseAction::Spectate, true, fonts, Some(1));
+    let menu_btn = spawn_overlay_button(commands, "Main Menu", PauseAction::MainMenu, false, fonts, theme, Some(0));
+    let spec_btn = spawn_overlay_button(commands, "Spectate", PauseAction::Spectate, true, fonts, theme, Some(1));
     commands.entity(btn_row).add_children(&[menu_btn, spec_btn]);
 }
 
 // ── Spectator HUD ──
 
-fn spawn_spectator_hud(commands: &mut Commands, fonts: &UiFonts, faction_stats: &FactionStats) {
+fn spawn_spectator_hud(commands: &mut Commands, fonts: &UiFonts, theme: &Theme, faction_stats: &FactionStats) {
     let root = commands
         .spawn((
             SpectatorHudRoot,
@@ -765,10 +776,10 @@ fn spawn_spectator_hud(commands: &mut Commands, fonts: &UiFonts, faction_stats: 
             Text::new("SPECTATING"),
             TextFont {
                 font: fonts.body_emphasis.clone(),
-                font_size: theme::FONT_SMALL,
+                font_size: theme.typography.small,
                 ..default()
             },
-            TextColor(theme::WARNING),
+            TextColor(theme.colors.warning),
             Node {
                 margin: UiRect::right(Val::Px(16.0)),
                 ..default()
@@ -811,10 +822,10 @@ fn spawn_spectator_hud(commands: &mut Commands, fonts: &UiFonts, faction_stats: 
                 Text::new(format!("{}", count)),
                 TextFont {
                     font: fonts.body.clone(),
-                    font_size: theme::FONT_SMALL,
+                    font_size: theme.typography.small,
                     ..default()
                 },
-                TextColor(theme::TEXT_SECONDARY),
+                TextColor(theme.colors.text_secondary),
             ))
             .id();
 
@@ -828,10 +839,10 @@ fn spawn_spectator_hud(commands: &mut Commands, fonts: &UiFonts, faction_stats: 
             Text::new("ESC for menu"),
             TextFont {
                 font: fonts.body.clone(),
-                font_size: theme::FONT_TINY,
+                font_size: theme.typography.tiny,
                 ..default()
             },
-            TextColor(theme::TEXT_DISABLED),
+            TextColor(theme.colors.text_disabled),
             Node {
                 margin: UiRect::left(Val::Px(16.0)),
                 ..default()
@@ -882,6 +893,7 @@ fn check_player_elimination(
     active_player: Res<ActivePlayer>,
     faction_stats: Res<FactionStats>,
     fonts: Res<UiFonts>,
+    theme: Res<Theme>,
     net_role: Res<NetRole>,
     net_map: Option<Res<EntityNetMap>>,
 ) {
@@ -903,7 +915,7 @@ fn check_player_elimination(
     if let Some(status) = faction_stats.stats.get(&active_player.0) {
         if status.eliminated {
             commands.insert_resource(InGameOverlay::DeathScreen);
-            spawn_death_screen(&mut commands, &fonts, &faction_stats);
+            spawn_death_screen(&mut commands, &fonts, &theme, &faction_stats);
         }
     }
 }
@@ -1004,6 +1016,7 @@ fn pause_nav_focus_visuals(
     mut commands: Commands,
     children_q: Query<&Children>,
     mut text_colors: Query<&mut TextColor>,
+    theme: Res<Theme>,
 ) {
     if focused.is_empty() {
         return;
@@ -1011,9 +1024,9 @@ fn pause_nav_focus_visuals(
 
     for entity in &focused {
         commands.entity(entity).insert((
-            BorderColor::all(theme::ACCENT),
+            BorderColor::all(theme.colors.accent),
             BoxShadow::new(
-                Color::srgba(0.29, 0.62, 1.0, 0.4),
+                theme.colors.accent.with_alpha(0.4),
                 Val::Px(0.0),
                 Val::Px(0.0),
                 Val::Px(0.0),
@@ -1040,7 +1053,7 @@ fn pause_nav_focus_visuals(
     }
 }
 
-fn spawn_pause_controls_hint(commands: &mut Commands, panel: Entity, fonts: &UiFonts) {
+fn spawn_pause_controls_hint(commands: &mut Commands, panel: Entity, fonts: &UiFonts, theme: &Theme) {
     let hint = commands
         .spawn((
             ControlsHint,
@@ -1072,27 +1085,27 @@ fn spawn_pause_controls_hint(commands: &mut Commands, panel: Entity, fonts: &UiF
                                 ..default()
                             },
                             BackgroundColor(Color::srgba(0.15, 0.15, 0.15, 0.9)),
-                            BorderColor::all(theme::TEXT_DISABLED),
+                            BorderColor::all(theme.colors.text_disabled),
                         ))
                         .with_children(|badge| {
                             badge.spawn((
                                 Text::new(key),
                                 TextFont {
                                     font: fonts.body_emphasis.clone(),
-                                    font_size: theme::FONT_TINY,
+                                    font_size: theme.typography.tiny,
                                     ..default()
                                 },
-                                TextColor(theme::TEXT_SECONDARY),
+                                TextColor(theme.colors.text_secondary),
                             ));
                         });
                         row.spawn((
                             Text::new(action),
                             TextFont {
                                 font: fonts.body.clone(),
-                                font_size: theme::FONT_TINY,
+                                font_size: theme.typography.tiny,
                                 ..default()
                             },
-                            TextColor(theme::TEXT_DISABLED),
+                            TextColor(theme.colors.text_disabled),
                         ));
                     });
             }

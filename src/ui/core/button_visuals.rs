@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::components::*;
-use crate::theme;
+use crate::theme::Theme;
 
 use super::interactions::{UiInteractPhase, UiInteractState};
 
@@ -10,6 +10,7 @@ fn lerp(from: f32, to: f32, t: f32) -> f32 {
 }
 
 pub fn button_hover_visual(
+    theme: Res<Theme>,
     mut query: Query<
         (
             &UiInteractState,
@@ -29,30 +30,27 @@ pub fn button_hover_visual(
             if let Some(mut bc) = border_color {
                 match state.phase {
                     UiInteractPhase::Hovered => {
-                        *bg = BackgroundColor(theme::BG_ELEVATED);
-                        *bc = BorderColor::all(Color::srgba(0.29, 0.62, 1.0, 0.5));
+                        *bg = BackgroundColor(theme.colors.bg_elevated);
+                        *bc = BorderColor::all(theme.colors.accent.with_alpha(0.5));
                     }
                     UiInteractPhase::Pressed => {
-                        *bg = BackgroundColor(theme::BTN_PRESSED);
-                        *bc = BorderColor::all(Color::srgba(
-                            0.29,
-                            0.62,
-                            1.0,
+                        *bg = BackgroundColor(theme.colors.btn_pressed);
+                        *bc = BorderColor::all(theme.colors.accent.with_alpha(
                             0.7 + 0.3 * state.hold_progress,
                         ));
                     }
                     UiInteractPhase::Idle | UiInteractPhase::Disabled => {
-                        *bg = BackgroundColor(theme::BG_SURFACE);
+                        *bg = BackgroundColor(theme.colors.bg_surface);
                         *bc = BorderColor::all(Color::NONE);
                     }
                 }
             }
         } else {
             *bg = match state.phase {
-                UiInteractPhase::Pressed => BackgroundColor(theme::BTN_PRESSED),
-                UiInteractPhase::Hovered => BackgroundColor(theme::BTN_HOVER),
+                UiInteractPhase::Pressed => BackgroundColor(theme.colors.btn_pressed),
+                UiInteractPhase::Hovered => BackgroundColor(theme.colors.btn_hover),
                 UiInteractPhase::Idle | UiInteractPhase::Disabled => {
-                    BackgroundColor(theme::BTN_PRIMARY)
+                    BackgroundColor(theme.colors.btn_primary)
                 }
             };
         }
@@ -60,6 +58,7 @@ pub fn button_hover_visual(
 }
 
 pub fn animated_button_chrome_system(
+    theme: Res<Theme>,
     mut query: Query<
         (
             &UiInteractState,
@@ -94,7 +93,7 @@ pub fn animated_button_chrome_system(
                         Color::srgba(0.35, 0.48, 0.65, 0.14 + 0.10 * state.click_flash)
                     }
                     ButtonStyle::Ghost => {
-                        Color::srgba(0.29, 0.62, 1.0, 0.10 + 0.12 * state.click_flash)
+                        theme.colors.accent.with_alpha(0.10 + 0.12 * state.click_flash)
                     }
                     ButtonStyle::Destructive => {
                         Color::srgba(0.85, 0.32, 0.32, 0.10 + 0.12 * state.click_flash)
@@ -119,7 +118,7 @@ pub fn animated_button_chrome_system(
             };
 
             let tint = match style {
-                ButtonStyle::Filled | ButtonStyle::Ghost => Color::srgba(0.29, 0.62, 1.0, alpha),
+                ButtonStyle::Filled | ButtonStyle::Ghost => theme.colors.accent.with_alpha(alpha),
                 ButtonStyle::Destructive => Color::srgba(0.85, 0.32, 0.32, alpha),
             };
             *shadow = BoxShadow::new(tint, Val::Px(0.0), Val::Px(y), Val::Px(0.0), Val::Px(blur));

@@ -253,7 +253,7 @@ fn update_minimap_texture(
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
     units: Query<(&Transform, &Faction), With<Unit>>,
-    buildings: Query<(&Transform, &Faction), With<Building>>,
+    buildings: Query<(&Transform, &Faction), (With<Building>, Without<FloorTile>)>,
     mobs: Query<&Transform, With<Mob>>,
     resource_nodes: Query<&Transform, With<ResourceNode>>,
     camera_q: Query<(&Camera, &GlobalTransform, &RtsCamera)>,

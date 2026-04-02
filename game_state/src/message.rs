@@ -18,7 +18,11 @@ fn default_lobby_teams() -> [u8; 4] {
 pub enum InputCommand {
     /// Move to a world position.
     #[serde(rename = "move")]
-    Move { target: Vec3 },
+    Move {
+        target: Vec3,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        formation: Option<u8>,
+    },
     /// Attack an entity.
     #[serde(rename = "attack")]
     Attack { target_id: EntityId },
@@ -571,6 +575,7 @@ mod tests {
                 entity_ids: vec![5, 6],
                 commands: vec![InputCommand::Move {
                     target: [1.0, 0.0, 3.0],
+                    formation: Some(1),
                 }],
             },
         };
@@ -591,6 +596,7 @@ mod tests {
                 commands: vec![
                     InputCommand::Move {
                         target: [10.0, 0.0, 5.0],
+                        formation: Some(0),
                     },
                     InputCommand::Attack { target_id: 2 },
                 ],
@@ -674,7 +680,10 @@ mod tests {
                     player_id: 1,
                     tick: 100,
                     entity_ids: vec![1, 2],
-                    commands: vec![InputCommand::Move { target: [1.0, 0.0, 3.0] }],
+                    commands: vec![InputCommand::Move {
+                        target: [1.0, 0.0, 3.0],
+                        formation: Some(2),
+                    }],
                 },
             },
             ClientMessage::JoinRequest {

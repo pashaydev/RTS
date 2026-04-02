@@ -7,7 +7,7 @@ use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
 use crate::combat_intents::clear_combat_intent;
 use crate::components::*;
-use crate::theme;
+use crate::theme::{self, Theme};
 
 pub struct ProductionQueueWidgetPlugin;
 
@@ -35,6 +35,7 @@ fn spawn_production_queue_widget(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
+    theme: Res<Theme>,
     root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
     let Ok(hud_root) = root_q.single() else {
@@ -47,6 +48,7 @@ fn spawn_production_queue_widget(
         registry.slots.get(&WidgetId::ProductionQueue).unwrap(),
         registry.is_visible(WidgetId::ProductionQueue),
         &fonts,
+        &theme,
     );
 }
 
@@ -68,6 +70,7 @@ struct CommandQueueGroup {
 pub fn update_production_queue(
     mut commands: Commands,
     active_player: Res<ActivePlayer>,
+    theme: Res<Theme>,
     icons: Res<IconAssets>,
     content_q: Query<Entity, With<super::widget_framework::WidgetContent>>,
     widget_q: Query<(&super::widget_framework::Widget, &Children)>,
@@ -120,10 +123,11 @@ pub fn update_production_queue(
             &mut commands,
             content,
             format!("Commands ({})", selected_units.len()),
+            &theme,
         );
 
         for group in group_command_queues(&selected_units, &kind_lookup, &resource_nodes) {
-            let row = spawn_focus_row(&mut commands, content, group.representative);
+            let row = spawn_focus_row(&mut commands, content, group.representative, &theme);
             let title = if group.count > 1 {
                 format!("{}x {}", group.count, group.kind.display_name())
             } else {
@@ -134,6 +138,7 @@ pub fn update_production_queue(
                 row,
                 icons.entity_icon(group.kind),
                 title.as_str(),
+                &theme,
             );
             spawn_command_line(
                 &mut commands,
@@ -147,10 +152,11 @@ pub fn update_production_queue(
                 group.active_task_id,
                 true,
                 group.count == 1 && group.active_task_id.is_some(),
+                &theme,
             );
 
             if group.queued_labels.is_empty() {
-                spawn_secondary_text(&mut commands, row, "No queued tasks");
+                spawn_secondary_text(&mut commands, row, "No queued tasks", &theme);
             } else {
                 for (label, task_id) in &group.queued_labels {
                     spawn_command_line(
@@ -169,6 +175,7 @@ pub fn update_production_queue(
                         },
                         false,
                         group.count == 1,
+                        &theme,
                     );
                 }
             }
@@ -180,10 +187,11 @@ pub fn update_production_queue(
             &mut commands,
             content,
             format!("Production ({})", selected_buildings.len()),
+            &theme,
         );
 
         for (entity, kind, _faction, queue) in selected_buildings {
-            spawn_building_queue_card(&mut commands, content, entity, *kind, queue, &icons, true);
+            spawn_building_queue_card(&mut commands, content, entity, *kind, queue, &icons, true, &theme);
         }
     } else {
         let active_buildings: Vec<_> = buildings
@@ -197,12 +205,13 @@ pub fn update_production_queue(
             &mut commands,
             content,
             format!("Production ({})", active_buildings.len()),
+            &theme,
         );
 
         if active_buildings.is_empty() && !has_commands {
-            spawn_secondary_text(&mut commands, content, "No active queues");
+            spawn_secondary_text(&mut commands, content, "No active queues", &theme);
         } else if active_buildings.is_empty() {
-            spawn_secondary_text(&mut commands, content, "No active production");
+            spawn_secondary_text(&mut commands, content, "No active production", &theme);
         } else {
             for (entity, kind, queue, _faction) in active_buildings {
                 spawn_building_queue_card(
@@ -213,22 +222,23 @@ pub fn update_production_queue(
                     queue,
                     &icons,
                     false,
+                    &theme,
                 );
             }
         }
     }
 }
 
-fn spawn_section_header(commands: &mut Commands, parent: Entity, label: String) {
+fn spawn_section_header(commands: &mut Commands, parent: Entity, label: String, theme: &Theme) {
     let header = commands
         .spawn((
             QueuePanelItem,
             Text::new(label),
             TextFont {
-                font_size: theme::FONT_SMALL,
+                font_size: theme.typography.small,
                 ..default()
             },
-            TextColor(theme::TEXT_SECONDARY),
+            TextColor(theme.colors.text_secondary),
             Node {
                 margin: UiRect::top(Val::Px(8.0)),
                 ..default()
@@ -238,7 +248,7 @@ fn spawn_section_header(commands: &mut Commands, parent: Entity, label: String) 
     commands.entity(parent).add_child(header);
 }
 
-fn spawn_focus_row(commands: &mut Commands, parent: Entity, entity: Entity) -> Entity {
+fn spawn_focus_row(commands: &mut Commands, parent: Entity, entity: Entity, theme: &Theme) -> Entity {
     let row = commands
         .spawn((
             QueuePanelItem,
@@ -254,7 +264,7 @@ fn spawn_focus_row(commands: &mut Commands, parent: Entity, entity: Entity) -> E
                 border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
-            BackgroundColor(theme::BG_SURFACE),
+            BackgroundColor(theme.colors.bg_surface),
         ))
         .id();
     commands.entity(parent).add_child(row);
@@ -266,6 +276,7 @@ fn spawn_row_header(
     parent: Entity,
     icon_handle: Handle<Image>,
     label: &str,
+    theme: &Theme,
 ) {
     let header = commands
         .spawn((
@@ -298,25 +309,25 @@ fn spawn_row_header(
             QueuePanelItem,
             Text::new(label),
             TextFont {
-                font_size: theme::FONT_BODY,
+                font_size: theme.typography.body,
                 ..default()
             },
-            TextColor(theme::TEXT_PRIMARY),
+            TextColor(theme.colors.text_primary),
         ))
         .id();
     commands.entity(header).add_child(text);
 }
 
-fn spawn_secondary_text(commands: &mut Commands, parent: Entity, label: &str) {
+fn spawn_secondary_text(commands: &mut Commands, parent: Entity, label: &str, theme: &Theme) {
     let text = commands
         .spawn((
             QueuePanelItem,
             Text::new(label),
             TextFont {
-                font_size: theme::FONT_SMALL,
+                font_size: theme.typography.small,
                 ..default()
             },
-            TextColor(theme::TEXT_DISABLED),
+            TextColor(theme.colors.text_disabled),
         ))
         .id();
     commands.entity(parent).add_child(text);
@@ -330,6 +341,7 @@ fn spawn_command_line(
     task_id: Option<u64>,
     is_current: bool,
     show_cancel: bool,
+    theme: &Theme,
 ) {
     let row = commands
         .spawn((
@@ -352,13 +364,13 @@ fn spawn_command_line(
             QueuePanelItem,
             Text::new(format!("{}  {}", prefix, label)),
             TextFont {
-                font_size: theme::FONT_SMALL,
+                font_size: theme.typography.small,
                 ..default()
             },
             TextColor(if is_current {
-                theme::TEXT_PRIMARY
+                theme.colors.text_primary
             } else {
-                theme::TEXT_SECONDARY
+                theme.colors.text_secondary
             }),
             Node {
                 flex_grow: 1.0,
@@ -393,10 +405,10 @@ fn spawn_command_line(
                 button.spawn((
                     Text::new("x"),
                     TextFont {
-                        font_size: theme::FONT_CAPTION,
+                        font_size: theme.typography.caption,
                         ..default()
                     },
-                    TextColor(theme::TEXT_SECONDARY),
+                    TextColor(theme.colors.text_secondary),
                 ));
             })
             .id();
@@ -412,9 +424,10 @@ fn spawn_building_queue_card(
     queue: &TrainingQueue,
     icons: &IconAssets,
     show_full_queue: bool,
+    theme: &Theme,
 ) {
-    let row = spawn_focus_row(commands, parent, building);
-    spawn_row_header(commands, row, icons.entity_icon(kind), kind.display_name());
+    let row = spawn_focus_row(commands, parent, building, theme);
+    spawn_row_header(commands, row, icons.entity_icon(kind), kind.display_name(), theme);
 
     if let Some(current) = queue.queue.first() {
         let remaining = queue.timer.as_ref().map_or(0.0, Timer::remaining_secs);
@@ -454,10 +467,10 @@ fn spawn_building_queue_card(
                     remaining
                 )),
                 TextFont {
-                    font_size: theme::FONT_SMALL,
+                    font_size: theme.typography.small,
                     ..default()
                 },
-                TextColor(theme::TEXT_PRIMARY),
+                TextColor(theme.colors.text_primary),
                 Node {
                     flex_grow: 1.0,
                     ..default()
@@ -475,7 +488,7 @@ fn spawn_building_queue_card(
                     border_radius: BorderRadius::all(Val::Px(3.0)),
                     ..default()
                 },
-                BackgroundColor(theme::HP_BAR_BG),
+                BackgroundColor(theme.colors.hp_bar_bg),
             ))
             .with_children(|bg| {
                 bg.spawn((
@@ -491,13 +504,13 @@ fn spawn_building_queue_card(
                         border_radius: BorderRadius::all(Val::Px(3.0)),
                         ..default()
                     },
-                    BackgroundColor(theme::ACCENT),
+                    BackgroundColor(theme.colors.accent),
                 ));
             })
             .id();
         commands.entity(current_row).add_child(progress_bg);
     } else {
-        spawn_secondary_text(commands, row, "Idle");
+        spawn_secondary_text(commands, row, "Idle", theme);
     }
 
     let queue_items = if show_full_queue {
@@ -535,7 +548,7 @@ fn spawn_building_queue_card(
                         border_radius: BorderRadius::all(Val::Px(4.0)),
                         ..default()
                     },
-                    BackgroundColor(theme::BG_PANEL),
+                    BackgroundColor(theme.colors.bg_panel),
                 ))
                 .with_children(|chip| {
                     chip.spawn((
@@ -549,18 +562,18 @@ fn spawn_building_queue_card(
                     chip.spawn((
                         Text::new(unit_kind.display_name()),
                         TextFont {
-                            font_size: theme::FONT_CAPTION,
+                            font_size: theme.typography.caption,
                             ..default()
                         },
-                        TextColor(theme::TEXT_SECONDARY),
+                        TextColor(theme.colors.text_secondary),
                     ));
                     chip.spawn((
                         Text::new("x"),
                         TextFont {
-                            font_size: theme::FONT_TINY,
+                            font_size: theme.typography.tiny,
                             ..default()
                         },
-                        TextColor(theme::TEXT_DISABLED),
+                        TextColor(theme.colors.text_disabled),
                     ));
                 })
                 .id();
@@ -573,10 +586,10 @@ fn spawn_building_queue_card(
                     QueuePanelItem,
                     Text::new(format!("+{}", queue.queue.len() - queue_items)),
                     TextFont {
-                        font_size: theme::FONT_CAPTION,
+                        font_size: theme.typography.caption,
                         ..default()
                     },
-                    TextColor(theme::TEXT_DISABLED),
+                    TextColor(theme.colors.text_disabled),
                 ))
                 .id();
             commands.entity(queue_row).add_child(more);

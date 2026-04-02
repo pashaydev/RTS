@@ -1,16 +1,16 @@
 use bevy::prelude::*;
 
 use crate::components::*;
-use crate::theme;
+use crate::theme::Theme;
 
-pub fn hp_color(current: f32, max: f32) -> Color {
+pub fn hp_color(theme: &Theme, current: f32, max: f32) -> Color {
     let pct = (current / max).clamp(0.0, 1.0);
     if pct > 0.6 {
-        theme::HP_HIGH
+        theme.colors.hp_high()
     } else if pct > 0.3 {
-        theme::HP_MID
+        theme.colors.hp_mid()
     } else {
-        theme::HP_LOW
+        theme.colors.hp_low()
     }
 }
 
@@ -20,9 +20,10 @@ pub fn spawn_hp_bar(
     tracked_entity: Entity,
     health: &Health,
     width: f32,
+    theme: &Theme,
 ) {
     let pct = (health.current / health.max).clamp(0.0, 1.0) * 100.0;
-    let bar_color = hp_color(health.current, health.max);
+    let bar_color = hp_color(theme, health.current, health.max);
 
     let bg = commands
         .spawn((
@@ -32,7 +33,7 @@ pub fn spawn_hp_bar(
                 border_radius: BorderRadius::all(Val::Px(3.0)),
                 ..default()
             },
-            BackgroundColor(theme::HP_BAR_BG),
+            BackgroundColor(theme.colors.hp_bar_bg),
         ))
         .id();
     commands.entity(parent).add_child(bg);

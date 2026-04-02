@@ -190,21 +190,45 @@ pub fn execute_input_command(
 ) {
     for cmd in &input.commands {
         match cmd {
-            InputCommand::Move { target } => {
+            InputCommand::Move { target, formation } => {
                 let pos = Vec3::new(target[0], target[1], target[2]);
                 let n = input.entity_ids.len();
-                let spacing = 1.5;
-                let radius = if n > 1 {
-                    (spacing * n as f32 / std::f32::consts::TAU).max(1.0)
+                let formation = formation
+                    .map(FormationType::from_net_u8)
+                    .unwrap_or_default();
+                let centroid = if n > 1 {
+                    let mut sum = Vec3::ZERO;
+                    let mut counted = 0usize;
+                    for &eid in &input.entity_ids {
+                        let Some(&ecs_entity) = net_map.to_ecs.get(&eid) else {
+                            continue;
+                        };
+                        let Ok(tf) = transforms.get(ecs_entity) else {
+                            continue;
+                        };
+                        sum += tf.translation();
+                        counted += 1;
+                    }
+                    if counted > 0 {
+                        sum / counted as f32
+                    } else {
+                        pos
+                    }
                 } else {
-                    0.0
+                    pos
+                };
+                let facing =
+                    Vec2::new(pos.x - centroid.x, pos.z - centroid.z).normalize_or_zero();
+                let offsets = if n > 1 {
+                    formation_offsets(formation, n, facing)
+                } else {
+                    Vec::new()
                 };
                 for (i, &eid) in input.entity_ids.iter().enumerate() {
                     if let Some(&ecs_entity) = net_map.to_ecs.get(&eid) {
                         let dest = if n > 1 {
-                            let angle = i as f32 / n as f32 * std::f32::consts::TAU;
-                            let offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
-                            pos + offset
+                            let offset = offsets.get(i).copied().unwrap_or(Vec2::ZERO);
+                            pos + Vec3::new(offset.x, 0.0, offset.y)
                         } else {
                             pos
                         };

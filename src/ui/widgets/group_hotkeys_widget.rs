@@ -5,7 +5,7 @@ use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
 use crate::components::*;
-use crate::theme;
+use crate::theme::{self, Theme};
 
 pub struct GroupHotkeysWidgetPlugin;
 
@@ -40,6 +40,7 @@ fn spawn_group_hotkeys_widget(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
+    theme: Res<Theme>,
     root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
     let Ok(hud_root) = root_q.single() else {
@@ -52,6 +53,7 @@ fn spawn_group_hotkeys_widget(
         registry.slots.get(&WidgetId::GroupHotkeys).unwrap(),
         registry.is_visible(WidgetId::GroupHotkeys),
         &fonts,
+        &theme,
     );
 }
 
@@ -121,6 +123,7 @@ fn grid_columns_for(count: usize) -> u16 {
 pub fn update_group_hotkeys_widget(
     mut commands: Commands,
     icons: Res<IconAssets>,
+    theme: Res<Theme>,
     control_groups: Res<ControlGroups>,
     group_state: Res<ControlGroupState>,
     widget_q: Query<(&super::widget_framework::Widget, &Children)>,
@@ -239,15 +242,15 @@ pub fn update_group_hotkeys_widget(
         } else if has_selected_members {
             group_color(i)
         } else if is_empty {
-            theme::TEXT_DISABLED
+            theme.colors.text_disabled
         } else {
-            theme::TEXT_PRIMARY
+            theme.colors.text_primary
         };
         let num = commands
             .spawn((
                 Text::new(format!("{}", i + 1)),
                 TextFont {
-                    font_size: theme::FONT_SMALL,
+                    font_size: theme.typography.small,
                     ..default()
                 },
                 TextColor(num_color),
@@ -261,7 +264,7 @@ pub fn update_group_hotkeys_widget(
                 .spawn((
                     Text::new("+"),
                     TextFont {
-                        font_size: theme::FONT_BODY,
+                        font_size: theme.typography.body,
                         ..default()
                     },
                     TextColor(Color::srgba(0.5, 0.5, 0.5, 0.5)),
@@ -315,10 +318,10 @@ pub fn update_group_hotkeys_widget(
                     .spawn((
                         Text::new(format!("{}", count)),
                         TextFont {
-                            font_size: theme::FONT_TINY,
+                            font_size: theme.typography.tiny,
                             ..default()
                         },
-                        TextColor(theme::TEXT_SECONDARY),
+                        TextColor(theme.colors.text_secondary),
                     ))
                     .id();
                 commands.entity(count_row).add_child(ct);
@@ -330,10 +333,10 @@ pub fn update_group_hotkeys_widget(
                     .spawn((
                         Text::new(format!("+{}", extra)),
                         TextFont {
-                            font_size: theme::FONT_TINY,
+                            font_size: theme.typography.tiny,
                             ..default()
                         },
-                        TextColor(theme::TEXT_DISABLED),
+                        TextColor(theme.colors.text_disabled),
                     ))
                     .id();
                 commands.entity(count_row).add_child(more);
@@ -345,7 +348,7 @@ pub fn update_group_hotkeys_widget(
                     .spawn((
                         Text::new(format!("{}/{}", selected_in_group, alive.len())),
                         TextFont {
-                            font_size: theme::FONT_TINY,
+                            font_size: theme.typography.tiny,
                             ..default()
                         },
                         TextColor(group_color(i).with_alpha(0.7)),
@@ -362,7 +365,7 @@ pub fn update_group_hotkeys_widget(
             .spawn((
                 Text::new("Ctrl+# set  Shift+# add  R-click assign"),
                 TextFont {
-                    font_size: theme::FONT_TINY,
+                    font_size: theme.typography.tiny,
                     ..default()
                 },
                 TextColor(Color::srgba(0.45, 0.45, 0.50, 0.7)),

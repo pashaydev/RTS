@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::components::*;
-use crate::theme;
+use crate::theme::Theme;
 
 // ── Easing Functions ──
 
@@ -147,6 +147,7 @@ pub fn ui_line_expand_system(
 /// Animates floating background particles with drift and alpha pulsing.
 pub fn menu_particle_system(
     time: Res<Time>,
+    theme: Res<Theme>,
     mut query: Query<(&mut Node, &mut BackgroundColor, &MenuParticle)>,
 ) {
     let t = time.elapsed_secs();
@@ -172,7 +173,7 @@ pub fn menu_particle_system(
 
         // Alpha pulse
         let alpha = particle.base_alpha * (0.5 + 0.5 * (t * 0.8 + particle.phase).sin());
-        let srgba = theme::ACCENT.to_srgba();
+        let srgba = theme.colors.accent.to_srgba();
         bg.0 = Color::srgba(srgba.red, srgba.green, srgba.blue, alpha * 0.3);
     }
 }

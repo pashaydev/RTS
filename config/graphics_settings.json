@@ -1,18 +1,19 @@
 {
   "resolution": [
-    1280,
-    720
+    1600,
+    900
   ],
   "fullscreen": true,
   "vsync": true,
   "shadow_quality": "High",
   "entity_lights": true,
   "anti_aliasing": "Smaa",
-  "bloom": "Medium",
+  "bloom": "Off",
   "brightness": 1.0,
-  "auto_exposure": true,
+  "auto_exposure": false,
   "depth_of_field": "Off",
   "motion_blur": "Off",
   "chromatic_aberration": "Off",
-  "ui_scale": 1.0
+  "ui_scale": 1.0,
+  "theme_mode": "Dark"
 }

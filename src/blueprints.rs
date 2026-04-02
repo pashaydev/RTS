@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::render::render_resource::PrimitiveTopology;
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline, OutlineStencil, OutlineVolume};
 use rand::Rng;
 use std::collections::HashMap;
@@ -42,6 +43,7 @@ pub enum EntityKind {
     WallSegment,
     WallPost,
     WallCorner,
+    Floor,
     Storage,
     House,
     MageTower,
@@ -103,6 +105,7 @@ impl EntityKind {
             | Self::WallSegment
             | Self::WallPost
             | Self::WallCorner
+            | Self::Floor
             | Self::Storage
             | Self::House
             | Self::MageTower
@@ -194,6 +197,7 @@ impl EntityKind {
             Self::WallSegment => "Wall",
             Self::WallPost => "Wall Post",
             Self::WallCorner => "Wall Corner",
+            Self::Floor => "Floor",
             Self::Storage => "Storage",
             Self::House => "House",
             Self::MageTower => "Mage Tower",
@@ -239,6 +243,7 @@ impl EntityKind {
         EntityKind::Gatehouse,
         EntityKind::WallSegment,
         EntityKind::WallPost,
+        EntityKind::Floor,
         EntityKind::Storage,
         EntityKind::House,
         EntityKind::MageTower,
@@ -299,6 +304,7 @@ impl EntityKind {
             Self::WallSegment => "Defensive wall segment. Best placed in long runs.",
             Self::WallPost => "Wall junction support piece.",
             Self::WallCorner => "Corner wall piece. Auto-placed at wall bends.",
+            Self::Floor => "Grid-based foundation tile. Flattens terrain and supports tidy base layouts.",
             Self::Storage => "Resource depot. Increases storage capacity.",
             Self::House => {
                 "Housing building. Increases max units by +4 at level 1, +6 at level 2, and +8 at level 3."
@@ -1004,6 +1010,7 @@ impl BlueprintRegistry {
             EntityKind::WallSegment,
             EntityKind::WallCorner,
             EntityKind::Gatehouse,
+            EntityKind::Floor,
             EntityKind::WatchTower,
             EntityKind::GuardTower,
             EntityKind::BallistaTower,
@@ -1038,6 +1045,218 @@ pub struct EntityVisualCache {
     pub materials_default: HashMap<EntityKind, Handle<StandardMaterial>>,
     pub materials_selected: HashMap<EntityKind, Handle<StandardMaterial>>,
     pub materials_hovered: HashMap<EntityKind, Handle<StandardMaterial>>,
+    pub floor_piece_meshes: HashMap<FloorPieceKind, Handle<Mesh>>,
+}
+
+fn fill_floor_rect(
+    occupancy: &mut [bool],
+    grid: usize,
+    world_size: f32,
+    min_x: f32,
+    max_x: f32,
+    min_z: f32,
+    max_z: f32,
+) {
+    let cell = world_size / grid as f32;
+    let half = world_size * 0.5;
+    for gz in 0..grid {
+        for gx in 0..grid {
+            let x = -half + (gx as f32 + 0.5) * cell;
+            let z = -half + (gz as f32 + 0.5) * cell;
+            if x >= min_x && x <= max_x && z >= min_z && z <= max_z {
+                occupancy[gz * grid + gx] = true;
+            }
+        }
+    }
+}
+
+fn build_floor_shape_occupancy(
+    kind: FloorPieceKind,
+    grid: usize,
+    world_size: f32,
+    inset: f32,
+) -> Vec<bool> {
+    let mut occupancy = vec![false; grid * grid];
+
+    let mut north = false;
+    let mut east = false;
+    let mut south = false;
+    let mut west = false;
+    match kind {
+        FloorPieceKind::Isolated => {}
+        FloorPieceKind::End => north = true,
+        FloorPieceKind::Straight => {
+            north = true;
+            south = true;
+        }
+        FloorPieceKind::Corner => {
+            north = true;
+            east = true;
+        }
+        FloorPieceKind::Tee => {
+            north = true;
+            east = true;
+            west = true;
+        }
+        FloorPieceKind::Cross => {
+            north = true;
+            east = true;
+            south = true;
+            west = true;
+        }
+    }
+
+    let tile_half = world_size * 0.5;
+    let edge = tile_half - 0.04 - inset;
+    let retract = (0.28 + inset).min(tile_half - 0.2);
+
+    let min_x = if west { -edge } else { -tile_half + retract };
+    let max_x = if east { edge } else { tile_half - retract };
+    let min_z = if north { -edge } else { -tile_half + retract };
+    let max_z = if south { edge } else { tile_half - retract };
+
+    fill_floor_rect(
+        &mut occupancy,
+        grid,
+        world_size,
+        min_x,
+        max_x,
+        min_z,
+        max_z,
+    );
+
+    occupancy
+}
+
+fn emit_occupancy_prism(
+    positions: &mut Vec<[f32; 3]>,
+    normals: &mut Vec<[f32; 3]>,
+    uvs: &mut Vec<[f32; 2]>,
+    indices: &mut Vec<u32>,
+    occupancy: &[bool],
+    grid: usize,
+    world_size: f32,
+    bottom_y: f32,
+    top_y: f32,
+    emit_bottom: bool,
+) {
+    let cell = world_size / grid as f32;
+    let half = world_size * 0.5;
+    let idx_of = |gx: usize, gz: usize| gz * grid + gx;
+    let occupied = |gx: isize, gz: isize| -> bool {
+        if gx < 0 || gz < 0 || gx >= grid as isize || gz >= grid as isize {
+            return false;
+        }
+        occupancy[idx_of(gx as usize, gz as usize)]
+    };
+    let mut push_quad =
+        |verts: [[f32; 3]; 4], normal: [f32; 3], uv_rect: [[f32; 2]; 4]| {
+            let base = positions.len() as u32;
+            positions.extend_from_slice(&verts);
+            normals.extend_from_slice(&[normal; 4]);
+            uvs.extend_from_slice(&uv_rect);
+            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        };
+
+    for gz in 0..grid {
+        for gx in 0..grid {
+            if !occupancy[idx_of(gx, gz)] {
+                continue;
+            }
+
+            let x0 = -half + gx as f32 * cell;
+            let x1 = x0 + cell;
+            let z0 = -half + gz as f32 * cell;
+            let z1 = z0 + cell;
+
+            push_quad(
+                [[x0, top_y, z0], [x1, top_y, z0], [x1, top_y, z1], [x0, top_y, z1]],
+                [0.0, 1.0, 0.0],
+                [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            );
+
+            if emit_bottom {
+                push_quad(
+                    [[x0, bottom_y, z1], [x1, bottom_y, z1], [x1, bottom_y, z0], [x0, bottom_y, z0]],
+                    [0.0, -1.0, 0.0],
+                    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                );
+            }
+
+            if !occupied(gx as isize, gz as isize - 1) {
+                push_quad(
+                    [[x0, bottom_y, z0], [x1, bottom_y, z0], [x1, top_y, z0], [x0, top_y, z0]],
+                    [0.0, 0.0, -1.0],
+                    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                );
+            }
+            if !occupied(gx as isize + 1, gz as isize) {
+                push_quad(
+                    [[x1, bottom_y, z0], [x1, bottom_y, z1], [x1, top_y, z1], [x1, top_y, z0]],
+                    [1.0, 0.0, 0.0],
+                    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                );
+            }
+            if !occupied(gx as isize, gz as isize + 1) {
+                push_quad(
+                    [[x1, bottom_y, z1], [x0, bottom_y, z1], [x0, top_y, z1], [x1, top_y, z1]],
+                    [0.0, 0.0, 1.0],
+                    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                );
+            }
+            if !occupied(gx as isize - 1, gz as isize) {
+                push_quad(
+                    [[x0, bottom_y, z1], [x0, bottom_y, z0], [x0, top_y, z0], [x0, top_y, z1]],
+                    [-1.0, 0.0, 0.0],
+                    [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                );
+            }
+        }
+    }
+}
+
+fn build_floor_piece_mesh(kind: FloorPieceKind) -> Mesh {
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uvs = Vec::new();
+    let mut indices = Vec::new();
+
+    let world_size = 3.12;
+    let grid = 18;
+    let base = build_floor_shape_occupancy(kind, grid, world_size, 0.0);
+    let cap = build_floor_shape_occupancy(kind, grid, world_size, 0.12);
+
+    emit_occupancy_prism(
+        &mut positions,
+        &mut normals,
+        &mut uvs,
+        &mut indices,
+        &base,
+        grid,
+        world_size,
+        -0.12,
+        0.0,
+        true,
+    );
+    emit_occupancy_prism(
+        &mut positions,
+        &mut normals,
+        &mut uvs,
+        &mut indices,
+        &cap,
+        grid,
+        world_size,
+        0.0,
+        0.06,
+        false,
+    );
+
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_indices(bevy::mesh::Indices::U32(indices));
+    mesh
 }
 
 // ── Build the registry ──
@@ -2153,6 +2372,40 @@ pub fn build_registry() -> BlueprintRegistry {
     );
 
     blueprints.insert(
+        EntityKind::Floor,
+        Blueprint {
+            faction: Faction::Player1,
+            combat: None,
+            movement: None,
+            gathering: None,
+            vision: None,
+            cost: ResourceCost::new()
+                .with(ResourceType::Wood, 4)
+                .with(ResourceType::Stone, 2),
+            train_time_secs: 0.0,
+            building: Some(BuildingData {
+                construction_time_secs: 0.0,
+                half_height: 0.12,
+                trains: vec![],
+                prerequisite: Some(EntityKind::Base),
+                level_upgrades: vec![],
+            }),
+            mob_ai: None,
+            visual: VisualDef {
+                mesh_kind: MeshKind::Cuboid {
+                    x: 3.04,
+                    y: 0.24,
+                    z: 3.04,
+                },
+                color: Color::srgb(0.56, 0.47, 0.35),
+                selected_color: Color::srgb(0.72, 0.62, 0.46),
+                selected_emissive: LinearRgba::new(0.08, 0.06, 0.03, 1.0),
+                scale: 1.0,
+            },
+        },
+    );
+
+    blueprints.insert(
         EntityKind::Storage,
         Blueprint {
             faction: Faction::Player1,
@@ -2873,11 +3126,11 @@ pub fn build_registry() -> BlueprintRegistry {
                 patrol_radius: 12.0,
             }),
             visual: VisualDef {
-                mesh_kind: MeshKind::ProceduralMob { pick_radius: 3.0 },
+                mesh_kind: MeshKind::GltfCharacter { pick_radius: 3.0 },
                 color: Color::srgb(0.3, 0.6, 0.15),
                 selected_color: Color::srgb(0.3, 0.6, 0.15),
                 selected_emissive: LinearRgba::NONE,
-                scale: 2.0,
+                scale: 1.0,
             },
         },
     );
@@ -3271,7 +3524,7 @@ pub fn spawn_from_blueprint_with_faction(
                 entity_cmds.insert(ProceduralMob {
                     visual_kind,
                     phase: 0.0,
-                    base_y_offset: bp.movement.as_ref().map(|m| m.y_offset).unwrap_or(0.8),
+                    base_y_offset: bp.movement.as_ref().map(|m| m.y_offset).unwrap_or(0.3),
                     base_scale: Vec3::splat(bp.visual.scale),
                     base_translation: Vec3::ZERO,
                     attack_timer: None,
@@ -3283,7 +3536,8 @@ pub fn spawn_from_blueprint_with_faction(
         }
         EntityCategory::Building => {
             let footprint = crate::buildings::footprint_for_kind(kind);
-            entity_cmds.insert((Building, BuildingLevel(1), BuildingFootprint(footprint)));
+            let bld_height = crate::buildings::building_height_for_kind(kind);
+            entity_cmds.insert((Building, BuildingLevel(1), BuildingFootprint(footprint), BuildingHeight(bld_height)));
             if let Some(ref bd) = bp.building {
                 let mut construction_timer =
                     Timer::from_seconds(bd.construction_time_secs, TimerMode::Once);
@@ -3616,7 +3870,9 @@ pub fn build_visual_cache(
     let mut cache = EntityVisualCache::default();
 
     for (kind, bp) in &registry.blueprints {
-        let mesh = match bp.visual.mesh_kind {
+        let mesh = match *kind {
+            EntityKind::Floor => meshes.add(build_floor_piece_mesh(FloorPieceKind::Cross)),
+            _ => match bp.visual.mesh_kind {
             MeshKind::Capsule { radius, length } => meshes.add(Capsule3d::new(radius, length)),
             MeshKind::Cuboid { x, y, z } => meshes.add(Cuboid::new(x, y, z)),
             MeshKind::GltfScene { .. } => meshes.add(Cuboid::new(4.0, 0.3, 4.0)),
@@ -3628,6 +3884,7 @@ pub fn build_visual_cache(
                 EntityKind::Demon => meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
                 _ => meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
             },
+            },
         };
 
         let emissive = match *kind {
@@ -3637,34 +3894,56 @@ pub fn build_visual_cache(
             }
             _ => LinearRgba::NONE,
         };
-        let mat_default = materials.add(StandardMaterial {
+        let mut default_material = StandardMaterial {
             base_color: bp.visual.color,
             emissive,
             ..default()
-        });
-
-        let mat_selected = materials.add(StandardMaterial {
+        };
+        let mut selected_material = StandardMaterial {
             base_color: bp.visual.selected_color,
             emissive: bp.visual.selected_emissive,
             ..default()
-        });
-
-        let hovered_emissive = LinearRgba::new(
-            bp.visual.selected_emissive.red * 0.35,
-            bp.visual.selected_emissive.green * 0.35,
-            bp.visual.selected_emissive.blue * 0.35,
-            bp.visual.selected_emissive.alpha,
-        );
-        let mat_hovered = materials.add(StandardMaterial {
+        };
+        let mut hovered_material = StandardMaterial {
             base_color: bp.visual.color,
-            emissive: hovered_emissive,
+            emissive: LinearRgba::new(
+                bp.visual.selected_emissive.red * 0.35,
+                bp.visual.selected_emissive.green * 0.35,
+                bp.visual.selected_emissive.blue * 0.35,
+                bp.visual.selected_emissive.alpha,
+            ),
             ..default()
-        });
+        };
+
+        if *kind == EntityKind::Floor {
+            default_material.perceptual_roughness = 0.95;
+            default_material.metallic = 0.0;
+            selected_material.perceptual_roughness = 0.9;
+            hovered_material.perceptual_roughness = 0.93;
+        }
+
+        let mat_default = materials.add(default_material);
+
+        let mat_selected = materials.add(selected_material);
+        let mat_hovered = materials.add(hovered_material);
 
         cache.meshes.insert(*kind, mesh);
         cache.materials_default.insert(*kind, mat_default);
         cache.materials_selected.insert(*kind, mat_selected);
         cache.materials_hovered.insert(*kind, mat_hovered);
+    }
+
+    for piece in [
+        FloorPieceKind::Isolated,
+        FloorPieceKind::End,
+        FloorPieceKind::Straight,
+        FloorPieceKind::Corner,
+        FloorPieceKind::Tee,
+        FloorPieceKind::Cross,
+    ] {
+        cache
+            .floor_piece_meshes
+            .insert(piece, meshes.add(build_floor_piece_mesh(piece)));
     }
 
     cache

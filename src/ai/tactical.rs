@@ -24,7 +24,7 @@ pub fn ai_tactical_system(
     spatial_grid: Res<SpatialHashGrid>,
     own_entities_q: Query<
         (Entity, &Faction, &Transform, &Health),
-        Or<(With<Unit>, With<Building>)>,
+        (Or<(With<Unit>, With<Building>)>, Without<FloorTile>),
     >,
     enemy_units_q: Query<
         (
@@ -38,7 +38,7 @@ pub fn ai_tactical_system(
         Or<(With<Unit>, With<Mob>)>,
     >,
     hostile_unit_data_q: Query<(&Faction, &Transform, &Health, Option<&AttackDamage>), Or<(With<Unit>, With<Mob>)>>,
-    buildings_q: Query<(&Faction, &Transform), With<Building>>,
+    buildings_q: Query<(&Faction, &Transform), (With<Building>, Without<FloorTile>)>,
 ) {
     let dt = time.delta_secs();
 

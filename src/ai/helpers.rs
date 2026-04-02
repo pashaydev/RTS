@@ -188,7 +188,7 @@ pub fn update_threat(threats: &mut Vec<ThreatEntry>, pos: Vec3, strength: f32, g
 pub fn pick_strategic_target(
     base_pos: Vec3,
     threats: &[ThreatEntry],
-    enemy_buildings: &Query<(&Faction, &Transform), With<Building>>,
+    enemy_buildings: &Query<(&Faction, &Transform), (With<Building>, Without<FloorTile>)>,
     teams: &TeamConfig,
     faction: &Faction,
 ) -> Option<Vec3> {
@@ -238,7 +238,7 @@ pub fn pick_strategic_target(
 }
 
 pub fn find_enemy_resource_area(
-    buildings: &Query<(&Faction, &Transform), With<Building>>,
+    buildings: &Query<(&Faction, &Transform), (With<Building>, Without<FloorTile>)>,
     teams: &TeamConfig,
     faction: &Faction,
 ) -> Option<Vec3> {

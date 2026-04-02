@@ -255,6 +255,8 @@ pub struct GraphicsSettings {
     pub chromatic_aberration: EffectQuality,
     #[serde(default = "default_ui_scale")]
     pub ui_scale: f32,
+    #[serde(default)]
+    pub theme_mode: crate::theme::ThemeMode,
 }
 
 fn default_vsync() -> bool {
@@ -301,6 +303,7 @@ impl Default for GraphicsSettings {
             motion_blur: EffectQuality::Off,
             chromatic_aberration: EffectQuality::Off,
             ui_scale: 1.0,
+            theme_mode: crate::theme::ThemeMode::Dark,
         }
     }
 }
@@ -553,9 +556,6 @@ pub enum CommandMode {
 
 #[derive(Component)]
 pub struct HoverRing;
-
-#[derive(Component)]
-pub struct HoverTooltip;
 
 #[derive(Resource)]
 pub struct HoverRingAssets {
@@ -909,6 +909,7 @@ pub struct PendingBuildOrder {
     pub kind: crate::blueprints::EntityKind,
     pub position: Vec3,
     pub faction: Faction,
+    pub rotation_y: f32,
 }
 
 #[derive(Component)]
@@ -916,6 +917,7 @@ pub struct BuildSitePreparation {
     pub kind: crate::blueprints::EntityKind,
     pub position: Vec3,
     pub faction: Faction,
+    pub rotation_y: f32,
     pub prep_timer: Timer,
     pub vfx_timer: Timer,
     pub burst_count: u8,
@@ -2454,29 +2456,99 @@ pub struct DemonPulseRing {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum FormationType {
-    #[default]
-    None,
     Line,
-    Box,
-    Wedge,
+    #[default]
+    Grid,
+    Chess,
 }
 
 impl FormationType {
+    pub const ALL: [Self; 3] = [Self::Line, Self::Grid, Self::Chess];
+
     pub fn display_name(self) -> &'static str {
         match self {
-            Self::None => "No Formation",
             Self::Line => "Line",
-            Self::Box => "Box",
-            Self::Wedge => "Wedge",
+            Self::Grid => "Grid",
+            Self::Chess => "Chess",
+        }
+    }
+
+    pub fn tooltip_text(self) -> &'static str {
+        match self {
+            Self::Line => "Wide front line for direct pushes",
+            Self::Grid => "Compact block for default group movement",
+            Self::Chess => "Staggered checker pattern for cleaner spacing",
         }
     }
 
     pub fn cycle(self) -> Self {
         match self {
-            Self::None => Self::Line,
-            Self::Line => Self::Box,
-            Self::Box => Self::Wedge,
-            Self::Wedge => Self::None,
+            Self::Line => Self::Grid,
+            Self::Grid => Self::Chess,
+            Self::Chess => Self::Line,
+        }
+    }
+
+    pub fn to_net_u8(self) -> u8 {
+        match self {
+            Self::Line => 0,
+            Self::Grid => 1,
+            Self::Chess => 2,
+        }
+    }
+
+    pub fn from_net_u8(value: u8) -> Self {
+        match value {
+            0 => Self::Line,
+            2 => Self::Chess,
+            _ => Self::Grid,
+        }
+    }
+}
+
+pub fn formation_offsets(formation: FormationType, count: usize, facing: Vec2) -> Vec<Vec2> {
+    let spacing = 2.0;
+    let forward = facing.normalize_or_zero();
+    let forward = if forward.length_squared() > 0.0 {
+        forward
+    } else {
+        Vec2::Y
+    };
+    let perp = Vec2::new(-forward.y, forward.x);
+
+    match formation {
+        FormationType::Line => (0..count)
+            .map(|i| {
+                let offset = (i as f32 - (count as f32 - 1.0) / 2.0) * spacing;
+                perp * offset
+            })
+            .collect(),
+        FormationType::Grid => {
+            let cols = (count as f32).sqrt().ceil() as usize;
+            let spacing_val = spacing * 1.25;
+            (0..count)
+                .map(|i| {
+                    let col = i % cols;
+                    let row = i / cols;
+                    let x = (col as f32 - (cols as f32 - 1.0) / 2.0) * spacing_val;
+                    let y = -(row as f32) * spacing_val;
+                    perp * x + forward * y
+                })
+                .collect()
+        }
+        FormationType::Chess => {
+            let cols = (count as f32).sqrt().ceil() as usize;
+            let spacing_val = spacing * 1.15;
+            (0..count)
+                .map(|i| {
+                    let col = i % cols;
+                    let row = i / cols;
+                    let row_shift = if row % 2 == 0 { 0.0 } else { spacing_val * 0.5 };
+                    let x = (col as f32 - (cols as f32 - 1.0) / 2.0) * spacing_val + row_shift;
+                    let y = -(row as f32) * spacing_val;
+                    perp * x + forward * y
+                })
+                .collect()
         }
     }
 }
@@ -2810,6 +2882,7 @@ impl IconAssets {
             EntityKind::WallSegment => self.tower.clone(),
             EntityKind::WallPost => self.tower.clone(),
             EntityKind::WallCorner => self.tower.clone(),
+            EntityKind::Floor => self.storage.clone(),
             EntityKind::Storage => self.storage.clone(),
             EntityKind::House => self.storage.clone(),
             // Units
@@ -2988,6 +3061,10 @@ pub struct Building;
 #[derive(Component)]
 pub struct BuildingFootprint(pub f32);
 
+/// Approximate total height of a building above terrain (for AABB picking).
+#[derive(Component)]
+pub struct BuildingHeight(pub f32);
+
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum BuildingState {
     UnderConstruction,
@@ -3028,9 +3105,16 @@ pub struct WallCornerPiece;
 #[derive(Component)]
 pub struct GatePiece;
 
+#[derive(Component)]
+pub struct FloorTile;
+
 /// Grid coordinate of a wall entity in the WallGrid.
 #[derive(Component, Clone, Copy)]
 pub struct WallGridCoord(pub i32, pub i32);
+
+/// Grid coordinate of a floor tile entity in the FloorGrid.
+#[derive(Component, Clone, Copy)]
+pub struct FloorGridCoord(pub i32, pub i32);
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum PlacementMode {
@@ -3039,6 +3123,7 @@ pub enum PlacementMode {
     PlotBase,
     PlotWall { start: Vec3 },
     PlotGate,
+    PlotFloor { start: Vec3 },
 }
 
 #[derive(Resource)]
@@ -3048,6 +3133,10 @@ pub struct BuildingPlacementState {
     pub awaiting_release: bool,
     /// Feedback text shown during placement (e.g. biome requirement hint)
     pub hint_text: Option<String>,
+    /// Y-axis rotation in radians for the building being placed (H/J to rotate).
+    pub rotation_y: f32,
+    /// Entity for the green grid plane shown under the ghost building.
+    pub grid_plane_entity: Option<Entity>,
 }
 
 impl Default for BuildingPlacementState {
@@ -3057,6 +3146,8 @@ impl Default for BuildingPlacementState {
             preview_entity: None,
             awaiting_release: false,
             hint_text: None,
+            rotation_y: 0.0,
+            grid_plane_entity: None,
         }
     }
 }
@@ -3068,6 +3159,25 @@ pub struct WallPlotPreview {
     pub ghost_entities: Vec<Entity>,
     pub total_cost: crate::blueprints::ResourceCost,
     pub valid: bool,
+}
+
+#[derive(Resource, Default)]
+pub struct FloorPlotPreview {
+    pub start: Option<Vec3>,
+    pub cells: Vec<(i32, i32)>,
+    pub ghost_entities: Vec<Entity>,
+    pub total_cost: crate::blueprints::ResourceCost,
+    pub valid: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum FloorPieceKind {
+    Isolated,
+    End,
+    Straight,
+    Corner,
+    Tee,
+    Cross,
 }
 
 // ── Wall Grid Auto-Tiling ──
@@ -3131,6 +3241,39 @@ impl WallGrid {
     pub fn neighbor_mask(&self, gx: i32, gz: i32) -> u8 {
         let mut mask = 0u8;
         for (i, (nx, nz)) in Self::cardinal_neighbors(gx, gz).iter().enumerate() {
+            if self.cells.contains_key(&(*nx, *nz)) {
+                mask |= 1 << i;
+            }
+        }
+        mask
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct FloorGrid {
+    pub cells: HashMap<(i32, i32), FloorGridCell>,
+    pub dirty: Vec<(i32, i32)>,
+}
+
+#[derive(Clone)]
+pub struct FloorGridCell {
+    pub entity: Entity,
+    pub _faction: Faction,
+    pub piece_kind: FloorPieceKind,
+    pub rotation_y: f32,
+}
+
+impl FloorGrid {
+    pub fn mark_dirty(&mut self, gx: i32, gz: i32) {
+        self.dirty.push((gx, gz));
+        for (nx, nz) in WallGrid::cardinal_neighbors(gx, gz) {
+            self.dirty.push((nx, nz));
+        }
+    }
+
+    pub fn neighbor_mask(&self, gx: i32, gz: i32) -> u8 {
+        let mut mask = 0u8;
+        for (i, (nx, nz)) in WallGrid::cardinal_neighbors(gx, gz).iter().enumerate() {
             if self.cells.contains_key(&(*nx, *nz)) {
                 mask |= 1 << i;
             }
@@ -3453,6 +3596,9 @@ pub struct AbilityButton(pub AbilityId);
 pub struct CycleFormationButton;
 
 #[derive(Component)]
+pub struct FormationPresetButton(pub FormationType);
+
+#[derive(Component)]
 pub struct ActionTooltip {
     pub owner: Entity,
 }
@@ -3568,10 +3714,15 @@ pub struct BuildingGhostMaterials {
     pub ghost_valid: Handle<StandardMaterial>,
     pub ghost_invalid: Handle<StandardMaterial>,
     pub under_construction: Handle<StandardMaterial>,
+    pub grid_plane: Handle<StandardMaterial>,
 }
 
 #[derive(Component)]
 pub struct GhostBuilding;
+
+/// Marker for the green grid plane shown under building ghost during placement.
+#[derive(Component)]
+pub struct GhostGridPlane;
 
 /// Marker: vegetation around this building has already been cleared.
 #[derive(Component)]
@@ -3732,11 +3883,6 @@ pub struct DamagePopup {
 pub struct AttentionIcon {
     pub owner: Entity,
     pub kind: AttentionKind,
-}
-
-#[derive(Component)]
-pub struct UnitLabel {
-    pub owner: Entity,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

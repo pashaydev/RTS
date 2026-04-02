@@ -415,23 +415,24 @@ fn biome_index(b: Biome) -> usize {
     }
 }
 
-/// Sample biome at many nearby offsets with Gaussian-like distance weighting
-/// and return a smoothly blended vertex color.
-fn blended_biome_color(
+/// Sample biomes from the (potentially patched) biome_data grid with Gaussian-weighted blending
+/// instead of querying `noise.biome_at`, so terrain colors match patched biomes.
+fn blended_biome_color_patched(
     noise: &TerrainNoise,
+    biome_data: &[Biome],
+    grid_size: usize,
     x: f32,
     z: f32,
     half_map: f32,
     step: f32,
 ) -> [f32; 4] {
-    // Use a wider blend radius (3× grid step) with more samples for smooth transitions
     let blend_radius = step * 3.0;
-    // 5×5 grid of sample points (25 samples) for much smoother blending
-    const SAMPLE_STEPS: i32 = 2; // -2..=2 → 5 steps per axis
+    const SAMPLE_STEPS: i32 = 2;
     let mut weights = [0.0f32; BIOME_COUNT];
     let mut height_norms = [0.0f32; BIOME_COUNT];
 
     let inv_sigma_sq = 1.0 / (blend_radius * blend_radius * 0.5);
+    let map_size = half_map * 2.0;
 
     for dzi in -SAMPLE_STEPS..=SAMPLE_STEPS {
         for dxi in -SAMPLE_STEPS..=SAMPLE_STEPS {
@@ -440,7 +441,6 @@ fn blended_biome_color(
             let dx = frac_x * blend_radius;
             let dz = frac_z * blend_radius;
 
-            // Gaussian-like weight: samples closer to center matter more
             let dist_sq = dx * dx + dz * dz;
             let w = (-dist_sq * inv_sigma_sq).exp();
 
@@ -448,7 +448,16 @@ fn blended_biome_color(
             let sz = z + dz;
             let h = noise.terrain_height(sx, sz, half_map);
             let hn = ((h / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0);
-            let b = noise.biome_at(sx, sz, half_map);
+
+            // Look up biome from the patched grid
+            let gx = ((sx + half_map) / map_size * (grid_size - 1) as f32)
+                .round()
+                .clamp(0.0, (grid_size - 1) as f32) as usize;
+            let gz = ((sz + half_map) / map_size * (grid_size - 1) as f32)
+                .round()
+                .clamp(0.0, (grid_size - 1) as f32) as usize;
+            let b = biome_data[gz * grid_size + gx];
+
             let idx = biome_index(b);
             weights[idx] += w;
             height_norms[idx] += hn * w;
@@ -597,11 +606,10 @@ pub fn spawn_ground(
     let actual_half_map = actual_map_size / 2.0;
     let actual_grid_size = ((actual_map_size / 1.5) as usize + 1).min(351);
 
-    // Generate terrain mesh
+    // Generate terrain mesh — pass 1: positions, normals, UVs, biome data
     let mut positions: Vec<[f32; 3]> = Vec::with_capacity(actual_grid_size * actual_grid_size);
     let mut normals: Vec<[f32; 3]> = Vec::with_capacity(actual_grid_size * actual_grid_size);
     let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(actual_grid_size * actual_grid_size);
-    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(actual_grid_size * actual_grid_size);
     let mut biome_data: Vec<Biome> = Vec::with_capacity(actual_grid_size * actual_grid_size);
 
     let step = actual_map_size / (actual_grid_size - 1) as f32;
@@ -613,15 +621,13 @@ pub fn spawn_ground(
             let z = -actual_half_map + iz as f32 * step;
             let y = noise.terrain_height(x, z, actual_half_map);
 
-            let biome = noise.biome_at(x, z, actual_half_map);
-            biome_data.push(biome);
+            biome_data.push(noise.biome_at(x, z, actual_half_map));
 
             positions.push([x, y, z]);
             uvs.push([
                 ix as f32 / (actual_grid_size - 1) as f32,
                 iz as f32 / (actual_grid_size - 1) as f32,
             ]);
-            colors.push(blended_biome_color(&noise, x, z, actual_half_map, step));
 
             // Central-difference normals
             let h_l = noise.terrain_height(x - eps, z, actual_half_map);
@@ -630,6 +636,35 @@ pub fn spawn_ground(
             let h_u = noise.terrain_height(x, z + eps, actual_half_map);
             let normal = Vec3::new(h_l - h_r, 2.0 * eps, h_d - h_u).normalize();
             normals.push(normal.to_array());
+        }
+    }
+
+    // Build HeightMap early so ensure_all_biomes can use it
+    let grid_heights: Vec<f32> = positions.iter().map(|p| p[1]).collect();
+
+    // Ensure every biome type appears on the map — patch in missing ones
+    ensure_all_biomes(
+        &mut biome_data,
+        actual_grid_size,
+        &grid_heights,
+        actual_half_map,
+    );
+
+    // Pass 2: compute vertex colors using (potentially patched) biome data
+    let mut colors: Vec<[f32; 4]> = Vec::with_capacity(actual_grid_size * actual_grid_size);
+    for iz in 0..actual_grid_size {
+        for ix in 0..actual_grid_size {
+            let x = -actual_half_map + ix as f32 * step;
+            let z = -actual_half_map + iz as f32 * step;
+            colors.push(blended_biome_color_patched(
+                &noise,
+                &biome_data,
+                actual_grid_size,
+                x,
+                z,
+                actual_half_map,
+                step,
+            ));
         }
     }
 
@@ -652,9 +687,6 @@ pub fn spawn_ground(
             indices.push(br);
         }
     }
-
-    // Build HeightMap from the same grid heights used by the mesh
-    let grid_heights: Vec<f32> = positions.iter().map(|p| p[1]).collect();
 
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
@@ -700,23 +732,24 @@ pub fn spawn_ground(
     let water_bodies = find_water_bodies(&grid_heights, actual_grid_size, step, actual_half_map);
 
     for body_cells in &water_bodies {
+        // Compute bounding sphere for frustum culling
+        let (center, radius) =
+            water_body_bounds(body_cells, actual_grid_size, step, actual_half_map);
         if let Some(mesh) = build_water_body_mesh(
             body_cells,
             &grid_heights,
             actual_grid_size,
             step,
             actual_half_map,
+            center,
         ) {
-            // Compute bounding sphere for frustum culling
-            let (center, radius) =
-                water_body_bounds(body_cells, actual_grid_size, step, actual_half_map);
             commands.spawn((
                 GameWorld,
                 WaterPlane,
                 Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(water_mat_handle.clone()),
-                Transform::IDENTITY,
-                CullingBounds::with_offset(radius, center),
+                Transform::from_translation(center),
+                CullingBounds::new(radius),
             ));
         }
     }
@@ -735,6 +768,140 @@ pub fn spawn_ground(
         grid_size: actual_grid_size,
         map_size: actual_map_size,
     });
+}
+
+/// Ensure every biome type has meaningful coverage on the map.
+/// Biomes below a minimum cell count get additional patches stamped at suitable locations.
+fn ensure_all_biomes(
+    biome_data: &mut [Biome],
+    grid_size: usize,
+    heights: &[f32],
+    half_map: f32,
+) {
+    let total_cells = biome_data.len();
+    // Each non-structural biome should cover at least 5% of the map
+    let min_cells = total_cells / 20;
+
+    // Biomes we guarantee coverage for (Water/Mountain are structural)
+    let target_biomes = [
+        Biome::Wetland,
+        Biome::Desert,
+        Biome::Forest,
+        Biome::Grassland,
+    ];
+
+    let patch_radius: usize = (grid_size / 14).max(5);
+    let margin = patch_radius + 4;
+    let stride = grid_size / 8; // coarse sampling stride to avoid O(n²) full scans
+
+    for biome in target_biomes {
+        let mut count = biome_data.iter().filter(|&&b| b == biome).count();
+        let mut patch_centers: Vec<(usize, usize)> = Vec::new();
+        let mut attempts = 0;
+
+        while count < min_cells && attempts < 6 {
+            attempts += 1;
+
+            // Coarse-grid search: sample every `stride` cells for speed
+            let mut best_score = f32::NEG_INFINITY;
+            let mut best_ix = grid_size / 2;
+            let mut best_iz = grid_size / 2;
+            let sample_step = stride.max(1);
+
+            let mut iz = margin;
+            while iz < grid_size - margin {
+                let mut ix = margin;
+                while ix < grid_size - margin {
+                    let idx = iz * grid_size + ix;
+                    let existing = biome_data[idx];
+                    if existing == biome
+                        || matches!(existing, Biome::Water | Biome::Mountain | Biome::Beach)
+                    {
+                        ix += sample_step;
+                        continue;
+                    }
+
+                    let h_norm = ((heights[idx] / AMPLITUDE) * 0.5 + 0.5).clamp(0.0, 1.0);
+                    let suitability =
+                        biome_suitability_score(biome, h_norm, ix, iz, grid_size, half_map);
+
+                    // Spread bonus: distance from previous patch centers (cheap)
+                    let spread_bonus = patch_centers
+                        .iter()
+                        .map(|&(cx, cz)| {
+                            ((ix as f32 - cx as f32).powi(2) + (iz as f32 - cz as f32).powi(2))
+                                .sqrt()
+                        })
+                        .min_by(|a, b| a.partial_cmp(b).unwrap())
+                        .map(|d| (d / patch_radius as f32).min(2.0) * 0.5)
+                        .unwrap_or(1.0);
+
+                    let score = suitability + spread_bonus;
+                    if score > best_score {
+                        best_score = score;
+                        best_ix = ix;
+                        best_iz = iz;
+                    }
+                    ix += sample_step;
+                }
+                iz += sample_step;
+            }
+
+            patch_centers.push((best_ix, best_iz));
+
+            // Stamp a circular patch
+            let r = patch_radius as i32;
+            let r_sq = r * r;
+            for dz in -r..=r {
+                for dx in -r..=r {
+                    if dx * dx + dz * dz > r_sq {
+                        continue;
+                    }
+                    let ix = best_ix as i32 + dx;
+                    let iz = best_iz as i32 + dz;
+                    if ix < 0 || iz < 0 || ix >= grid_size as i32 || iz >= grid_size as i32 {
+                        continue;
+                    }
+                    let idx = iz as usize * grid_size + ix as usize;
+                    if !matches!(biome_data[idx], Biome::Water | Biome::Mountain) {
+                        if biome_data[idx] != biome {
+                            count += 1;
+                        }
+                        biome_data[idx] = biome;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Score how suitable a grid cell is for a given biome.
+fn biome_suitability_score(
+    biome: Biome,
+    height_norm: f32,
+    ix: usize,
+    iz: usize,
+    grid_size: usize,
+    half_map: f32,
+) -> f32 {
+    let step = (half_map * 2.0) / (grid_size - 1) as f32;
+    let x = -half_map + ix as f32 * step;
+    let z = -half_map + iz as f32 * step;
+    let center_dist = (x * x + z * z).sqrt() / half_map;
+
+    match biome {
+        Biome::Wetland => -height_norm * 3.0 + center_dist * 0.5,
+        Biome::Desert => {
+            let ideal_height = 1.0 - (height_norm - 0.55).abs() * 4.0;
+            ideal_height + center_dist * 0.3
+        }
+        Biome::Forest => {
+            let ideal_height = 1.0 - (height_norm - 0.50).abs() * 3.0;
+            ideal_height + center_dist * 0.2
+        }
+        Biome::Grassland => 1.0 - (height_norm - 0.48).abs() * 2.0,
+        _ => 0.0,
+    }
 }
 
 /// Flood-fill on the grid-cell (quad) level to find connected water regions.
@@ -834,6 +1001,7 @@ fn build_water_body_mesh(
     grid_size: usize,
     step: f32,
     half_map: f32,
+    center: Vec3,
 ) -> Option<Mesh> {
     if cells.is_empty() {
         return None;
@@ -852,11 +1020,12 @@ fn build_water_body_mesh(
         }
         let iz = vi / grid_size;
         let ix = vi % grid_size;
-        let x = -half_map + ix as f32 * step;
-        let z = -half_map + iz as f32 * step;
+        // Build positions relative to center so the entity Transform places them correctly
+        let x = -half_map + ix as f32 * step - center.x;
+        let z = -half_map + iz as f32 * step - center.z;
         let idx = positions.len() as u32;
 
-        positions.push([x, WATER_LEVEL, z]);
+        positions.push([x, WATER_LEVEL - center.y, z]);
         normals.push([0.0, 1.0, 0.0]);
         uvs.push([
             ix as f32 / (grid_size - 1) as f32,

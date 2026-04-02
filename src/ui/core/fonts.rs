@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use bevy::text::Font;
 
-use crate::theme;
 
 #[derive(Resource, Clone)]
 pub struct UiFonts {
@@ -54,5 +53,6 @@ pub fn body_emphasis(fonts: &UiFonts, font_size: f32) -> TextFont {
 }
 
 pub fn toolbar(fonts: &UiFonts) -> TextFont {
-    body_emphasis(fonts, theme::FONT_CAPTION)
+    // caption = Typography::default().caption (10.0)
+    body_emphasis(fonts, 10.0)
 }

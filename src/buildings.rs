@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use bevy::asset::RenderAssetUsages;
 use bevy::ecs::system::SystemParam;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
@@ -10,6 +11,7 @@ use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityCategory, EntityKind,
     EntityVisualCache, LevelBonus,
 };
+use crate::camera;
 use crate::components::*;
 use crate::ground::{BorderSettings, HeightMap};
 use crate::model_assets::{BuildingConstructionAssets, BuildingModelAssets, UnitModelAssets};
@@ -213,6 +215,124 @@ pub fn spawn_wall_line(
     )
 }
 
+pub fn spawn_floor_grid_cells(
+    commands: &mut Commands,
+    cache: &EntityVisualCache,
+    height_map: &HeightMap,
+    floor_grid: &mut FloorGrid,
+    faction: Faction,
+    cells: &[(i32, i32)],
+) -> Vec<Entity> {
+    let mesh = cache
+        .floor_piece_meshes
+        .get(&FloorPieceKind::Isolated)
+        .expect("Missing floor piece mesh")
+        .clone();
+    let material = cache
+        .materials_default
+        .get(&EntityKind::Floor)
+        .expect("Missing floor material")
+        .clone();
+    let half_height = 0.12;
+    let footprint = footprint_for_kind(EntityKind::Floor);
+    let mut spawned = Vec::new();
+
+    for &(gx, gz) in cells {
+        if floor_grid.cells.contains_key(&(gx, gz)) {
+            continue;
+        }
+
+        let world = WallGrid::grid_to_world(gx, gz);
+        let ground_y = height_map.foundation_target_height(world.x, world.z, footprint);
+        let entity = commands
+            .spawn((
+                GameWorld,
+                EntityKind::Floor,
+                faction,
+                Building,
+                FloorTile,
+                FloorGridCoord(gx, gz),
+                BuildingFootprint(footprint),
+                VegetationCleared,
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_translation(Vec3::new(world.x, ground_y + half_height, world.z)),
+                Visibility::default(),
+            ))
+            .id();
+
+        floor_grid.cells.insert(
+            (gx, gz),
+            FloorGridCell {
+                entity,
+                _faction: faction,
+                piece_kind: FloorPieceKind::Isolated,
+                rotation_y: 0.0,
+            },
+        );
+        floor_grid.mark_dirty(gx, gz);
+        spawned.push(entity);
+    }
+
+    spawned
+}
+
+fn floor_piece_and_rotation(neighbor_mask: u8) -> (FloorPieceKind, f32) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+
+    let count = neighbor_mask.count_ones();
+    let n = neighbor_mask & 1 != 0;
+    let e = neighbor_mask & 2 != 0;
+    let s = neighbor_mask & 4 != 0;
+    let w = neighbor_mask & 8 != 0;
+
+    match count {
+        0 => (FloorPieceKind::Isolated, 0.0),
+        1 => {
+            let rot = if n {
+                0.0
+            } else if e {
+                FRAC_PI_2
+            } else if s {
+                PI
+            } else {
+                -FRAC_PI_2
+            };
+            (FloorPieceKind::End, rot)
+        }
+        2 => {
+            if (n && s) || (e && w) {
+                let rot = if e && w { FRAC_PI_2 } else { 0.0 };
+                (FloorPieceKind::Straight, rot)
+            } else {
+                let rot = if n && e {
+                    0.0
+                } else if e && s {
+                    FRAC_PI_2
+                } else if s && w {
+                    PI
+                } else {
+                    -FRAC_PI_2
+                };
+                (FloorPieceKind::Corner, rot)
+            }
+        }
+        3 => {
+            let rot = if !s {
+                0.0
+            } else if !w {
+                FRAC_PI_2
+            } else if !n {
+                PI
+            } else {
+                -FRAC_PI_2
+            };
+            (FloorPieceKind::Tee, rot)
+        }
+        _ => (FloorPieceKind::Cross, 0.0),
+    }
+}
+
 pub fn footprint_for_kind(kind: EntityKind) -> f32 {
     // Based on actual GLTF bounding boxes (scaled) + ~0.5 margin
     match kind {
@@ -236,8 +356,36 @@ pub fn footprint_for_kind(kind: EntityKind) -> f32 {
         | EntityKind::BombardTower
         | EntityKind::Storage
         | EntityKind::House => 2.0,           // towers ~1.5, Granary 1.6, House 1.7 @ 0.75
+        EntityKind::Floor => 1.5,
         EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner => 1.5,
         _ => 2.5,
+    }
+}
+
+pub fn building_height_for_kind(kind: EntityKind) -> f32 {
+    match kind {
+        EntityKind::Tower
+        | EntityKind::WatchTower
+        | EntityKind::GuardTower
+        | EntityKind::BallistaTower
+        | EntityKind::BombardTower => 10.0,
+        EntityKind::Outpost => 8.0,
+        EntityKind::Base | EntityKind::Smelter => 7.0,
+        EntityKind::Barracks
+        | EntityKind::Workshop
+        | EntityKind::MageTower
+        | EntityKind::Temple
+        | EntityKind::Stable
+        | EntityKind::SiegeWorks
+        | EntityKind::Sawmill
+        | EntityKind::Mine
+        | EntityKind::OilRig
+        | EntityKind::Alchemist
+        | EntityKind::Gatehouse => 6.0,
+        EntityKind::House | EntityKind::Storage => 5.0,
+        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner => 4.0,
+        EntityKind::Floor => 0.5,
+        _ => 5.0,
     }
 }
 
@@ -249,6 +397,14 @@ pub fn is_wall_like_kind(kind: EntityKind) -> bool {
             | EntityKind::WallCorner
             | EntityKind::Gatehouse
     )
+}
+
+pub fn is_floor_kind(kind: EntityKind) -> bool {
+    kind == EntityKind::Floor
+}
+
+fn blocks_construction_overlap(kind: EntityKind) -> bool {
+    !is_floor_kind(kind)
 }
 
 pub fn uses_terrain_foundation(kind: EntityKind) -> bool {
@@ -319,7 +475,11 @@ pub fn try_queue_build_order_authoritative(
 ) -> Result<(), String> {
     if matches!(
         kind,
-        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner | EntityKind::Gatehouse
+        EntityKind::WallSegment
+            | EntityKind::WallPost
+            | EntityKind::WallCorner
+            | EntityKind::Gatehouse
+            | EntityKind::Floor
     ) {
         return Err("This building uses a specialized placement flow.".to_string());
     }
@@ -383,7 +543,10 @@ pub fn try_queue_build_order_authoritative(
         }
     }
 
-    for (building_tf, existing_fp, _, _) in existing_buildings {
+    for (building_tf, existing_fp, _, existing_kind) in existing_buildings {
+        if !blocks_construction_overlap(*existing_kind) {
+            continue;
+        }
         let dx = building_tf.translation.x - build_pos.x;
         let dz = building_tf.translation.z - build_pos.z;
         if (dx * dx + dz * dz).sqrt() < existing_fp.0 + new_footprint {
@@ -437,6 +600,7 @@ pub fn try_queue_build_order_authoritative(
             kind,
             position: build_pos,
             faction,
+            rotation_y: 0.0,
         })
         .insert(MoveTarget(build_pos));
     commands
@@ -639,13 +803,63 @@ fn wall_auto_tile_system(
     }
 }
 
+fn floor_auto_tile_system(
+    mut commands: Commands,
+    mut floor_grid: ResMut<FloorGrid>,
+    cache: Res<EntityVisualCache>,
+    transform_q: Query<&Transform>,
+) {
+    const AUTO_TILE_BUDGET: usize = 24;
+
+    let dirty: Vec<(i32, i32)> = floor_grid.dirty.drain(..).collect();
+    let mut dirty_set: Vec<(i32, i32)> = {
+        let mut set = std::collections::HashSet::new();
+        dirty.into_iter().filter(|c| set.insert(*c)).collect()
+    };
+
+    if dirty_set.len() > AUTO_TILE_BUDGET {
+        let deferred = dirty_set.split_off(AUTO_TILE_BUDGET);
+        floor_grid.dirty.extend(deferred);
+    }
+
+    for (gx, gz) in dirty_set {
+        let Some(cell) = floor_grid.cells.get(&(gx, gz)).cloned() else {
+            continue;
+        };
+
+        let mask = floor_grid.neighbor_mask(gx, gz);
+        let (new_piece, new_rot) = floor_piece_and_rotation(mask);
+
+        if new_piece == cell.piece_kind && (new_rot - cell.rotation_y).abs() < 0.01 {
+            continue;
+        }
+
+        if let Some(cell_mut) = floor_grid.cells.get_mut(&(gx, gz)) {
+            cell_mut.piece_kind = new_piece;
+            cell_mut.rotation_y = new_rot;
+        }
+
+        if let Some(mesh) = cache.floor_piece_meshes.get(&new_piece) {
+            commands.entity(cell.entity).insert(Mesh3d(mesh.clone()));
+        }
+
+        if let Ok(current_tf) = transform_q.get(cell.entity) {
+            let mut new_tf = *current_tf;
+            new_tf.rotation = Quat::from_rotation_y(new_rot);
+            commands.entity(cell.entity).insert(new_tf);
+        }
+    }
+}
+
 pub struct BuildingsPlugin;
 
 impl Plugin for BuildingsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<BuildingPlacementState>()
             .init_resource::<WallPlotPreview>()
+            .init_resource::<FloorPlotPreview>()
             .init_resource::<WallGrid>()
+            .init_resource::<FloorGrid>()
             .init_resource::<ObstacleGrid>()
             .add_systems(Startup, create_ghost_materials)
             .add_systems(
@@ -660,10 +874,12 @@ impl Plugin for BuildingsPlugin {
                     update_placement_preview,
                     update_wall_plot_preview,
                     update_gate_plot_preview,
+                    update_floor_plot_preview,
                     apply_ghost_materials,
                     confirm_placement,
                     confirm_wall_plot,
                     confirm_gate_plot,
+                    confirm_floor_plot,
                     cancel_placement,
                 )
                     .chain()
@@ -679,6 +895,7 @@ impl Plugin for BuildingsPlugin {
                     pending_build_cleanup_system,
                     construction_progress_system,
                     wall_auto_tile_system,
+                    floor_auto_tile_system,
                     tower_auto_attack,
                     training_queue_system,
                     update_completed_buildings_tracker,
@@ -726,7 +943,59 @@ fn sync_obstacle_grid(
 
 // ── Asset creation (ghost materials only) ──
 
-fn create_ghost_materials(mut commands: Commands, mut materials: ResMut<Assets<StandardMaterial>>) {
+fn create_ghost_materials(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    // Create a procedural green grid texture for the placement ground plane
+    let grid_tex = {
+        use bevy::image::{ImageAddressMode, ImageSamplerDescriptor};
+        const TEX_SIZE: u32 = 64;
+        let mut data = vec![0u8; (TEX_SIZE * TEX_SIZE * 4) as usize];
+        let line_width = 2u32;
+        for y in 0..TEX_SIZE {
+            for x in 0..TEX_SIZE {
+                let on_edge = x < line_width
+                    || x >= TEX_SIZE - line_width
+                    || y < line_width
+                    || y >= TEX_SIZE - line_width;
+                let idx = ((y * TEX_SIZE + x) * 4) as usize;
+                if on_edge {
+                    // Bright green grid lines
+                    data[idx] = 50;
+                    data[idx + 1] = 220;
+                    data[idx + 2] = 80;
+                    data[idx + 3] = 200;
+                } else {
+                    // Transparent fill with slight green tint
+                    data[idx] = 30;
+                    data[idx + 1] = 180;
+                    data[idx + 2] = 50;
+                    data[idx + 3] = 40;
+                }
+            }
+        }
+        let mut img = Image::new_fill(
+            bevy::render::render_resource::Extent3d {
+                width: TEX_SIZE,
+                height: TEX_SIZE,
+                depth_or_array_layers: 1,
+            },
+            bevy::render::render_resource::TextureDimension::D2,
+            &[255, 255, 255, 255],
+            bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::RENDER_WORLD,
+        );
+        img.data = Some(data);
+        img.sampler = bevy::image::ImageSampler::Descriptor(ImageSamplerDescriptor {
+            address_mode_u: ImageAddressMode::Repeat,
+            address_mode_v: ImageAddressMode::Repeat,
+            ..default()
+        });
+        images.add(img)
+    };
+
     commands.insert_resource(BuildingGhostMaterials {
         ghost_valid: materials.add(StandardMaterial {
             base_color: Color::srgba(0.2, 0.8, 0.3, 0.4),
@@ -745,6 +1014,15 @@ fn create_ghost_materials(mut commands: Commands, mut materials: ResMut<Assets<S
             alpha_mode: AlphaMode::Blend,
             ..default()
         }),
+        grid_plane: materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            base_color_texture: Some(grid_tex),
+            alpha_mode: AlphaMode::Blend,
+            unlit: true,
+            double_sided: true,
+            cull_mode: None,
+            ..default()
+        }),
     });
 }
 
@@ -753,18 +1031,16 @@ fn create_ghost_materials(mut commands: Commands, mut materials: ResMut<Assets<S
 fn cursor_ground_pos(
     camera_q: &Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: &Query<&Window, With<PrimaryWindow>>,
+    graphics: &GraphicsSettings,
     height_map: &HeightMap,
 ) -> Option<Vec3> {
     let Ok(window) = windows.single() else {
         return None;
     };
-    let cursor = window.cursor_position()?;
     let Ok((camera, cam_gt)) = camera_q.single() else {
         return None;
     };
-    let Ok(ray) = camera.viewport_to_world(cam_gt, cursor) else {
-        return None;
-    };
+    let ray = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, graphics)?;
     cursor_terrain_hit(ray, height_map)
 }
 
@@ -930,11 +1206,61 @@ fn clear_wall_preview(commands: &mut Commands, wall_preview: &mut WallPlotPrevie
     wall_preview.valid = false;
 }
 
+fn floor_layout_grid_cells(start: Vec3, end: Vec3) -> Vec<(i32, i32)> {
+    let (sx, sz) = WallGrid::world_to_grid(start);
+    let (ex, ez) = WallGrid::world_to_grid(end);
+    let min_x = sx.min(ex);
+    let max_x = sx.max(ex);
+    let min_z = sz.min(ez);
+    let max_z = sz.max(ez);
+
+    let mut cells = Vec::new();
+    for gz in min_z..=max_z {
+        for gx in min_x..=max_x {
+            cells.push((gx, gz));
+        }
+    }
+    cells
+}
+
+fn floor_cost_from_cells(
+    cells: &[(i32, i32)],
+    floor_grid: &FloorGrid,
+    registry: &BlueprintRegistry,
+) -> crate::blueprints::ResourceCost {
+    use crate::blueprints::ResourceCost;
+
+    let mut total = ResourceCost::default();
+    let cost = &registry.get(EntityKind::Floor).cost;
+    for cell in cells {
+        if floor_grid.cells.contains_key(cell) {
+            continue;
+        }
+        for rt in ResourceType::ALL.iter() {
+            total.set(*rt, total.get(*rt) + cost.get(*rt));
+        }
+    }
+    total
+}
+
+fn clear_floor_preview(commands: &mut Commands, floor_preview: &mut FloorPlotPreview) {
+    for entity in floor_preview.ghost_entities.drain(..) {
+        commands.entity(entity).try_despawn();
+    }
+    floor_preview.start = None;
+    floor_preview.cells.clear();
+    floor_preview.total_cost = crate::blueprints::ResourceCost::default();
+    floor_preview.valid = false;
+}
+
 fn placement_kind(mode: PlacementMode) -> Option<EntityKind> {
     match mode {
         PlacementMode::Placing(kind) => Some(kind),
         PlacementMode::PlotBase => Some(EntityKind::Base),
-        PlacementMode::None | PlacementMode::PlotWall { .. } | PlacementMode::PlotGate => None,
+        PlacementMode::None
+        | PlacementMode::PlotWall { .. }
+        | PlacementMode::PlotGate
+        | PlacementMode::PlotFloor { .. } => None,
     }
 }
 
@@ -945,21 +1271,35 @@ fn update_placement_preview(
     cache: Res<EntityVisualCache>,
     ghost_mats: Res<BuildingGhostMaterials>,
     building_models: Option<Res<BuildingModelAssets>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    viewport: (
+        Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+        Query<&Window, With<PrimaryWindow>>,
+        Res<GraphicsSettings>,
+    ),
     mut ghosts: Query<&mut Transform, With<GhostBuilding>>,
     mut ghost_valid_q: Query<&mut GhostValid, With<GhostBuilding>>,
     existing_buildings: Query<
-        (&Transform, &BuildingFootprint),
+        (&Transform, &BuildingFootprint, &EntityKind),
         (With<Building>, Without<GhostBuilding>),
     >,
     biome_map: Option<Res<BiomeMap>>,
     height_map: Res<HeightMap>,
     obstacle_grid: Res<ObstacleGrid>,
 ) {
+    let (camera_q, windows, graphics) = viewport;
     let Some(kind) = placement_kind(placement.mode) else {
         return;
     };
+
+    // Handle rotation input (H = rotate left, J = rotate right) — 90 degree steps
+    if keyboard.just_pressed(KeyCode::KeyH) {
+        placement.rotation_y += std::f32::consts::FRAC_PI_2;
+    }
+    if keyboard.just_pressed(KeyCode::KeyJ) {
+        placement.rotation_y -= std::f32::consts::FRAC_PI_2;
+    }
 
     let bp = registry.get(kind);
     let is_gltf = bp.visual.mesh_kind.is_gltf();
@@ -968,7 +1308,7 @@ fn update_placement_preview(
     } else {
         bp.building.as_ref().map(|b| b.half_height).unwrap_or(1.0)
     };
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) else {
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) else {
         return;
     };
     let new_footprint = footprint_for_kind(kind);
@@ -1017,6 +1357,25 @@ fn update_placement_preview(
         placement.preview_entity = Some(ghost);
     }
 
+    // Spawn grid plane if it doesn't exist
+    if placement.grid_plane_entity.is_none() {
+        let grid_size = new_footprint * 2.5;
+        // Number of grid cells across the plane (UV tiling)
+        let uv_tiles = (grid_size / 2.0).max(2.0);
+        let plane_mesh = meshes.add(build_grid_plane_mesh(grid_size, uv_tiles, &height_map));
+        let grid_entity = commands
+            .spawn((
+                GhostGridPlane,
+                Mesh3d(plane_mesh),
+                MeshMaterial3d(ghost_mats.grid_plane.clone()),
+                Transform::from_translation(Vec3::new(0.0, -100.0, 0.0)),
+                NotShadowCaster,
+                NotShadowReceiver,
+            ))
+            .id();
+        placement.grid_plane_entity = Some(grid_entity);
+    }
+
     let Some(ghost_entity) = placement.preview_entity else {
         return;
     };
@@ -1031,6 +1390,24 @@ fn update_placement_preview(
     };
     let y = ground_y + half_h;
     ghost_tf.translation = Vec3::new(world_pos.x, y, world_pos.z);
+    ghost_tf.rotation = Quat::from_rotation_y(placement.rotation_y);
+
+    // Update grid plane position & mesh to align with terrain
+    if let Some(grid_entity) = placement.grid_plane_entity {
+        let grid_size = new_footprint * 2.5;
+        let uv_tiles = (grid_size / 2.0).max(2.0);
+        let new_mesh = meshes.add(build_grid_plane_mesh_at(
+            world_pos.x,
+            world_pos.z,
+            grid_size,
+            uv_tiles,
+            &height_map,
+        ));
+        commands.entity(grid_entity).insert((
+            Mesh3d(new_mesh),
+            Transform::from_translation(Vec3::new(world_pos.x, 0.0, world_pos.z)),
+        ));
+    }
 
     let mut valid = true;
     let mut hint: Option<String> = None;
@@ -1055,7 +1432,10 @@ fn update_placement_preview(
         }
     }
 
-    for (building_tf, existing_footprint) in &existing_buildings {
+    for (building_tf, existing_footprint, existing_kind) in &existing_buildings {
+        if !blocks_construction_overlap(*existing_kind) {
+            continue;
+        }
         let min_dist = existing_footprint.0 + new_footprint;
         let dx = building_tf.translation.x - ghost_tf.translation.x;
         let dz = building_tf.translation.z - ghost_tf.translation.z;
@@ -1084,6 +1464,73 @@ fn update_placement_preview(
     }
 }
 
+/// Build a flat grid plane mesh centered at origin. Used as initial mesh (position set later).
+fn build_grid_plane_mesh(size: f32, uv_tiles: f32, _height_map: &HeightMap) -> Mesh {
+    build_grid_plane_mesh_at(0.0, 0.0, size, uv_tiles, _height_map)
+}
+
+/// Build a grid plane mesh that conforms to the terrain at the given world position.
+/// The mesh is centered at (0,0,0) — the Transform positions it in world space.
+fn build_grid_plane_mesh_at(
+    cx: f32,
+    cz: f32,
+    size: f32,
+    uv_tiles: f32,
+    height_map: &HeightMap,
+) -> Mesh {
+    // Subdivide the plane into a grid so it follows terrain contour
+    let subdivisions: u32 = 12;
+    let verts_per_side = subdivisions + 1;
+    let total_verts = (verts_per_side * verts_per_side) as usize;
+
+    let mut positions = Vec::with_capacity(total_verts);
+    let mut normals = Vec::with_capacity(total_verts);
+    let mut uvs = Vec::with_capacity(total_verts);
+
+    let half = size / 2.0;
+    let step = size / subdivisions as f32;
+
+    for iz in 0..verts_per_side {
+        for ix in 0..verts_per_side {
+            let lx = -half + ix as f32 * step;
+            let lz = -half + iz as f32 * step;
+            let wx = cx + lx;
+            let wz = cz + lz;
+            let wy = height_map.sample(wx, wz) + 0.15; // slight offset above terrain
+            positions.push([lx, wy, lz]);
+            normals.push([0.0, 1.0, 0.0]);
+            let u = ix as f32 / subdivisions as f32 * uv_tiles;
+            let v = iz as f32 / subdivisions as f32 * uv_tiles;
+            uvs.push([u, v]);
+        }
+    }
+
+    let mut indices = Vec::with_capacity((subdivisions * subdivisions * 6) as usize);
+    for iz in 0..subdivisions {
+        for ix in 0..subdivisions {
+            let tl = iz * verts_per_side + ix;
+            let tr = tl + 1;
+            let bl = (iz + 1) * verts_per_side + ix;
+            let br = bl + 1;
+            indices.push(tl);
+            indices.push(bl);
+            indices.push(tr);
+            indices.push(tr);
+            indices.push(bl);
+            indices.push(br);
+        }
+    }
+
+    Mesh::new(
+        bevy::render::render_resource::PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(bevy::mesh::Indices::U32(indices))
+}
+
 fn update_wall_plot_preview(
     mut commands: Commands,
     mut placement: ResMut<BuildingPlacementState>,
@@ -1092,15 +1539,19 @@ fn update_wall_plot_preview(
     registry: Res<BlueprintRegistry>,
     ghost_mats: Res<BuildingGhostMaterials>,
     building_models: Option<Res<BuildingModelAssets>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    viewport: (
+        Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+        Query<&Window, With<PrimaryWindow>>,
+        Res<GraphicsSettings>,
+    ),
     existing_buildings: Query<
-        (&Transform, &BuildingFootprint),
+        (&Transform, &BuildingFootprint, &EntityKind),
         (With<Building>, Without<GhostBuilding>),
     >,
     height_map: Res<HeightMap>,
     obstacle_grid: Res<ObstacleGrid>,
 ) {
+    let (camera_q, windows, graphics) = viewport;
     if !matches!(placement.mode, PlacementMode::PlotWall { .. }) {
         if wall_preview.start.is_some() || !wall_preview.ghost_entities.is_empty() {
             clear_wall_preview(&mut commands, &mut wall_preview);
@@ -1118,7 +1569,7 @@ fn update_wall_plot_preview(
         }
     };
 
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) else {
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) else {
         return;
     };
 
@@ -1169,7 +1620,10 @@ fn update_wall_plot_preview(
 
         // Check collision with non-wall buildings
         let fp = footprint_for_kind(EntityKind::WallPost);
-        let blocked = existing_buildings.iter().any(|(building_tf, existing_fp)| {
+        let blocked = existing_buildings.iter().any(|(building_tf, existing_fp, existing_kind)| {
+            if !blocks_construction_overlap(*existing_kind) {
+                return false;
+            }
             let check_pos = Vec3::new(world.x, building_tf.translation.y, world.z);
             building_tf.translation.distance(check_pos) < existing_fp.0 + fp
         });
@@ -1236,8 +1690,11 @@ fn update_gate_plot_preview(
     cache: Res<EntityVisualCache>,
     ghost_mats: Res<BuildingGhostMaterials>,
     building_models: Option<Res<BuildingModelAssets>>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    viewport: (
+        Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+        Query<&Window, With<PrimaryWindow>>,
+        Res<GraphicsSettings>,
+    ),
     mut ghosts: Query<&mut Transform, With<GhostBuilding>>,
     mut ghost_valid_q: Query<&mut GhostValid, With<GhostBuilding>>,
     wall_segments: Query<
@@ -1251,11 +1708,12 @@ fn update_gate_plot_preview(
     active_player: Res<ActivePlayer>,
     height_map: Res<HeightMap>,
 ) {
+    let (camera_q, windows, graphics) = viewport;
     if placement.mode != PlacementMode::PlotGate {
         return;
     }
 
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) else {
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) else {
         return;
     };
 
@@ -1335,6 +1793,137 @@ fn update_gate_plot_preview(
     }
 }
 
+fn update_floor_plot_preview(
+    mut commands: Commands,
+    mut placement: ResMut<BuildingPlacementState>,
+    mut floor_preview: ResMut<FloorPlotPreview>,
+    floor_grid: Res<FloorGrid>,
+    registry: Res<BlueprintRegistry>,
+    ghost_mats: Res<BuildingGhostMaterials>,
+    cache: Res<EntityVisualCache>,
+    viewport: (
+        Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+        Query<&Window, With<PrimaryWindow>>,
+        Res<GraphicsSettings>,
+    ),
+    height_map: Res<HeightMap>,
+    obstacle_grid: Res<ObstacleGrid>,
+) {
+    let (camera_q, windows, graphics) = viewport;
+    if !matches!(placement.mode, PlacementMode::PlotFloor { .. }) {
+        if floor_preview.start.is_some() || !floor_preview.ghost_entities.is_empty() {
+            clear_floor_preview(&mut commands, &mut floor_preview);
+        }
+        return;
+    }
+
+    clear_floor_preview(&mut commands, &mut floor_preview);
+
+    let start = match placement.mode {
+        PlacementMode::PlotFloor { start } if start != Vec3::ZERO => start,
+        _ => {
+            placement.hint_text = Some("Click ground to start floor brush".to_string());
+            return;
+        }
+    };
+
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) else {
+        return;
+    };
+
+    let cells = floor_layout_grid_cells(start, Vec3::new(world_pos.x, 0.0, world_pos.z));
+    if cells.is_empty() {
+        placement.hint_text = Some("Move cursor to paint floor".to_string());
+        return;
+    }
+
+    let new_cells: Vec<(i32, i32)> = cells
+        .iter()
+        .copied()
+        .filter(|cell| !floor_grid.cells.contains_key(cell))
+        .collect();
+    if new_cells.is_empty() {
+        placement.hint_text = Some("All cells already have floor".to_string());
+        return;
+    }
+
+    let half_height = registry
+        .get(EntityKind::Floor)
+        .building
+        .as_ref()
+        .map(|b| b.half_height)
+        .unwrap_or(0.08);
+    let footprint = footprint_for_kind(EntityKind::Floor);
+
+    floor_preview.start = Some(start);
+    floor_preview.cells = new_cells.clone();
+    floor_preview.total_cost = floor_cost_from_cells(&new_cells, &floor_grid, &registry);
+    floor_preview.valid = true;
+
+    let mut merged: std::collections::HashSet<(i32, i32)> =
+        floor_grid.cells.keys().copied().collect();
+    for &cell in &new_cells {
+        merged.insert(cell);
+    }
+
+    let half_map = height_map.half_map;
+    for &(gx, gz) in &new_cells {
+        let world = WallGrid::grid_to_world(gx, gz);
+        let mut valid = true;
+
+        if obstacle_grid.is_cell_blocked(gx, gz) {
+            valid = false;
+        }
+
+        if world.x.abs() > half_map - 5.0 || world.z.abs() > half_map - 5.0 {
+            valid = false;
+        }
+
+        floor_preview.valid &= valid;
+
+        let mut mask = 0u8;
+        for (i, (nx, nz)) in WallGrid::cardinal_neighbors(gx, gz).iter().enumerate() {
+            if merged.contains(&(*nx, *nz)) {
+                mask |= 1 << i;
+            }
+        }
+        let (piece_kind, rotation_y) = floor_piece_and_rotation(mask);
+        let mesh = cache
+            .floor_piece_meshes
+            .get(&piece_kind)
+            .expect("Missing floor piece mesh")
+            .clone();
+        let y = height_map.foundation_target_height(world.x, world.z, footprint) + half_height;
+        let ghost = commands
+            .spawn((
+                GhostBuilding,
+                GhostValid(valid),
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(if valid {
+                    ghost_mats.ghost_valid.clone()
+                } else {
+                    ghost_mats.ghost_invalid.clone()
+                }),
+                Transform::from_translation(Vec3::new(world.x, y, world.z))
+                    .with_rotation(Quat::from_rotation_y(rotation_y)),
+                NotShadowCaster,
+                NotShadowReceiver,
+            ))
+            .id();
+        floor_preview.ghost_entities.push(ghost);
+    }
+
+    let count = floor_preview.cells.len();
+    let cost = &floor_preview.total_cost;
+    let wood = cost.get(ResourceType::Wood);
+    let stone = cost.get(ResourceType::Stone);
+    placement.hint_text = Some(if floor_preview.valid {
+        format!("Floor: {count} tiles | Cost: {wood}W {stone}S")
+    } else {
+        "Floor area blocked".to_string()
+    });
+}
+
 /// Overrides materials on all mesh descendants of ghost buildings to ghost_valid/ghost_invalid.
 fn apply_ghost_materials(
     mut commands: Commands,
@@ -1400,6 +1989,7 @@ fn confirm_placement(
     queries: (
         Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
         Query<&Window, With<PrimaryWindow>>,
+        Res<GraphicsSettings>,
         Query<&Interaction, With<Node>>,
         Query<
             (&Transform, &BuildingFootprint, &Faction, &EntityKind),
@@ -1420,7 +2010,7 @@ fn confirm_placement(
     obstacle_grid: Res<ObstacleGrid>,
 ) {
     let (all_completed, biome_map, faction_ages) = extras;
-    let (camera_q, windows, ui_interactions, existing_buildings, workers) = queries;
+    let (camera_q, windows, graphics, ui_interactions, existing_buildings, workers) = queries;
     let mode = placement.mode;
     let Some(kind) = placement_kind(mode) else {
         return;
@@ -1444,7 +2034,7 @@ fn confirm_placement(
         return;
     }
 
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) else {
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) else {
         return;
     };
 
@@ -1514,7 +2104,10 @@ fn confirm_placement(
             return;
         }
     }
-    for (building_tf, existing_fp, _, _) in &existing_buildings {
+    for (building_tf, existing_fp, _, existing_kind) in &existing_buildings {
+        if !blocks_construction_overlap(*existing_kind) {
+            continue;
+        }
         let dx = building_tf.translation.x - world_pos.x;
         let dz = building_tf.translation.z - world_pos.z;
         if (dx * dx + dz * dz).sqrt() < existing_fp.0 + new_footprint {
@@ -1574,9 +2167,14 @@ fn confirm_placement(
         if let Some(ghost) = placement.preview_entity {
             commands.entity(ghost).try_despawn();
         }
+        if let Some(grid) = placement.grid_plane_entity {
+            commands.entity(grid).try_despawn();
+        }
         placement.mode = PlacementMode::None;
         placement.preview_entity = None;
+        placement.grid_plane_entity = None;
         placement.hint_text = None;
+        placement.rotation_y = 0.0;
         return;
     }
 
@@ -1591,9 +2189,14 @@ fn confirm_placement(
         pending_drains.drains.push(drain);
     }
 
-    // Despawn ghost
+    let rotation_y = placement.rotation_y;
+
+    // Despawn ghost & grid plane
     if let Some(ghost) = placement.preview_entity {
         commands.entity(ghost).try_despawn();
+    }
+    if let Some(grid) = placement.grid_plane_entity {
+        commands.entity(grid).try_despawn();
     }
 
     // Clean up any existing gathering assignment before reassigning
@@ -1612,6 +2215,7 @@ fn confirm_placement(
             kind,
             position: build_pos,
             faction,
+            rotation_y,
         })
         .insert(MoveTarget(build_pos));
     // Clear any queued tasks
@@ -1623,7 +2227,9 @@ fn confirm_placement(
     // Reset placement
     placement.mode = PlacementMode::None;
     placement.preview_entity = None;
+    placement.grid_plane_entity = None;
     placement.hint_text = None;
+    placement.rotation_y = 0.0;
 }
 
 fn confirm_wall_plot(
@@ -1634,8 +2240,11 @@ fn confirm_wall_plot(
     mut wall_grid: ResMut<WallGrid>,
     mut all_resources: ResMut<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    viewport: (
+        Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+        Query<&Window, With<PrimaryWindow>>,
+        Res<GraphicsSettings>,
+    ),
     ui_interactions: Query<&Interaction, With<Node>>,
     height_map: Res<HeightMap>,
     cache: Res<EntityVisualCache>,
@@ -1644,6 +2253,7 @@ fn confirm_wall_plot(
     workers: Query<(Entity, &Transform, &UnitState, &Faction, &EntityKind), With<Unit>>,
     obstacle_grid: Res<ObstacleGrid>,
 ) {
+    let (camera_q, windows, graphics) = viewport;
     if !matches!(placement.mode, PlacementMode::PlotWall { .. }) || placement.awaiting_release {
         return;
     }
@@ -1658,7 +2268,7 @@ fn confirm_wall_plot(
 
     if let PlacementMode::PlotWall { start } = placement.mode {
         if start == Vec3::ZERO {
-            if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) {
+            if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) {
                 // Snap start to grid
                 let (gx, gz) = WallGrid::world_to_grid(Vec3::new(world_pos.x, 0.0, world_pos.z));
                 let first = WallGrid::grid_to_world(gx, gz);
@@ -1752,8 +2362,11 @@ fn confirm_gate_plot(
     mut wall_grid: ResMut<WallGrid>,
     mut all_resources: ResMut<AllPlayerResources>,
     active_player: Res<ActivePlayer>,
-    camera_q: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    viewport: (
+        Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+        Query<&Window, With<PrimaryWindow>>,
+        Res<GraphicsSettings>,
+    ),
     ui_interactions: Query<&Interaction, With<Node>>,
     height_map: Res<HeightMap>,
     wall_segments: Query<
@@ -1763,6 +2376,7 @@ fn confirm_gate_plot(
     registry: Res<BlueprintRegistry>,
     workers: Query<(Entity, &Transform, &UnitState, &Faction, &EntityKind), With<Unit>>,
 ) {
+    let (camera_q, windows, graphics) = viewport;
     if placement.mode != PlacementMode::PlotGate || !mouse.just_pressed(MouseButton::Left) {
         return;
     }
@@ -1771,7 +2385,7 @@ fn confirm_gate_plot(
         return;
     }
 
-    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &height_map) else {
+    let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) else {
         return;
     };
 
@@ -1862,12 +2476,101 @@ fn confirm_gate_plot(
     placement.hint_text = None;
 }
 
+fn confirm_floor_plot(
+    mut commands: Commands,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut placement: ResMut<BuildingPlacementState>,
+    mut floor_preview: ResMut<FloorPlotPreview>,
+    mut floor_grid: ResMut<FloorGrid>,
+    mut all_resources: ResMut<AllPlayerResources>,
+    active_player: Res<ActivePlayer>,
+    viewport: (
+        Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+        Query<&Window, With<PrimaryWindow>>,
+        Res<GraphicsSettings>,
+    ),
+    ui_interactions: Query<&Interaction, With<Node>>,
+    height_map: Res<HeightMap>,
+    cache: Res<EntityVisualCache>,
+    registry: Res<BlueprintRegistry>,
+    obstacle_grid: Res<ObstacleGrid>,
+) {
+    let (camera_q, windows, graphics) = viewport;
+    if !matches!(placement.mode, PlacementMode::PlotFloor { .. }) || placement.awaiting_release {
+        return;
+    }
+
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    if is_pointer_over_ui(&ui_interactions) {
+        return;
+    }
+
+    if let PlacementMode::PlotFloor { start } = placement.mode {
+        if start == Vec3::ZERO {
+            if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) {
+                let (gx, gz) = WallGrid::world_to_grid(Vec3::new(world_pos.x, 0.0, world_pos.z));
+                let first = WallGrid::grid_to_world(gx, gz);
+                floor_preview.start = Some(first);
+                placement.mode = PlacementMode::PlotFloor { start: first };
+                placement.hint_text =
+                    Some("Move cursor and click again to stamp floor".to_string());
+            }
+            return;
+        }
+    }
+
+    if floor_preview.cells.is_empty() || !floor_preview.valid {
+        return;
+    }
+
+    let faction = active_player.0;
+    let cells: Vec<(i32, i32)> = floor_preview
+        .cells
+        .iter()
+        .copied()
+        .filter(|(gx, gz)| !obstacle_grid.is_cell_blocked(*gx, *gz))
+        .filter(|cell| !floor_grid.cells.contains_key(cell))
+        .collect();
+    if cells.is_empty() {
+        clear_floor_preview(&mut commands, &mut floor_preview);
+        placement.mode = PlacementMode::None;
+        placement.hint_text = Some("Floor area blocked by trees".to_string());
+        return;
+    }
+
+    let final_cost = floor_cost_from_cells(&cells, &floor_grid, &registry);
+    let player_res = all_resources.get(&faction);
+    if !final_cost.can_afford(player_res) {
+        placement.hint_text = Some("Not enough resources for floor".to_string());
+        return;
+    }
+    final_cost.deduct(all_resources.get_mut(&faction));
+
+    spawn_floor_grid_cells(
+        &mut commands,
+        &cache,
+        &height_map,
+        &mut floor_grid,
+        faction,
+        &cells,
+    );
+
+    clear_floor_preview(&mut commands, &mut floor_preview);
+    placement.mode = PlacementMode::None;
+    placement.preview_entity = None;
+    placement.hint_text = None;
+}
+
 fn cancel_placement(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut placement: ResMut<BuildingPlacementState>,
     mut wall_preview: ResMut<WallPlotPreview>,
+    mut floor_preview: ResMut<FloorPlotPreview>,
 ) {
     if placement.mode == PlacementMode::None {
         return;
@@ -1877,11 +2580,17 @@ fn cancel_placement(
         if let Some(preview) = placement.preview_entity {
             commands.entity(preview).try_despawn();
         }
+        if let Some(grid) = placement.grid_plane_entity {
+            commands.entity(grid).try_despawn();
+        }
         clear_wall_preview(&mut commands, &mut wall_preview);
+        clear_floor_preview(&mut commands, &mut floor_preview);
         placement.mode = PlacementMode::None;
         placement.preview_entity = None;
+        placement.grid_plane_entity = None;
         placement.awaiting_release = false;
         placement.hint_text = None;
+        placement.rotation_y = 0.0;
     }
 }
 
@@ -1892,7 +2601,7 @@ fn pending_build_arrival_system(
     mut workers: Query<(Entity, &Transform, &UnitState, &PendingBuildOrder), With<Unit>>,
     registry: Res<BlueprintRegistry>,
     existing_buildings: Query<
-        (&Transform, &BuildingFootprint),
+        (&Transform, &BuildingFootprint, &EntityKind),
         (With<Building>, Without<GhostBuilding>),
     >,
     mut all_resources: ResMut<AllPlayerResources>,
@@ -1919,10 +2628,15 @@ fn pending_build_arrival_system(
         let new_footprint = footprint_for_kind(kind);
 
         // Final collision check — another building may have been placed in the meantime
-        let blocked = existing_buildings.iter().any(|(building_tf, existing_fp)| {
+        let blocked = existing_buildings
+            .iter()
+            .any(|(building_tf, existing_fp, existing_kind)| {
+                if !blocks_construction_overlap(*existing_kind) {
+                    return false;
+                }
             let check_pos = Vec3::new(build_pos.x, building_tf.translation.y, build_pos.z);
             building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
-        });
+            });
 
         if blocked {
             let bp = registry.get(kind);
@@ -1947,6 +2661,7 @@ fn pending_build_arrival_system(
                 kind,
                 position: build_pos,
                 faction: pending.faction,
+                rotation_y: pending.rotation_y,
                 prep_timer: Timer::from_seconds(1.25, TimerMode::Once),
                 vfx_timer: Timer::from_seconds(0.12, TimerMode::Repeating),
                 burst_count: 0,
@@ -1967,7 +2682,7 @@ fn build_site_preparation_system(
     vfx_assets: Option<Res<VfxAssets>>,
     mut workers: Query<(Entity, &Transform, &UnitState, &mut BuildSitePreparation), With<Unit>>,
     existing_buildings: Query<
-        (&Transform, &BuildingFootprint),
+        (&Transform, &BuildingFootprint, &EntityKind),
         (With<Building>, Without<GhostBuilding>),
     >,
     mut all_resources: ResMut<AllPlayerResources>,
@@ -2012,10 +2727,15 @@ fn build_site_preparation_system(
         }
 
         let new_footprint = footprint_for_kind(prep.kind);
-        let blocked = existing_buildings.iter().any(|(building_tf, existing_fp)| {
+        let blocked = existing_buildings
+            .iter()
+            .any(|(building_tf, existing_fp, existing_kind)| {
+                if !blocks_construction_overlap(*existing_kind) {
+                    return false;
+                }
             let check_pos = Vec3::new(prep.position.x, building_tf.translation.y, prep.position.z);
             building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
-        });
+            });
 
         if blocked {
             let bp = registry.get(prep.kind);
@@ -2035,6 +2755,7 @@ fn build_site_preparation_system(
 
         let bp = registry.get(prep.kind);
         let is_gltf = bp.visual.mesh_kind.is_gltf();
+        let rot_y = prep.rotation_y;
         let building_entity = spawn_from_blueprint_with_faction(
             &mut commands,
             &cache,
@@ -2046,6 +2767,11 @@ fn build_site_preparation_system(
             &height_map,
             prep.faction,
         );
+
+        commands
+            .entity(building_entity)
+            .entry::<Transform>()
+            .and_modify(move |mut tf| tf.rotation = Quat::from_rotation_y(rot_y));
 
         if !is_gltf {
             commands
@@ -3020,7 +3746,9 @@ fn demolish_system(
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     mut all_resources: ResMut<AllPlayerResources>,
     mut wall_grid: ResMut<WallGrid>,
+    mut floor_grid: ResMut<FloorGrid>,
     grid_coord_q: Query<&WallGridCoord>,
+    floor_coord_q: Query<&FloorGridCoord>,
     yard_q: Query<&SawmillYard>,
     mut buildings: Query<
         (
@@ -3066,6 +3794,11 @@ fn demolish_system(
                 for (nx, nz) in WallGrid::cardinal_neighbors(gx, gz) {
                     wall_grid.dirty.push((nx, nz));
                 }
+            }
+
+            if let Ok(coord) = floor_coord_q.get(entity) {
+                floor_grid.cells.remove(&(coord.0, coord.1));
+                floor_grid.mark_dirty(coord.0, coord.1);
             }
 
             // Clean up sawmill yard entities
