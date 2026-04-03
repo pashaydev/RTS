@@ -21,8 +21,8 @@ pub struct FogTextures {
 }
 
 #[derive(Resource, Default)]
-struct FogTextureUploadState {
-    explored_dirty: bool,
+pub struct FogTextureUploadState {
+    pub explored_dirty: bool,
 }
 
 /// Controls fog update frequency. Heavy systems only run on tick frames.

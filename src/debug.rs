@@ -3,6 +3,7 @@ mod model;
 mod state;
 mod ui;
 
+#[cfg(not(target_arch = "wasm32"))]
 use bevy::dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::light::cluster::{ClusterConfig, ClusterZConfig};
@@ -43,19 +44,24 @@ pub struct DebugPlugin;
 
 impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
-        let mut fps_overlay_config = FpsOverlayConfig::default();
-        fps_overlay_config.enabled = false;
-        fps_overlay_config.frame_time_graph_config.enabled = false;
+        app.add_plugins(FrameTimeDiagnosticsPlugin::default());
 
-        app.add_plugins((
-            FrameTimeDiagnosticsPlugin::default(),
-            FpsOverlayPlugin {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut fps_overlay_config = FpsOverlayConfig::default();
+            fps_overlay_config.enabled = false;
+            fps_overlay_config.frame_time_graph_config.enabled = false;
+            app.add_plugins(FpsOverlayPlugin {
                 config: fps_overlay_config,
-            },
-        ))
+            });
+        }
+
+        app
         .init_resource::<DebugViewState>()
-        .add_systems(Update, toggle_debug_views)
-        .add_systems(
+        .add_systems(Update, toggle_debug_views);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        app.add_systems(
             Update,
             apply_debug_view_state.in_set(GameFlowSet::Diagnostics),
         );
@@ -596,6 +602,7 @@ fn toggle_debug_views(
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn apply_debug_view_state(state: Res<DebugViewState>, mut fps_overlay: ResMut<FpsOverlayConfig>) {
     fps_overlay.enabled = state.fps_overlay;
     fps_overlay.frame_time_graph_config.enabled = state.fps_overlay;
@@ -671,7 +678,10 @@ fn sync_frustum_debug_camera(
                     ..default()
                 },
                 ClusterConfig::FixedZ {
+                    #[cfg(not(target_arch = "wasm32"))]
                     total: 4096,
+                    #[cfg(target_arch = "wasm32")]
+                    total: 256,
                     z_slices: 1,
                     z_config: ClusterZConfig::default(),
                     dynamic_resizing: true,

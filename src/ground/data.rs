@@ -138,7 +138,14 @@ impl HeightMap {
             .fold(0.0_f32, f32::max)
     }
 
-    pub fn foundation_target_height(&self, x: f32, z: f32, footprint: f32) -> f32 {
+    fn foundation_target_height_from(
+        &self,
+        heights: &[f32],
+        fallback_sample: impl FnOnce(&Self, f32, f32) -> f32,
+        x: f32,
+        z: f32,
+        footprint: f32,
+    ) -> f32 {
         let (inner_radius, _) = foundation_radii(footprint, self.step);
         let min_x = (((x - inner_radius) + self.half_map) / self.step)
             .floor()
@@ -167,16 +174,30 @@ impl HeightMap {
                 }
 
                 let idx = iz * self.grid_size + ix;
-                sum += self.natural_heights[idx];
+                sum += heights[idx];
                 count += 1;
             }
         }
 
         if count == 0 {
-            self.sample_natural(x, z)
+            fallback_sample(self, x, z)
         } else {
             sum / count as f32
         }
+    }
+
+    pub fn foundation_target_height(&self, x: f32, z: f32, footprint: f32) -> f32 {
+        self.foundation_target_height_from(
+            &self.natural_heights,
+            Self::sample_natural,
+            x,
+            z,
+            footprint,
+        )
+    }
+
+    pub fn foundation_target_height_shaped(&self, x: f32, z: f32, footprint: f32) -> f32 {
+        self.foundation_target_height_from(&self.heights, Self::sample, x, z, footprint)
     }
 }
 

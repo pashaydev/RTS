@@ -23,6 +23,7 @@ impl Plugin for SelectionPlugin {
             .init_resource::<UiPressActive>()
             .init_resource::<CommandMode>()
             .init_resource::<ActiveFormation>()
+            .init_resource::<EntityLabelVisibility>()
             .init_resource::<NextTaskId>()
             .init_resource::<SubgroupCycleState>()
             .init_resource::<DoubleClickDetector>()

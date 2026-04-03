@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+#[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::OutlineVolume;
 
 use crate::blueprints::{EntityKind, EntityVisualCache};
@@ -384,11 +385,24 @@ pub(crate) fn update_entity_visuals(
         Has<ArmyOverviewHighlighted>,
         Has<Mesh3d>,
     )>,
+    #[cfg(not(target_arch = "wasm32"))]
     mut outlines: Query<&mut OutlineVolume>,
 ) {
     // Outline colors
+    #[cfg(not(target_arch = "wasm32"))]
     let outline_selected = Color::srgb(0.2, 1.0, 0.3);
+    #[cfg(not(target_arch = "wasm32"))]
     let outline_hovered = Color::srgb(0.3, 0.8, 1.0);
+
+    macro_rules! set_outline {
+        ($entity:expr, visible: $vis:expr $(, colour: $col:expr, width: $w:expr)?) => {
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Ok(mut outline) = outlines.get_mut($entity) {
+                outline.visible = $vis;
+                $(outline.colour = $col; outline.width = $w;)?
+            }
+        };
+    }
 
     for (entity, kind, has_mesh) in &added_selected {
         if has_mesh {
@@ -396,11 +410,7 @@ pub(crate) fn update_entity_visuals(
                 commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
             }
         }
-        if let Ok(mut outline) = outlines.get_mut(entity) {
-            outline.visible = true;
-            outline.colour = outline_selected;
-            outline.width = 4.0;
-        }
+        set_outline!(entity, visible: true, colour: outline_selected, width: 4.0);
     }
 
     for entity in removed_selected.read() {
@@ -413,20 +423,14 @@ pub(crate) fn update_entity_visuals(
                         commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                     }
                 }
-                if let Ok(mut outline) = outlines.get_mut(entity) {
-                    outline.visible = true;
-                    outline.colour = outline_hovered;
-                    outline.width = 3.0;
-                }
+                set_outline!(entity, visible: true, colour: outline_hovered, width: 3.0);
             } else {
                 if has_mesh {
                     if let Some(mat) = cache.materials_default.get(kind) {
                         commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                     }
                 }
-                if let Ok(mut outline) = outlines.get_mut(entity) {
-                    outline.visible = false;
-                }
+                set_outline!(entity, visible: false);
             }
         }
     }
@@ -439,11 +443,7 @@ pub(crate) fn update_entity_visuals(
                         commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                     }
                 }
-                if let Ok(mut outline) = outlines.get_mut(entity) {
-                    outline.visible = true;
-                    outline.colour = outline_hovered;
-                    outline.width = 3.0;
-                }
+                set_outline!(entity, visible: true, colour: outline_hovered, width: 3.0);
             }
         }
     }
@@ -456,11 +456,7 @@ pub(crate) fn update_entity_visuals(
                         commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                     }
                 }
-                if let Ok(mut outline) = outlines.get_mut(entity) {
-                    outline.visible = true;
-                    outline.colour = outline_hovered;
-                    outline.width = 3.0;
-                }
+                set_outline!(entity, visible: true, colour: outline_hovered, width: 3.0);
             }
         }
     }
@@ -476,20 +472,14 @@ pub(crate) fn update_entity_visuals(
                             commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                         }
                     }
-                    if let Ok(mut outline) = outlines.get_mut(entity) {
-                        outline.visible = true;
-                        outline.colour = outline_hovered;
-                        outline.width = 3.0;
-                    }
+                    set_outline!(entity, visible: true, colour: outline_hovered, width: 3.0);
                 } else {
                     if has_mesh {
                         if let Some(mat) = cache.materials_default.get(kind) {
                             commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                         }
                     }
-                    if let Ok(mut outline) = outlines.get_mut(entity) {
-                        outline.visible = false;
-                    }
+                    set_outline!(entity, visible: false);
                 }
             }
         }
@@ -504,20 +494,14 @@ pub(crate) fn update_entity_visuals(
                             commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                         }
                     }
-                    if let Ok(mut outline) = outlines.get_mut(entity) {
-                        outline.visible = true;
-                        outline.colour = outline_hovered;
-                        outline.width = 3.0;
-                    }
+                    set_outline!(entity, visible: true, colour: outline_hovered, width: 3.0);
                 } else {
                     if has_mesh {
                         if let Some(mat) = cache.materials_default.get(kind) {
                             commands.entity(entity).insert(MeshMaterial3d(mat.clone()));
                         }
                     }
-                    if let Ok(mut outline) = outlines.get_mut(entity) {
-                        outline.visible = false;
-                    }
+                    set_outline!(entity, visible: false);
                 }
             }
         }

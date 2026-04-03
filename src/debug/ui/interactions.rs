@@ -199,13 +199,14 @@ pub fn handle_slider_interaction(
 
 pub fn handle_save_config_click(
     tweaks: Res<DebugTweaks>,
+    db: Res<crate::database::GameDatabase>,
     mut feedback: ResMut<SaveConfigFeedback>,
     btn_q: Query<&Interaction, (Changed<Interaction>, With<SaveConfigButton>)>,
     mut text_q: Query<&mut Text, With<SaveConfigButtonText>>,
 ) {
     for interaction in &btn_q {
         if *interaction == Interaction::Pressed {
-            save_debug_config(&tweaks);
+            save_debug_config(&tweaks, &db);
             feedback.0 = Timer::from_seconds(1.0, TimerMode::Once);
             if let Ok(mut text) = text_q.single_mut() {
                 **text = "Saved!".to_string();

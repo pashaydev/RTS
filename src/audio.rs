@@ -23,31 +23,8 @@ impl Default for AudioSettings {
     }
 }
 
-impl AudioSettings {
-    pub fn load_or_default() -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            std::fs::read_to_string("config/audio_settings.json")
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            Self::default()
-        }
-    }
-
-    pub fn save(&self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let _ = std::fs::write(
-                "config/audio_settings.json",
-                serde_json::to_string_pretty(self).unwrap(),
-            );
-        }
-    }
-}
+// AudioSettings is loaded from SQLite via database::init_early() and
+// saved back by sync_settings_to_db when the resource changes.
 
 // ── Channel markers ──
 
@@ -482,9 +459,8 @@ pub struct GameAudioPlugin;
 
 impl Plugin for GameAudioPlugin {
     fn build(&self, app: &mut App) {
-        let audio_settings = AudioSettings::load_or_default();
-        app.insert_resource(audio_settings)
-            .init_resource::<MusicState>()
+        // AudioSettings is already inserted by main() via database::init_early().
+        app.init_resource::<MusicState>()
             .add_message::<PlaySfx>()
             .add_systems(Startup, setup_audio)
             .add_systems(

@@ -295,6 +295,7 @@ fn record_match_system(
     all_resources: Res<AllPlayerResources>,
     time: Res<Time>,
     match_start: Option<Res<MatchStartTime>>,
+    lobby: Option<Res<crate::multiplayer::LobbyState>>,
     mut recorded: Local<bool>,
 ) {
     if !victory.game_over || *recorded || !db.is_available() {
@@ -307,6 +308,19 @@ fn record_match_system(
         None => 0.0,
     };
 
+    // Build player names per faction slot: local player from ActiveProfile,
+    // remote players from LobbyState, AI slots get no name.
+    let mut player_names = HashMap::new();
+    player_names.insert(game_config.local_player_slot, profile.name.clone());
+    if let Some(ref lobby) = lobby {
+        for lp in &lobby.players {
+            let slot = lp.seat_index as usize;
+            if slot != game_config.local_player_slot && !lp.name.is_empty() {
+                player_names.insert(slot, lp.name.clone());
+            }
+        }
+    }
+
     if let Some(match_id) = db.record_match(
         &profile.id,
         &game_config,
@@ -316,6 +330,7 @@ fn record_match_system(
         &faction_stats,
         &all_resources,
         duration,
+        &player_names,
     ) {
         info!("Match recorded (id={match_id}, duration={duration:.0}s)");
 

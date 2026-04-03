@@ -5,6 +5,7 @@
 > WebRTC NAT traversal enables internet play without VPN.
 > **MessagePack binary wire protocol** over reliable + unreliable WebRTC data channels. Delta-compressed state sync at ~10Hz with staged client application.
 > Reconnection with 30s grace period.
+> **SQLite persistence** — player profiles (`ActiveProfile`), match history with per-player names, ELO ratings, and all settings stored in `config/game.db`.
 
 ---
 
@@ -606,13 +607,36 @@ stateDiagram-v2
 
 ---
 
+## Player Identity & Match Recording
+
+Player identity is managed by `ActiveProfile` (UUID + name), persisted in SQLite via `GameDatabase`. On startup, `ActiveProfile.name` is synced into `GameSetupConfig.player_name` so the lobby and new-game UI show the persisted name. When the player edits their name (text input or random-name button), both `GameSetupConfig.player_name` and `ActiveProfile` are updated, and the change is written to the database.
+
+### Match recording in multiplayer
+
+`record_match_system` fires once when `VictoryState.game_over` becomes true. It runs on **both host and client** — each side has its own `GameDatabase` and `ActiveProfile`, so both record the match locally.
+
+- **Host:** Has authoritative `FactionStats`, `AllPlayerResources`, `VictoryState` — recording is accurate.
+- **Client:** Has replicated data via state sync. `client_apply_server_events` (in `GameFlowSet::NetworkBroadcast`) sets `VictoryState.game_over` when receiving `GameEvent::Victory`. The victory systems are not in a `GameFlowSet`, so recording may be delayed by one frame — this is safe due to the `Local<bool>` guard preventing double recording.
+
+Player names are stored per faction in `match_faction_stats.player_name`:
+- Local player's name comes from `ActiveProfile`.
+- Remote players' names come from `LobbyState.players` (populated during lobby join flow).
+- AI slots get `NULL` for `player_name`.
+
+### ELO ratings
+
+ELO is updated after each recorded match. For single-player, opponent rating is derived from AI difficulty (Easy=800, Medium=1200, Hard=1600). For multiplayer, a default of 1200 is used as opponent baseline — true opponent ELO exchange requires a central matchmaking server (future work).
+
+---
+
 ## Known Limitations
 
 - **No rollback/prediction:** Client commands are fire-and-forget; no reconciliation if host rejects
 - **WorldBaseline is partial:** It is now wired, but only for terrain metadata + neutral world objects; full entity/bootstrap state still depends on `EntitySpawn` plus periodic full resync behavior
 - **Max 4 players** (hardcoded faction count)
-- **Reconnection is partial:** Grace period and session tokens work host-side, but the client-side reconnect UI flow (auto-retry + `Reconnect` message) is not yet wired
+- **Reconnection is partial:** Grace period and session tokens work host-side, but the client-side reconnect UI flow (auto-retry + `Reconnect` message) is not yet wired. Session tokens are ephemeral (lost on host restart).
 - **No TURN relay:** WebRTC STUN works for most NATs, but symmetric NAT requires a TURN server (not yet configured)
+- **Multiplayer ELO is approximate:** Uses hardcoded 1200 opponent rating since we can't verify remote players' ratings without a central server
 
 ---
 
@@ -624,6 +648,8 @@ stateDiagram-v2
 - **Reconnect UI**: Client-side auto-retry flow (detect disconnect → reconnect with `Reconnect { session_token }`) — host-side grace period + tokens are done
 - **Full baseline coverage**: Extend `WorldBaseline` or add a true full-world bootstrap message for entity/unit/building state on late join and reconnect
 - **Standalone signaling server**: For production internet play, extract signaling into a deployable binary
+- **Central matchmaking / ELO exchange**: Broadcast real opponent ELO during `GameStart` so match records reflect true ratings
+- **Post-match stats overlay**: Query `match_faction_stats` for the latest `match_id` and display per-player stats in the victory overlay
 
 ---
 
@@ -643,5 +669,7 @@ stateDiagram-v2
 | `src/multiplayer/debug_tap.rs` | HTTP debug server, TX/RX event recording |
 | `src/net_bridge.rs` | NetworkId assignment (entities + neutral objects), EntityNetMap |
 | `src/menu/multiplayer.rs` | Lobby UI, connection flow (start_hosting, connect_to_host_system, update_lobby_ui), config serialization |
+| `src/database.rs` | SQLite persistence — player profiles, match history, ELO, settings, presets. `ActiveProfile` is player identity source of truth |
+| `src/victory.rs` | Victory/defeat checks, `record_match_system` (records match + player names + ELO on game over) |
 | `game_state/src/message.rs` | All network message types + ServerFrame |
 | `game_state/src/codec.rs` | MessagePack encode/decode helpers |

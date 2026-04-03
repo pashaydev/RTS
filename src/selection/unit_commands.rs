@@ -768,6 +768,7 @@ pub(crate) fn handle_unit_command_hotkeys(
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut cmd_mode: ResMut<CommandMode>,
+    mut label_visibility: ResMut<EntityLabelVisibility>,
     mut next_task_id: ResMut<NextTaskId>,
     viewport: (
         Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
@@ -794,6 +795,11 @@ pub(crate) fn handle_unit_command_hotkeys(
     // Escape cancels command mode
     if keys.just_pressed(KeyCode::Escape) {
         *cmd_mode = CommandMode::Normal;
+        return;
+    }
+
+    if keys.just_pressed(KeyCode::KeyL) {
+        label_visibility.show_unit_labels = !label_visibility.show_unit_labels;
         return;
     }
 

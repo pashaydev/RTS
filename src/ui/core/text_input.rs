@@ -126,6 +126,8 @@ pub fn text_input_system(
     )>,
     mut commands: Commands,
     mut config: ResMut<GameSetupConfig>,
+    mut profile: ResMut<crate::database::ActiveProfile>,
+    db: Res<crate::database::GameDatabase>,
     mut keyboard_events: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     theme: Res<Theme>,
@@ -169,6 +171,8 @@ pub fn text_input_system(
                 insert_text_at_cursor(&mut field, &clip);
                 if is_session_code.is_none() {
                     config.player_name = field.value.clone();
+                    profile.name = field.value.clone();
+                    db.update_profile_name(&profile.id, &profile.name);
                 }
                 break;
             }
@@ -360,6 +364,8 @@ pub fn text_input_system(
         if changed {
             if is_session_code.is_none() {
                 config.player_name = field.value.clone();
+                profile.name = field.value.clone();
+                db.update_profile_name(&profile.id, &profile.name);
             }
         }
     }

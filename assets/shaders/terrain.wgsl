@@ -95,6 +95,11 @@ fn fragment(
     let tex_rock  = textureSample(rock_texture,  rock_sampler,  tile_uv).rgb;
     let tex_sand  = textureSample(sand_texture,  sand_sampler,  tile_uv).rgb;
     let tex_snow  = textureSample(snow_texture,  snow_sampler,  tile_uv).rgb;
+    // WebGPU requires implicit-derivative texture sampling to happen in uniform control flow.
+    // Pre-sample the floor textures before any data-dependent branches.
+    let floor_uv = world_pos.xz * 0.3;
+    let tex_floor_snow = textureSample(snow_texture, snow_sampler, floor_uv).rgb;
+    let tex_floor_rock = textureSample(rock_texture, rock_sampler, floor_uv).rgb;
 
     // ── Biome blend weights derived from vertex color ──
     let r = vertex_color.r;
@@ -156,9 +161,6 @@ fn fragment(
     if settings.floor_blend > 0.0 {
         // Floor tile mesh: vertex_color.a encodes edge distance (0 = edge, 1 = center).
         // Floor texture is passed via the snow_texture slot (floors don't need snow).
-        let floor_uv = world_pos.xz * 0.3;
-        let tex_floor = textureSample(snow_texture, snow_sampler, floor_uv).rgb;
-
         let edge_raw = vertex_color.a;
         let edge_factor = smoothstep(0.0, 0.6, edge_raw);
 
@@ -166,7 +168,7 @@ fn fragment(
         let blend_t = clamp(edge_factor + blend_noise, 0.0, 1.0);
 
         let floor_detail = 1.0 + simplex2d(world_pos.xz * 6.0) * 0.06;
-        let floor_color = tex_floor * floor_detail * 0.95;
+        let floor_color = tex_floor_snow * floor_detail * 0.95;
 
         color = mix(color, floor_color, blend_t);
     } else {
@@ -174,10 +176,6 @@ fn fragment(
         // 0.0 = full floor, 1.0 = no floor (default).
         let floor_alpha = vertex_color.a;
         if floor_alpha < 0.99 {
-            // Reuse the rock texture at a tighter tiling to approximate stone floor
-            let floor_uv = world_pos.xz * 0.3;
-            let tex_floor_rock = textureSample(rock_texture, rock_sampler, floor_uv).rgb;
-
             let floor_t = 1.0 - floor_alpha;
             // Add noise to break up the blend seam for organic edges
             let blend_noise = simplex2d(world_pos.xz * 3.0) * 0.12;

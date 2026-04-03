@@ -308,32 +308,8 @@ impl Default for GraphicsSettings {
     }
 }
 
-impl GraphicsSettings {
-    pub fn load_or_default() -> Self {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            std::fs::read_to_string("config/graphics_settings.json")
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            Self::default()
-        }
-    }
-
-    pub fn save(&self) {
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let _ = std::fs::create_dir_all("config");
-            let _ = std::fs::write(
-                "config/graphics_settings.json",
-                serde_json::to_string_pretty(self).unwrap(),
-            );
-        }
-    }
-}
+// GraphicsSettings is loaded from SQLite via database::init_early() and
+// saved back by sync_settings_to_db when the resource changes.
 
 // ── Resource types ──
 
@@ -1297,6 +1273,10 @@ pub struct ResourceNode {
     pub resource_type: ResourceType,
     pub amount_remaining: u32,
 }
+
+/// Vertical offset to preserve when snapping an entity back onto the terrain.
+#[derive(Component, Clone, Copy, Default)]
+pub struct TerrainHeightOffset(pub f32);
 
 // ── Global resources ──
 
@@ -2988,6 +2968,19 @@ pub struct InspectedEnemy {
     pub entity: Option<Entity>,
 }
 
+#[derive(Resource)]
+pub struct EntityLabelVisibility {
+    pub show_unit_labels: bool,
+}
+
+impl Default for EntityLabelVisibility {
+    fn default() -> Self {
+        Self {
+            show_unit_labels: true,
+        }
+    }
+}
+
 #[derive(Component)]
 pub struct Boss;
 
@@ -2999,6 +2992,21 @@ pub struct CampReward {
 
 #[derive(Component)]
 pub struct SelectionInfoPanel;
+
+#[derive(Component)]
+pub struct SelectionInfoBody;
+
+#[derive(Component)]
+pub struct SelectionFooter;
+
+#[derive(Component)]
+pub struct ToggleUnitLabelsButton;
+
+#[derive(Component)]
+pub struct ToggleUnitLabelsButtonText;
+
+#[derive(Component)]
+pub struct UnitLabelsStatusText;
 
 /// Single source of truth for which UI mode is active.
 /// Both the selection info panel and the action bar read this.
@@ -4041,6 +4049,8 @@ pub enum PauseAction {
     BackFromOptions,
     ApplySettings,
     Spectate,
+    SaveGame,
+    LoadGame,
 }
 
 #[derive(Component)]

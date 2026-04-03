@@ -5,6 +5,7 @@ use rand::Rng;
 
 use super::helpers::*;
 use crate::components::*;
+use crate::database::{ActiveProfile, GameDatabase};
 use crate::theme::Theme;
 use crate::ui::core::interactions::UiClickEvent;
 use crate::ui::fonts::UiFonts;
@@ -25,14 +26,23 @@ pub(crate) fn spawn_menu(
     audio_settings: Res<crate::audio::AudioSettings>,
     fonts: Res<UiFonts>,
     restart: Option<Res<RestartRequested>>,
+    pending_load: Option<Res<crate::save_load::PendingLoad>>,
     mut next_state: ResMut<NextState<AppState>>,
     lobby: Res<LobbyState>,
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
     theme: Res<Theme>,
+    db: Res<GameDatabase>,
+    profile: Res<ActiveProfile>,
 ) {
     if restart.is_some() {
         commands.remove_resource::<RestartRequested>();
+        next_state.set(AppState::InGame);
+        return;
+    }
+
+    // If PendingLoad exists, skip the menu and go straight to InGame
+    if pending_load.is_some() {
         next_state.set(AppState::InGame);
         return;
     }
@@ -90,6 +100,8 @@ pub(crate) fn spawn_menu(
         &net_role,
         &client_state,
         &theme,
+        &db,
+        &profile,
     );
 }
 
@@ -105,6 +117,8 @@ fn dispatch_page(
     net_role: &Option<Res<NetRole>>,
     client_state: &Option<Res<ClientNetState>>,
     theme: &Theme,
+    db: &GameDatabase,
+    profile: &ActiveProfile,
 ) {
     match *page {
         MenuPage::Title => pages::spawn_title_page(commands, container, fonts, theme),
@@ -120,6 +134,9 @@ fn dispatch_page(
             multiplayer::spawn_join_lobby_page(
                 commands, container, config, fonts, lobby, role, my_faction, theme,
             )
+        }
+        MenuPage::LoadGame => {
+            pages::spawn_load_game_page(commands, container, fonts, theme, db, profile)
         }
     }
 }
@@ -138,6 +155,8 @@ pub(crate) fn refresh_menu_page(
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
     theme: Res<Theme>,
+    db: Res<GameDatabase>,
+    profile: Res<ActiveProfile>,
 ) {
     if !page.is_changed() {
         return;
@@ -165,6 +184,8 @@ pub(crate) fn refresh_menu_page(
         &net_role,
         &client_state,
         &theme,
+        &db,
+        &profile,
     );
 }
 
@@ -182,6 +203,8 @@ pub(crate) fn rebuild_dirty_menu(
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
     theme: Res<Theme>,
+    db: Res<GameDatabase>,
+    profile: Res<ActiveProfile>,
 ) {
     if dirty.is_none() {
         return;
@@ -210,6 +233,8 @@ pub(crate) fn rebuild_dirty_menu(
         &net_role,
         &client_state,
         &theme,
+        &db,
+        &profile,
     );
 }
 
@@ -222,13 +247,14 @@ pub(crate) fn handle_menu_buttons(
     mut page: ResMut<MenuPage>,
     mut config: ResMut<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
-    audio_settings: Res<crate::audio::AudioSettings>,
     mut theme: ResMut<crate::theme::Theme>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
     mut windows: Query<&mut Window>,
     host_state: Option<Res<HostNetState>>,
     client_state: Option<Res<ClientNetState>>,
+    db: Res<GameDatabase>,
+    profile: Res<ActiveProfile>,
 ) {
     for event in click_events.read() {
         let Ok(btn) = buttons.get(event.entity) else {
@@ -237,6 +263,9 @@ pub(crate) fn handle_menu_buttons(
         match btn.0 {
             MenuAction::NewGame => {
                 *page = MenuPage::NewGame;
+            }
+            MenuAction::LoadGame => {
+                *page = MenuPage::LoadGame;
             }
             MenuAction::Options => {
                 *page = MenuPage::Options;
@@ -252,8 +281,6 @@ pub(crate) fn handle_menu_buttons(
             }
             MenuAction::ApplySettings => {
                 theme.set_mode(graphics.theme_mode);
-                graphics.save();
-                audio_settings.save();
                 if let Ok(mut window) = windows.single_mut() {
                     super::options::apply_graphics_settings(&graphics, &mut window);
                 }
@@ -280,7 +307,6 @@ pub(crate) fn handle_menu_buttons(
                 // Handled by refresh_lan_hosts_system
             }
             MenuAction::StartMultiplayer => {
-                // Start 3-second countdown (or cancel if already counting)
                 commands.insert_resource(super::CountdownState {
                     timer: Timer::from_seconds(3.0, TimerMode::Once),
                     current_digit: 3,
@@ -299,7 +325,82 @@ pub(crate) fn handle_menu_buttons(
                 multiplayer::stop_client(&mut commands, &client_state);
                 *page = MenuPage::JoinLobby;
             }
+            MenuAction::LoadSave(save_id) => {
+                if let Some(blob) = db.load_save(save_id) {
+                    match rmp_serde::from_slice::<crate::save_load::SaveData>(&blob) {
+                        Ok(save_data) => {
+                            info!("Loading save id={save_id}");
+                            // Restore GameSetupConfig from save
+                            config.map_seed = save_data.map_seed;
+                            // Parse map_size, resource_density, etc. from saved strings
+                            restore_config_from_save(&mut config, &save_data.game_config);
+                            commands.insert_resource(crate::save_load::PendingLoad { save_data });
+                            next_state.set(AppState::InGame);
+                        }
+                        Err(e) => {
+                            error!("Failed to deserialize save: {e}");
+                        }
+                    }
+                }
+            }
+            MenuAction::DeleteSave(save_id) => {
+                db.delete_save(save_id);
+                // Refresh the page
+                commands.insert_resource(MenuDirty);
+            }
         }
+    }
+}
+
+fn restore_config_from_save(config: &mut GameSetupConfig, saved: &crate::save_load::SavedGameConfig) {
+    config.player_name = saved.player_name.clone();
+    config.local_player_slot = saved.local_player_slot;
+    config.player_teams = saved.player_teams;
+    config.day_cycle_secs = saved.day_cycle_secs;
+    config.starting_resources_mult = saved.starting_resources_mult;
+    config.map_seed = saved.map_seed;
+
+    // Parse map_size
+    config.map_size = match saved.map_size.as_str() {
+        "Small" => MapSize::Small,
+        "Large" => MapSize::Large,
+        _ => MapSize::Medium,
+    };
+
+    // Parse resource_density
+    config.resource_density = match saved.resource_density.as_str() {
+        "Sparse" => ResourceDensity::Sparse,
+        "Dense" => ResourceDensity::Dense,
+        _ => ResourceDensity::Normal,
+    };
+
+    // Parse team_mode
+    config.team_mode = match saved.team_mode.as_str() {
+        "Teams" => TeamMode::Teams,
+        _ => TeamMode::FFA,
+    };
+
+    // Parse slots
+    for (i, slot_str) in saved.slots.iter().enumerate() {
+        if i >= config.slots.len() {
+            break;
+        }
+        config.slots[i] = if slot_str == "Human" {
+            SlotOccupant::Human
+        } else if slot_str == "Open" {
+            SlotOccupant::Open
+        } else if slot_str == "Closed" {
+            SlotOccupant::Closed
+        } else if let Some(diff_str) = slot_str.strip_prefix("Ai:") {
+            let diff = match diff_str {
+                "Easy" => AiDifficulty::Easy,
+                "Hard" => AiDifficulty::Hard,
+                _ => AiDifficulty::Medium,
+            };
+            SlotOccupant::Ai(diff)
+        } else {
+            SlotOccupant::Closed
+        };
     }
 }
 
@@ -822,6 +923,8 @@ pub(crate) fn randomize_seed_system(
 pub(crate) fn random_name_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<RandomNameButton>)>,
     mut config: ResMut<GameSetupConfig>,
+    mut profile: ResMut<crate::database::ActiveProfile>,
+    db: Res<crate::database::GameDatabase>,
     mut inputs: Query<&mut TextInputField>,
 ) {
     for interaction in &interactions {
@@ -831,6 +934,8 @@ pub(crate) fn random_name_system(
         let mut rng = rand::rng();
         let name = RANDOM_NAMES[rng.random_range(0..RANDOM_NAMES.len())].to_string();
         config.player_name = name.clone();
+        profile.name = name.clone();
+        db.update_profile_name(&profile.id, &name);
 
         for mut field in &mut inputs {
             field.value = name.clone();
@@ -995,14 +1100,12 @@ pub(crate) fn menu_selector_keyboard_nav(
                         let delta = if left { -0.01 } else { 0.01 };
                         audio_settings.music_volume =
                             (audio_settings.music_volume + delta).clamp(0.0, 1.0);
-                        audio_settings.save();
                         handled_slider = true;
                     }
                     SelectorField::SfxVolume => {
                         let delta = if left { -0.01 } else { 0.01 };
                         audio_settings.sfx_volume =
                             (audio_settings.sfx_volume + delta).clamp(0.0, 1.0);
-                        audio_settings.save();
                         handled_slider = true;
                     }
                     _ => {}
@@ -1128,10 +1231,9 @@ pub(crate) fn volume_slider_system(
     mut audio_settings: ResMut<crate::audio::AudioSettings>,
     mut drag: ResMut<SliderDragState>,
 ) {
-    // On release, stop dragging and save.
+    // On release, stop dragging.
     if mouse.just_released(MouseButton::Left) {
         if drag.active.is_some() {
-            audio_settings.save();
             drag.active = None;
         }
         return;

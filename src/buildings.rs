@@ -19,6 +19,7 @@ use crate::ground::{
 };
 use game_state::message::TerrainShapeOp;
 use crate::model_assets::{BuildingConstructionAssets, BuildingModelAssets, UnitModelAssets};
+#[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
 
 #[derive(SystemParam)]
@@ -105,6 +106,22 @@ fn find_best_worker_for_build<'a>(
         }
     }
     best.map(|(e, prio, _)| (e, prio))
+}
+
+fn has_available_worker_for_build<'a>(
+    workers: impl Iterator<
+        Item = (
+            Entity,
+            &'a Transform,
+            &'a UnitState,
+            &'a Faction,
+            &'a EntityKind,
+        ),
+    >,
+    faction: Faction,
+    build_pos: Vec3,
+) -> bool {
+    find_best_worker_for_build(workers, faction, build_pos).is_some()
 }
 
 /// When reassigning a worker away from their current task, clean up the old building's
@@ -238,7 +255,7 @@ pub fn spawn_floor_grid_cells(
 
         let world = WallGrid::grid_to_world(gx, gz);
         let ground_y = shared_height.unwrap_or_else(|| {
-            height_map.foundation_target_height(world.x, world.z, footprint)
+            height_map.foundation_target_height_shaped(world.x, world.z, footprint)
         });
         // Floor tiles are invisible — the terrain blend handles the visuals.
         // Entity is kept for game logic (FloorGrid, FloorTile filtering, etc.)
@@ -786,15 +803,15 @@ fn wall_auto_tile_system(
                 }
             }
 
-            let child = commands
+            let mut child = commands
                 .spawn((
                     SceneRoot(scene),
                     BuildingSceneChild,
-                    InheritOutline,
-                    AsyncSceneInheritOutline::default(),
                     building_models.child_transform(new_kind, 1.0),
-                ))
-                .id();
+                ));
+            #[cfg(not(target_arch = "wasm32"))]
+            child.insert((InheritOutline, AsyncSceneInheritOutline::default()));
+            let child = child.id();
             commands.entity(entity).add_child(child);
 
             // Clear team color so it gets re-applied
@@ -933,28 +950,53 @@ fn sync_environment_to_terrain_changes(
     mut dirty_areas: ResMut<TerrainSurfaceDirtyQueue>,
     height_map: Res<HeightMap>,
     registry: Res<BlueprintRegistry>,
-    mut trees: Query<
-        &mut Transform,
-        (
-            Or<(With<Sapling>, With<GrowingTree>, With<MatureTree>)>,
-            Without<Building>,
-        ),
-    >,
+    mut terrain_followers: ParamSet<(
+        Query<
+            '_, 
+            '_, 
+            &mut Transform,
+            (
+                Or<(With<Sapling>, With<GrowingTree>, With<MatureTree>)>,
+                Without<Building>,
+            ),
+        >,
+        Query<
+            '_,
+            '_,
+            (&mut Transform, &ResourceNode, Option<&TerrainHeightOffset>),
+            (
+                Without<Building>,
+                Without<Sapling>,
+                Without<GrowingTree>,
+                Without<MatureTree>,
+            ),
+        >,
+        Query<
+            '_,
+            '_,
+            (&mut Transform, &GrowingResource, Option<&TerrainHeightOffset>),
+            (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
+        >,
+        Query<
+            '_,
+            '_,
+            (Entity, &DecoChunk, &Transform, &Mesh3d),
+            (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
+        >,
+    )>,
     mut building_q: Query<(&mut Transform, &EntityKind, &BuildingFootprint), With<Building>>,
     grass_chunks: Query<(Entity, &GrassChunk, &Mesh3d)>,
-    deco_chunks: Query<
-        (Entity, &DecoChunk, &Transform, &Mesh3d),
-        (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
-    >,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     while let Some(area) = dirty_areas.pending.pop_front() {
         sync_building_heights_for_area(&height_map, &registry, area, &mut building_q);
-        sync_tree_heights_for_area(&height_map, area, &mut trees);
+        sync_tree_heights_for_area(&height_map, area, &mut terrain_followers.p0());
+        sync_resource_node_heights_for_area(&height_map, area, &mut terrain_followers.p1());
+        sync_growing_resource_heights_for_area(&height_map, area, &mut terrain_followers.p2());
         clear_vegetation_in_radius(
             &mut commands,
             &grass_chunks,
-            &deco_chunks,
+            &terrain_followers.p3(),
             &mut meshes,
             area.center.x,
             area.center.y,
@@ -987,7 +1029,7 @@ fn sync_building_heights_for_area(
             bp.building.as_ref().map(|b| b.half_height).unwrap_or(0.0)
         };
         let ground_y = if uses_terrain_foundation(*kind) {
-            height_map.foundation_target_height(
+            height_map.foundation_target_height_shaped(
                 transform.translation.x,
                 transform.translation.z,
                 footprint.0,
@@ -1026,6 +1068,68 @@ fn sync_tree_heights_for_area(
 
         transform.translation.y =
             height_map.sample(transform.translation.x, transform.translation.z);
+    }
+}
+
+fn sync_resource_node_heights_for_area(
+    height_map: &HeightMap,
+    area: TerrainSurfaceDirtyArea,
+    resource_nodes: &mut Query<
+        (&mut Transform, &ResourceNode, Option<&TerrainHeightOffset>),
+        (
+            Without<Building>,
+            Without<Sapling>,
+            Without<GrowingTree>,
+            Without<MatureTree>,
+        ),
+    >,
+) {
+    let area_r2 = area.radius * area.radius;
+
+    for (mut transform, node, offset) in resource_nodes.iter_mut() {
+        let dx = transform.translation.x - area.center.x;
+        let dz = transform.translation.z - area.center.y;
+        if dx * dx + dz * dz > area_r2 {
+            continue;
+        }
+
+        let terrain_offset = offset
+            .map(|o| o.0)
+            .unwrap_or_else(|| default_resource_height_offset(node.resource_type));
+        transform.translation.y =
+            height_map.sample(transform.translation.x, transform.translation.z) + terrain_offset;
+    }
+}
+
+fn sync_growing_resource_heights_for_area(
+    height_map: &HeightMap,
+    area: TerrainSurfaceDirtyArea,
+    growing_resources: &mut Query<
+        (&mut Transform, &GrowingResource, Option<&TerrainHeightOffset>),
+        (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
+    >,
+) {
+    let area_r2 = area.radius * area.radius;
+
+    for (mut transform, growing, offset) in growing_resources.iter_mut() {
+        let dx = transform.translation.x - area.center.x;
+        let dz = transform.translation.z - area.center.y;
+        if dx * dx + dz * dz > area_r2 {
+            continue;
+        }
+
+        let terrain_offset = offset
+            .map(|o| o.0)
+            .unwrap_or_else(|| default_resource_height_offset(growing.resource_type));
+        transform.translation.y =
+            height_map.sample(transform.translation.x, transform.translation.z) + terrain_offset;
+    }
+}
+
+fn default_resource_height_offset(resource_type: ResourceType) -> f32 {
+    match resource_type {
+        ResourceType::Oil => 0.6,
+        _ => 0.0,
     }
 }
 
@@ -1333,10 +1437,21 @@ fn update_placement_preview(
         (&Transform, &BuildingFootprint, &EntityKind),
         (With<Building>, Without<GhostBuilding>),
     >,
-    biome_map: Option<Res<BiomeMap>>,
-    height_map: Res<HeightMap>,
-    obstacle_grid: Res<ObstacleGrid>,
+    worker_context: (
+        Res<ActivePlayer>,
+        Query<
+            (Entity, &Transform, &UnitState, &Faction, &EntityKind),
+            (With<Unit>, Without<GhostBuilding>),
+        >,
+    ),
+    environment: (
+        Option<Res<BiomeMap>>,
+        Res<HeightMap>,
+        Res<ObstacleGrid>,
+    ),
 ) {
+    let (active_player, workers) = worker_context;
+    let (biome_map, height_map, obstacle_grid) = environment;
     let (camera_q, windows, graphics) = viewport;
     let Some(kind) = placement_kind(placement.mode) else {
         return;
@@ -1433,7 +1548,7 @@ fn update_placement_preview(
     };
 
     let ground_y = if uses_terrain_foundation(kind) {
-        height_map.foundation_target_height(world_pos.x, world_pos.z, new_footprint)
+        height_map.foundation_target_height_shaped(world_pos.x, world_pos.z, new_footprint)
     } else {
         height_map.sample(world_pos.x, world_pos.z)
     };
@@ -1504,6 +1619,15 @@ fn update_placement_preview(
     let half_map = height_map.half_map;
     if world_pos.x.abs() > half_map - 5.0 || world_pos.z.abs() > half_map - 5.0 {
         valid = false;
+    }
+
+    if valid {
+        let build_pos = Vec3::new(world_pos.x, 0.0, world_pos.z);
+        let worker_iter = workers.iter().map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
+        if !has_available_worker_for_build(worker_iter, active_player.0, build_pos) {
+            valid = false;
+            hint = Some("All workers are busy".to_owned());
+        }
     }
 
     placement.hint_text = if !valid { hint } else { None };
@@ -1584,6 +1708,7 @@ fn update_wall_plot_preview(
     mut commands: Commands,
     mut placement: ResMut<BuildingPlacementState>,
     mut wall_preview: ResMut<WallPlotPreview>,
+    active_player: Res<ActivePlayer>,
     wall_grid: Res<WallGrid>,
     registry: Res<BlueprintRegistry>,
     ghost_mats: Res<BuildingGhostMaterials>,
@@ -1596,6 +1721,10 @@ fn update_wall_plot_preview(
     existing_buildings: Query<
         (&Transform, &BuildingFootprint, &EntityKind),
         (With<Building>, Without<GhostBuilding>),
+    >,
+    workers: Query<
+        (Entity, &Transform, &UnitState, &Faction, &EntityKind),
+        (With<Unit>, Without<GhostBuilding>),
     >,
     height_map: Res<HeightMap>,
     obstacle_grid: Res<ObstacleGrid>,
@@ -1725,10 +1854,17 @@ fn update_wall_plot_preview(
     let cost = &wall_preview.total_cost;
     let wood = cost.get(ResourceType::Wood);
     let stone = cost.get(ResourceType::Stone);
+    if wall_preview.valid {
+        let wall_pos = wall_preview.snapped_points[0];
+        let worker_iter = workers.iter().map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
+        if !has_available_worker_for_build(worker_iter, active_player.0, wall_pos) {
+            wall_preview.valid = false;
+        }
+    }
     placement.hint_text = Some(if wall_preview.valid {
         format!("Wall: {count} pieces | Cost: {wood}W {stone}S")
     } else {
-        "Wall path blocked".to_string()
+        "Wall path blocked or all workers are busy".to_string()
     });
 }
 
@@ -1753,6 +1889,10 @@ fn update_gate_plot_preview(
             With<Building>,
             Without<GhostBuilding>,
         ),
+    >,
+    workers: Query<
+        (Entity, &Transform, &UnitState, &Faction, &EntityKind),
+        (With<Unit>, Without<GhostBuilding>),
     >,
     active_player: Res<ActivePlayer>,
     height_map: Res<HeightMap>,
@@ -1829,10 +1969,17 @@ fn update_gate_plot_preview(
     if let Some((segment_tf, _)) = nearest {
         ghost_tf.translation = segment_tf.translation;
         ghost_tf.rotation = segment_tf.rotation;
+        let worker_iter = workers.iter().map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
+        let has_worker =
+            has_available_worker_for_build(worker_iter, active_player.0, segment_tf.translation);
         if let Ok(mut gv) = ghost_valid_q.get_mut(ghost_entity) {
-            gv.0 = true;
+            gv.0 = has_worker;
         }
-        placement.hint_text = Some("Click to replace wall segment with Gatehouse".to_string());
+        placement.hint_text = Some(if has_worker {
+            "Click to replace wall segment with Gatehouse".to_string()
+        } else {
+            "All workers are busy".to_string()
+        });
     } else {
         ghost_tf.translation = Vec3::new(world_pos.x, -100.0, world_pos.z);
         if let Ok(mut gv) = ghost_valid_q.get_mut(ghost_entity) {
@@ -2337,6 +2484,13 @@ fn confirm_wall_plot(
     }
 
     let faction = active_player.0;
+    let wall_pos = wall_preview.snapped_points[0];
+    let worker_iter = workers.iter().map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
+    let Some((worker_entity, _)) = find_best_worker_for_build(worker_iter, faction, wall_pos) else {
+        placement.hint_text = Some("All workers are busy".to_string());
+        return;
+    };
+
     let player_res = all_resources.get(&faction);
     if !wall_preview.total_cost.can_afford(player_res) {
         placement.hint_text = Some("Not enough resources for wall".to_string());
@@ -2372,32 +2526,28 @@ fn confirm_wall_plot(
     );
 
     if !spawned_entities.is_empty() {
-        let wall_pos = wall_preview.snapped_points[0];
-        let worker_iter = workers.iter().map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
-        if let Some((worker_entity, _)) = find_best_worker_for_build(worker_iter, faction, wall_pos) {
-            // Clean up any existing gathering assignment
-            if let Ok((_, _, w_state, _, _)) = workers.get(worker_entity) {
-                cleanup_worker_assignment(&mut commands, worker_entity, w_state);
-            }
-            let target_building = spawned_entities[0];
-            commands
-                .entity(worker_entity)
-                .remove::<AttackTarget>()
-                .remove::<MoveTarget>()
-                .insert(UnitState::MovingToBuild(target_building))
-                .insert(TaskSource::Manual);
-            commands
-                .entity(target_building)
-                .entry::<AssignedWorkers>()
-                .and_modify(move |mut aw| {
-                    if !aw.workers.contains(&worker_entity) {
-                        aw.workers.push(worker_entity);
-                    }
-                })
-                .or_insert(AssignedWorkers {
-                    workers: vec![worker_entity],
-                });
+        // Clean up any existing gathering assignment before reassigning
+        if let Ok((_, _, w_state, _, _)) = workers.get(worker_entity) {
+            cleanup_worker_assignment(&mut commands, worker_entity, w_state);
         }
+        let target_building = spawned_entities[0];
+        commands
+            .entity(worker_entity)
+            .remove::<AttackTarget>()
+            .remove::<MoveTarget>()
+            .insert(UnitState::MovingToBuild(target_building))
+            .insert(TaskSource::Manual);
+        commands
+            .entity(target_building)
+            .entry::<AssignedWorkers>()
+            .and_modify(move |mut aw| {
+                if !aw.workers.contains(&worker_entity) {
+                    aw.workers.push(worker_entity);
+                }
+            })
+            .or_insert(AssignedWorkers {
+                workers: vec![worker_entity],
+            });
     }
 
     clear_wall_preview(&mut commands, &mut wall_preview);
@@ -2460,26 +2610,7 @@ fn confirm_gate_plot(
     };
 
     let bp = registry.get(EntityKind::Gatehouse);
-    let player_res = all_resources.get(faction);
-    if !bp.cost.can_afford(player_res) {
-        placement.hint_text = Some("Not enough resources for Gatehouse".to_string());
-        return;
-    }
-    bp.cost.deduct(all_resources.get_mut(faction));
-
-    // Mark the grid cell as a gate — auto-tile system will swap the model
-    let (gx, gz) = (grid_coord.0, grid_coord.1);
-    if let Some(cell) = wall_grid.cells.get_mut(&(gx, gz)) {
-        cell.is_gate = true;
-    }
-    wall_grid.mark_dirty(gx, gz);
-
-    if let Some(preview) = placement.preview_entity.take() {
-        commands.entity(preview).try_despawn();
-    }
-
-    // Assign worker to the entity (it will get its model swapped by auto-tile)
-    if let Some(worker_entity) = workers
+    let worker_entity = workers
         .iter()
         .filter(|(_, _, state, worker_faction, kind)| {
             **kind == EntityKind::Worker
@@ -2501,26 +2632,46 @@ fn confirm_gate_plot(
                 .partial_cmp(&b_dist)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
-        .map(|(worker, _, _, _, _)| worker)
-    {
-        commands
-            .entity(worker_entity)
-            .remove::<AttackTarget>()
-            .remove::<MoveTarget>()
-            .insert(UnitState::MovingToBuild(segment_entity))
-            .insert(TaskSource::Manual);
-        commands
-            .entity(segment_entity)
-            .entry::<AssignedWorkers>()
-            .and_modify(move |mut aw| {
-                if !aw.workers.contains(&worker_entity) {
-                    aw.workers.push(worker_entity);
-                }
-            })
-            .or_insert(AssignedWorkers {
-                workers: vec![worker_entity],
-            });
+        .map(|(worker, _, _, _, _)| worker);
+    let Some(worker_entity) = worker_entity else {
+        placement.hint_text = Some("All workers are busy".to_string());
+        return;
+    };
+
+    let player_res = all_resources.get(faction);
+    if !bp.cost.can_afford(player_res) {
+        placement.hint_text = Some("Not enough resources for Gatehouse".to_string());
+        return;
     }
+    bp.cost.deduct(all_resources.get_mut(faction));
+
+    // Mark the grid cell as a gate — auto-tile system will swap the model
+    let (gx, gz) = (grid_coord.0, grid_coord.1);
+    if let Some(cell) = wall_grid.cells.get_mut(&(gx, gz)) {
+        cell.is_gate = true;
+    }
+    wall_grid.mark_dirty(gx, gz);
+
+    if let Some(preview) = placement.preview_entity.take() {
+        commands.entity(preview).try_despawn();
+    }
+    commands
+        .entity(worker_entity)
+        .remove::<AttackTarget>()
+        .remove::<MoveTarget>()
+        .insert(UnitState::MovingToBuild(segment_entity))
+        .insert(TaskSource::Manual);
+    commands
+        .entity(segment_entity)
+        .entry::<AssignedWorkers>()
+        .and_modify(move |mut aw| {
+            if !aw.workers.contains(&worker_entity) {
+                aw.workers.push(worker_entity);
+            }
+        })
+        .or_insert(AssignedWorkers {
+            workers: vec![worker_entity],
+        });
 
     placement.mode = PlacementMode::None;
     placement.awaiting_release = false;
@@ -2603,7 +2754,7 @@ fn confirm_floor_plot(
     let cx = world.x;
     let cz = world.z;
     let footprint = footprint_for_kind(EntityKind::Floor);
-    let shared_height = height_map.foundation_target_height(cx, cz, footprint);
+    let shared_height = height_map.foundation_target_height_shaped(cx, cz, footprint);
 
     // Flatten terrain for single cell
     let op = TerrainShapeOp {
@@ -3089,15 +3240,15 @@ fn construction_progress_system(
                         }
                     }
 
-                    let child = commands
+                    let mut child = commands
                         .spawn((
                             SceneRoot(stage_scene.clone()),
                             BuildingSceneChild,
-                            InheritOutline,
-                            AsyncSceneInheritOutline::default(),
                             building_models.child_transform(*kind, base_scale),
-                        ))
-                        .id();
+                        ));
+                    #[cfg(not(target_arch = "wasm32"))]
+                    child.insert((InheritOutline, AsyncSceneInheritOutline::default()));
+                    let child = child.id();
                     commands.entity(entity).add_child(child);
                     commands
                         .entity(entity)
@@ -3126,15 +3277,15 @@ fn construction_progress_system(
                 if let Some(complete_scene) =
                     building_models.scene_for(*kind, 1, transform.translation)
                 {
-                    let child = commands
+                    let mut child = commands
                         .spawn((
                             SceneRoot(complete_scene),
                             BuildingSceneChild,
-                            InheritOutline,
-                            AsyncSceneInheritOutline::default(),
                             building_models.child_transform(*kind, base_scale),
-                        ))
-                        .id();
+                        ));
+                    #[cfg(not(target_arch = "wasm32"))]
+                    child.insert((InheritOutline, AsyncSceneInheritOutline::default()));
+                    let child = child.id();
                     commands.entity(entity).add_child(child);
                 }
                 commands
@@ -3691,15 +3842,15 @@ fn building_upgrade_system(
                         }
                     }
                     // Spawn new scene child with calibration
-                    let child = commands
+                    let mut child = commands
                         .spawn((
                             SceneRoot(new_scene),
                             BuildingSceneChild,
-                            InheritOutline,
-                            AsyncSceneInheritOutline::default(),
                             models.child_transform(*kind, 1.0),
-                        ))
-                        .id();
+                        ));
+                    #[cfg(not(target_arch = "wasm32"))]
+                    child.insert((InheritOutline, AsyncSceneInheritOutline::default()));
+                    let child = child.id();
                     commands.entity(entity).add_child(child);
                     // Remove TeamColorApplied so the new scene gets recolored
                     commands.entity(entity).remove::<TeamColorApplied>();

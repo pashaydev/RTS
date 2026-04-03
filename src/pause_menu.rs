@@ -205,36 +205,26 @@ fn spawn_pause_overlay(
 }
 
 fn spawn_pause_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts, theme: &Theme, role: NetRole) {
-    // // Title
-    // let title = commands
-    //     .spawn((
-    //         Text::new("PAUSED"),
-    //         TextFont {
-    //             font: fonts.heading.clone(),
-    //             font_size: theme::FONT_DISPLAY,
-    //             ..default()
-    //         },
-    //         TextColor(theme::TEXT_PRIMARY),
-    //         Node {
-    //             margin: UiRect::bottom(Val::Px(24.0)),
-    //             ..default()
-    //         },
-    //     ))
-    //     .id();
-    // commands.entity(panel).add_child(title);
-
     // Buttons
     let menu_label = if role == NetRole::Host {
         "End Match"
     } else {
         "Main Menu"
     };
-    let buttons = vec![
+
+    // Save/Load only in single-player (offline) mode
+    let is_offline = role == NetRole::Offline;
+
+    let mut buttons: Vec<(&str, PauseAction, bool)> = vec![
         ("Continue", PauseAction::Continue, true),
-        ("Restart", PauseAction::Restart, false),
-        (menu_label, PauseAction::MainMenu, false),
-        ("Quit", PauseAction::Quit, false),
     ];
+    if is_offline {
+        buttons.push(("Save Game", PauseAction::SaveGame, false));
+        buttons.push(("Load Game", PauseAction::LoadGame, false));
+    }
+    buttons.push(("Restart", PauseAction::Restart, false));
+    buttons.push((menu_label, PauseAction::MainMenu, false));
+    buttons.push(("Quit", PauseAction::Quit, false));
 
     for (i, (label, action, accent)) in buttons.into_iter().enumerate() {
         let btn = spawn_overlay_button(commands, label, action, accent, fonts, theme, Some(i));
@@ -520,6 +510,20 @@ fn handle_pause_buttons(
                 }
                 // Spawn spectator HUD
                 spawn_spectator_hud(&mut commands, &fonts, &theme, &faction_stats);
+            }
+            PauseAction::SaveGame => {
+                // Insert a trigger resource that save_load::handle_save_trigger picks up
+                commands.insert_resource(crate::save_load::SaveTrigger { label: None });
+                // Close pause menu after save
+                *overlay = InGameOverlay::None;
+                for e in &pause_roots {
+                    commands.entity(e).try_despawn();
+                }
+            }
+            PauseAction::LoadGame => {
+                // Go to main menu's load game page
+                commands.insert_resource(crate::menu::MenuPage::LoadGame);
+                next_state.set(AppState::MainMenu);
             }
         }
     }

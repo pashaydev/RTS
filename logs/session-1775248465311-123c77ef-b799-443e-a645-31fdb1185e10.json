@@ -1,0 +1,167 @@
+{
+  "session_id": "123c77ef-b799-443e-a645-31fdb1185e10",
+  "started_at_unix_ms": 1775248465311,
+  "finished_at_unix_ms": 1775248465621,
+  "base_dir": "/Users/pashayakubovsky/Desktop/Gamedev/rts",
+  "output_path": "/Users/pashayakubovsky/Desktop/Gamedev/rts/logs/session-1775248465311-123c77ef-b799-443e-a645-31fdb1185e10.json",
+  "entries": [
+    {
+      "timestamp_unix_ms": 1775248465340,
+      "level": "INFO",
+      "target": "log",
+      "module_path": null,
+      "file": null,
+      "line": null,
+      "fields": {
+        "log.file": "/Users/pashayakubovsky/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_diagnostic-0.18.1/src/system_information_diagnostics_plugin.rs",
+        "log.line": 273,
+        "log.module_path": "bevy_diagnostic::system_information_diagnostics_plugin::internal",
+        "log.target": "bevy_diagnostic::system_information_diagnostics_plugin::internal",
+        "message": "SystemInfo { os: \"macOS 15.6.1 Sequoia\", kernel: \"24.6.0\", cpu: \"Apple M3 Pro\", core_count: \"11\", memory: \"18.0 GiB\" }"
+      },
+      "message": "SystemInfo { os: \"macOS 15.6.1 Sequoia\", kernel: \"24.6.0\", cpu: \"Apple M3 Pro\", core_count: \"11\", memory: \"18.0 GiB\" }"
+    },
+    {
+      "timestamp_unix_ms": 1775248465425,
+      "level": "INFO",
+      "target": "bevy_render::renderer",
+      "module_path": "bevy_render::renderer",
+      "file": "/Users/pashayakubovsky/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render-0.18.1/src/renderer/mod.rs",
+      "line": 283,
+      "fields": {
+        "message": "AdapterInfo { name: \"Apple M3 Pro\", vendor: 0, device: 0, device_type: IntegratedGpu, driver: \"\", driver_info: \"\", backend: Metal }"
+      },
+      "message": "AdapterInfo { name: \"Apple M3 Pro\", vendor: 0, device: 0, device_type: IntegratedGpu, driver: \"\", driver_info: \"\", backend: Metal }"
+    },
+    {
+      "timestamp_unix_ms": 1775248465522,
+      "level": "INFO",
+      "target": "rts::multiplayer::debug_tap",
+      "module_path": "rts::multiplayer::debug_tap",
+      "file": "src/multiplayer/debug_tap.rs",
+      "line": 88,
+      "fields": {
+        "message": "Net debug tap ready: http://127.0.0.1:8787/events"
+      },
+      "message": "Net debug tap ready: http://127.0.0.1:8787/events"
+    },
+    {
+      "timestamp_unix_ms": 1775248465522,
+      "level": "INFO",
+      "target": "rts::multiplayer::debug_tap",
+      "module_path": "rts::multiplayer::debug_tap",
+      "file": "src/multiplayer/debug_tap.rs",
+      "line": 198,
+      "fields": {
+        "message": "Net debug tap listening on http://127.0.0.1:8787"
+      },
+      "message": "Net debug tap listening on http://127.0.0.1:8787"
+    },
+    {
+      "timestamp_unix_ms": 1775248465531,
+      "level": "INFO",
+      "target": "bevy_render::batching::gpu_preprocessing",
+      "module_path": "bevy_render::batching::gpu_preprocessing",
+      "file": "/Users/pashayakubovsky/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render-0.18.1/src/batching/gpu_preprocessing.rs",
+      "line": 1144,
+      "fields": {
+        "message": "GPU preprocessing is fully supported on this device."
+      },
+      "message": "GPU preprocessing is fully supported on this device."
+    },
+    {
+      "timestamp_unix_ms": 1775248465559,
+      "level": "WARN",
+      "target": "bevy_gltf::loader",
+      "module_path": "bevy_gltf::loader",
+      "file": "/Users/pashayakubovsky/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_gltf-0.18.1/src/loader/mod.rs",
+      "line": 726,
+      "fields": {
+        "message": "Unknown vertex attribute COLOR_1"
+      },
+      "message": "Unknown vertex attribute COLOR_1"
+    },
+    {
+      "timestamp_unix_ms": 1775248465560,
+      "level": "WARN",
+      "target": "bevy_gltf::loader",
+      "module_path": "bevy_gltf::loader",
+      "file": "/Users/pashayakubovsky/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_gltf-0.18.1/src/loader/mod.rs",
+      "line": 726,
+      "fields": {
+        "message": "Unknown vertex attribute COLOR_1"
+      },
+      "message": "Unknown vertex attribute COLOR_1"
+    },
+    {
+      "timestamp_unix_ms": 1775248465565,
+      "level": "WARN",
+      "target": "bevy_gltf::loader",
+      "module_path": "bevy_gltf::loader",
+      "file": "/Users/pashayakubovsky/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_gltf-0.18.1/src/loader/mod.rs",
+      "line": 726,
+      "fields": {
+        "message": "Unknown vertex attribute COLOR_1"
+      },
+      "message": "Unknown vertex attribute COLOR_1"
+    },
+    {
+      "timestamp_unix_ms": 1775248465565,
+      "level": "WARN",
+      "target": "bevy_gltf::loader",
+      "module_path": "bevy_gltf::loader",
+      "file": "/Users/pashayakubovsky/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_gltf-0.18.1/src/loader/mod.rs",
+      "line": 726,
+      "fields": {
+        "message": "Unknown vertex attribute COLOR_1"
+      },
+      "message": "Unknown vertex attribute COLOR_1"
+    },
+    {
+      "timestamp_unix_ms": 1775248465565,
+      "level": "INFO",
+      "target": "bevy_winit::system",
+      "module_path": "bevy_winit::system",
+      "file": "/Users/pashayakubovsky/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_winit-0.18.1/src/system.rs",
+      "line": 68,
+      "fields": {
+        "message": "Creating new window RTS Prototype (0v0)"
+      },
+      "message": "Creating new window RTS Prototype (0v0)"
+    },
+    {
+      "timestamp_unix_ms": 1775248465566,
+      "level": "WARN",
+      "target": "bevy_gltf::loader",
+      "module_path": "bevy_gltf::loader",
+      "file": "/Users/pashayakubovsky/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_gltf-0.18.1/src/loader/mod.rs",
+      "line": 726,
+      "fields": {
+        "message": "Unknown vertex attribute COLOR_1"
+      },
+      "message": "Unknown vertex attribute COLOR_1"
+    },
+    {
+      "timestamp_unix_ms": 1775248465566,
+      "level": "WARN",
+      "target": "bevy_gltf::loader",
+      "module_path": "bevy_gltf::loader",
+      "file": "/Users/pashayakubovsky/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_gltf-0.18.1/src/loader/mod.rs",
+      "line": 726,
+      "fields": {
+        "message": "Unknown vertex attribute COLOR_1"
+      },
+      "message": "Unknown vertex attribute COLOR_1"
+    },
+    {
+      "timestamp_unix_ms": 1775248465621,
+      "level": "ERROR",
+      "target": "panic",
+      "module_path": null,
+      "file": "/Users/pashayakubovsky/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_ecs-0.18.1/src/system/system_param.rs:387",
+      "line": null,
+      "fields": null,
+      "message": "panic: error[B0001]: Query<(&mut Transform, GrowingResource, Option<TerrainHeightOffset>), (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>)> in system rts::buildings::sync_environment_to_terrain_changes accesses component(s) Transform in a way that conflicts with a previous system parameter. Consider using `Without<T>` to create disjoint Queries or merging conflicting Queries into a `ParamSet`. See: https://bevy.org/learn/errors/b0001"
+    }
+  ]
+}

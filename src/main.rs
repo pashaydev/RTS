@@ -18,6 +18,7 @@ mod fog_material;
 mod ground;
 mod hover_material;
 mod lighting;
+mod logging;
 mod menu;
 mod minimap;
 mod mobs;
@@ -28,6 +29,7 @@ mod orders;
 mod pathfinding;
 mod pathvis;
 mod pause_menu;
+mod save_load;
 mod procedural_mobs;
 mod resources;
 mod selection;
@@ -43,12 +45,17 @@ mod water_material;
 
 use bevy::ecs::error;
 use bevy::prelude::*;
+use bevy::log::LogPlugin;
 use bevy::window::PresentMode;
+#[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::OutlinePlugin;
 
-use components::{AppState, GameFlowSet, GameSetupConfig, GraphicsSettings};
+use components::{AppState, GameFlowSet, GameSetupConfig};
 
 fn main() {
+    #[cfg(target_arch = "wasm32")]
+    console_error_panic_hook::set_once();
+
     // Resolve the executable's directory so assets/config/saves are found
     // correctly in distribution builds (especially Windows).
     // Skip when running inside a cargo `target/` dir (i.e. during development).
@@ -69,41 +76,95 @@ fn main() {
         .map(|d| d.join("assets").to_string_lossy().into_owned())
         .unwrap_or_else(|| "assets".to_string());
 
-    let graphics = GraphicsSettings::load_or_default();
+    logging::configure_session_logging(
+        std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from(".")),
+    );
+
+    // Open database early so settings (graphics, audio) are loaded before window creation.
+    let (db, profile, graphics, audio_settings) = database::init_early();
+
+    // On WASM, use the browser viewport size so hover coordinates match from the start.
+    // The DB-stored resolution is a desktop value that causes a mismatch until a resize event.
+    #[cfg(target_arch = "wasm32")]
+    let (w, h) = {
+        let (mut w, mut h) = graphics.resolution;
+        if let Some(window) = web_sys::window() {
+            w = window.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(w as f64) as u32;
+            h = window.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(h as f64) as u32;
+        }
+        (w, h)
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let (w, h) = graphics.resolution;
 
     App::new()
         .set_error_handler(error::warn)
         .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "RTS Prototype".to_string(),
-                        resolution: (w, h).into(),
-                        mode: if graphics.fullscreen {
-                            bevy::window::WindowMode::BorderlessFullscreen(
-                                bevy::window::MonitorSelection::Current,
-                            )
-                        } else {
-                            bevy::window::WindowMode::Windowed
-                        },
-                        present_mode: if graphics.vsync {
-                            PresentMode::AutoVsync
-                        } else {
-                            PresentMode::AutoNoVsync
-                        },
-                        fit_canvas_to_parent: true,
+            {
+                let plugins = DefaultPlugins
+                    .set(LogPlugin {
+                        custom_layer: logging::make_tracing_layer,
                         ..default()
-                    }),
+                    })
+                    .set(WindowPlugin {
+                        primary_window: Some(Window {
+                            title: "RTS Prototype".to_string(),
+                            resolution: (w, h).into(),
+                            mode: if graphics.fullscreen {
+                                bevy::window::WindowMode::BorderlessFullscreen(
+                                    bevy::window::MonitorSelection::Current,
+                                )
+                            } else {
+                                bevy::window::WindowMode::Windowed
+                            },
+                            present_mode: if graphics.vsync {
+                                PresentMode::AutoVsync
+                            } else {
+                                PresentMode::AutoNoVsync
+                            },
+                            fit_canvas_to_parent: true,
+                            canvas: Some("canvas".to_string()),
+                            ..default()
+                        }),
+                        ..default()
+                    })
+                    .set(AssetPlugin {
+                        file_path: asset_path,
+                        meta_check: bevy::asset::AssetMetaCheck::Never,
+                        ..default()
+                    });
+                // Use conservative WebGPU defaults so Bevy generates simpler
+                // shaders that browser WebGPU implementations can compile.
+                // Chrome/Edge use Dawn which validates shader bindings strictly
+                // during module creation. Request adapter-level limits so the
+                // PBR shader's binding counts (textures, uniform buffers) pass.
+                #[cfg(target_arch = "wasm32")]
+                let plugins = plugins.set(bevy::render::RenderPlugin {
+                    render_creation: bevy::render::settings::WgpuSettings {
+                        // Functionality mode: request the adapter's actual
+                        // limits & features (not the conservative WebGPU defaults).
+                        priority: bevy::render::settings::WgpuSettingsPriority::Functionality,
+                        // Disable advanced shader features that generate WGSL
+                        // constructs Chrome's Dawn backend may not compile.
+                        disabled_features: Some(
+                            bevy::render::settings::WgpuFeatures::TEXTURE_BINDING_ARRAY
+                                | bevy::render::settings::WgpuFeatures::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING
+                                | bevy::render::settings::WgpuFeatures::BUFFER_BINDING_ARRAY
+                                | bevy::render::settings::WgpuFeatures::STORAGE_RESOURCE_BINDING_ARRAY
+                                | bevy::render::settings::WgpuFeatures::STORAGE_TEXTURE_ARRAY_NON_UNIFORM_INDEXING
+                                | bevy::render::settings::WgpuFeatures::UNIFORM_BUFFER_BINDING_ARRAYS,
+                        ),
+                        ..default()
+                    }
+                    .into(),
                     ..default()
-                })
-                .set(AssetPlugin {
-                    file_path: asset_path,
-                    meta_check: bevy::asset::AssetMetaCheck::Never,
-                    ..default()
-                }),
+                });
+                plugins
+            },
         )
-        .add_plugins(OutlinePlugin)
+        // bevy_mod_outline shaders are incompatible with browser WebGPU
+        .add_plugins(cfg_outline_plugin())
         .init_state::<AppState>()
         .configure_sets(
             Update,
@@ -121,6 +182,10 @@ fn main() {
         .insert_resource(GameSetupConfig::default())
         .insert_resource(theme::Theme::from_mode(graphics.theme_mode))
         .insert_resource(graphics)
+        .insert_resource(db)
+        .insert_resource(profile)
+        .insert_resource(audio_settings)
+        .add_plugins(logging::SessionLogPlugin)
         .add_plugins(database::DatabasePlugin)
         .add_plugins(menu::MenuPlugin)
         .add_plugins(blueprints::BlueprintPlugin)
@@ -155,6 +220,7 @@ fn main() {
         .add_plugins(ai::AiPlugin)
         .add_plugins(unit_ai::UnitAiPlugin)
         .add_plugins(pause_menu::PauseMenuPlugin)
+        .add_plugins(save_load::SaveLoadPlugin)
         .add_plugins(net_bridge::NetBridgePlugin)
         .add_plugins(multiplayer::MultiplayerPlugin)
         .add_plugins(victory::VictoryPlugin)
@@ -162,4 +228,14 @@ fn main() {
         .add_plugins(audio::GameAudioPlugin)
         .add_plugins(entity_labels::EntityLabelPlugin)
         .run();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn cfg_outline_plugin() -> OutlinePlugin {
+    OutlinePlugin
+}
+
+#[cfg(target_arch = "wasm32")]
+fn cfg_outline_plugin() -> impl bevy::app::Plugin {
+    |_app: &mut App| {}
 }

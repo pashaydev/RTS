@@ -22,10 +22,17 @@
                 overflow: hidden;
                 background: #1a1a1a;
             }
+            #game-container {
+                width: 100vw;
+                height: 100vh;
+            }
             canvas {
                 display: block;
-                width: 100vw !important;
-                height: 100vh !important;
+                width: 100% !important;
+                height: 100% !important;
+                position: absolute !important;
+                top: 0;
+                left: 0;
             }
         </style>
         <script>
@@ -55,7 +62,11 @@
                     if (contexts.length > 0) {
                         document.removeEventListener("click", unlock, true);
                         document.removeEventListener("keydown", unlock, true);
-                        document.removeEventListener("touchstart", unlock, true);
+                        document.removeEventListener(
+                            "touchstart",
+                            unlock,
+                            true,
+                        );
                     }
                 }
                 document.addEventListener("click", unlock, true);
@@ -63,6 +74,48 @@
                 document.addEventListener("touchstart", unlock, true);
             })();
         </script>
+        <script>
+            // Trigger a resize event after 3 seconds (useful for engines that
+            // need a delayed layout/viewport recalculation).
+            window.setTimeout(function () {
+                window.dispatchEvent(new Event("resize"));
+            }, 3000);
+        </script>
+        <script>
+            // DEBUG: Intercept WebGPU shader compilation errors.
+            // Patches the prototype synchronously before WASM loads.
+            (function () {
+                if (!navigator.gpu) return;
+                var orig = GPUDevice.prototype.createShaderModule;
+                GPUDevice.prototype.createShaderModule = function (desc) {
+                    var mod = orig.call(this, desc);
+                    mod.getCompilationInfo().then(function (info) {
+                        for (var i = 0; i < info.messages.length; i++) {
+                            var m = info.messages[i];
+                            if (m.type === "error") {
+                                console.error(
+                                    "WGSL ERROR [line " + m.lineNum + ":" + m.linePos + "]: " + m.message
+                                );
+                                if (desc.code && m.lineNum > 0) {
+                                    var lines = desc.code.split("\n");
+                                    var s = Math.max(0, m.lineNum - 4);
+                                    var e = Math.min(lines.length, m.lineNum + 3);
+                                    console.error("Source:\n" + lines.slice(s, e).map(function (l, j) {
+                                        var n = s + j + 1;
+                                        return (n === m.lineNum ? ">>> " : "    ") + n + ": " + l;
+                                    }).join("\n"));
+                                }
+                            }
+                        }
+                    });
+                    return mod;
+                };
+            })();
+        </script>
     </head>
-    <body></body>
+    <body>
+        <div id="game-container">
+            <canvas id="canvas"></canvas>
+        </div>
+    </body>
 </html>

@@ -156,6 +156,7 @@ struct LeaderGeometry {
 fn entity_label_system(
     mut commands: Commands,
     config: Res<LabelConfig>,
+    label_visibility: Res<EntityLabelVisibility>,
     theme: Res<Theme>,
     viewport: (
         Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
@@ -194,7 +195,7 @@ fn entity_label_system(
 ) {
     let (camera_q, windows, graphics, ui_scale) = viewport;
     let (active_player, teams, fog_map, fog_settings) = game_state;
-    let (_unit_q, building_q, mob_q, selected_q, hovered_q) = marker_queries;
+    let (unit_q, building_q, mob_q, selected_q, hovered_q) = marker_queries;
     let (existing_labels, existing_lines) = label_ui;
 
     let Ok((camera, cam_gt)) = camera_q.single() else {
@@ -219,9 +220,14 @@ fn entity_label_system(
 
         let is_selected = selected_q.contains(entity);
         let is_hovered = hovered_q.contains(entity);
+        let is_unit = unit_q.contains(entity);
         let is_building = building_q.contains(entity);
         let is_mob = mob_q.contains(entity);
         let is_resource = resource_opt.is_some() && kind_opt.is_none();
+
+        if is_unit && !label_visibility.show_unit_labels && !is_hovered && !is_selected {
+            continue;
+        }
 
         // Resources and buildings only shown on hover/select
         if (is_resource || is_building) && !is_hovered && !is_selected {

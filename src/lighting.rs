@@ -294,11 +294,11 @@ fn setup_lighting(
         SunLight,
         DirectionalLight {
             illuminance: 6000.0,
-            shadows_enabled: graphics.shadow_quality != ShadowQuality::Off,
+            // Shadow sampling shaders can fail validation on browser WebGPU
+            shadows_enabled: false,
             color: Color::srgb(0.85, 0.8, 0.7),
             ..default()
         },
-        cascade_shadow_config,
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -0.8, SUN_YAW, 0.0)),
     ));
 
@@ -445,7 +445,10 @@ impl Default for EntityLightGrid {
     fn default() -> Self {
         Self {
             cell_size: 15.0,
+            #[cfg(not(target_arch = "wasm32"))]
             max_lights: 64,
+            #[cfg(target_arch = "wasm32")]
+            max_lights: 16,
             cells: HashMap::new(),
         }
     }

@@ -9,7 +9,6 @@ client = [
     "dep:bevy",
     "dep:bevy-inspector-egui",
     "dep:bevy_matchbox",
-    "dep:bevy_mod_outline",
     "dep:getrandom",
     "dep:noise",
     "dep:rand",
@@ -21,9 +20,8 @@ path = "src/main.rs"
 required-features = ["client"]
 
 [dependencies]
-bevy = { version = "0.18", features = ["webgpu", "webgl2", "bevy_dev_tools"], optional = true }
+bevy = { version = "0.18", features = ["webgpu", "bevy_dev_tools"], optional = true }
 bevy-inspector-egui = { version = "0.36", optional = true }
-bevy_mod_outline = { version = "0.12", optional = true }
 bevy_matchbox = { version = "0.14", features = ["signaling"], optional = true }
 noise = { version = "0.9", optional = true }
 rand = { version = "0.9", optional = true }
@@ -36,6 +34,7 @@ game_state = { path = "game_state" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rusqlite = { version = "0.33", features = ["bundled"] }
+bevy_mod_outline = { version = "0.12" }
 socket2 = "0.5"
 if-addrs = "0.13"
 tungstenite = { version = "0.26", features = ["native-tls"] }
@@ -46,6 +45,7 @@ web-sys = { version = "0.3.91", features = ["WebSocket", "MessageEvent", "ErrorE
 wasm-bindgen = "0.2.114"
 js-sys = "0.3.91"
 web-time = "1.1"
+console_error_panic_hook = "0.1"
 
 [dev-dependencies]
 

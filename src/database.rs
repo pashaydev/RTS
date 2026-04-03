@@ -19,12 +19,8 @@ pub struct DatabasePlugin;
 
 impl Plugin for DatabasePlugin {
     fn build(&self, app: &mut App) {
-        let db = GameDatabase::open();
-        let profile = db.get_or_create_active_profile();
-
-        app.insert_resource(db)
-            .insert_resource(profile)
-            .add_systems(Startup, migrate_settings_from_json)
+        // DB + profile are already inserted by `database::init_early()` in main().
+        app.add_systems(Startup, sync_profile_to_config)
             .add_systems(OnEnter(AppState::InGame), insert_match_start_time)
             .add_systems(
                 Update,
@@ -34,6 +30,19 @@ impl Plugin for DatabasePlugin {
                 ),
             );
     }
+}
+
+/// Call early in `main()` before building the Bevy `App`.
+/// Opens the database, creates the profile, and returns resources + loaded settings
+/// so they can be inserted before window creation.
+pub fn init_early() -> (GameDatabase, ActiveProfile, GraphicsSettings, crate::audio::AudioSettings) {
+    let db = GameDatabase::open();
+    let profile = db.get_or_create_active_profile();
+    let graphics = db.load_settings_blob::<GraphicsSettings>("graphics")
+        .unwrap_or_default();
+    let audio = db.load_settings_blob::<crate::audio::AudioSettings>("audio")
+        .unwrap_or_default();
+    (db, profile, graphics, audio)
 }
 
 // ── Resources ───────────────────────────────────────────────────────────────
@@ -88,6 +97,17 @@ pub struct MatchSummary {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SaveEntry {
+    pub id: i64,
+    pub label: Option<String>,
+    pub created_at: String,
+    pub elapsed_secs: f64,
+    pub map_size: String,
+    pub num_players: i32,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EloRating {
     pub rating: i32,
     pub peak_rating: i32,
@@ -131,23 +151,20 @@ pub struct ReplayEntry {
     pub recorded_at: String,
 }
 
-// ── Schema migrations ───────────────────────────────────────────────────────
+// ── Schema ──────────────────────────────────────────────────────────────────
 
 #[cfg(not(target_arch = "wasm32"))]
-const MIGRATIONS: &[(i32, &str)] = &[
-    (
-        1,
-        "
-CREATE TABLE player_profiles (
+const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS player_profiles (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
     is_last_used INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX idx_profiles_last_used ON player_profiles(is_last_used);
+CREATE INDEX IF NOT EXISTS idx_profiles_last_used ON player_profiles(is_last_used);
 
-CREATE TABLE matches (
+CREATE TABLE IF NOT EXISTS matches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     player_profile_id TEXT NOT NULL REFERENCES player_profiles(id),
     started_at TEXT NOT NULL,
@@ -164,10 +181,10 @@ CREATE TABLE matches (
     local_player_faction INTEGER NOT NULL,
     local_player_won INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX idx_matches_profile ON matches(player_profile_id);
-CREATE INDEX idx_matches_started ON matches(started_at);
+CREATE INDEX IF NOT EXISTS idx_matches_profile ON matches(player_profile_id);
+CREATE INDEX IF NOT EXISTS idx_matches_started ON matches(started_at);
 
-CREATE TABLE match_faction_stats (
+CREATE TABLE IF NOT EXISTS match_faction_stats (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     match_id INTEGER NOT NULL REFERENCES matches(id) ON DELETE CASCADE,
     faction_index INTEGER NOT NULL,
@@ -178,22 +195,19 @@ CREATE TABLE match_faction_stats (
     eliminated INTEGER NOT NULL DEFAULT 0,
     unit_count INTEGER NOT NULL DEFAULT 0,
     building_count INTEGER NOT NULL DEFAULT 0,
-    resources_json TEXT
+    resources_json TEXT,
+    player_name TEXT
 );
-CREATE INDEX idx_mfs_match ON match_faction_stats(match_id);
+CREATE INDEX IF NOT EXISTS idx_mfs_match ON match_faction_stats(match_id);
 
-CREATE TABLE settings (
+CREATE TABLE IF NOT EXISTS settings (
     category TEXT NOT NULL,
     key TEXT NOT NULL,
     value_json TEXT NOT NULL,
     PRIMARY KEY (category, key)
 );
-",
-    ),
-    (
-        2,
-        "
-CREATE TABLE replay_metadata (
+
+CREATE TABLE IF NOT EXISTS replay_metadata (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     match_id INTEGER REFERENCES matches(id),
     file_path TEXT NOT NULL,
@@ -204,9 +218,9 @@ CREATE TABLE replay_metadata (
     map_seed INTEGER,
     map_size TEXT
 );
-CREATE INDEX idx_replay_match ON replay_metadata(match_id);
+CREATE INDEX IF NOT EXISTS idx_replay_match ON replay_metadata(match_id);
 
-CREATE TABLE elo_ratings (
+CREATE TABLE IF NOT EXISTS elo_ratings (
     player_profile_id TEXT PRIMARY KEY REFERENCES player_profiles(id),
     rating INTEGER NOT NULL DEFAULT 1200,
     peak_rating INTEGER NOT NULL DEFAULT 1200,
@@ -214,7 +228,7 @@ CREATE TABLE elo_ratings (
     last_updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE elo_history (
+CREATE TABLE IF NOT EXISTS elo_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     player_profile_id TEXT NOT NULL REFERENCES player_profiles(id),
     match_id INTEGER NOT NULL REFERENCES matches(id),
@@ -222,9 +236,9 @@ CREATE TABLE elo_history (
     rating_after INTEGER NOT NULL,
     recorded_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-CREATE INDEX idx_elo_history_profile ON elo_history(player_profile_id);
+CREATE INDEX IF NOT EXISTS idx_elo_history_profile ON elo_history(player_profile_id);
 
-CREATE TABLE map_presets (
+CREATE TABLE IF NOT EXISTS map_presets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     config_json TEXT NOT NULL,
@@ -232,16 +246,28 @@ CREATE TABLE map_presets (
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE TABLE keybind_profiles (
+CREATE TABLE IF NOT EXISTS keybind_profiles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     is_active INTEGER NOT NULL DEFAULT 0,
     bindings_json TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-",
-    ),
-];
+
+CREATE TABLE IF NOT EXISTS game_saves (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_profile_id TEXT NOT NULL REFERENCES player_profiles(id),
+    label TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    elapsed_secs REAL NOT NULL,
+    map_size TEXT NOT NULL,
+    map_seed INTEGER NOT NULL,
+    num_players INTEGER NOT NULL,
+    save_data BLOB NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_saves_profile ON game_saves(player_profile_id);
+CREATE INDEX IF NOT EXISTS idx_saves_created ON game_saves(created_at);
+";
 
 // ── GameDatabase implementation ─────────────────────────────────────────────
 
@@ -261,9 +287,9 @@ impl GameDatabase {
         // Enable WAL mode for better concurrent read performance.
         let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;");
 
-        // Run migrations.
-        if let Err(e) = Self::run_migrations(&conn) {
-            warn!("Database migration failed: {e}");
+        // Create tables (idempotent via IF NOT EXISTS).
+        if let Err(e) = Self::create_tables(&conn) {
+            warn!("Database schema creation failed: {e}");
             return Self { conn: None };
         }
 
@@ -289,36 +315,8 @@ impl GameDatabase {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn run_migrations(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS _schema_version (
-                version INTEGER PRIMARY KEY,
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );",
-        )?;
-
-        let current: i32 = conn
-            .query_row(
-                "SELECT COALESCE(MAX(version), 0) FROM _schema_version",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap_or(0);
-
-        for &(version, sql) in MIGRATIONS {
-            if version > current {
-                let tx = conn.unchecked_transaction()?;
-                tx.execute_batch(sql)?;
-                tx.execute(
-                    "INSERT INTO _schema_version (version) VALUES (?1)",
-                    [version],
-                )?;
-                tx.commit()?;
-                info!("Applied database migration v{version}");
-            }
-        }
-
-        Ok(())
+    fn create_tables(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+        conn.execute_batch(SCHEMA)
     }
 
     // ── Helper to lock connection ───────────────────────────────────────
@@ -433,6 +431,12 @@ impl GameDatabase {
         });
     }
 
+    /// Load a JSON blob stored under `(category, "_blob")` and deserialize it.
+    pub fn load_settings_blob<T: serde::de::DeserializeOwned>(&self, category: &str) -> Option<T> {
+        let json = self.load_setting(category, "_blob")?;
+        serde_json::from_str(&json).ok()
+    }
+
     pub fn has_settings(&self, category: &str) -> bool {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -465,6 +469,7 @@ impl GameDatabase {
         faction_stats: &FactionStats,
         all_resources: &AllPlayerResources,
         duration_secs: f64,
+        player_names: &std::collections::HashMap<usize, String>,
     ) -> Option<i64> {
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -561,12 +566,14 @@ impl GameDatabase {
                         .map(|s| *s == crate::victory::FactionStatus::Eliminated)
                         .unwrap_or(false);
 
+                    let pname: Option<&str> = player_names.get(&i).map(|s| s.as_str());
+
                     tx.execute(
                         "INSERT INTO match_faction_stats (
                             match_id, faction_index, is_local_player,
                             slot_type, ai_difficulty, team, eliminated,
-                            unit_count, building_count, resources_json
-                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                            unit_count, building_count, resources_json, player_name
+                        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                         rusqlite::params![
                             match_id,
                             i as i32,
@@ -578,6 +585,7 @@ impl GameDatabase {
                             fs.unit_count,
                             fs.building_count,
                             resources_json,
+                            pname,
                         ],
                     )?;
                 }
@@ -597,6 +605,7 @@ impl GameDatabase {
                 faction_stats,
                 all_resources,
                 duration_secs,
+                player_names,
             );
             None
         }
@@ -1022,6 +1031,101 @@ impl GameDatabase {
             Vec::new()
         }
     }
+
+    // ── Game saves CRUD ────────────────────────────────────────────────
+
+    pub fn save_game(
+        &self,
+        profile_id: &str,
+        label: Option<&str>,
+        elapsed_secs: f64,
+        map_size: &str,
+        map_seed: i64,
+        num_players: i32,
+        data: &[u8],
+    ) -> Option<i64> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.with_conn(|conn| {
+                conn.execute(
+                    "INSERT INTO game_saves (player_profile_id, label, elapsed_secs, map_size, map_seed, num_players, save_data)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    rusqlite::params![profile_id, label, elapsed_secs, map_size, map_seed, num_players, data],
+                )?;
+                Ok(conn.last_insert_rowid())
+            })
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (profile_id, label, elapsed_secs, map_size, map_seed, num_players, data);
+            None
+        }
+    }
+
+    pub fn list_saves(&self, profile_id: &str) -> Vec<SaveEntry> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.with_conn(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, label, created_at, elapsed_secs, map_size, num_players
+                     FROM game_saves WHERE player_profile_id = ?1
+                     ORDER BY created_at DESC",
+                )?;
+                let rows = stmt.query_map([profile_id], |row| {
+                    Ok(SaveEntry {
+                        id: row.get(0)?,
+                        label: row.get(1)?,
+                        created_at: row.get(2)?,
+                        elapsed_secs: row.get(3)?,
+                        map_size: row.get(4)?,
+                        num_players: row.get(5)?,
+                    })
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap_or_default()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = profile_id;
+            Vec::new()
+        }
+    }
+
+    pub fn load_save(&self, save_id: i64) -> Option<Vec<u8>> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.with_conn(|conn| {
+                conn.query_row(
+                    "SELECT save_data FROM game_saves WHERE id = ?1",
+                    [save_id],
+                    |row| row.get(0),
+                )
+            })
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = save_id;
+            None
+        }
+    }
+
+    pub fn delete_save(&self, save_id: i64) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.with_conn(|conn| {
+            conn.execute("DELETE FROM game_saves WHERE id = ?1", [save_id])
+        });
+    }
+
+    pub fn rename_save(&self, save_id: i64, label: &str) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.with_conn(|conn| {
+            conn.execute(
+                "UPDATE game_saves SET label = ?1 WHERE id = ?2",
+                rusqlite::params![label, save_id],
+            )
+        });
+    }
 }
 
 // ── Serializable preset helper ──────────────────────────────────────────────
@@ -1045,33 +1149,11 @@ fn insert_match_start_time(mut commands: Commands, time: Res<Time>) {
     commands.insert_resource(MatchStartTime(time.elapsed_secs_f64()));
 }
 
-fn migrate_settings_from_json(db: Res<GameDatabase>) {
-    if !db.is_available() {
-        return;
-    }
-
-    // Migrate graphics settings
-    if !db.has_settings("graphics") {
-        if let Ok(json) = std::fs::read_to_string("config/graphics_settings.json") {
-            db.save_setting("graphics", "_blob", &json);
-            info!("Migrated graphics settings from JSON to database");
-        }
-    }
-
-    // Migrate audio settings
-    if !db.has_settings("audio") {
-        if let Ok(json) = std::fs::read_to_string("config/audio_settings.json") {
-            db.save_setting("audio", "_blob", &json);
-            info!("Migrated audio settings from JSON to database");
-        }
-    }
-
-    // Migrate debug tweaks
-    if !db.has_settings("debug") {
-        if let Ok(json) = std::fs::read_to_string("config/debug_tweaks.json") {
-            db.save_setting("debug", "_blob", &json);
-            info!("Migrated debug settings from JSON to database");
-        }
+/// On startup, copy `ActiveProfile.name` into `GameSetupConfig.player_name`
+/// so the lobby / new-game UI shows the persisted player name.
+fn sync_profile_to_config(profile: Res<ActiveProfile>, mut config: ResMut<GameSetupConfig>) {
+    if !profile.name.is_empty() {
+        config.player_name = profile.name.clone();
     }
 }
 

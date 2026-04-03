@@ -24,7 +24,9 @@ impl Plugin for UnitsPlugin {
             .add_systems(OnEnter(AppState::InGame), apply_game_config)
             .add_systems(
                 OnEnter(AppState::InGame),
-                spawn_all_players.after(crate::ground::spawn_ground),
+                spawn_all_players
+                    .after(crate::ground::spawn_ground)
+                    .run_if(not(resource_exists::<crate::save_load::PendingLoad>)),
             )
             .add_systems(
                 Update,

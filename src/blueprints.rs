@@ -1,6 +1,7 @@
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
+#[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline, OutlineStencil, OutlineVolume};
 use rand::Rng;
 use std::collections::HashMap;
@@ -3420,7 +3421,7 @@ pub fn spawn_from_blueprint_with_faction(
         && crate::buildings::uses_terrain_foundation(kind)
     {
         let footprint = crate::buildings::footprint_for_kind(kind);
-        height_map.foundation_target_height(pos.x, pos.z, footprint)
+        height_map.foundation_target_height_shaped(pos.x, pos.z, footprint)
     } else {
         height_map.sample(pos.x, pos.z)
     };
@@ -3442,12 +3443,6 @@ pub fn spawn_from_blueprint_with_faction(
             Transform::from_translation(Vec3::new(pos.x, y, pos.z))
                 .with_scale(Vec3::splat(bp.visual.scale)),
             Visibility::default(),
-            OutlineVolume {
-                visible: false,
-                colour: Color::NONE,
-                width: 3.0,
-            },
-            OutlineStencil::default(),
         ))
     } else {
         commands.spawn((
@@ -3461,14 +3456,19 @@ pub fn spawn_from_blueprint_with_faction(
             MeshMaterial3d(mat_handle),
             Transform::from_translation(Vec3::new(pos.x, y, pos.z))
                 .with_scale(Vec3::splat(bp.visual.scale)),
+        ))
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        entity_cmds.insert((
             OutlineVolume {
                 visible: false,
                 colour: Color::NONE,
                 width: 3.0,
             },
             OutlineStencil::default(),
-        ))
-    };
+        ));
+    }
 
     // Category markers
     match kind.category() {
@@ -3806,15 +3806,15 @@ pub fn spawn_from_blueprint_with_faction(
     if !is_gltf_character && bp.visual.mesh_kind.is_gltf() {
         if let Some(models) = building_models {
             if let Some(scene_handle) = models.scene_for(kind, 1, pos) {
-                let child = commands
+                let mut child = commands
                     .spawn((
                         SceneRoot(scene_handle),
                         BuildingSceneChild,
-                        InheritOutline,
-                        AsyncSceneInheritOutline::default(),
                         models.child_transform(kind, 1.0),
-                    ))
-                    .id();
+                    ));
+                #[cfg(not(target_arch = "wasm32"))]
+                child.insert((InheritOutline, AsyncSceneInheritOutline::default()));
+                let child = child.id();
                 commands.entity(entity_id).add_child(child);
             }
         }
@@ -3851,17 +3851,17 @@ pub fn spawn_from_blueprint_with_faction(
                 let scale = cal.map(|c| c.scale).unwrap_or(2.0);
                 let y_off = cal.map(|c| c.y_offset).unwrap_or(0.0);
                 let facing = cal.map(|c| c.facing_rotation).unwrap_or(0.0);
-                let child = commands
+                let mut child = commands
                     .spawn((
                         SceneRoot(scene_handle.clone()),
                         UnitSceneChild,
-                        InheritOutline,
-                        AsyncSceneInheritOutline::default(),
                         Transform::from_scale(Vec3::splat(scale))
                             .with_translation(Vec3::new(0.0, y_off, 0.0))
                             .with_rotation(Quat::from_rotation_y(facing)),
-                    ))
-                    .id();
+                    ));
+                #[cfg(not(target_arch = "wasm32"))]
+                child.insert((InheritOutline, AsyncSceneInheritOutline::default()));
+                let child = child.id();
                 commands.entity(entity_id).add_child(child);
             }
         }
@@ -3984,4 +3984,3 @@ fn setup_blueprints(
     commands.insert_resource(registry);
     commands.insert_resource(cache);
 }
-

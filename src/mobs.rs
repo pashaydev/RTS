@@ -17,7 +17,9 @@ impl Plugin for MobsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             OnEnter(AppState::InGame),
-            spawn_mob_camps.after(crate::ground::spawn_ground),
+            spawn_mob_camps
+                .after(crate::ground::spawn_ground)
+                .run_if(not(resource_exists::<crate::save_load::PendingLoad>)),
         )
         .add_systems(
             Update,

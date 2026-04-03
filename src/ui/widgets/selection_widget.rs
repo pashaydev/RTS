@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use super::core::components as ui_components;
 use super::core::fonts::UiFonts;
 use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
@@ -7,7 +8,7 @@ use super::core::shared::{hp_color, spawn_hp_bar};
 use super::group_hotkeys_widget::{group_color, ControlGroups};
 use crate::blueprints::EntityKind;
 use crate::components::*;
-use crate::theme::{self, Theme};
+use crate::theme::Theme;
 
 pub struct SelectionWidgetPlugin;
 
@@ -28,10 +29,15 @@ impl Plugin for SelectionWidgetPlugin {
         )
         .add_systems(
             Update,
+            update_label_visibility_footer.run_if(in_state(AppState::InGame)),
+        )
+        .add_systems(
+            Update,
             (
                 update_hp_bars,
                 handle_unit_card_click,
                 handle_formation_preset_click,
+                handle_toggle_unit_labels_click,
                 clear_stale_inspected,
             )
                 .run_if(in_state(AppState::InGame)),
@@ -58,9 +64,30 @@ fn spawn_selection_widget(
         &fonts,
         &theme,
     );
-    commands
-        .entity(selection_content)
-        .insert(SelectionInfoPanel);
+    commands.entity(selection_content).insert((
+        Node {
+            flex_direction: FlexDirection::Column,
+            flex_grow: 1.0,
+            row_gap: Val::Px(8.0),
+            ..default()
+        },
+        SelectionInfoPanel,
+    ));
+
+    let body = commands
+        .spawn((
+            SelectionInfoBody,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(4.0),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(selection_content).add_child(body);
+
+    spawn_selection_footer(&mut commands, selection_content, true, &theme);
 }
 
 pub fn handle_unit_card_click(
@@ -141,6 +168,59 @@ fn handle_formation_preset_click(
     }
 }
 
+fn handle_toggle_unit_labels_click(
+    interactions: Query<&Interaction, (Changed<Interaction>, With<ToggleUnitLabelsButton>)>,
+    mut label_visibility: ResMut<EntityLabelVisibility>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+        label_visibility.show_unit_labels = !label_visibility.show_unit_labels;
+    }
+}
+
+fn update_label_visibility_footer(
+    label_visibility: Res<EntityLabelVisibility>,
+    theme: Res<Theme>,
+    footer_q: Query<Entity, With<SelectionFooter>>,
+    mut button_q: Query<
+        (&mut BackgroundColor, &mut ButtonAnimState),
+        With<ToggleUnitLabelsButton>,
+    >,
+    mut button_text_q: Query<&mut Text, With<ToggleUnitLabelsButtonText>>,
+    mut button_text_color_q: Query<&mut TextColor, With<ToggleUnitLabelsButtonText>>,
+    mut status_text_q: Query<&mut Text, (With<UnitLabelsStatusText>, Without<ToggleUnitLabelsButtonText>)>,
+) {
+    if !label_visibility.is_changed() {
+        return;
+    }
+    if footer_q.is_empty() {
+        return;
+    }
+
+    let (bg_color, text, text_color, status) = label_visibility_presentation(&theme, label_visibility.show_unit_labels);
+    for (mut bg, mut anim) in &mut button_q {
+        *bg = BackgroundColor(bg_color);
+        let bg_array = bg_color.to_srgba().to_f32_array();
+        anim.bg_current = bg_array;
+        anim.bg_target = bg_array;
+    }
+    for mut text_component in &mut button_text_q {
+        **text_component = text.to_string();
+    }
+    for mut color_component in &mut button_text_color_q {
+        *color_component = TextColor(text_color);
+    }
+    for mut text_component in &mut status_text_q {
+        **text_component = status.to_string();
+    }
+}
+
 pub fn clear_stale_inspected(
     mut inspected: ResMut<InspectedEnemy>,
     mob_query: Query<Entity, With<Mob>>,
@@ -164,7 +244,7 @@ pub fn rebuild_selection_panel(
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
     icons: Res<IconAssets>,
-    panel_q: Query<Entity, With<SelectionInfoPanel>>,
+    panel_q: Query<Entity, With<SelectionInfoBody>>,
     children_q: Query<&Children>,
     selected_units: Query<
         (
@@ -217,28 +297,16 @@ pub fn rebuild_selection_panel(
     let Ok(panel_entity) = panel_q.single() else {
         return;
     };
+    let panel_is_empty = children_q
+        .get(panel_entity)
+        .map(|children| children.is_empty())
+        .unwrap_or(true);
 
-    let has_inspected = inspected.entity.map_or(false, |e| {
-        mob_query.get(e).is_ok()
-            || inspected_unit_q.get(e).is_ok()
-            || inspected_building_q.get(e).is_ok()
-    });
-
-    let should_show = matches!(
-        *ui_mode,
-        UiMode::SelectedUnits(_) | UiMode::SelectedBuilding(_)
-    ) || has_inspected;
-
-    if !should_show {
-        if let Ok(children) = children_q.get(panel_entity) {
-            for child in children.iter() {
-                commands.entity(child).try_despawn();
-            }
-        }
-        return;
-    }
-
-    if !ui_mode.is_changed() && !inspected.is_changed() && !formation.is_changed() {
+    if !panel_is_empty
+        && !ui_mode.is_changed()
+        && !inspected.is_changed()
+        && !formation.is_changed()
+    {
         return;
     }
 
@@ -631,6 +699,126 @@ pub fn rebuild_selection_panel(
                 .id();
             commands.entity(panel_entity).add_child(label);
         }
+    }
+}
+
+fn spawn_selection_footer(
+    commands: &mut Commands,
+    parent: Entity,
+    show_unit_labels: bool,
+    theme: &Theme,
+) {
+    let (button_bg, button_text, button_text_color, status_text) =
+        label_visibility_presentation(theme, show_unit_labels);
+
+    let footer = commands
+        .spawn((
+            SelectionFooter,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(6.0),
+                margin: UiRect::top(Val::Px(4.0)),
+                padding: UiRect::top(Val::Px(8.0)),
+                border: UiRect::top(Val::Px(1.0)),
+                ..default()
+            },
+        ))
+        .insert(BorderColor::all(theme.colors.separator))
+        .id();
+    commands.entity(parent).add_child(footer);
+
+    let top_row = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(8.0),
+            row_gap: Val::Px(6.0),
+            ..default()
+        })
+        .id();
+    commands.entity(footer).add_child(top_row);
+
+    let title_block = commands
+        .spawn(Node {
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(2.0),
+            ..default()
+        })
+        .id();
+    commands.entity(top_row).add_child(title_block);
+
+    let footer_label = commands
+        .spawn((
+            Text::new("Unit Labels"),
+            TextFont {
+                font_size: theme.typography.small,
+                ..default()
+            },
+            TextColor(theme.colors.text_primary),
+        ))
+        .id();
+    commands.entity(title_block).add_child(footer_label);
+
+    let status = commands
+        .spawn((
+            UnitLabelsStatusText,
+            Text::new(status_text),
+            TextFont {
+                font_size: theme.typography.tiny,
+                ..default()
+            },
+            TextColor(theme.colors.text_secondary),
+        ))
+        .id();
+    commands.entity(title_block).add_child(status);
+
+    let button = commands
+        .spawn((
+            Button,
+            StandardButton,
+            ToggleUnitLabelsButton,
+            ui_components::compact_button_node(10.0, 5.0),
+            ui_components::filled_button_chrome(theme, ui_components::UiTone::Neutral),
+            ActionTooltipTrigger {
+                text: "Toggle ambient unit labels\nHotkey: L".to_string(),
+            },
+        ))
+        .with_children(|parent| {
+            parent.spawn((
+                ToggleUnitLabelsButtonText,
+                Text::new(button_text),
+                TextFont {
+                    font_size: theme.typography.small,
+                    ..default()
+                },
+                TextColor(button_text_color),
+            ));
+        })
+        .id();
+    commands.entity(top_row).add_child(button);
+
+    commands.entity(button).insert(BackgroundColor(button_bg));
+    commands.entity(button).insert(ButtonAnimState::new(button_bg.to_srgba().to_f32_array()));
+}
+
+fn label_visibility_presentation(theme: &Theme, show_unit_labels: bool) -> (Color, &'static str, Color, &'static str) {
+    if show_unit_labels {
+        (
+            theme.colors.accent,
+            "On (L)",
+            Color::WHITE,
+            "Ambient labels are visible for units on screen.",
+        )
+    } else {
+        (
+            theme.colors.btn_primary,
+            "Off (L)",
+            theme.colors.text_primary,
+            "Only hovered and selected units show labels.",
+        )
     }
 }
 

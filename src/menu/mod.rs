@@ -20,6 +20,7 @@ pub(crate) enum MenuPage {
     Multiplayer,
     HostLobby,
     JoinLobby,
+    LoadGame,
 }
 
 #[derive(Component)]
@@ -37,6 +38,7 @@ pub(crate) struct MenuButton(pub(crate) MenuAction);
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MenuAction {
     NewGame,
+    LoadGame,
     Options,
     Quit,
     Back,
@@ -51,6 +53,8 @@ pub(crate) enum MenuAction {
     BackToMultiplayer,
     CancelHost,
     Disconnect,
+    LoadSave(i64),
+    DeleteSave(i64),
 }
 
 #[allow(dead_code)]

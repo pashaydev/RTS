@@ -150,19 +150,35 @@ fn spawn_camera(
             ..default()
         },
         RenderTarget::Image(render_target.image.clone().into()),
+        brightness_exposure(graphics.brightness),
+        Transform::from_translation(pivot + offset).looking_at(pivot, Vec3::Y),
+        Msaa::Off,
+    ));
+
+    // HDR + TonyMcMapface tonemapping + large cluster configs can fail
+    // shader validation on browser WebGPU, so only enable on native.
+    #[cfg(not(target_arch = "wasm32"))]
+    entity.insert((
         Hdr,
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
         bevy::core_pipeline::tonemapping::DebandDither::Enabled,
-        brightness_exposure(graphics.brightness),
-        Transform::from_translation(pivot + offset).looking_at(pivot, Vec3::Y),
-        // Top-down RTS camera: flatten Z-slices to 1 since all action is on a single plane
         ClusterConfig::FixedZ {
             total: 4096,
             z_slices: 1,
             z_config: ClusterZConfig::default(),
             dynamic_resizing: true,
         },
-        Msaa::Off,
+    ));
+
+    #[cfg(target_arch = "wasm32")]
+    entity.insert((
+        bevy::core_pipeline::tonemapping::Tonemapping::AcesFitted,
+        ClusterConfig::FixedZ {
+            total: 256,
+            z_slices: 1,
+            z_config: ClusterZConfig::default(),
+            dynamic_resizing: true,
+        },
     ));
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -179,11 +195,13 @@ fn create_internal_render_image(images: &mut Assets<Image>, size: UVec2) -> Hand
         height: size.y.max(1),
         depth_or_array_layers: 1,
     };
+    // HDR requires a float format; Bgra8UnormSrgb causes PBR shader validation
+    // failures on WebGPU because the fragment output type doesn't match.
     let mut image = Image::new_fill(
         extent,
         TextureDimension::D2,
-        &[0, 0, 0, 255],
-        TextureFormat::Bgra8UnormSrgb,
+        &[0, 0, 0, 0, 0, 0, 0, 0],
+        TextureFormat::Rgba16Float,
         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
     );
     image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING
@@ -415,13 +433,16 @@ fn insert_post_process_effects(
         }
     }
 
-    if let Some(depth_of_field) = depth_of_field_for_quality(graphics.depth_of_field) {
-        commands.entity(entity).insert(depth_of_field);
-    }
-    if let Some(chromatic_aberration) =
-        chromatic_aberration_for_quality(graphics.chromatic_aberration)
+    #[cfg(not(target_arch = "wasm32"))]
     {
-        commands.entity(entity).insert(chromatic_aberration);
+        if let Some(depth_of_field) = depth_of_field_for_quality(graphics.depth_of_field) {
+            commands.entity(entity).insert(depth_of_field);
+        }
+        if let Some(chromatic_aberration) =
+            chromatic_aberration_for_quality(graphics.chromatic_aberration)
+        {
+            commands.entity(entity).insert(chromatic_aberration);
+        }
     }
 }
 
@@ -445,11 +466,15 @@ fn sync_camera_post_process_settings(
 
     *applied = Some((entity, graphics.clone()));
 
+    commands
+        .entity(entity)
+        .insert(brightness_exposure(graphics.brightness));
+
+    #[cfg(not(target_arch = "wasm32"))]
     commands.entity(entity).insert((
         Hdr,
         bevy::core_pipeline::tonemapping::Tonemapping::TonyMcMapface,
         bevy::core_pipeline::tonemapping::DebandDither::Enabled,
-        brightness_exposure(graphics.brightness),
     ));
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -481,21 +506,24 @@ fn sync_camera_post_process_settings(
         commands.entity(entity).remove::<AutoExposure>();
     }
 
-    match depth_of_field_for_quality(graphics.depth_of_field) {
-        Some(depth_of_field) => {
-            commands.entity(entity).insert(depth_of_field);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match depth_of_field_for_quality(graphics.depth_of_field) {
+            Some(depth_of_field) => {
+                commands.entity(entity).insert(depth_of_field);
+            }
+            None => {
+                commands.entity(entity).remove::<DepthOfField>();
+            }
         }
-        None => {
-            commands.entity(entity).remove::<DepthOfField>();
-        }
-    }
 
-    match chromatic_aberration_for_quality(graphics.chromatic_aberration) {
-        Some(chromatic_aberration) => {
-            commands.entity(entity).insert(chromatic_aberration);
-        }
-        None => {
-            commands.entity(entity).remove::<ChromaticAberration>();
+        match chromatic_aberration_for_quality(graphics.chromatic_aberration) {
+            Some(chromatic_aberration) => {
+                commands.entity(entity).insert(chromatic_aberration);
+            }
+            None => {
+                commands.entity(entity).remove::<ChromaticAberration>();
+            }
         }
     }
 }
