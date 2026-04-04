@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use std::collections::HashMap;
 
 use super::core::components as ui_components;
 use super::core::fonts::UiFonts;
@@ -8,6 +9,7 @@ use super::core::shared::{hp_color, spawn_hp_bar};
 use super::group_hotkeys_widget::{group_color, ControlGroups};
 use crate::blueprints::EntityKind;
 use crate::components::*;
+use crate::items::{inferred_inventory_capacity, ItemAssets, ItemKind, ItemRuntimeState, UnitInventory};
 use crate::theme::Theme;
 
 pub struct SelectionWidgetPlugin;
@@ -64,15 +66,21 @@ fn spawn_selection_widget(
         &fonts,
         &theme,
     );
-    commands.entity(selection_content).insert((
-        Node {
-            flex_direction: FlexDirection::Column,
-            flex_grow: 1.0,
-            row_gap: Val::Px(8.0),
-            ..default()
-        },
-        SelectionInfoPanel,
-    ));
+    // Don't overwrite the content Node — it has overflow: scroll_y() from spawn_widget_frame.
+    // Instead, add a wrapper child for layout.
+    let inner = commands
+        .spawn((
+            SelectionInfoPanel,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
+                row_gap: Val::Px(8.0),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(selection_content).add_child(inner);
 
     let body = commands
         .spawn((
@@ -85,9 +93,9 @@ fn spawn_selection_widget(
             },
         ))
         .id();
-    commands.entity(selection_content).add_child(body);
+    commands.entity(inner).add_child(body);
 
-    spawn_selection_footer(&mut commands, selection_content, true, &theme);
+    spawn_selection_footer(&mut commands, inner, true, &theme);
 }
 
 pub fn handle_unit_card_click(
@@ -188,13 +196,16 @@ fn update_label_visibility_footer(
     label_visibility: Res<EntityLabelVisibility>,
     theme: Res<Theme>,
     footer_q: Query<Entity, With<SelectionFooter>>,
-    mut button_q: Query<
-        (&mut BackgroundColor, &mut ButtonAnimState),
-        With<ToggleUnitLabelsButton>,
-    >,
+    mut button_q: Query<(&mut BackgroundColor, &mut ButtonAnimState), With<ToggleUnitLabelsButton>>,
     mut button_text_q: Query<&mut Text, With<ToggleUnitLabelsButtonText>>,
     mut button_text_color_q: Query<&mut TextColor, With<ToggleUnitLabelsButtonText>>,
-    mut status_text_q: Query<&mut Text, (With<UnitLabelsStatusText>, Without<ToggleUnitLabelsButtonText>)>,
+    mut status_text_q: Query<
+        &mut Text,
+        (
+            With<UnitLabelsStatusText>,
+            Without<ToggleUnitLabelsButtonText>,
+        ),
+    >,
 ) {
     if !label_visibility.is_changed() {
         return;
@@ -203,7 +214,8 @@ fn update_label_visibility_footer(
         return;
     }
 
-    let (bg_color, text, text_color, status) = label_visibility_presentation(&theme, label_visibility.show_unit_labels);
+    let (bg_color, text, text_color, status) =
+        label_visibility_presentation(&theme, label_visibility.show_unit_labels);
     for (mut bg, mut anim) in &mut button_q {
         *bg = BackgroundColor(bg_color);
         let bg_array = bg_color.to_srgba().to_f32_array();
@@ -244,6 +256,7 @@ pub fn rebuild_selection_panel(
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
     icons: Res<IconAssets>,
+    item_assets: Res<ItemAssets>,
     panel_q: Query<Entity, With<SelectionInfoBody>>,
     children_q: Query<&Children>,
     selected_units: Query<
@@ -256,6 +269,8 @@ pub fn rebuild_selection_panel(
             &AttackRange,
             &UnitSpeed,
             Option<&UnitStance>,
+            Option<&UnitInventory>,
+            Option<&ItemRuntimeState>,
         ),
         (With<Unit>, With<Selected>),
     >,
@@ -323,7 +338,18 @@ pub fn rebuild_selection_panel(
 
     match &*ui_mode {
         UiMode::SelectedUnits(entities) if entities.len() == 1 => {
-            if let Some((entity, kind, display_name, health, dmg, rng, spd, stance)) =
+            if let Some((
+                entity,
+                kind,
+                display_name,
+                health,
+                dmg,
+                rng,
+                spd,
+                stance,
+                inventory,
+                runtime_state,
+            )) =
                 selected_units.iter().next()
             {
                 spawn_friendly_detail_card(
@@ -337,7 +363,10 @@ pub fn rebuild_selection_panel(
                     rng,
                     spd,
                     stance.copied(),
+                    inventory,
+                    runtime_state,
                     &icons,
+                    &item_assets,
                     &theme,
                 );
             }
@@ -378,7 +407,9 @@ pub fn rebuild_selection_panel(
                     },
                 ))
                 .id();
-            commands.entity(grid_container).add_child(formation_controls);
+            commands
+                .entity(grid_container)
+                .add_child(formation_controls);
 
             let formation_label = commands
                 .spawn((
@@ -390,7 +421,9 @@ pub fn rebuild_selection_panel(
                     TextColor(theme.colors.text_secondary),
                 ))
                 .id();
-            commands.entity(formation_controls).add_child(formation_label);
+            commands
+                .entity(formation_controls)
+                .add_child(formation_label);
 
             let formation_row = commands
                 .spawn(Node {
@@ -452,13 +485,19 @@ pub fn rebuild_selection_panel(
 
             let mut unit_groups: Vec<(
                 EntityKind,
-                Vec<(Entity, Option<&UnitDisplayName>, &Health)>,
+                Vec<(
+                    Entity,
+                    Option<&UnitDisplayName>,
+                    &Health,
+                    Option<&UnitInventory>,
+                    Option<&ItemRuntimeState>,
+                )>,
             )> = Vec::new();
-            for (entity, kind, display_name, health, _, _, _, _) in &selected_units {
+            for (entity, kind, display_name, health, _, _, _, _, inventory, runtime) in &selected_units {
                 if let Some(group) = unit_groups.iter_mut().find(|(k, _)| *k == *kind) {
-                    group.1.push((entity, display_name, health));
+                    group.1.push((entity, display_name, health, inventory, runtime));
                 } else {
-                    unit_groups.push((*kind, vec![(entity, display_name, health)]));
+                    unit_groups.push((*kind, vec![(entity, display_name, health, inventory, runtime)]));
                 }
             }
             for (_, entities) in &mut unit_groups {
@@ -476,6 +515,14 @@ pub fn rebuild_selection_panel(
                     building_groups.push((*kind, vec![(entity, health)]));
                 }
             }
+
+            spawn_multi_inventory_summary(
+                &mut commands,
+                grid_container,
+                &selected_units,
+                &item_assets,
+                &theme,
+            );
 
             for (kind, entities) in &unit_groups {
                 let header = commands
@@ -508,7 +555,7 @@ pub fn rebuild_selection_panel(
                     .id();
                 commands.entity(grid_container).add_child(grid);
 
-                for (entity, display_name, health) in entities {
+                for (entity, display_name, health, inventory, runtime) in entities {
                     spawn_unit_mini_card(
                         &mut commands,
                         grid,
@@ -516,7 +563,10 @@ pub fn rebuild_selection_panel(
                         display_name.map(|name| name.0.as_str()),
                         *kind,
                         health,
+                        *inventory,
+                        *runtime,
                         &icons,
+                        &item_assets,
                         &control_groups,
                         &theme,
                     );
@@ -562,7 +612,10 @@ pub fn rebuild_selection_panel(
                         None,
                         *kind,
                         health,
+                        None,
+                        None,
                         &icons,
+                        &item_assets,
                         &control_groups,
                         &theme,
                     );
@@ -648,7 +701,10 @@ pub fn rebuild_selection_panel(
                 rng,
                 spd,
                 None,
+                None,
+                None,
                 &icons,
+                &item_assets,
                 &theme,
             );
             let label = commands
@@ -801,10 +857,15 @@ fn spawn_selection_footer(
     commands.entity(top_row).add_child(button);
 
     commands.entity(button).insert(BackgroundColor(button_bg));
-    commands.entity(button).insert(ButtonAnimState::new(button_bg.to_srgba().to_f32_array()));
+    commands
+        .entity(button)
+        .insert(ButtonAnimState::new(button_bg.to_srgba().to_f32_array()));
 }
 
-fn label_visibility_presentation(theme: &Theme, show_unit_labels: bool) -> (Color, &'static str, Color, &'static str) {
+fn label_visibility_presentation(
+    theme: &Theme,
+    show_unit_labels: bool,
+) -> (Color, &'static str, Color, &'static str) {
     if show_unit_labels {
         (
             theme.colors.accent,
@@ -833,7 +894,10 @@ pub fn spawn_friendly_detail_card(
     range: &AttackRange,
     speed: &UnitSpeed,
     stance: Option<UnitStance>,
+    inventory: Option<&UnitInventory>,
+    runtime_state: Option<&ItemRuntimeState>,
     icons: &IconAssets,
+    item_assets: &ItemAssets,
     theme: &Theme,
 ) {
     let card = commands
@@ -944,7 +1008,11 @@ pub fn spawn_friendly_detail_card(
         .id();
     commands.entity(info).add_child(stats);
 
-    let stat_colors = [theme.colors.stat_dmg, theme.colors.stat_rng, theme.colors.stat_spd];
+    let stat_colors = [
+        theme.colors.stat_dmg,
+        theme.colors.stat_rng,
+        theme.colors.stat_spd,
+    ];
     for ((label, value), color) in [
         ("DMG", format!("{:.0}", damage.0)),
         ("RNG", format!("{:.1}", range.0)),
@@ -984,6 +1052,391 @@ pub fn spawn_friendly_detail_card(
             ))
             .id();
         commands.entity(info).add_child(stance_label);
+    }
+
+    spawn_single_inventory_section(
+        commands,
+        info,
+        kind,
+        inventory,
+        runtime_state,
+        item_assets,
+        theme,
+    );
+}
+
+fn displayed_inventory_capacity(kind: EntityKind, inventory: Option<&UnitInventory>) -> usize {
+    inventory
+        .map(|inventory| inventory.capacity as usize)
+        .unwrap_or_else(|| inferred_inventory_capacity(kind) as usize)
+}
+
+fn displayed_inventory_items(inventory: Option<&UnitInventory>) -> &[ItemKind] {
+    inventory.map(|inventory| inventory.items.as_slice()).unwrap_or(&[])
+}
+
+fn spawn_single_inventory_section(
+    commands: &mut Commands,
+    parent: Entity,
+    kind: EntityKind,
+    inventory: Option<&UnitInventory>,
+    runtime_state: Option<&ItemRuntimeState>,
+    item_assets: &ItemAssets,
+    theme: &Theme,
+) {
+    let capacity = displayed_inventory_capacity(kind, inventory);
+    if capacity == 0 {
+        return;
+    }
+    let items = displayed_inventory_items(inventory);
+
+    let section = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(6.0),
+            margin: UiRect::top(Val::Px(6.0)),
+            padding: UiRect::top(Val::Px(6.0)),
+            border: UiRect::top(Val::Px(1.0)),
+            ..default()
+        })
+        .insert(BorderColor::all(theme.colors.separator))
+        .id();
+    commands.entity(parent).add_child(section);
+
+    let header = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::SpaceBetween,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(8.0),
+            ..default()
+        })
+        .id();
+    commands.entity(section).add_child(header);
+
+    commands.entity(header).with_children(|header| {
+        header.spawn((
+            Text::new("Inventory"),
+            TextFont {
+                font_size: theme.typography.body,
+                ..default()
+            },
+            TextColor(theme.colors.text_primary),
+        ));
+        header.spawn((
+            Text::new(format!("{}/{} slots", items.len().min(capacity), capacity)),
+            TextFont {
+                font_size: theme.typography.small,
+                ..default()
+            },
+            TextColor(theme.colors.text_secondary),
+        ));
+    });
+
+    let slots = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(6.0),
+            row_gap: Val::Px(6.0),
+            flex_wrap: FlexWrap::Wrap,
+            ..default()
+        })
+        .id();
+    commands.entity(section).add_child(slots);
+
+    for slot in 0..capacity {
+        let filled = items.get(slot).copied();
+        let slot_node = commands
+            .spawn((
+                Node {
+                    width: Val::Px(40.0),
+                    height: Val::Px(40.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    ..default()
+                },
+                BorderColor::all(if filled.is_some() {
+                    theme.colors.accent
+                } else {
+                    theme.colors.border_subtle
+                }),
+                BackgroundColor(theme.colors.icon_frame_bg),
+            ))
+            .id();
+        commands.entity(slots).add_child(slot_node);
+
+        if let Some(item) = filled {
+            commands.entity(slot_node).with_children(|slot| {
+                slot.spawn((
+                    ImageNode::new(item_assets.icon(item)),
+                    Node {
+                        width: Val::Px(28.0),
+                        height: Val::Px(28.0),
+                        ..default()
+                    },
+                ));
+            });
+        } else {
+            commands.entity(slot_node).with_children(|slot| {
+                slot.spawn((
+                    Text::new("+"),
+                    TextFont {
+                        font_size: theme.typography.large,
+                        ..default()
+                    },
+                    TextColor(theme.colors.text_disabled),
+                ));
+            });
+        }
+    }
+
+    if items.is_empty() {
+        let empty = commands
+            .spawn((
+                Text::new("No items equipped."),
+                TextFont {
+                    font_size: theme.typography.small,
+                    ..default()
+                },
+                TextColor(theme.colors.text_secondary),
+            ))
+            .id();
+        commands.entity(section).add_child(empty);
+        return;
+    }
+
+    let list = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
+            ..default()
+        })
+        .id();
+    commands.entity(section).add_child(list);
+
+    for &item in items.iter().take(capacity) {
+        let row = commands
+            .spawn(Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(8.0),
+                ..default()
+            })
+            .id();
+        commands.entity(list).add_child(row);
+
+        let icon = commands
+            .spawn((
+                ImageNode::new(item_assets.icon(item)),
+                Node {
+                    width: Val::Px(20.0),
+                    height: Val::Px(20.0),
+                    ..default()
+                },
+            ))
+            .id();
+        commands.entity(row).add_child(icon);
+
+        let text_col = commands
+            .spawn(Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(1.0),
+                ..default()
+            })
+            .id();
+        commands.entity(row).add_child(text_col);
+
+        let status = runtime_state
+            .and_then(|state| state.items.iter().find(|entry| entry.item == item))
+            .map(|entry| {
+                if entry.cooldown_remaining > 0.0 {
+                    format!("Cooldown {:.1}s", entry.cooldown_remaining)
+                } else if entry.enabled {
+                    if entry.active_toggled {
+                        "Active".to_string()
+                    } else {
+                        "Enabled".to_string()
+                    }
+                } else {
+                    entry
+                        .disabled_reason
+                        .map(|reason| format!("Disabled: {}", reason.label()))
+                        .unwrap_or_else(|| "Disabled".to_string())
+                }
+            })
+            .unwrap_or_else(|| "Enabled".to_string());
+
+        commands.entity(text_col).with_children(|col| {
+            col.spawn((
+                Text::new(format!(
+                    "{} [{}]",
+                    item.display_name(),
+                    item.category().label()
+                )),
+                TextFont {
+                    font_size: theme.typography.small,
+                    ..default()
+                },
+                TextColor(theme.colors.text_primary),
+            ));
+            col.spawn((
+                Text::new(item.effect_summary()),
+                TextFont {
+                    font_size: theme.typography.tiny,
+                    ..default()
+                },
+                TextColor(theme.colors.text_secondary),
+            ));
+            col.spawn((
+                Text::new(status),
+                TextFont {
+                    font_size: theme.typography.tiny,
+                    ..default()
+                },
+                TextColor(theme.colors.accent),
+            ));
+        });
+    }
+}
+
+fn spawn_multi_inventory_summary(
+    commands: &mut Commands,
+    parent: Entity,
+    selected_units: &Query<
+        (
+            Entity,
+            &EntityKind,
+            Option<&UnitDisplayName>,
+            &Health,
+            &AttackDamage,
+            &AttackRange,
+            &UnitSpeed,
+            Option<&UnitStance>,
+            Option<&UnitInventory>,
+            Option<&ItemRuntimeState>,
+        ),
+        (With<Unit>, With<Selected>),
+    >,
+    item_assets: &ItemAssets,
+    theme: &Theme,
+) {
+    let mut total_capacity = 0usize;
+    let mut total_filled = 0usize;
+    let mut counts: HashMap<ItemKind, usize> = HashMap::new();
+
+    for (_, kind, _, _, _, _, _, _, inventory, _) in selected_units.iter() {
+        let capacity = displayed_inventory_capacity(*kind, inventory);
+        total_capacity += capacity;
+
+        let items = displayed_inventory_items(inventory);
+        total_filled += items.len().min(capacity);
+        for &item in items.iter().take(capacity) {
+            *counts.entry(item).or_insert(0) += 1;
+        }
+    }
+
+    if total_capacity == 0 {
+        return;
+    }
+
+    let section = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(6.0),
+            margin: UiRect::bottom(Val::Px(8.0)),
+            padding: UiRect::all(Val::Px(8.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
+            ..default()
+        })
+        .insert(BorderColor::all(theme.colors.border_subtle))
+        .insert(BackgroundColor(theme.colors.bg_surface))
+        .id();
+    commands.entity(parent).add_child(section);
+
+    commands.entity(section).with_children(|section| {
+        section.spawn((
+            Text::new(format!("Squad Inventory {}/{}", total_filled, total_capacity)),
+            TextFont {
+                font_size: theme.typography.body,
+                ..default()
+            },
+            TextColor(theme.colors.text_primary),
+        ));
+    });
+
+    if counts.is_empty() {
+        commands.entity(section).with_children(|section| {
+            section.spawn((
+                Text::new("No equipped items across the current selection."),
+                TextFont {
+                    font_size: theme.typography.small,
+                    ..default()
+                },
+                TextColor(theme.colors.text_secondary),
+            ));
+        });
+        return;
+    }
+
+    let mut item_counts: Vec<(ItemKind, usize)> = counts.into_iter().collect();
+    item_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.display_name().cmp(b.0.display_name())));
+
+    let chip_row = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Wrap,
+            column_gap: Val::Px(6.0),
+            row_gap: Val::Px(6.0),
+            ..default()
+        })
+        .id();
+    commands.entity(section).add_child(chip_row);
+
+    for (item, count) in item_counts {
+        let chip = commands
+            .spawn((
+                Node {
+                    flex_direction: FlexDirection::Row,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(6.0),
+                    padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
+                    border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(999.0)),
+                    ..default()
+                },
+                BorderColor::all(theme.colors.border_subtle),
+                BackgroundColor(theme.colors.icon_frame_bg),
+            ))
+            .id();
+        commands.entity(chip_row).add_child(chip);
+
+        commands.entity(chip).with_children(|chip| {
+            chip.spawn((
+                ImageNode::new(item_assets.icon(item)),
+                Node {
+                    width: Val::Px(16.0),
+                    height: Val::Px(16.0),
+                    ..default()
+                },
+            ));
+            chip.spawn((
+                Text::new(format!("{} x{}", item.display_name(), count)),
+                TextFont {
+                    font_size: theme.typography.small,
+                    ..default()
+                },
+                TextColor(theme.colors.text_primary),
+            ));
+        });
     }
 }
 
@@ -1229,7 +1682,10 @@ fn spawn_unit_mini_card(
     display_name: Option<&str>,
     kind: EntityKind,
     health: &Health,
+    inventory: Option<&UnitInventory>,
+    _runtime_state: Option<&ItemRuntimeState>,
     icons: &IconAssets,
+    _item_assets: &ItemAssets,
     control_groups: &ControlGroups,
     theme: &Theme,
 ) {
@@ -1300,6 +1756,40 @@ fn spawn_unit_mini_card(
             ))
             .id();
         commands.entity(card).add_child(unit_type);
+    }
+
+    let capacity = displayed_inventory_capacity(kind, inventory);
+    if capacity > 0 {
+        let filled = displayed_inventory_items(inventory).len().min(capacity);
+        let slots = commands
+            .spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(2.0),
+                margin: UiRect::top(Val::Px(1.0)),
+                ..default()
+            })
+            .id();
+        commands.entity(card).add_child(slots);
+
+        for idx in 0..capacity {
+            let tone = if idx < filled {
+                theme.colors.accent
+            } else {
+                theme.colors.border_subtle
+            };
+            let slot = commands
+                .spawn((
+                    Node {
+                        width: Val::Px(8.0),
+                        height: Val::Px(8.0),
+                        border_radius: BorderRadius::all(Val::Px(2.0)),
+                        ..default()
+                    },
+                    BackgroundColor(tone),
+                ))
+                .id();
+            commands.entity(slots).add_child(slot);
+        }
     }
 
     // Group membership badge(s) — small colored numbers in top-right corner

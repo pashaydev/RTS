@@ -127,7 +127,9 @@ impl SpatialHashGrid {
         let length = delta.length().max(0.001);
         let dir = delta / length;
         let mut results = Vec::new();
-        for (entity, pos) in self.query_radius_limited(from.lerp(to, 0.5), length * 0.5 + half_width, limit * 3) {
+        for (entity, pos) in
+            self.query_radius_limited(from.lerp(to, 0.5), length * 0.5 + half_width, limit * 3)
+        {
             let rel = Vec2::new(pos.x - from.x, pos.z - from.z);
             let forward = rel.dot(dir);
             if forward < -half_width || forward > length + half_width {
@@ -227,7 +229,12 @@ fn seed_spatial_grid(
     mobs: Query<(Entity, &Transform), (With<Mob>, Without<Unit>)>,
     buildings: Query<
         (Entity, &Transform),
-        (With<Building>, Without<Unit>, Without<Mob>, Without<FloorTile>),
+        (
+            With<Building>,
+            Without<Unit>,
+            Without<Mob>,
+            Without<FloorTile>,
+        ),
     >,
 ) {
     grid.cells.clear();
@@ -248,7 +255,10 @@ fn update_spatial_grid(
     units: Query<(Entity, &Transform), (With<Unit>, Or<(Added<Unit>, Changed<Transform>)>)>,
     mobs: Query<
         (Entity, &Transform),
-        ((With<Mob>, Without<Unit>), Or<(Added<Mob>, Changed<Transform>)>),
+        (
+            (With<Mob>, Without<Unit>),
+            Or<(Added<Mob>, Changed<Transform>)>,
+        ),
     >,
     buildings: Query<
         (Entity, &Transform),
@@ -295,7 +305,11 @@ fn seed_wall_grid(
         (Entity, &Transform, &BuildingFootprint, &Faction),
         (
             With<Building>,
-            Or<(With<WallSegmentPiece>, With<WallPostPiece>, With<WallCornerPiece>)>,
+            Or<(
+                With<WallSegmentPiece>,
+                With<WallPostPiece>,
+                With<WallCornerPiece>,
+            )>,
         ),
     >,
 ) {
@@ -312,8 +326,16 @@ fn update_wall_grid(
         (Entity, &Transform, &BuildingFootprint, &Faction),
         (
             With<Building>,
-            Or<(With<WallSegmentPiece>, With<WallPostPiece>, With<WallCornerPiece>)>,
-            Or<(Added<Building>, Changed<Transform>, Changed<BuildingFootprint>)>,
+            Or<(
+                With<WallSegmentPiece>,
+                With<WallPostPiece>,
+                With<WallCornerPiece>,
+            )>,
+            Or<(
+                Added<Building>,
+                Changed<Transform>,
+                Changed<BuildingFootprint>,
+            )>,
         ),
     >,
 ) {

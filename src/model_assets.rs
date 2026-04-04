@@ -193,9 +193,7 @@ fn load_model_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     let bushes = load_scenes_from(
         &asset_server,
         NEW_TREE_PATH,
-        &[
-            "bush (1).glb", "bush (2).glb"
-        ],
+        &["bush (1).glb", "bush (2).glb"],
     );
 
     let grass = load_gltf_scenes(
@@ -233,7 +231,10 @@ fn load_model_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     // access mesh primitives for CPU vertex merging.
     let deco_bush_gltfs = load_gltf_handles_from(
         &asset_server,
-        &["trees_compressed/bush (1).glb", "trees_compressed/bush (2).glb"],
+        &[
+            "trees_compressed/bush (1).glb",
+            "trees_compressed/bush (2).glb",
+        ],
     );
     let deco_rock_gltfs = load_gltf_handles(
         &asset_server,
@@ -539,9 +540,8 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
     }
 
     // Summons reuse spare animated TTP characters (mobs now use procedural cubes)
-    let mob_mappings: &[(EntityKind, &str)] = &[
-        (EntityKind::SkeletonMinion, "TT_Light_Infantry.glb"),
-    ];
+    let mob_mappings: &[(EntityKind, &str)] =
+        &[(EntityKind::SkeletonMinion, "TT_Light_Infantry.glb")];
     for (kind, filename) in mob_mappings {
         let handle = asset_server.load(format!("{TTP_UNITS_PATH}/{filename}#Scene0"));
         scenes.insert(*kind, handle);
@@ -614,12 +614,8 @@ impl ProjectileModelAssets {
     /// Pick the scene handle for a given visual kind, cycling through variants.
     pub fn scene_for(&self, kind: ProjectileVisualKind, variant: usize) -> Handle<Scene> {
         match kind {
-            ProjectileVisualKind::Arrow => {
-                self.arrows[variant % self.arrows.len()].clone()
-            }
-            ProjectileVisualKind::Bolt => {
-                self.bolts[variant % self.bolts.len()].clone()
-            }
+            ProjectileVisualKind::Arrow => self.arrows[variant % self.arrows.len()].clone(),
+            ProjectileVisualKind::Bolt => self.bolts[variant % self.bolts.len()].clone(),
             ProjectileVisualKind::CatapultRock => {
                 self.catapult_rocks[variant % self.catapult_rocks.len()].clone()
             }
@@ -635,9 +631,7 @@ pub fn projectile_visual_for(kind: EntityKind) -> Option<ProjectileVisualKind> {
             Some(ProjectileVisualKind::Arrow)
         }
         EntityKind::BallistaTower => Some(ProjectileVisualKind::Bolt),
-        EntityKind::Catapult | EntityKind::BombardTower => {
-            Some(ProjectileVisualKind::CatapultRock)
-        }
+        EntityKind::Catapult | EntityKind::BombardTower => Some(ProjectileVisualKind::CatapultRock),
         _ => None, // Mage, Priest, etc. keep sphere VFX
     }
 }

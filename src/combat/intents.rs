@@ -127,11 +127,7 @@ pub fn reset_combat_state(commands: &mut Commands, entity: Entity) {
         .remove::<SlotClaim>();
 }
 
-pub fn apply_auto_move_intent(
-    commands: &mut Commands,
-    entity: Entity,
-    destination: Vec3,
-) {
+pub fn apply_auto_move_intent(commands: &mut Commands, entity: Entity, destination: Vec3) {
     commands
         .entity(entity)
         .insert(TaskSource::Auto)
@@ -197,7 +193,10 @@ fn cleanup_expired_combat_state(
     let mut expired_locks = 0_u64;
 
     for (entity, buffered) in &buffered_commands {
-        if buffered.expires_at.is_some_and(|expires_at| now >= expires_at) {
+        if buffered
+            .expires_at
+            .is_some_and(|expires_at| now >= expires_at)
+        {
             commands.entity(entity).remove::<BufferedCommand>();
             expired_buffers += 1;
         }

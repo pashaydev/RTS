@@ -12,8 +12,8 @@ use bevy::prelude::*;
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::{
     AiControlledFactions, AiFactionSettings, AllPlayerResources, AllyNotifications, AllyNotifyKind,
-    AppState, AttackTarget, CullReason, Faction, FrustumCulled, FrustumDebugMode,
-    GameFlowSet, GameSetupConfig, GameWorld, Health, MoveTarget, ResourceType, RtsCamera, Selected,
+    AppState, AttackTarget, CullReason, Faction, FrustumCulled, FrustumDebugMode, GameFlowSet,
+    GameSetupConfig, GameWorld, Health, MoveTarget, ResourceType, RtsCamera, Selected,
     UiPressActive, UnitSpeed,
 };
 use crate::fog::FogTweakSettings;
@@ -56,9 +56,8 @@ impl Plugin for DebugPlugin {
             });
         }
 
-        app
-        .init_resource::<DebugViewState>()
-        .add_systems(Update, toggle_debug_views);
+        app.init_resource::<DebugViewState>()
+            .add_systems(Update, toggle_debug_views);
 
         #[cfg(not(target_arch = "wasm32"))]
         app.add_systems(
@@ -125,8 +124,6 @@ impl Plugin for DebugPlugin {
                     .in_set(GameFlowSet::Diagnostics)
                     .run_if(in_state(AppState::InGame)),
             );
-
-
     }
 }
 
@@ -528,7 +525,6 @@ fn get_selected_kind_and_faction(tweaks: &DebugTweaks) -> (EntityKind, Faction) 
 fn format_debug_vec3(v: Vec3) -> String {
     format!("{:.1}, {:.1}, {:.1}", v.x, v.y, v.z)
 }
-
 
 fn toggle_debug_views(
     keys: Res<ButtonInput<KeyCode>>,
@@ -965,7 +961,6 @@ fn sync_debug_flow_tweaks(
     );
 }
 
-
 fn sync_entity_spawn_tweaks(
     mut commands: Commands,
     mut tweaks: ResMut<DebugTweaks>,
@@ -1218,7 +1213,6 @@ fn sync_entity_selected_tweaks(
         }
     }
 }
-
 
 fn sync_ai_debug_tweaks(
     mut tweaks: ResMut<DebugTweaks>,

@@ -53,6 +53,9 @@ pub enum InputCommand {
     /// Hold position — stop and defend.
     #[serde(rename = "hold")]
     HoldPosition,
+    /// Stop — cancel all orders and return to idle.
+    #[serde(rename = "stop")]
+    Stop,
     /// Change combat stance.
     #[serde(rename = "stance")]
     SetStance { stance: u8 },

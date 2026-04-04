@@ -605,7 +605,8 @@ pub fn handle_rally_point_button(
         let Ok((camera, cam_gt)) = camera_q.single() else {
             return;
         };
-        let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics) else {
+        let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics)
+        else {
             return;
         };
         let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) else {
@@ -679,7 +680,10 @@ pub fn handle_assign_worker_button(
         (Entity, &ResourceProcessor, &Transform, Option<&SawmillYard>),
         (With<Building>, With<Selected>),
     >,
-    mut idle_workers: Query<(Entity, &UnitState, &Faction, &mut Transform), (With<Unit>, With<GatherSpeed>, Without<Building>)>,
+    mut idle_workers: Query<
+        (Entity, &UnitState, &Faction, &mut Transform),
+        (With<Unit>, With<GatherSpeed>, Without<Building>),
+    >,
     assigned_workers_q: Query<&AssignedWorkers>,
     active_player: Res<ActivePlayer>,
     height_map: Res<crate::ground::HeightMap>,

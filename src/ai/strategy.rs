@@ -5,8 +5,8 @@ use crate::blueprints::EntityKind;
 use crate::components::*;
 
 use super::helpers::push_if_missing;
-use super::AiWorldSnapshot;
 use super::types::*;
+use super::AiWorldSnapshot;
 
 // ════════════════════════════════════════════════════════════════════
 // System 1: Strategy — State machine transitions & build queue planning

@@ -37,7 +37,10 @@ pub fn ai_tactical_system(
         ),
         Or<(With<Unit>, With<Mob>)>,
     >,
-    hostile_unit_data_q: Query<(&Faction, &Transform, &Health, Option<&AttackDamage>), Or<(With<Unit>, With<Mob>)>>,
+    hostile_unit_data_q: Query<
+        (&Faction, &Transform, &Health, Option<&AttackDamage>),
+        Or<(With<Unit>, With<Mob>)>,
+    >,
     buildings_q: Query<(&Faction, &Transform), (With<Building>, Without<FloorTile>)>,
 ) {
     let dt = time.delta_secs();
@@ -233,7 +236,10 @@ pub fn ai_tactical_system(
 fn detect_threats_near_ally(
     brain: &mut AiFactionBrain,
     spatial_grid: &SpatialHashGrid,
-    hostile_unit_data_q: &Query<(&Faction, &Transform, &Health, Option<&AttackDamage>), Or<(With<Unit>, With<Mob>)>>,
+    hostile_unit_data_q: &Query<
+        (&Faction, &Transform, &Health, Option<&AttackDamage>),
+        Or<(With<Unit>, With<Mob>)>,
+    >,
     teams: &TeamConfig,
     faction: &Faction,
     player_base_pos: Vec3,

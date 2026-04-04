@@ -37,8 +37,7 @@ impl Plugin for AiPlugin {
             .init_resource::<AiFactionSettings>()
             .add_systems(
                 PreUpdate,
-                build_ai_world_snapshot
-                    .run_if(in_state(AppState::InGame)),
+                build_ai_world_snapshot.run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
@@ -137,7 +136,9 @@ fn build_ai_world_snapshot(
             entry.worker_entities.push((entity, tf.translation));
         } else {
             entry.military_count += 1;
-            entry.military_entities.push((entity, *kind, tf.translation));
+            entry
+                .military_entities
+                .push((entity, *kind, tf.translation));
         }
     }
 

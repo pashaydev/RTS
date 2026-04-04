@@ -1,18 +1,18 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::RenderTarget;
-use bevy::image::ImageSampler;
 use bevy::ecs::message::MessageReader;
+use bevy::image::ImageSampler;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::light::cluster::{ClusterConfig, ClusterZConfig};
-use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::post_process::{
     auto_exposure::AutoExposure,
     bloom::Bloom,
     dof::{DepthOfField, DepthOfFieldMode},
     effect_stack::ChromaticAberration,
 };
+use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy::render::view::Hdr;
 use bevy::window::PrimaryWindow;
 
@@ -204,9 +204,8 @@ fn create_internal_render_image(images: &mut Assets<Image>, size: UVec2) -> Hand
         TextureFormat::Rgba16Float,
         RenderAssetUsages::RENDER_WORLD | RenderAssetUsages::MAIN_WORLD,
     );
-    image.texture_descriptor.usage = TextureUsages::TEXTURE_BINDING
-        | TextureUsages::COPY_DST
-        | TextureUsages::RENDER_ATTACHMENT;
+    image.texture_descriptor.usage =
+        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::RENDER_ATTACHMENT;
     image.sampler = ImageSampler::linear();
     images.add(image)
 }
@@ -459,7 +458,9 @@ fn sync_camera_post_process_settings(
 
     if applied
         .as_ref()
-        .is_some_and(|(last_entity, last_settings)| *last_entity == entity && *last_settings == *graphics)
+        .is_some_and(|(last_entity, last_settings)| {
+            *last_entity == entity && *last_settings == *graphics
+        })
     {
         return;
     }
@@ -480,7 +481,9 @@ fn sync_camera_post_process_settings(
     #[cfg(not(target_arch = "wasm32"))]
     match graphics.anti_aliasing {
         AntiAliasingMode::Off => {
-            commands.entity(entity).remove::<bevy::anti_alias::smaa::Smaa>();
+            commands
+                .entity(entity)
+                .remove::<bevy::anti_alias::smaa::Smaa>();
         }
         AntiAliasingMode::Smaa => {
             commands
@@ -627,11 +630,9 @@ fn camera_zoom_input(
     mut scroll_events: MessageReader<MouseWheel>,
     keyboard: Res<ButtonInput<KeyCode>>,
     cursor_over_ui: Res<CursorOverUi>,
+    scroll_consumed: Res<crate::ui::core::framework::ScrollConsumedByWidget>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    widget_q: Query<
-        (&ComputedNode, &UiGlobalTransform),
-        With<crate::ui::core::framework::Widget>,
-    >,
+    widget_q: Query<(&ComputedNode, &UiGlobalTransform), With<crate::ui::core::framework::Widget>>,
     time: Res<Time>,
     mut query: Query<&mut RtsCamera>,
     debug_mode: Res<FrustumDebugMode>,
@@ -659,7 +660,7 @@ fn camera_zoom_input(
             MouseScrollUnit::Line => ev.y,
             MouseScrollUnit::Pixel => ev.y / 16.0,
         };
-        if !cursor_over_ui.0 && !cursor_in_widget {
+        if !cursor_over_ui.0 && !cursor_in_widget && !scroll_consumed.0 {
             cam.target_distance *= 1.0 - scroll * ZOOM_SENSITIVITY;
         }
     }

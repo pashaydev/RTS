@@ -40,7 +40,10 @@ pub fn enqueue_building_terrain_updates(
     net_role: Option<Res<crate::multiplayer::NetRole>>,
     mut queue: ResMut<TerrainShapeUpdateQueue>,
 ) {
-    if matches!(net_role.as_deref(), Some(crate::multiplayer::NetRole::Client)) {
+    if matches!(
+        net_role.as_deref(),
+        Some(crate::multiplayer::NetRole::Client)
+    ) {
         return;
     }
 
@@ -72,7 +75,10 @@ pub fn process_terrain_shape_update_queue(
         return;
     }
 
-    let is_client = matches!(net_role.as_deref(), Some(crate::multiplayer::NetRole::Client));
+    let is_client = matches!(
+        net_role.as_deref(),
+        Some(crate::multiplayer::NetRole::Client)
+    );
     let Some(update) = queue.pending.pop_front() else {
         return;
     };
@@ -101,7 +107,14 @@ pub fn process_terrain_shape_update_queue(
         let norm_min_z = op_min_z.saturating_sub(1);
         let norm_max_z = (op_max_z + 1).min(height_map.grid_size - 1);
 
-        sync_ground_mesh_partial(mesh, &height_map, norm_min_x, norm_max_x, norm_min_z, norm_max_z);
+        sync_ground_mesh_partial(
+            mesh,
+            &height_map,
+            norm_min_x,
+            norm_max_x,
+            norm_min_z,
+            norm_max_z,
+        );
     }
 
     sync_state.applied_history.insert(update.clone());
@@ -119,8 +132,7 @@ pub fn apply_terrain_shape_op(height_map: &mut HeightMap, update: &TerrainShapeO
     for iz in min_z..=max_z {
         for ix in min_x..=max_x {
             let (world_x, world_z) = height_map.world_pos_for_grid(ix, iz);
-            let dist =
-                Vec2::new(world_x - update.center[0], world_z - update.center[1]).length();
+            let dist = Vec2::new(world_x - update.center[0], world_z - update.center[1]).length();
             if dist > outer_radius {
                 continue;
             }
@@ -247,8 +259,7 @@ pub fn paint_floor_blend_on_ground(
     inner_radius: f32,
     transition: f32,
 ) {
-    let Some(VertexAttributeValues::Float32x4(colors)) =
-        mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR)
+    let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR)
     else {
         return;
     };

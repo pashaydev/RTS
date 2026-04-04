@@ -2,7 +2,7 @@ use bevy::prelude::*;
 
 use super::helpers::*;
 use crate::components::*;
-use crate::database::{GameDatabase, ActiveProfile, SaveEntry};
+use crate::database::{ActiveProfile, GameDatabase, SaveEntry};
 use crate::theme::{self, Theme};
 use crate::ui::core::components as ui_components;
 use crate::ui::fonts::{self, UiFonts};
@@ -12,7 +12,12 @@ use super::*;
 
 // ── Title Page ──
 
-pub(crate) fn spawn_title_page(commands: &mut Commands, container: Entity, fonts: &UiFonts, theme: &Theme) {
+pub(crate) fn spawn_title_page(
+    commands: &mut Commands,
+    container: Entity,
+    fonts: &UiFonts,
+    theme: &Theme,
+) {
     let title = commands
         .spawn((
             TitleShimmer { phase_offset: 0.0 },
@@ -73,8 +78,15 @@ pub(crate) fn spawn_title_page(commands: &mut Commands, container: Entity, fonts
     .iter()
     .enumerate()
     {
-        let btn =
-            spawn_styled_button_nav(commands, label, MenuButton(*action), false, fonts, Some(i), theme);
+        let btn = spawn_styled_button_nav(
+            commands,
+            label,
+            MenuButton(*action),
+            false,
+            fonts,
+            Some(i),
+            theme,
+        );
         commands.entity(container).add_child(btn);
     }
 
@@ -458,9 +470,15 @@ pub(crate) fn spawn_slot_card(
                         Button,
                         ui_components::compact_button_node_with_margin(10.0, 5.0, 1.0),
                         if is_selected {
-                            ui_components::filled_button_chrome(theme, ui_components::UiTone::Accent)
+                            ui_components::filled_button_chrome(
+                                theme,
+                                ui_components::UiTone::Accent,
+                            )
                         } else {
-                            ui_components::filled_button_chrome(theme, ui_components::UiTone::Neutral)
+                            ui_components::filled_button_chrome(
+                                theme,
+                                ui_components::UiTone::Neutral,
+                            )
                         },
                     ));
                     if is_selected {
@@ -554,7 +572,10 @@ pub(crate) fn spawn_slot_card(
                             node.margin = UiRect::left(Val::Px(4.0));
                             node
                         },
-                        ui_components::filled_button_chrome(theme, ui_components::UiTone::Destructive),
+                        ui_components::filled_button_chrome(
+                            theme,
+                            ui_components::UiTone::Destructive,
+                        ),
                     ))
                     .with_children(|btn| {
                         btn.spawn((
@@ -615,9 +636,15 @@ pub(crate) fn spawn_slot_card(
                             Button,
                             ui_components::compact_button_node_with_margin(14.0, 7.0, 2.0),
                             if is_selected {
-                                ui_components::filled_button_chrome(theme, ui_components::UiTone::Accent)
+                                ui_components::filled_button_chrome(
+                                    theme,
+                                    ui_components::UiTone::Accent,
+                                )
                             } else {
-                                ui_components::filled_button_chrome(theme, ui_components::UiTone::Neutral)
+                                ui_components::filled_button_chrome(
+                                    theme,
+                                    ui_components::UiTone::Neutral,
+                                )
                             },
                         ));
                         if is_selected {
@@ -711,8 +738,15 @@ pub(crate) fn spawn_load_game_page(
     }
 
     // Back button
-    let back_btn =
-        spawn_styled_button_nav(commands, "BACK", MenuButton(MenuAction::Back), false, fonts, Some(saves.len()), theme);
+    let back_btn = spawn_styled_button_nav(
+        commands,
+        "BACK",
+        MenuButton(MenuAction::Back),
+        false,
+        fonts,
+        Some(saves.len()),
+        theme,
+    );
     commands.entity(container).add_child(back_btn);
 }
 

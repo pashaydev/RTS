@@ -55,6 +55,7 @@ pub(crate) enum MenuAction {
     Disconnect,
     LoadSave(i64),
     DeleteSave(i64),
+    ResetWidgetLayout,
 }
 
 #[allow(dead_code)]

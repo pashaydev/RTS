@@ -4,7 +4,9 @@ use bevy::prelude::*;
 // Theme Mode
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum ThemeMode {
     #[default]
     Dark,
@@ -192,16 +194,16 @@ impl ColorPalette {
 
 #[derive(Clone, Debug)]
 pub struct Typography {
-    pub display: f32,  // 48 — menu title
-    pub heading: f32,  // 28 — section headers
-    pub button: f32,   // 18 — menu buttons, large labels
-    pub large: f32,    // 15 — popups, unit names
-    pub medium: f32,   // 13 — selector labels, resource counts
-    pub body: f32,     // 12 — standard text, tooltips
-    pub small: f32,    // 10 — widget titles, costs
-    pub caption: f32,  // 10 — toolbar, queue labels
-    pub tiny: f32,     //  8 — close buttons, badges
-    pub micro: f32,    //  8 — event log timestamps
+    pub display: f32, // 48 — menu title
+    pub heading: f32, // 28 — section headers
+    pub button: f32,  // 18 — menu buttons, large labels
+    pub large: f32,   // 15 — popups, unit names
+    pub medium: f32,  // 13 — selector labels, resource counts
+    pub body: f32,    // 12 — standard text, tooltips
+    pub small: f32,   // 10 — widget titles, costs
+    pub caption: f32, // 10 — toolbar, queue labels
+    pub tiny: f32,    //  8 — close buttons, badges
+    pub micro: f32,   //  8 — event log timestamps
 }
 
 impl Default for Typography {

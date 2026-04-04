@@ -298,12 +298,8 @@ fn update_minimap_texture(
                 fog_idx_cache.fog_grid_size = fog.grid_size;
                 for py in 0..MINIMAP_TEX_SIZE {
                     for px in 0..MINIMAP_TEX_SIZE {
-                        let (wx, wz) = minimap_to_world(
-                            px as f32 + 0.5,
-                            py as f32 + 0.5,
-                            map_size,
-                            half_map,
-                        );
+                        let (wx, wz) =
+                            minimap_to_world(px as f32 + 0.5, py as f32 + 0.5, map_size, half_map);
                         let ix = ((wx + fog.half_map) / fog.step).round() as usize;
                         let iz = ((wz + fog.half_map) / fog.step).round() as usize;
                         let fog_idx = if ix < fog.grid_size && iz < fog.grid_size {
@@ -394,12 +390,7 @@ fn update_minimap_texture(
                 }
             }
         }
-        let (px, py) = world_to_minimap(
-            tf.translation.x,
-            tf.translation.z,
-            map_size,
-            half_map,
-        );
+        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, map_size, half_map);
         draw_dot(buf, px, py, 1, [255, 220, 50, 255]);
     }
 
@@ -412,12 +403,7 @@ fn update_minimap_texture(
                 }
             }
         }
-        let (px, py) = world_to_minimap(
-            tf.translation.x,
-            tf.translation.z,
-            map_size,
-            half_map,
-        );
+        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, map_size, half_map);
         draw_dot(buf, px, py, 1, [220, 40, 40, 255]);
     }
 
@@ -437,12 +423,7 @@ fn update_minimap_texture(
             Faction::Player4 => [50, 200, 80, 255],
             Faction::Neutral => [220, 40, 40, 255],
         };
-        let (px, py) = world_to_minimap(
-            tf.translation.x,
-            tf.translation.z,
-            map_size,
-            half_map,
-        );
+        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, map_size, half_map);
         draw_dot(buf, px, py, 2, color);
     }
 
@@ -462,12 +443,7 @@ fn update_minimap_texture(
             Faction::Player4 => [50, 255, 80, 255],
             Faction::Neutral => [220, 40, 40, 255],
         };
-        let (px, py) = world_to_minimap(
-            tf.translation.x,
-            tf.translation.z,
-            map_size,
-            half_map,
-        );
+        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, map_size, half_map);
         draw_dot(buf, px, py, 1, color);
     }
 
@@ -490,12 +466,7 @@ fn update_minimap_texture(
                         let t = -ray.origin.y / ray.direction.y;
                         if t > 0.0 {
                             let hit = ray.origin + ray.direction * t;
-                            let (px, py) = world_to_minimap(
-                                hit.x,
-                                hit.z,
-                                map_size,
-                                half_map,
-                            );
+                            let (px, py) = world_to_minimap(hit.x, hit.z, map_size, half_map);
                             minimap_corners.push((px as i32, py as i32));
                         }
                     }

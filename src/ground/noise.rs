@@ -79,9 +79,9 @@ impl TerrainNoise {
             return height;
         }
 
-        let ridge_noise = self
-            .moisture_fbm
-            .get([x as f64 * 0.021 + 37.0, z as f64 * 0.021 - 19.0]) as f32;
+        let ridge_noise =
+            self.moisture_fbm
+                .get([x as f64 * 0.021 + 37.0, z as f64 * 0.021 - 19.0]) as f32;
         let ridge_variation = ridge_noise * 3.5;
 
         if edge_distance <= border.thickness {
@@ -99,7 +99,8 @@ impl TerrainNoise {
     fn sample_moisture(&self, x: f32, z: f32, half_map: f32) -> f32 {
         let local = (self
             .moisture_fbm
-            .get([x as f64 * MOISTURE_SCALE, z as f64 * MOISTURE_SCALE]) as f32
+            .get([x as f64 * MOISTURE_SCALE, z as f64 * MOISTURE_SCALE])
+            as f32
             * 0.5
             + 0.5)
             .clamp(0.0, 1.0);

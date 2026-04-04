@@ -2,6 +2,7 @@ use bevy::ecs::message::MessageReader;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::fonts::{self, UiFonts};
@@ -9,9 +10,14 @@ use super::interactions::{UiClickEvent, UiInteractPhase, UiInteractState};
 use crate::components::AppState;
 use crate::theme::Theme;
 
+/// Set to true when a widget consumed scroll events this frame.
+/// Camera zoom should skip when this is true.
+#[derive(Resource, Default)]
+pub struct ScrollConsumedByWidget(pub bool);
+
 // ── Widget Identifiers ──
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum WidgetId {
     Resources,
     Selection,
@@ -87,7 +93,7 @@ impl WidgetId {
 
 // ── Grid Slot ──
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub struct GridSlot {
     pub col: u8,
     pub row: u8,
@@ -120,19 +126,51 @@ pub struct WidgetContent;
 pub struct WidgetCloseButton(pub WidgetId);
 
 #[derive(Component)]
-pub struct WidgetTitleBar(#[allow(dead_code)] pub WidgetId);
+pub struct WidgetTitleBar(pub WidgetId);
 
 #[derive(Component)]
 pub struct WidgetDragHandle(pub Entity);
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ResizeDirection {
+    Top,
+    Bottom,
+    Left,
+    Right,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 #[derive(Component)]
-pub struct WidgetResizeHandle(pub Entity);
+pub struct WidgetResizeHandle {
+    pub widget: Entity,
+    pub direction: ResizeDirection,
+}
+
+#[derive(Component)]
+pub struct WidgetEditButton(pub WidgetId);
+
+/// Tracks which widget is in edit mode (resize handles visible).
+#[derive(Resource, Default)]
+pub struct WidgetEditState {
+    pub active: Option<WidgetId>,
+}
 
 #[derive(Resource, Default)]
 pub struct WidgetResizeState {
     pub active_widget: Option<Entity>,
+    pub direction: ResizeDirection,
     pub start_cursor: Vec2,
     pub start_size: Vec2,
+    pub start_pos: Vec2,
+}
+
+impl Default for ResizeDirection {
+    fn default() -> Self {
+        Self::BottomRight
+    }
 }
 
 #[derive(Resource, Default)]
@@ -150,10 +188,11 @@ pub struct GridInteractionActive(pub bool);
 
 // ── Registry Resource ──
 
-#[derive(Resource)]
+#[derive(Resource, Serialize, Deserialize)]
 pub struct WidgetRegistry {
     pub slots: HashMap<WidgetId, GridSlot>,
     pub visibility: HashMap<WidgetId, bool>,
+    #[serde(skip, default)]
     pub top_z: i32,
 }
 
@@ -281,26 +320,65 @@ pub fn spawn_widget_frame(
                 TextColor(theme.colors.text_secondary),
             ));
 
-            // Close button
-            bar.spawn((
-                Button,
-                WidgetCloseButton(id),
-                Node {
-                    width: Val::Px(16.0),
-                    height: Val::Px(16.0),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-            ))
-            .with_children(|close| {
-                close.spawn((
-                    Text::new("X"),
-                    fonts::body_emphasis(fonts, theme.typography.tiny),
-                    TextColor(theme.colors.text_disabled),
-                ));
+            // Right-side button group
+            bar.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                column_gap: Val::Px(2.0),
+                ..default()
+            })
+            .with_children(|btns| {
+                // Edit/pencil button (hidden by default, shown on title bar hover)
+                btns.spawn((
+                    Button,
+                    WidgetEditButton(id),
+                    Visibility::Hidden,
+                    Node {
+                        width: Val::Px(16.0),
+                        height: Val::Px(16.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::NONE),
+                ))
+                .with_children(|edit| {
+                    edit.spawn((
+                        ImageNode::new(fonts.edit_icon.clone()),
+                        Node {
+                            width: Val::Px(12.0),
+                            height: Val::Px(12.0),
+                            ..default()
+                        },
+                    ));
+                });
+
+                // Close button (hidden by default, shown on title bar hover)
+                btns.spawn((
+                    Button,
+                    WidgetCloseButton(id),
+                    Visibility::Hidden,
+                    Node {
+                        width: Val::Px(16.0),
+                        height: Val::Px(16.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::NONE),
+                ))
+                .with_children(|close| {
+                    close.spawn((
+                        ImageNode::new(fonts.close_icon.clone()),
+                        Node {
+                            width: Val::Px(10.0),
+                            height: Val::Px(10.0),
+                            ..default()
+                        },
+                    ));
+                });
             });
         })
         .id();
@@ -336,25 +414,96 @@ pub fn spawn_widget_frame(
         .id();
     commands.entity(widget_entity).add_child(content);
 
-    // Resize Handle
-    let resize_handle = commands
-        .spawn((
-            WidgetResizeHandle(widget_entity),
-            Interaction::None,
-            Node {
-                position_type: PositionType::Absolute,
-                right: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                width: Val::Px(12.0),
-                height: Val::Px(12.0),
-                ..default()
-            },
-            BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1)),
-        ))
-        .id();
-    commands.entity(widget_entity).add_child(resize_handle);
+    // Resize handles (all hidden by default, shown in edit mode)
+    spawn_resize_handles(commands, widget_entity, theme);
 
     content
+}
+
+fn spawn_resize_handles(commands: &mut Commands, widget_entity: Entity, theme: &Theme) {
+    let handle_color = BackgroundColor(theme.colors.accent.with_alpha(0.5));
+    let edge_thickness = Val::Px(5.0);
+    let corner_size = Val::Px(10.0);
+
+    let directions = [
+        // Edges
+        (ResizeDirection::Top, Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0), top: Val::Px(0.0),
+            width: Val::Percent(100.0), height: edge_thickness,
+            ..default()
+        }),
+        (ResizeDirection::Bottom, Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0), bottom: Val::Px(0.0),
+            width: Val::Percent(100.0), height: edge_thickness,
+            ..default()
+        }),
+        (ResizeDirection::Left, Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0), top: Val::Px(0.0),
+            width: edge_thickness, height: Val::Percent(100.0),
+            ..default()
+        }),
+        (ResizeDirection::Right, Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(0.0), top: Val::Px(0.0),
+            width: edge_thickness, height: Val::Percent(100.0),
+            ..default()
+        }),
+        // Corners
+        (ResizeDirection::TopLeft, Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0), top: Val::Px(0.0),
+            width: corner_size, height: corner_size,
+            ..default()
+        }),
+        (ResizeDirection::TopRight, Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(0.0), top: Val::Px(0.0),
+            width: corner_size, height: corner_size,
+            ..default()
+        }),
+        (ResizeDirection::BottomLeft, Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(0.0), bottom: Val::Px(0.0),
+            width: corner_size, height: corner_size,
+            ..default()
+        }),
+        (ResizeDirection::BottomRight, Node {
+            position_type: PositionType::Absolute,
+            right: Val::Px(0.0), bottom: Val::Px(0.0),
+            width: corner_size, height: corner_size,
+            ..default()
+        }),
+    ];
+
+    for (direction, node) in directions {
+        let is_corner = matches!(
+            direction,
+            ResizeDirection::TopLeft
+                | ResizeDirection::TopRight
+                | ResizeDirection::BottomLeft
+                | ResizeDirection::BottomRight
+        );
+        let handle = commands
+            .spawn((
+                WidgetResizeHandle {
+                    widget: widget_entity,
+                    direction,
+                },
+                Interaction::None,
+                Visibility::Hidden,
+                node,
+                if is_corner {
+                    handle_color
+                } else {
+                    BackgroundColor(Color::NONE)
+                },
+            ))
+            .id();
+        commands.entity(widget_entity).add_child(handle);
+    }
 }
 
 // ── Widget Content Lookup ──
@@ -404,11 +553,107 @@ pub fn sync_widget_visibility(
 pub fn handle_widget_buttons(
     mut click_events: MessageReader<UiClickEvent>,
     mut registry: ResMut<WidgetRegistry>,
+    mut edit_state: ResMut<WidgetEditState>,
     close_q: Query<&WidgetCloseButton>,
+    edit_q: Query<&WidgetEditButton>,
 ) {
     for event in click_events.read() {
         if let Ok(close_btn) = close_q.get(event.entity) {
             registry.set_visible(close_btn.0, false);
+            if edit_state.active == Some(close_btn.0) {
+                edit_state.active = None;
+            }
+        }
+        if let Ok(edit_btn) = edit_q.get(event.entity) {
+            if edit_state.active == Some(edit_btn.0) {
+                edit_state.active = None;
+            } else {
+                edit_state.active = Some(edit_btn.0);
+            }
+        }
+    }
+}
+
+/// Show pencil/close icons on title bar hover, show/hide resize handles based on edit mode.
+pub fn update_edit_mode_visuals(
+    edit_state: Res<WidgetEditState>,
+    theme: Res<Theme>,
+    widgets: Query<&Widget>,
+    title_bars: Query<(&WidgetTitleBar, &Interaction)>,
+    mut edit_btns: Query<
+        (&WidgetEditButton, &mut Visibility, &mut BackgroundColor),
+        (Without<WidgetResizeHandle>, Without<WidgetCloseButton>),
+    >,
+    mut close_btns: Query<
+        (&WidgetCloseButton, &mut Visibility),
+        (Without<WidgetResizeHandle>, Without<WidgetEditButton>),
+    >,
+    mut resize_handles: Query<
+        (
+            &WidgetResizeHandle,
+            &mut Visibility,
+            &mut BackgroundColor,
+        ),
+        (Without<WidgetEditButton>, Without<WidgetCloseButton>),
+    >,
+) {
+    // Show/hide pencil + close buttons based on title bar hover
+    for (title_bar, interaction) in &title_bars {
+        let title_hovered =
+            *interaction == Interaction::Hovered || *interaction == Interaction::Pressed;
+        let is_editing = edit_state.active == Some(title_bar.0);
+        let show = title_hovered || is_editing;
+
+        for (edit_btn, mut vis, mut bg) in &mut edit_btns {
+            if edit_btn.0 == title_bar.0 {
+                *vis = if show {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
+                *bg = if is_editing {
+                    BackgroundColor(theme.colors.accent.with_alpha(0.3))
+                } else {
+                    BackgroundColor(Color::NONE)
+                };
+            }
+        }
+
+        for (close_btn, mut vis) in &mut close_btns {
+            if close_btn.0 == title_bar.0 {
+                *vis = if show {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                };
+            }
+        }
+    }
+
+    // Show/hide resize handles based on edit mode
+    for (handle, mut vis, mut bg) in &mut resize_handles {
+        let widget_id = widgets.get(handle.widget).map(|w| w.id).ok();
+        let is_editing = widget_id.is_some_and(|id| edit_state.active == Some(id));
+
+        *vis = if is_editing {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+
+        if is_editing {
+            let is_corner = matches!(
+                handle.direction,
+                ResizeDirection::TopLeft
+                    | ResizeDirection::TopRight
+                    | ResizeDirection::BottomLeft
+                    | ResizeDirection::BottomRight
+            );
+            *bg = if is_corner {
+                BackgroundColor(theme.colors.accent.with_alpha(0.5))
+            } else {
+                BackgroundColor(Color::NONE)
+            };
         }
     }
 }
@@ -418,11 +663,14 @@ pub fn handle_widget_buttons(
 pub fn handle_widget_scroll(
     mut mouse_wheel: MessageReader<MouseWheel>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    mut scroll_consumed: ResMut<ScrollConsumedByWidget>,
     mut scroll_q: Query<
         (&mut ScrollPosition, &ComputedNode, &UiGlobalTransform),
         With<WidgetContent>,
     >,
 ) {
+    scroll_consumed.0 = false;
+
     let mut dy: f32 = 0.0;
     for ev in mouse_wheel.read() {
         dy += match ev.unit {
@@ -447,16 +695,22 @@ pub fn handle_widget_scroll(
             let max_scroll = (computed.content_size().y - computed.size().y).max(0.0)
                 * computed.inverse_scale_factor();
             scroll_pos.y = (scroll_pos.y + dy).clamp(0.0, max_scroll);
+            scroll_consumed.0 = true;
         }
     }
 }
 
 // ── Grid Overlay ──
 
-pub fn spawn_grid_overlay(mut commands: Commands, theme: Res<Theme>, existing: Query<Entity, With<GridOverlay>>) {
+pub fn spawn_grid_overlay(
+    mut commands: Commands,
+    existing: Query<Entity, With<GridOverlay>>,
+) {
     if !existing.is_empty() {
         return;
     }
+
+    let grid_color = Color::srgba(1.0, 1.0, 1.0, 0.12);
 
     commands
         .spawn((
@@ -486,7 +740,7 @@ pub fn spawn_grid_overlay(mut commands: Commands, theme: Res<Theme>, existing: Q
                         height: Val::Percent(100.0),
                         ..default()
                     },
-                    BackgroundColor(theme.colors.grid_line),
+                    BackgroundColor(grid_color),
                 ));
             }
             // 13 horizontal lines (at each row boundary 0..=12)
@@ -502,7 +756,7 @@ pub fn spawn_grid_overlay(mut commands: Commands, theme: Res<Theme>, existing: Q
                         height: Val::Px(1.0),
                         ..default()
                     },
-                    BackgroundColor(theme.colors.grid_line),
+                    BackgroundColor(grid_color),
                 ));
             }
         });
@@ -551,6 +805,7 @@ pub fn handle_widget_drag(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     ui_scale: Res<UiScale>,
+    edit_state: Res<WidgetEditState>,
     mut drag_state: ResMut<WidgetDragState>,
     mut registry: ResMut<WidgetRegistry>,
     mut grid_active: ResMut<GridInteractionActive>,
@@ -612,6 +867,12 @@ pub fn handle_widget_drag(
         for (interaction, handle) in &interactions {
             if *interaction == Interaction::Pressed || *interaction == Interaction::Hovered {
                 let widget_entity = handle.0;
+                // Only allow drag if this widget is in edit mode
+                if let Ok((_, _, widget, _)) = widget_nodes.get(widget_entity) {
+                    if edit_state.active != Some(widget.id) {
+                        continue;
+                    }
+                }
                 if let Ok((node, mut z_index, _, _)) = widget_nodes.get_mut(widget_entity) {
                     registry.top_z += 1;
                     *z_index = ZIndex(registry.top_z);
@@ -657,12 +918,17 @@ pub fn handle_widget_resize(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     ui_scale: Res<UiScale>,
+    edit_state: Res<WidgetEditState>,
     mut resize_state: ResMut<WidgetResizeState>,
     mut registry: ResMut<WidgetRegistry>,
     mut grid_active: ResMut<GridInteractionActive>,
     interactions: Query<(&Interaction, &WidgetResizeHandle)>,
     mut widget_nodes: Query<(&mut Node, &ComputedNode, &mut ZIndex, &Widget), With<Widget>>,
 ) {
+    // Resize only works in edit mode
+    if edit_state.active.is_none() && resize_state.active_widget.is_none() {
+        return;
+    }
     let Ok(window) = windows.single() else {
         return;
     };
@@ -672,7 +938,7 @@ pub fn handle_widget_resize(
     let scale = ui_scale.0.max(0.001);
     let cursor = cursor_raw / scale;
 
-    // Snap on release (before clearing active_widget)
+    // Snap on release
     if mouse.just_released(MouseButton::Left) {
         if let Some(widget_entity) = resize_state.active_widget {
             if let Ok((mut node, computed, _, widget)) = widget_nodes.get_mut(widget_entity) {
@@ -717,14 +983,30 @@ pub fn handle_widget_resize(
     if mouse.just_pressed(MouseButton::Left) {
         for (interaction, handle) in &interactions {
             if *interaction == Interaction::Pressed || *interaction == Interaction::Hovered {
-                if let Ok((_, computed, mut z_index, _)) = widget_nodes.get_mut(handle.0) {
+                if let Ok((node, computed, mut z_index, _)) = widget_nodes.get_mut(handle.widget) {
                     registry.top_z += 1;
                     *z_index = ZIndex(registry.top_z);
 
                     let inv_scale = computed.inverse_scale_factor();
-                    resize_state.active_widget = Some(handle.0);
+                    let win_w = window.width() / scale;
+                    let win_h = window.height() / scale;
+
+                    let start_x = match node.left {
+                        Val::Px(x) => x,
+                        Val::Percent(p) => p / 100.0 * win_w,
+                        _ => 0.0,
+                    };
+                    let start_y = match node.top {
+                        Val::Px(y) => y,
+                        Val::Percent(p) => p / 100.0 * win_h,
+                        _ => 0.0,
+                    };
+
+                    resize_state.active_widget = Some(handle.widget);
+                    resize_state.direction = handle.direction;
                     resize_state.start_cursor = cursor;
                     resize_state.start_size = computed.size() * inv_scale;
+                    resize_state.start_pos = Vec2::new(start_x, start_y);
                     grid_active.0 = true;
                 }
                 break;
@@ -736,10 +1018,50 @@ pub fn handle_widget_resize(
         if let Some(widget_entity) = resize_state.active_widget {
             let delta = cursor - resize_state.start_cursor;
             if let Ok((mut node, _, _, _)) = widget_nodes.get_mut(widget_entity) {
-                let new_w = (resize_state.start_size.x + delta.x).max(120.0);
-                let new_h = (resize_state.start_size.y + delta.y).max(70.0);
-                node.width = Val::Px(new_w);
-                node.height = Val::Px(new_h);
+                let dir = resize_state.direction;
+                let (mut x, mut y) = (resize_state.start_pos.x, resize_state.start_pos.y);
+                let (mut w, mut h) = (resize_state.start_size.x, resize_state.start_size.y);
+
+                let resizes_left = matches!(
+                    dir,
+                    ResizeDirection::Left | ResizeDirection::TopLeft | ResizeDirection::BottomLeft
+                );
+                let resizes_right = matches!(
+                    dir,
+                    ResizeDirection::Right | ResizeDirection::TopRight | ResizeDirection::BottomRight
+                );
+                let resizes_top = matches!(
+                    dir,
+                    ResizeDirection::Top | ResizeDirection::TopLeft | ResizeDirection::TopRight
+                );
+                let resizes_bottom = matches!(
+                    dir,
+                    ResizeDirection::Bottom
+                        | ResizeDirection::BottomLeft
+                        | ResizeDirection::BottomRight
+                );
+
+                if resizes_right {
+                    w = (w + delta.x).max(120.0);
+                }
+                if resizes_bottom {
+                    h = (h + delta.y).max(70.0);
+                }
+                if resizes_left {
+                    let new_w = (w - delta.x).max(120.0);
+                    x += w - new_w;
+                    w = new_w;
+                }
+                if resizes_top {
+                    let new_h = (h - delta.y).max(70.0);
+                    y += h - new_h;
+                    h = new_h;
+                }
+
+                node.left = Val::Px(x);
+                node.top = Val::Px(y);
+                node.width = Val::Px(w);
+                node.height = Val::Px(h);
             }
         }
     } else {
@@ -749,19 +1071,95 @@ pub fn handle_widget_resize(
 
 pub fn update_resize_handle_visuals(
     theme: Res<Theme>,
-    mut handles: Query<(&UiInteractState, &mut BackgroundColor), With<WidgetResizeHandle>>,
+    edit_state: Res<WidgetEditState>,
+    widgets: Query<&Widget>,
+    mut handles: Query<(
+        &WidgetResizeHandle,
+        Option<&UiInteractState>,
+        &mut BackgroundColor,
+    )>,
 ) {
-    for (state, mut bg) in &mut handles {
-        match state.phase {
-            UiInteractPhase::Pressed => {
-                *bg = BackgroundColor(
-                    theme.colors.accent.with_alpha(0.35 + 0.55 * state.hold_progress),
-                )
+    for (handle, interact_state, mut bg) in &mut handles {
+        let is_corner = matches!(
+            handle.direction,
+            ResizeDirection::TopLeft
+                | ResizeDirection::TopRight
+                | ResizeDirection::BottomLeft
+                | ResizeDirection::BottomRight
+        );
+
+        let widget_id = widgets.get(handle.widget).map(|w| w.id).ok();
+        let is_editing = widget_id.is_some_and(|id| edit_state.active == Some(id));
+
+        if !is_editing {
+            *bg = BackgroundColor(Color::NONE);
+            continue;
+        }
+
+        if let Some(state) = interact_state {
+            match state.phase {
+                UiInteractPhase::Pressed => {
+                    *bg = BackgroundColor(
+                        theme
+                            .colors
+                            .accent
+                            .with_alpha(0.35 + 0.55 * state.hold_progress),
+                    );
+                }
+                UiInteractPhase::Hovered => {
+                    *bg = BackgroundColor(theme.colors.accent.with_alpha(0.4));
+                }
+                UiInteractPhase::Idle | UiInteractPhase::Disabled => {
+                    *bg = if is_corner {
+                        BackgroundColor(theme.colors.accent.with_alpha(0.5))
+                    } else {
+                        BackgroundColor(Color::NONE)
+                    };
+                }
             }
-            UiInteractPhase::Hovered => *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.4)),
-            UiInteractPhase::Idle | UiInteractPhase::Disabled => {
-                *bg = BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.1))
-            }
+        } else if is_corner {
+            *bg = BackgroundColor(theme.colors.accent.with_alpha(0.5));
         }
     }
+}
+
+/// Dismiss edit mode when clicking outside the edited widget or pressing Escape.
+pub fn dismiss_edit_mode(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keyboard: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    mut edit_state: ResMut<WidgetEditState>,
+    widgets: Query<(&Widget, &ComputedNode, &UiGlobalTransform)>,
+) {
+    if edit_state.active.is_none() {
+        return;
+    }
+
+    if keyboard.just_pressed(KeyCode::Escape) {
+        edit_state.active = None;
+        return;
+    }
+
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+
+    let Some(cursor_phys) = windows
+        .single()
+        .ok()
+        .and_then(|w| w.physical_cursor_position())
+    else {
+        return;
+    };
+
+    let active_id = edit_state.active.unwrap();
+
+    // Don't dismiss if clicking inside the edited widget (using hit-test)
+    for (widget, computed, ui_tf) in &widgets {
+        if widget.id == active_id && computed.contains_point(*ui_tf, cursor_phys) {
+            return;
+        }
+    }
+
+    edit_state.active = None;
 }

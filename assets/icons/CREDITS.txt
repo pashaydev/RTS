@@ -6,3 +6,26 @@ Authors:
   mechanic-garage, watchtower, warehouse, viking-shield, planks, metal-plate
 - Lorc (https://lorcblog.blogspot.com/) — metal-bar, anvil, mining, crossed-swords, bowman,
   thrown-charcoal, powder, cauldron
+
+Additional item icons from Openclipart
+License: CC0 / Public Domain (https://openclipart.org/share)
+
+Sources:
+- https://openclipart.org/detail/289640/body-armor — padded_vest
+- https://openclipart.org/detail/225136/raseone-armor-1 — bronze_cuirass
+- https://openclipart.org/detail/225163/raseone-armor-3 — plate_cuirass
+- https://openclipart.org/detail/169351/crusader-great-helmet — crusader_helm
+- https://openclipart.org/detail/169352/the-kettle-hathelmet — kettle_helm
+- https://openclipart.org/detail/169353/viking-spectacle-helmet — viking_helm
+- https://openclipart.org/detail/335686/jewel-ring — jewel_ring
+- https://openclipart.org/detail/170901/ring — plain_band
+- https://openclipart.org/detail/167494/wedding-ring — wedding_band
+- https://openclipart.org/detail/117241/golden-ring — golden_band
+- https://openclipart.org/detail/325166/wedding-rings-silhouette — twin_rings
+- https://openclipart.org/detail/321332/wedding-rings-silhouette — linked_rings
+- https://openclipart.org/detail/169233/classic-medieval-sword — arming_sword
+- https://openclipart.org/detail/169241/classic-viking-sword — viking_blade
+- https://openclipart.org/detail/342629/battle-staff — battle_staff
+- https://openclipart.org/detail/193247/short-magical-staff — mage_crozier
+- https://openclipart.org/detail/244264/yew-long-bow — yew_longbow
+- https://openclipart.org/detail/301093/bow-and-arrow-2 — war_bow

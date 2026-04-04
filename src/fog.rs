@@ -426,8 +426,7 @@ fn spawn_fog_overlay(
     let overlay_cells = (grid_size - 1).div_ceil(FOG_OVERLAY_VERTEX_STRIDE);
     let overlay_grid_size = overlay_cells + 1;
 
-    let mut positions: Vec<[f32; 3]> =
-        Vec::with_capacity(overlay_grid_size * overlay_grid_size);
+    let mut positions: Vec<[f32; 3]> = Vec::with_capacity(overlay_grid_size * overlay_grid_size);
     let mut normals: Vec<[f32; 3]> = Vec::with_capacity(overlay_grid_size * overlay_grid_size);
     let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(overlay_grid_size * overlay_grid_size);
 
@@ -528,7 +527,8 @@ fn tick_fog_timer(
     time: Res<Time>,
 ) {
     // Sync tick rate from tweaks
-    let desired_duration = std::time::Duration::from_secs_f32(1.0 / fog_settings.tick_rate_hz.max(1.0));
+    let desired_duration =
+        std::time::Duration::from_secs_f32(1.0 / fog_settings.tick_rate_hz.max(1.0));
     if fog_timer.timer.duration() != desired_duration {
         fog_timer.timer.set_duration(desired_duration);
     }
@@ -1003,7 +1003,12 @@ fn fog_hide_entities(
 
         let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
         if v >= threshold {
-            set_visibility_if_needed(&mut vis, cull_reason, Visibility::Inherited, CullReason::Visible);
+            set_visibility_if_needed(
+                &mut vis,
+                cull_reason,
+                Visibility::Inherited,
+                CullReason::Visible,
+            );
         } else {
             set_visibility_if_needed(&mut vis, cull_reason, Visibility::Hidden, CullReason::Fog);
         }
@@ -1015,13 +1020,28 @@ fn fog_hide_entities(
             continue;
         }
         if teams.is_allied(&active_player.0, faction) {
-            set_visibility_if_needed(&mut vis, cull_reason, Visibility::Inherited, CullReason::Visible);
+            set_visibility_if_needed(
+                &mut vis,
+                cull_reason,
+                Visibility::Inherited,
+                CullReason::Visible,
+            );
         } else {
             let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
             if v >= fog_settings.mob_threshold {
-                set_visibility_if_needed(&mut vis, cull_reason, Visibility::Inherited, CullReason::Visible);
+                set_visibility_if_needed(
+                    &mut vis,
+                    cull_reason,
+                    Visibility::Inherited,
+                    CullReason::Visible,
+                );
             } else {
-                set_visibility_if_needed(&mut vis, cull_reason, Visibility::Hidden, CullReason::Fog);
+                set_visibility_if_needed(
+                    &mut vis,
+                    cull_reason,
+                    Visibility::Hidden,
+                    CullReason::Fog,
+                );
             }
         }
     }
@@ -1032,13 +1052,28 @@ fn fog_hide_entities(
             continue;
         }
         if teams.is_allied(&active_player.0, faction) {
-            set_visibility_if_needed(&mut vis, cull_reason, Visibility::Inherited, CullReason::Visible);
+            set_visibility_if_needed(
+                &mut vis,
+                cull_reason,
+                Visibility::Inherited,
+                CullReason::Visible,
+            );
         } else {
             let v = fog_map.get_visibility(tf.translation.x, tf.translation.z);
             if v >= fog_settings.mob_threshold {
-                set_visibility_if_needed(&mut vis, cull_reason, Visibility::Inherited, CullReason::Visible);
+                set_visibility_if_needed(
+                    &mut vis,
+                    cull_reason,
+                    Visibility::Inherited,
+                    CullReason::Visible,
+                );
             } else {
-                set_visibility_if_needed(&mut vis, cull_reason, Visibility::Hidden, CullReason::Fog);
+                set_visibility_if_needed(
+                    &mut vis,
+                    cull_reason,
+                    Visibility::Hidden,
+                    CullReason::Fog,
+                );
             }
         }
     }

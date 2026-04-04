@@ -62,7 +62,6 @@ copy_asset_dir "ToonyTinyPeople/models/buildings"
 copy_asset_dir "ToonyTinyPeople/models/units"
 copy_asset_dir "ToonyTinyPeople/textures/buildings"
 copy_asset_dir "ToonyTinyPeople/textures/units"
-copy_asset_dir "KayKit_Skeletons/characters/gltf"
 copy_asset_dir "KayKit_Character_Animations/Animations/gltf/Rig_Medium"
 
 # --- Create zip archive ---

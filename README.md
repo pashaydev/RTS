@@ -125,10 +125,10 @@ The codebase is organized as Bevy plugins around runtime domains, with a separat
 - `game_state`: shared protocol crate for serialized messages, MessagePack codec, and replicated gameplay data
 - `net_bridge`: stable network IDs and ECS/network mapping
 - `components`, `blueprints`, `orders`, `selection`, `spatial`: shared gameplay state, entity typing, commands, and world queries
-- `units`, `buildings`, `resources`, `combat`, `unit_ai`, `mobs`, `ai`, `pathfinding`: simulation and faction behavior
-- `ground`, `lighting`, `fog`, `fog_material`, `hover_material`, `camera`, `minimap`, `pathvis`, `roads`, `attention`, `animation`, `vfx`, `culling`, `model_assets`: rendering, asset loading, feedback, and performance
+- `units`, `buildings`, `resources`, `combat`, `abilities`, `unit_ai`, `mobs`, `procedural_mobs`, `items`, `ai`, `ages`, `victory`, `pathfinding`: simulation and faction behavior
+- `ground`, `lighting`, `fog`, `fog_material`, `hover_material`, `terrain_material`, `water_material`, `camera`, `minimap`, `pathvis`, `attention`, `animation`, `vfx`, `culling`, `model_assets`, `entity_labels`, `audio`: rendering, asset loading, audio, feedback, and performance
 - `ui`: HUD widgets, widgets framework, notifications, and action surfaces
-- `debug`, `save`: local tooling, tweak flows, persistence, and restoration
+- `debug`, `save_load`, `logging`, `database`: local tooling, tweak flows, persistence, session logging, and restoration
 
 ## Tech Stack
 
@@ -137,3 +137,4 @@ The codebase is organized as Bevy plugins around runtime domains, with a separat
 - `bevy_mod_outline`
 - `serde` / `serde_json` / `rmp-serde` (MessagePack binary codec)
 - `bevy_matchbox` (WebRTC transport with embedded signaling server)
+- `rusqlite` (SQLite persistence for profiles, match history, ELO, settings)

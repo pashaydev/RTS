@@ -83,8 +83,8 @@ fn count_player_units(
         if *unit_faction != faction {
             continue;
         }
-        let is_idle_worker = *kind == EntityKind::Worker
-            && unit_state.is_some_and(|s| *s == UnitState::Idle);
+        let is_idle_worker =
+            *kind == EntityKind::Worker && unit_state.is_some_and(|s| *s == UnitState::Idle);
 
         if let Some(entry) = counts.iter_mut().find(|c| c.kind == *kind) {
             entry.total += 1;

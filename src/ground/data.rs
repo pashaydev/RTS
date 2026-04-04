@@ -121,7 +121,11 @@ impl HeightMap {
         let dist = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y))?;
         let fallback = ray.get_point(dist);
         if in_bounds(fallback) {
-            Some(Vec3::new(fallback.x, self.sample(fallback.x, fallback.z), fallback.z))
+            Some(Vec3::new(
+                fallback.x,
+                self.sample(fallback.x, fallback.z),
+                fallback.z,
+            ))
         } else {
             None
         }

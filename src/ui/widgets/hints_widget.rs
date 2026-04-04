@@ -10,10 +10,8 @@ pub struct HintsWidgetPlugin;
 
 impl Plugin for HintsWidgetPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<HintState>().add_systems(
-            Update,
-            hints_system.run_if(in_state(AppState::InGame)),
-        );
+        app.init_resource::<HintState>()
+            .add_systems(Update, hints_system.run_if(in_state(AppState::InGame)));
     }
 }
 

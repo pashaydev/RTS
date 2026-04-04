@@ -38,15 +38,33 @@ pub(crate) fn ray_sphere_dist(ray: &Ray3d, center: Vec3, radius: f32) -> Option<
 
 /// Returns the distance along `ray` to the closest intersection with an AABB,
 /// or `None` if the ray misses. The box spans `[center.x ± half_xz, y_min..y_max, center.z ± half_xz]`.
-pub(crate) fn ray_aabb_dist(ray: &Ray3d, center: Vec3, half_xz: f32, y_min: f32, y_max: f32) -> Option<f32> {
+pub(crate) fn ray_aabb_dist(
+    ray: &Ray3d,
+    center: Vec3,
+    half_xz: f32,
+    y_min: f32,
+    y_max: f32,
+) -> Option<f32> {
     let min = Vec3::new(center.x - half_xz, y_min, center.z - half_xz);
     let max = Vec3::new(center.x + half_xz, y_max, center.z + half_xz);
 
     let dir = *ray.direction;
     let inv = Vec3::new(
-        if dir.x.abs() > 1e-8 { 1.0 / dir.x } else { f32::INFINITY.copysign(dir.x) },
-        if dir.y.abs() > 1e-8 { 1.0 / dir.y } else { f32::INFINITY.copysign(dir.y) },
-        if dir.z.abs() > 1e-8 { 1.0 / dir.z } else { f32::INFINITY.copysign(dir.z) },
+        if dir.x.abs() > 1e-8 {
+            1.0 / dir.x
+        } else {
+            f32::INFINITY.copysign(dir.x)
+        },
+        if dir.y.abs() > 1e-8 {
+            1.0 / dir.y
+        } else {
+            f32::INFINITY.copysign(dir.y)
+        },
+        if dir.z.abs() > 1e-8 {
+            1.0 / dir.z
+        } else {
+            f32::INFINITY.copysign(dir.z)
+        },
     );
 
     let t1 = (min.x - ray.origin.x) * inv.x;
@@ -75,24 +93,85 @@ pub(crate) struct PickResult {
     pub is_resource: bool,
 }
 
+/// Persistent state for click-cycling through overlapping entities.
+#[derive(Resource, Default)]
+pub(crate) struct PickCycleState {
+    /// Screen position of the last click (window coords).
+    pub last_cursor: Option<Vec2>,
+    /// Entity returned by the last pick.
+    pub last_entity: Option<Entity>,
+    /// How many times the user clicked roughly the same spot.
+    pub cycle_index: usize,
+}
+
+impl PickCycleState {
+    /// Check if the current click is close enough to the previous one to continue cycling.
+    pub fn should_cycle(&self, cursor: Vec2) -> bool {
+        if let Some(prev) = self.last_cursor {
+            prev.distance(cursor) < 6.0
+        } else {
+            false
+        }
+    }
+
+    pub fn advance(&mut self, cursor: Vec2, entity: Entity) {
+        if self.should_cycle(cursor) && self.last_entity == Some(entity) {
+            // Same entity picked at same spot — will be skipped next time
+            self.cycle_index += 1;
+        } else if self.should_cycle(cursor) {
+            // Same spot but different entity picked (cycling worked)
+            // keep cycle_index
+        } else {
+            // New spot
+            self.cycle_index = 0;
+        }
+        self.last_cursor = Some(cursor);
+        self.last_entity = Some(entity);
+    }
+
+    pub fn reset(&mut self) {
+        self.last_cursor = None;
+        self.last_entity = None;
+        self.cycle_index = 0;
+    }
+}
+
+/// Collected hit data before scoring.
+struct PickHit {
+    entity: Entity,
+    ray_dist: f32,
+    screen_dist: f32,
+    is_unit: bool,
+    is_building: bool,
+    is_mob: bool,
+    is_resource: bool,
+}
+
 /// Pick the best entity for click selection.
 ///
-/// Distance should dominate target choice. Type priority is only used to break
-/// near-ties so a nearby unit does not steal hover/selection from a building
-/// that is more directly under the cursor.
+/// Uses a composite score of screen-space proximity (how close the entity's
+/// center projects to the cursor) and ray distance. Screen-space proximity
+/// dominates in dense areas, making picking predictable.
+///
+/// `skip_entity`: when cycling, the entity to deprioritize.
 pub fn pick_for_click(
     ray: &Ray3d,
+    cursor_screen: Option<Vec2>,
+    camera: &Camera,
+    cam_gt: &GlobalTransform,
+    window: &Window,
+    graphics: &GraphicsSettings,
     pickables: &Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     units: &Query<Entity, With<Unit>>,
     buildings: &Query<(Entity, &BuildingFootprint, &BuildingHeight), With<Building>>,
     mobs: &Query<Entity, With<Mob>>,
     resource_nodes: &Query<Entity, With<ResourceNode>>,
     height_map: &HeightMap,
+    skip_entity: Option<Entity>,
 ) -> Option<PickResult> {
-    let mut hits: Vec<(Entity, f32, bool, bool, bool, bool)> = Vec::new();
+    let mut hits: Vec<PickHit> = Vec::new();
 
     for (entity, gt, pick_r, inherited_vis) in pickables {
-        // Skip entities hidden by fog of war
         if !inherited_vis.get() {
             continue;
         }
@@ -106,7 +185,7 @@ pub fn pick_for_click(
         }
 
         let center = gt.translation();
-        let dist = if is_building {
+        let ray_dist = if is_building {
             if let Ok((_, footprint, bld_h)) = buildings.get(entity) {
                 let terrain_y = height_map.sample(center.x, center.z);
                 ray_aabb_dist(ray, center, footprint.0, terrain_y, terrain_y + bld_h.0)
@@ -116,70 +195,96 @@ pub fn pick_for_click(
         } else {
             ray_sphere_dist(ray, center, pick_r.0)
         };
-        if let Some(d) = dist {
-            hits.push((entity, d, is_unit, is_building, is_mob, is_resource));
-        }
+
+        let Some(d) = ray_dist else {
+            continue;
+        };
+
+        // Compute screen-space distance from cursor to entity center projection
+        let screen_dist = cursor_screen
+            .and_then(|cursor| {
+                camera::world_to_window_viewport(camera, cam_gt, center, window, graphics)
+                    .map(|proj| cursor.distance(proj))
+            })
+            .unwrap_or(0.0);
+
+        hits.push(PickHit {
+            entity,
+            ray_dist: d,
+            screen_dist,
+            is_unit,
+            is_building,
+            is_mob,
+            is_resource,
+        });
     }
 
     if hits.is_empty() {
         return None;
     }
 
-    // Sort by distance
-    hits.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    // ── Scoring ──
+    // Composite score: screen-space proximity is the primary discriminator in
+    // dense clusters, with ray distance as a secondary factor and type priority
+    // as a final tiebreaker.
 
-    // Only apply type priority to genuine near-ties. The previous 2.0-unit
-    // threshold let nearby units win over buildings too aggressively.
-    let closest_dist = hits[0].1;
-    let threshold = closest_dist + 0.35;
-    let close_hits: Vec<_> = hits.into_iter().filter(|h| h.1 <= threshold).collect();
+    let min_ray = hits.iter().map(|h| h.ray_dist).fold(f32::INFINITY, f32::min);
+    let max_ray = hits.iter().map(|h| h.ray_dist).fold(0.0_f32, f32::max);
+    let ray_range = (max_ray - min_ray).max(0.01);
 
-    // Priority: unit > building > resource > mob
-    if let Some(h) = close_hits.iter().find(|h| h.2) {
-        return Some(PickResult {
-            entity: h.0,
-            is_unit: true,
-            is_building: false,
-            is_mob: false,
-            is_resource: false,
-        });
-    }
-    if let Some(h) = close_hits.iter().find(|h| h.3) {
-        return Some(PickResult {
-            entity: h.0,
-            is_unit: false,
-            is_building: true,
-            is_mob: false,
-            is_resource: false,
-        });
-    }
-    if let Some(h) = close_hits.iter().find(|h| h.5) {
-        return Some(PickResult {
-            entity: h.0,
-            is_unit: false,
-            is_building: false,
-            is_mob: false,
-            is_resource: true,
-        });
-    }
-    if let Some(h) = close_hits.iter().find(|h| h.4) {
-        return Some(PickResult {
-            entity: h.0,
-            is_unit: false,
-            is_building: false,
-            is_mob: true,
-            is_resource: false,
-        });
-    }
+    let min_screen = hits.iter().map(|h| h.screen_dist).fold(f32::INFINITY, f32::min);
+    let max_screen = hits.iter().map(|h| h.screen_dist).fold(0.0_f32, f32::max);
+    let screen_range = (max_screen - min_screen).max(0.01);
 
-    None
+    // Type priority bonus (lower is better): unit=0, building=1, resource=2, mob=3
+    let type_priority = |h: &PickHit| -> f32 {
+        if h.is_unit {
+            0.0
+        } else if h.is_building {
+            0.05
+        } else if h.is_resource {
+            0.10
+        } else {
+            0.15
+        }
+    };
+
+    // Sort by composite score (lower is better)
+    hits.sort_by(|a, b| {
+        let score_a = screen_score(a.screen_dist, min_screen, screen_range)
+            + ray_score(a.ray_dist, min_ray, ray_range)
+            + type_priority(a)
+            + if Some(a.entity) == skip_entity { 100.0 } else { 0.0 };
+        let score_b = screen_score(b.screen_dist, min_screen, screen_range)
+            + ray_score(b.ray_dist, min_ray, ray_range)
+            + type_priority(b)
+            + if Some(b.entity) == skip_entity { 100.0 } else { 0.0 };
+        score_a
+            .partial_cmp(&score_b)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let best = &hits[0];
+    Some(PickResult {
+        entity: best.entity,
+        is_unit: best.is_unit,
+        is_building: best.is_building,
+        is_mob: best.is_mob,
+        is_resource: best.is_resource,
+    })
 }
 
-pub(crate) fn setup_hover_assets(
-    mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-) {
-    // Flat plane that will show the ring shader — sized 3x3 units
+/// Normalized screen-space score (0..1). Weighted heavily — this is the primary factor.
+fn screen_score(dist: f32, min: f32, range: f32) -> f32 {
+    ((dist - min) / range) * 0.7
+}
+
+/// Normalized ray-distance score (0..1). Secondary factor.
+fn ray_score(dist: f32, min: f32, range: f32) -> f32 {
+    ((dist - min) / range) * 0.3
+}
+
+pub(crate) fn setup_hover_assets(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
     let ring_mesh = meshes.add(Plane3d::new(Vec3::Y, Vec2::splat(1.5)));
     commands.insert_resource(HoverRingAssets { mesh: ring_mesh });
 }
@@ -221,18 +326,27 @@ pub(crate) fn update_hover(
     let Ok((camera, cam_gt)) = camera_q.single() else {
         return;
     };
-    let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics) else {
+    let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics)
+    else {
         return;
     };
 
+    let cursor_screen = window.cursor_position();
+
     if let Some(result) = pick_for_click(
         &ray,
+        cursor_screen,
+        camera,
+        cam_gt,
+        window,
+        &graphics,
         &pickables,
         &units,
         &buildings,
         &mobs,
         &resource_nodes,
         &height_map,
+        None, // no skip for hover
     ) {
         commands.entity(result.entity).insert(Hovered);
     }

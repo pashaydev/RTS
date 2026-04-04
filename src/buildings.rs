@@ -17,10 +17,10 @@ use crate::ground::{
     apply_terrain_shape_op, foundation_radii, sync_ground_mesh_partial, BorderSettings, HeightMap,
     TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
 };
-use game_state::message::TerrainShapeOp;
 use crate::model_assets::{BuildingConstructionAssets, BuildingModelAssets, UnitModelAssets};
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
+use game_state::message::TerrainShapeOp;
 
 #[derive(SystemParam)]
 struct PlacementOnlineParams<'w> {
@@ -75,8 +75,7 @@ fn find_best_worker_for_build<'a>(
 ) -> Option<(Entity, u8)> {
     // First pass: collect faction workers and count builders per construction site
     let mut faction_workers: Vec<(Entity, Vec3, &UnitState)> = Vec::new();
-    let mut build_counts: std::collections::HashMap<Entity, u32> =
-        std::collections::HashMap::new();
+    let mut build_counts: std::collections::HashMap<Entity, u32> = std::collections::HashMap::new();
 
     for (w_entity, w_tf, w_state, w_faction, w_kind) in workers {
         if *w_kind != EntityKind::Worker || *w_faction != faction {
@@ -349,7 +348,7 @@ fn floor_piece_and_rotation(neighbor_mask: u8) -> (FloorPieceKind, f32) {
 pub fn footprint_for_kind(kind: EntityKind) -> f32 {
     // Based on actual GLTF bounding boxes (scaled) + ~0.5 margin
     match kind {
-        EntityKind::Outpost => 4.5,           // BeastLair: raw 3.93 @ 1.0
+        EntityKind::Outpost => 4.5, // BeastLair: raw 3.93 @ 1.0
         EntityKind::Base | EntityKind::Smelter => 3.5, // Castle: 3.02, Keep: 3.11 @ 0.75
         EntityKind::Barracks
         | EntityKind::Workshop
@@ -361,14 +360,14 @@ pub fn footprint_for_kind(kind: EntityKind) -> f32 {
         | EntityKind::Mine
         | EntityKind::OilRig
         | EntityKind::Alchemist
-        | EntityKind::Gatehouse => 3.0,       // ~2.5 radius @ 0.75
+        | EntityKind::Gatehouse => 3.0, // ~2.5 radius @ 0.75
         EntityKind::Tower
         | EntityKind::WatchTower
         | EntityKind::GuardTower
         | EntityKind::BallistaTower
         | EntityKind::BombardTower
         | EntityKind::Storage
-        | EntityKind::House => 2.0,           // towers ~1.5, Granary 1.6, House 1.7 @ 0.75
+        | EntityKind::House => 2.0, // towers ~1.5, Granary 1.6, House 1.7 @ 0.75
         EntityKind::Floor => 2.2,
         EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner => 1.5,
         _ => 2.5,
@@ -552,7 +551,10 @@ pub fn try_queue_build_order_authoritative(
         }
     }
 
-    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner) {
+    if !matches!(
+        kind,
+        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner
+    ) {
         const MAX_BUILDING_SLOPE: f32 = 0.5;
         let slope = height_map.max_slope_under_footprint(build_pos.x, build_pos.z, new_footprint);
         if slope > MAX_BUILDING_SLOPE {
@@ -581,8 +583,12 @@ pub fn try_queue_build_order_authoritative(
     }
 
     // Find best worker using priority-based selection (includes processor-assigned workers)
-    let worker_iter = workers.iter().map(|(e, tf, state, fac, kind, _)| (e, tf, state, fac, kind));
-    let Some((worker_entity, _worker_prio)) = find_best_worker_for_build(worker_iter, faction, build_pos) else {
+    let worker_iter = workers
+        .iter()
+        .map(|(e, tf, state, fac, kind, _)| (e, tf, state, fac, kind));
+    let Some((worker_entity, _worker_prio)) =
+        find_best_worker_for_build(worker_iter, faction, build_pos)
+    else {
         return Err("No workers available!".to_string());
     };
 
@@ -803,12 +809,11 @@ fn wall_auto_tile_system(
                 }
             }
 
-            let mut child = commands
-                .spawn((
-                    SceneRoot(scene),
-                    BuildingSceneChild,
-                    building_models.child_transform(new_kind, 1.0),
-                ));
+            let mut child = commands.spawn((
+                SceneRoot(scene),
+                BuildingSceneChild,
+                building_models.child_transform(new_kind, 1.0),
+            ));
             #[cfg(not(target_arch = "wasm32"))]
             child.insert((InheritOutline, AsyncSceneInheritOutline::default()));
             let child = child.id();
@@ -820,9 +825,7 @@ fn wall_auto_tile_system(
     }
 }
 
-fn floor_auto_tile_system(
-    mut floor_grid: ResMut<FloorGrid>,
-) {
+fn floor_auto_tile_system(mut floor_grid: ResMut<FloorGrid>) {
     // Floor tiles have no geometry — just update the grid metadata for neighbor tracking.
     let dirty: Vec<(i32, i32)> = floor_grid.dirty.drain(..).collect();
     let mut dirty_set: Vec<(i32, i32)> = {
@@ -927,7 +930,15 @@ impl Plugin for BuildingsPlugin {
 fn sync_obstacle_grid(
     mut grid: ResMut<ObstacleGrid>,
     trees: Query<&Transform, Or<(With<Sapling>, With<GrowingTree>, With<MatureTree>)>>,
-    resource_nodes: Query<&Transform, (With<ResourceNode>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>)>,
+    resource_nodes: Query<
+        &Transform,
+        (
+            With<ResourceNode>,
+            Without<Sapling>,
+            Without<GrowingTree>,
+            Without<MatureTree>,
+        ),
+    >,
     height_map: Res<HeightMap>,
 ) {
     grid.cells.clear();
@@ -952,8 +963,8 @@ fn sync_environment_to_terrain_changes(
     registry: Res<BlueprintRegistry>,
     mut terrain_followers: ParamSet<(
         Query<
-            '_, 
-            '_, 
+            '_,
+            '_,
             &mut Transform,
             (
                 Or<(With<Sapling>, With<GrowingTree>, With<MatureTree>)>,
@@ -974,14 +985,28 @@ fn sync_environment_to_terrain_changes(
         Query<
             '_,
             '_,
-            (&mut Transform, &GrowingResource, Option<&TerrainHeightOffset>),
-            (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
+            (
+                &mut Transform,
+                &GrowingResource,
+                Option<&TerrainHeightOffset>,
+            ),
+            (
+                Without<Building>,
+                Without<Sapling>,
+                Without<GrowingTree>,
+                Without<MatureTree>,
+            ),
         >,
         Query<
             '_,
             '_,
             (Entity, &DecoChunk, &Transform, &Mesh3d),
-            (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
+            (
+                Without<Building>,
+                Without<Sapling>,
+                Without<GrowingTree>,
+                Without<MatureTree>,
+            ),
         >,
     )>,
     mut building_q: Query<(&mut Transform, &EntityKind, &BuildingFootprint), With<Building>>,
@@ -1022,12 +1047,12 @@ fn sync_building_heights_for_area(
         }
 
         let bp = registry.get(*kind);
-        let half_height = if bp.visual.mesh_kind.is_gltf() && !bp.visual.mesh_kind.is_gltf_character()
-        {
-            0.0
-        } else {
-            bp.building.as_ref().map(|b| b.half_height).unwrap_or(0.0)
-        };
+        let half_height =
+            if bp.visual.mesh_kind.is_gltf() && !bp.visual.mesh_kind.is_gltf_character() {
+                0.0
+            } else {
+                bp.building.as_ref().map(|b| b.half_height).unwrap_or(0.0)
+            };
         let ground_y = if uses_terrain_foundation(*kind) {
             height_map.foundation_target_height_shaped(
                 transform.translation.x,
@@ -1105,8 +1130,17 @@ fn sync_growing_resource_heights_for_area(
     height_map: &HeightMap,
     area: TerrainSurfaceDirtyArea,
     growing_resources: &mut Query<
-        (&mut Transform, &GrowingResource, Option<&TerrainHeightOffset>),
-        (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
+        (
+            &mut Transform,
+            &GrowingResource,
+            Option<&TerrainHeightOffset>,
+        ),
+        (
+            Without<Building>,
+            Without<Sapling>,
+            Without<GrowingTree>,
+            Without<MatureTree>,
+        ),
     >,
 ) {
     let area_r2 = area.radius * area.radius;
@@ -1163,16 +1197,16 @@ fn create_ghost_materials(
                 let radial = (centered_x * centered_x + centered_y * centered_y).sqrt();
                 let center_glow = (1.0 - radial).clamp(0.0, 1.0).powf(1.6);
                 let edge_fade = (1.0 - radial * 0.85).clamp(0.0, 1.0).powf(2.2);
-                let minor_grid = line_strength(u, MINOR_CELLS, 0.18)
-                    .max(line_strength(v, MINOR_CELLS, 0.18));
-                let major_grid = line_strength(u, MAJOR_CELLS, 0.28)
-                    .max(line_strength(v, MAJOR_CELLS, 0.28));
+                let minor_grid =
+                    line_strength(u, MINOR_CELLS, 0.18).max(line_strength(v, MINOR_CELLS, 0.18));
+                let major_grid =
+                    line_strength(u, MAJOR_CELLS, 0.28).max(line_strength(v, MAJOR_CELLS, 0.28));
                 let border = centered_x.abs().max(centered_y.abs());
                 let border_glow = ((border - 0.78) / 0.22).clamp(0.0, 1.0).powf(1.5);
                 let idx = ((y * TEX_SIZE + x) * 4) as usize;
 
-                let line_mix = (minor_grid * 0.45 + major_grid * 0.85 + border_glow * 0.55)
-                    .clamp(0.0, 1.0);
+                let line_mix =
+                    (minor_grid * 0.45 + major_grid * 0.85 + border_glow * 0.55).clamp(0.0, 1.0);
                 let alpha = (12.0 + edge_fade * 40.0 + center_glow * 36.0 + line_mix * 150.0)
                     .clamp(0.0, 255.0);
                 let red = (18.0 + center_glow * 20.0 + major_grid * 14.0).clamp(0.0, 255.0);
@@ -1319,7 +1353,8 @@ fn wall_cost_from_cells(
     }
 
     // Build temporary merged set for neighbor lookups
-    let mut merged: std::collections::HashSet<(i32, i32)> = existing_grid.cells.keys().copied().collect();
+    let mut merged: std::collections::HashSet<(i32, i32)> =
+        existing_grid.cells.keys().copied().collect();
     for &cell in proposed {
         merged.insert(cell);
     }
@@ -1444,11 +1479,7 @@ fn update_placement_preview(
             (With<Unit>, Without<GhostBuilding>),
         >,
     ),
-    environment: (
-        Option<Res<BiomeMap>>,
-        Res<HeightMap>,
-        Res<ObstacleGrid>,
-    ),
+    environment: (Option<Res<BiomeMap>>, Res<HeightMap>, Res<ObstacleGrid>),
 ) {
     let (active_player, workers) = worker_context;
     let (biome_map, height_map, obstacle_grid) = environment;
@@ -1585,7 +1616,10 @@ fn update_placement_preview(
     }
 
     // Slope validation (walls are exempt — they're designed for varied terrain)
-    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner) {
+    if !matches!(
+        kind,
+        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner
+    ) {
         const MAX_BUILDING_SLOPE: f32 = 0.5; // ~27 degrees
         let slope = height_map.max_slope_under_footprint(world_pos.x, world_pos.z, new_footprint);
         if slope > MAX_BUILDING_SLOPE {
@@ -1623,7 +1657,9 @@ fn update_placement_preview(
 
     if valid {
         let build_pos = Vec3::new(world_pos.x, 0.0, world_pos.z);
-        let worker_iter = workers.iter().map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
+        let worker_iter = workers
+            .iter()
+            .map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
         if !has_available_worker_for_build(worker_iter, active_player.0, build_pos) {
             valid = false;
             hint = Some("All workers are busy".to_owned());
@@ -1798,13 +1834,15 @@ fn update_wall_plot_preview(
 
         // Check collision with non-wall buildings
         let fp = footprint_for_kind(EntityKind::WallPost);
-        let blocked = existing_buildings.iter().any(|(building_tf, existing_fp, existing_kind)| {
-            if !blocks_construction_overlap(*existing_kind) {
-                return false;
-            }
-            let check_pos = Vec3::new(world.x, building_tf.translation.y, world.z);
-            building_tf.translation.distance(check_pos) < existing_fp.0 + fp
-        });
+        let blocked = existing_buildings
+            .iter()
+            .any(|(building_tf, existing_fp, existing_kind)| {
+                if !blocks_construction_overlap(*existing_kind) {
+                    return false;
+                }
+                let check_pos = Vec3::new(world.x, building_tf.translation.y, world.z);
+                building_tf.translation.distance(check_pos) < existing_fp.0 + fp
+            });
         if blocked {
             wall_preview.valid = false;
         }
@@ -1856,7 +1894,9 @@ fn update_wall_plot_preview(
     let stone = cost.get(ResourceType::Stone);
     if wall_preview.valid {
         let wall_pos = wall_preview.snapped_points[0];
-        let worker_iter = workers.iter().map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
+        let worker_iter = workers
+            .iter()
+            .map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
         if !has_available_worker_for_build(worker_iter, active_player.0, wall_pos) {
             wall_preview.valid = false;
         }
@@ -1969,7 +2009,9 @@ fn update_gate_plot_preview(
     if let Some((segment_tf, _)) = nearest {
         ghost_tf.translation = segment_tf.translation;
         ghost_tf.rotation = segment_tf.rotation;
-        let worker_iter = workers.iter().map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
+        let worker_iter = workers
+            .iter()
+            .map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
         let has_worker =
             has_available_worker_for_build(worker_iter, active_player.0, segment_tf.translation);
         if let Ok(mut gv) = ghost_valid_q.get_mut(ghost_entity) {
@@ -2059,8 +2101,7 @@ fn update_floor_plot_preview(
         let cost = registry.get(EntityKind::Floor).cost.clone();
         let wood = cost.get(ResourceType::Wood);
         let stone = cost.get(ResourceType::Stone);
-        placement.hint_text =
-            Some(format!("Floor brush | Cost per tile: {wood}W {stone}S"));
+        placement.hint_text = Some(format!("Floor brush | Cost per tile: {wood}W {stone}S"));
     } else if already_placed {
         placement.hint_text = Some("Already has floor".to_string());
     } else if blocked {
@@ -2128,22 +2169,14 @@ fn animate_placement_preview_vfx(
 
     if let Some(material) = materials.get_mut(&ghost_mats.ghost_valid) {
         material.base_color = Color::srgba(0.35, 0.98, 0.72, 0.28 + pulse * 0.1);
-        material.emissive = LinearRgba::new(
-            0.14 * intensity,
-            0.72 * intensity,
-            0.44 * intensity,
-            1.0,
-        );
+        material.emissive =
+            LinearRgba::new(0.14 * intensity, 0.72 * intensity, 0.44 * intensity, 1.0);
     }
 
     if let Some(material) = materials.get_mut(&ghost_mats.ghost_invalid) {
         material.base_color = Color::srgba(1.0, 0.38, 0.22, 0.28 + pulse * 0.12);
-        material.emissive = LinearRgba::new(
-            0.82 * intensity,
-            0.18 * intensity,
-            0.08 * intensity,
-            1.0,
-        );
+        material.emissive =
+            LinearRgba::new(0.82 * intensity, 0.18 * intensity, 0.08 * intensity, 1.0);
     }
 
     if let Some(material) = materials.get_mut(&ghost_mats.grid_plane) {
@@ -2277,6 +2310,13 @@ fn confirm_placement(
         true
     };
     if !prereq_met {
+        let prereq_name = bp
+            .building
+            .as_ref()
+            .and_then(|bd| bd.prerequisite)
+            .map(|k| k.display_name())
+            .unwrap_or("prerequisite");
+        placement.hint_text = Some(format!("Requires {prereq_name}"));
         return;
     }
 
@@ -2295,7 +2335,10 @@ fn confirm_placement(
         }
     }
     // Slope validation (walls exempt)
-    if !matches!(kind, EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner) {
+    if !matches!(
+        kind,
+        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner
+    ) {
         const MAX_BUILDING_SLOPE: f32 = 0.5;
         let slope = height_map.max_slope_under_footprint(world_pos.x, world_pos.z, new_footprint);
         if slope > MAX_BUILDING_SLOPE {
@@ -2322,8 +2365,11 @@ fn confirm_placement(
 
     // Find best available worker using priority-based selection
     let build_pos = Vec3::new(world_pos.x, 0.0, world_pos.z);
-    let worker_iter = workers.iter().map(|(e, tf, state, fac, kind, _)| (e, tf, state, fac, kind));
-    let Some((worker_entity, _)) = find_best_worker_for_build(worker_iter, faction, build_pos) else {
+    let worker_iter = workers
+        .iter()
+        .map(|(e, tf, state, fac, kind, _)| (e, tf, state, fac, kind));
+    let Some((worker_entity, _)) = find_best_worker_for_build(worker_iter, faction, build_pos)
+    else {
         placement.hint_text = Some("No workers available!".to_string());
         return;
     };
@@ -2332,6 +2378,7 @@ fn confirm_placement(
     let player_res = all_resources.get(&faction);
     let carried = carried_totals.get(&faction);
     if !bp.cost.can_afford_with_carried(player_res, carried) {
+        placement.hint_text = Some("Not enough resources".to_string());
         return;
     }
 
@@ -2466,7 +2513,8 @@ fn confirm_wall_plot(
 
     if let PlacementMode::PlotWall { start } = placement.mode {
         if start == Vec3::ZERO {
-            if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map) {
+            if let Some(world_pos) = cursor_ground_pos(&camera_q, &windows, &graphics, &height_map)
+            {
                 // Snap start to grid
                 let (gx, gz) = WallGrid::world_to_grid(Vec3::new(world_pos.x, 0.0, world_pos.z));
                 let first = WallGrid::grid_to_world(gx, gz);
@@ -2485,8 +2533,11 @@ fn confirm_wall_plot(
 
     let faction = active_player.0;
     let wall_pos = wall_preview.snapped_points[0];
-    let worker_iter = workers.iter().map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
-    let Some((worker_entity, _)) = find_best_worker_for_build(worker_iter, faction, wall_pos) else {
+    let worker_iter = workers
+        .iter()
+        .map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
+    let Some((worker_entity, _)) = find_best_worker_for_build(worker_iter, faction, wall_pos)
+    else {
         placement.hint_text = Some("All workers are busy".to_string());
         return;
     };
@@ -2912,8 +2963,8 @@ fn pending_build_arrival_system(
                 if !blocks_construction_overlap(*existing_kind) {
                     return false;
                 }
-            let check_pos = Vec3::new(build_pos.x, building_tf.translation.y, build_pos.z);
-            building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
+                let check_pos = Vec3::new(build_pos.x, building_tf.translation.y, build_pos.z);
+                building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
             });
 
         if blocked {
@@ -3011,8 +3062,9 @@ fn build_site_preparation_system(
                 if !blocks_construction_overlap(*existing_kind) {
                     return false;
                 }
-            let check_pos = Vec3::new(prep.position.x, building_tf.translation.y, prep.position.z);
-            building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
+                let check_pos =
+                    Vec3::new(prep.position.x, building_tf.translation.y, prep.position.z);
+                building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
             });
 
         if blocked {
@@ -3240,12 +3292,11 @@ fn construction_progress_system(
                         }
                     }
 
-                    let mut child = commands
-                        .spawn((
-                            SceneRoot(stage_scene.clone()),
-                            BuildingSceneChild,
-                            building_models.child_transform(*kind, base_scale),
-                        ));
+                    let mut child = commands.spawn((
+                        SceneRoot(stage_scene.clone()),
+                        BuildingSceneChild,
+                        building_models.child_transform(*kind, base_scale),
+                    ));
                     #[cfg(not(target_arch = "wasm32"))]
                     child.insert((InheritOutline, AsyncSceneInheritOutline::default()));
                     let child = child.id();
@@ -3277,12 +3328,11 @@ fn construction_progress_system(
                 if let Some(complete_scene) =
                     building_models.scene_for(*kind, 1, transform.translation)
                 {
-                    let mut child = commands
-                        .spawn((
-                            SceneRoot(complete_scene),
-                            BuildingSceneChild,
-                            building_models.child_transform(*kind, base_scale),
-                        ));
+                    let mut child = commands.spawn((
+                        SceneRoot(complete_scene),
+                        BuildingSceneChild,
+                        building_models.child_transform(*kind, base_scale),
+                    ));
                     #[cfg(not(target_arch = "wasm32"))]
                     child.insert((InheritOutline, AsyncSceneInheritOutline::default()));
                     let child = child.id();
@@ -3430,28 +3480,29 @@ fn tower_auto_attack(
                 continue;
             }
 
-            let surface_dist =
-                crate::combat::attack_surface_distance(tower_tf.translation, target_tf.translation, 0.0);
+            let surface_dist = crate::combat::attack_surface_distance(
+                tower_tf.translation,
+                target_tf.translation,
+                0.0,
+            );
             if !crate::combat::is_in_attack_band(surface_dist, range.0, minimum_range, 0.1) {
                 continue;
             }
 
             if let Some(profile) = opt_profile {
                 let reserved_total = t_reserved.as_ref().map_or(0.0, |r| r.total());
-                if let Some(score) = crate::combat::target_score(
-                    &crate::combat::TargetScoreInput {
-                        profile,
-                        attacker_pos: tower_tf.translation,
-                        attacker_damage_type: tower_dmg_type,
-                        scan_range: range.0,
-                        target_pos: target_tf.translation,
-                        target_health: t_health,
-                        target_armor: *t_armor,
-                        target_threat: t_threat.map_or(0.0, |t| t.0),
-                        target_is_building: false,
-                        target_reserved_damage: reserved_total,
-                    },
-                ) {
+                if let Some(score) = crate::combat::target_score(&crate::combat::TargetScoreInput {
+                    profile,
+                    attacker_pos: tower_tf.translation,
+                    attacker_damage_type: tower_dmg_type,
+                    scan_range: range.0,
+                    target_pos: target_tf.translation,
+                    target_health: t_health,
+                    target_armor: *t_armor,
+                    target_threat: t_threat.map_or(0.0, |t| t.0),
+                    target_is_building: false,
+                    target_reserved_damage: reserved_total,
+                }) {
                     if score < best_score {
                         best_score = score;
                         best_target = Some((target_entity, surface_dist));
@@ -3476,8 +3527,7 @@ fn tower_auto_attack(
                 reserved.reservations.push((tower_entity, damage.0, ttl));
             }
 
-            let proj_visual =
-                crate::model_assets::projectile_visual_for(*kind);
+            let proj_visual = crate::model_assets::projectile_visual_for(*kind);
             let orient = proj_visual.is_some()
                 && !matches!(
                     proj_visual,
@@ -3510,8 +3560,7 @@ fn tower_auto_attack(
                 } else {
                     Quat::IDENTITY
                 };
-                let scene =
-                    proj_res.scene_for(visual_kind, tower_entity.to_bits() as usize);
+                let scene = proj_res.scene_for(visual_kind, tower_entity.to_bits() as usize);
                 commands.spawn((
                     proj_component,
                     SceneRoot(scene),
@@ -3524,8 +3573,7 @@ fn tower_auto_attack(
                     proj_component,
                     Mesh3d(vfx.sphere_mesh.clone()),
                     MeshMaterial3d(vfx.projectile_material.clone()),
-                    Transform::from_translation(spawn_pos)
-                        .with_scale(Vec3::splat(0.2)),
+                    Transform::from_translation(spawn_pos).with_scale(Vec3::splat(0.2)),
                     NotShadowCaster,
                     NotShadowReceiver,
                 ));
@@ -3842,12 +3890,11 @@ fn building_upgrade_system(
                         }
                     }
                     // Spawn new scene child with calibration
-                    let mut child = commands
-                        .spawn((
-                            SceneRoot(new_scene),
-                            BuildingSceneChild,
-                            models.child_transform(*kind, 1.0),
-                        ));
+                    let mut child = commands.spawn((
+                        SceneRoot(new_scene),
+                        BuildingSceneChild,
+                        models.child_transform(*kind, 1.0),
+                    ));
                     #[cfg(not(target_arch = "wasm32"))]
                     child.insert((InheritOutline, AsyncSceneInheritOutline::default()));
                     let child = child.id();
@@ -4422,10 +4469,7 @@ fn sawmill_yard_system(
     model_assets: Option<Res<ModelAssets>>,
     new_sawmills: Query<
         (Entity, &Transform, &BuildingLevel, &BuildingState),
-        (
-            With<Building>,
-            Without<SawmillYard>,
-        ),
+        (With<Building>, Without<SawmillYard>),
     >,
     mut upgraded_sawmills: Query<
         (Entity, &Transform, &BuildingLevel, &mut SawmillYard),
@@ -4444,7 +4488,9 @@ fn sawmill_yard_system(
         if *state != BuildingState::Complete {
             continue;
         }
-        let Ok(kind) = kind_q.get(entity) else { continue };
+        let Ok(kind) = kind_q.get(entity) else {
+            continue;
+        };
         if *kind != EntityKind::Sawmill {
             continue;
         }
@@ -4544,7 +4590,9 @@ fn sawmill_yard_system(
 
     // Handle level upgrades — add more trees
     for (entity, transform, level, mut yard) in &mut upgraded_sawmills {
-        let Ok(kind) = kind_q.get(entity) else { continue };
+        let Ok(kind) = kind_q.get(entity) else {
+            continue;
+        };
         if *kind != EntityKind::Sawmill {
             continue;
         }
@@ -4670,7 +4718,12 @@ fn clear_vegetation_around_buildings(
     grass_chunks: Query<(Entity, &GrassChunk, &Mesh3d)>,
     deco_chunks: Query<
         (Entity, &DecoChunk, &Transform, &Mesh3d),
-        (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
+        (
+            Without<Building>,
+            Without<Sapling>,
+            Without<GrowingTree>,
+            Without<MatureTree>,
+        ),
     >,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
@@ -4703,7 +4756,12 @@ fn clear_vegetation_in_radius(
     grass_chunks: &Query<(Entity, &GrassChunk, &Mesh3d)>,
     deco_chunks: &Query<
         (Entity, &DecoChunk, &Transform, &Mesh3d),
-        (Without<Building>, Without<Sapling>, Without<GrowingTree>, Without<MatureTree>),
+        (
+            Without<Building>,
+            Without<Sapling>,
+            Without<GrowingTree>,
+            Without<MatureTree>,
+        ),
     >,
     meshes: &mut Assets<Mesh>,
     bx: f32,

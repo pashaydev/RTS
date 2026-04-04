@@ -3,14 +3,14 @@ use bevy::window::PrimaryWindow;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::OutlineVolume;
 
+use crate::audio::{PlaySfx, SfxKind};
 use crate::blueprints::{EntityKind, EntityVisualCache};
 use crate::camera;
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::minimap::MinimapInteraction;
-use crate::audio::{PlaySfx, SfxKind};
 
-use super::picking::pick_for_click;
+use super::picking::{pick_for_click, PickCycleState};
 
 // ── UI state helpers ──
 
@@ -131,7 +131,7 @@ pub(crate) fn handle_click_select(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut state: (ResMut<DragState>, ResMut<InspectedEnemy>),
+    mut state: (ResMut<DragState>, ResMut<InspectedEnemy>, ResMut<PickCycleState>),
     placement: Res<BuildingPlacementState>,
     viewport: (
         Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
@@ -164,7 +164,7 @@ pub(crate) fn handle_click_select(
     ),
 ) {
     let (ref camera_q, ref windows, ref graphics) = viewport;
-    let (ref mut drag, ref mut inspected) = state;
+    let (ref mut drag, ref mut inspected, ref mut pick_cycle) = state;
     let (ref units, ref buildings, ref mobs, ref resource_nodes) = entity_queries;
     let (ref minimap_interaction, ref ui_clicked, ref ui_press) = flags;
     let (ref time, ref mut dbl_click, ref entity_kinds, ref mut sfx) = extra;
@@ -234,9 +234,13 @@ pub(crate) fn handle_click_select(
                 }
                 // Workers assigned to buildings are now visible, so no need to skip them
                 if let Ok(gt) = unit_transforms.get(entity) {
-                    if let Some(screen_pos) =
-                        camera::world_to_window_viewport(camera, cam_gt, gt.translation(), window, &graphics)
-                    {
+                    if let Some(screen_pos) = camera::world_to_window_viewport(
+                        camera,
+                        cam_gt,
+                        gt.translation(),
+                        window,
+                        &graphics,
+                    ) {
                         if screen_pos.x >= min_x
                             && screen_pos.x <= max_x
                             && screen_pos.y >= min_y
@@ -249,21 +253,45 @@ pub(crate) fn handle_click_select(
             }
         }
     } else {
-        let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics) else {
+        let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics)
+        else {
             return;
         };
 
+        let cursor_screen = window.cursor_position();
+
+        // Determine skip entity for click-cycling: if clicking the same spot,
+        // deprioritize the entity we picked last time so the next one surfaces.
+        let skip = cursor_screen.and_then(|cursor| {
+            if pick_cycle.should_cycle(cursor) {
+                pick_cycle.last_entity
+            } else {
+                None
+            }
+        });
+
         let pick = pick_for_click(
             &ray,
+            cursor_screen,
+            camera,
+            cam_gt,
+            window,
+            &graphics,
             &pickables,
             &units,
             &buildings,
             &mobs,
             &resource_nodes,
             &height_map,
+            skip,
         );
 
         if let Some(result) = pick {
+            // Update cycle state so next click at same spot picks a different entity
+            if let Some(cursor) = cursor_screen {
+                pick_cycle.advance(cursor, result.entity);
+            }
+
             if result.is_mob {
                 inspected.entity = Some(result.entity);
             } else if result.is_resource {
@@ -356,6 +384,7 @@ pub(crate) fn handle_click_select(
                 }
             }
         } else {
+            pick_cycle.reset();
             inspected.entity = None;
             if !shift {
                 for entity in &selected {
@@ -375,7 +404,10 @@ pub(crate) fn update_entity_visuals(
     mut removed_selected: RemovedComponents<Selected>,
     added_hovered: Query<(Entity, &EntityKind, Has<Mesh3d>), Added<Hovered>>,
     mut removed_hovered: RemovedComponents<Hovered>,
-    added_army_highlighted: Query<(Entity, &EntityKind, Has<Mesh3d>), Added<ArmyOverviewHighlighted>>,
+    added_army_highlighted: Query<
+        (Entity, &EntityKind, Has<Mesh3d>),
+        Added<ArmyOverviewHighlighted>,
+    >,
     mut removed_army_highlighted: RemovedComponents<ArmyOverviewHighlighted>,
     all_entities: Query<(
         Entity,
@@ -385,8 +417,7 @@ pub(crate) fn update_entity_visuals(
         Has<ArmyOverviewHighlighted>,
         Has<Mesh3d>,
     )>,
-    #[cfg(not(target_arch = "wasm32"))]
-    mut outlines: Query<&mut OutlineVolume>,
+    #[cfg(not(target_arch = "wasm32"))] mut outlines: Query<&mut OutlineVolume>,
 ) {
     // Outline colors
     #[cfg(not(target_arch = "wasm32"))]

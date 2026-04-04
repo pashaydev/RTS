@@ -730,7 +730,6 @@ pub fn client_apply_terrain_shape_sync(
     }
 }
 
-
 /// Smoothly interpolates remote entity positions between state sync snapshots.
 pub fn client_interpolate_remote_units(
     time: Res<Time>,

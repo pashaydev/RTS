@@ -24,8 +24,12 @@ pub fn show_action_tooltips(
                 // Estimate height based on line count for positioning
                 let line_count = trigger.text.split('\n').filter(|l| !l.is_empty()).count();
                 let estimated_h = 20.0 + line_count as f32 * 18.0;
-                let (left, top) =
-                    tooltip_anchor_under_cursor(windows.single().ok(), ui_scale.0, 176.0, estimated_h);
+                let (left, top) = tooltip_anchor_under_cursor(
+                    windows.single().ok(),
+                    ui_scale.0,
+                    176.0,
+                    estimated_h,
+                );
 
                 commands
                     .spawn((
@@ -185,7 +189,10 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str, theme: &Them
         } else if line.starts_with("Build time:") || line.starts_with("Train:") {
             (theme.colors.text_secondary, theme.typography.caption)
         } else {
-            (Color::srgba(0.65, 0.65, 0.65, 0.9), theme.typography.caption)
+            (
+                Color::srgba(0.65, 0.65, 0.65, 0.9),
+                theme.typography.caption,
+            )
         };
 
         tt.spawn((

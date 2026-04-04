@@ -217,8 +217,7 @@ pub fn execute_input_command(
                 } else {
                     pos
                 };
-                let facing =
-                    Vec2::new(pos.x - centroid.x, pos.z - centroid.z).normalize_or_zero();
+                let facing = Vec2::new(pos.x - centroid.x, pos.z - centroid.z).normalize_or_zero();
                 let offsets = if n > 1 {
                     formation_offsets(formation, n, facing)
                 } else {
@@ -259,7 +258,9 @@ pub fn execute_input_command(
                             if let Ok(mut state) = unit_states.get_mut(ecs_entity) {
                                 *state = UnitState::Attacking(target_ecs);
                             }
-                            apply_manual_attack_intent(commands, ecs_entity, target_ecs, issue_time);
+                            apply_manual_attack_intent(
+                                commands, ecs_entity, target_ecs, issue_time,
+                            );
                             commands
                                 .entity(ecs_entity)
                                 .remove::<MoveTarget>()
@@ -375,6 +376,24 @@ pub fn execute_input_command(
                     }
                 }
             }
+            InputCommand::Stop => {
+                for &eid in &input.entity_ids {
+                    if let Some(&ecs_entity) = net_map.to_ecs.get(&eid) {
+                        if let Ok(mut state) = unit_states.get_mut(ecs_entity) {
+                            *state = UnitState::Idle;
+                        }
+                        clear_combat_intent(commands, ecs_entity, issue_time);
+                        commands
+                            .entity(ecs_entity)
+                            .remove::<MoveTarget>()
+                            .remove::<AttackTarget>()
+                            .insert(TaskSource::Auto);
+                        if let Ok(mut queue) = task_queues.get_mut(ecs_entity) {
+                            queue.clear();
+                        }
+                    }
+                }
+            }
             InputCommand::Train { building_id, kind } => {
                 let Some(&ecs_entity) = net_map.to_ecs.get(building_id) else {
                     continue;
@@ -484,6 +503,7 @@ pub fn host_process_client_commands(
                             | InputCommand::Patrol { .. }
                             | InputCommand::AttackMove { .. }
                             | InputCommand::HoldPosition
+                            | InputCommand::Stop
                             | InputCommand::SetStance { .. } => {
                                 if has_owned_units {
                                     sanitized_commands.push(command.clone());

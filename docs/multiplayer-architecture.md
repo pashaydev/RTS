@@ -229,7 +229,7 @@ Messages are sent as MessagePack-encoded bytes directly over WebRTC data channel
 ```mermaid
 classDiagram
     class ClientMessage {
-        +seq: u64
+        +seq: u32
         +timestamp: f64
     }
     class Input {
@@ -241,11 +241,19 @@ classDiagram
     }
     class LeaveNotice
     class Ping
+    class Reconnect {
+        +session_token: u64
+    }
+    class Chat {
+        +message: String
+    }
 
     ClientMessage <|-- Input
     ClientMessage <|-- JoinRequest
     ClientMessage <|-- LeaveNotice
     ClientMessage <|-- Ping
+    ClientMessage <|-- Reconnect
+    ClientMessage <|-- Chat
 
     class PlayerInput {
         +player_id: EntityId
@@ -276,7 +284,7 @@ classDiagram
 ```mermaid
 classDiagram
     class ServerMessage {
-        +seq: u64
+        +seq: u32
     }
 
     class StateSync {
@@ -292,7 +300,7 @@ classDiagram
         +buildings: Vec~BuildingSnapshot~
     }
     class ResourceSync {
-        +factions: Vec~(u8, u32[10])~
+        +factions: Vec~(u8, u32[11])~
     }
     class DayCycleSync {
         +cycle: DayCycleSnapshot
@@ -310,10 +318,19 @@ classDiagram
     }
     class WorldBaseline {
         +terrain: TerrainDescriptor
+        +terrain_hash: u64
+        +biome_hash: u64
+        +terrain_ops: Vec~TerrainShapeOp~
         +neutral_objects: Vec~NeutralWorldSnapshot~
     }
     class Pong {
         +timestamp: f64
+    }
+    class TerrainShapeSync {
+        +ops: Vec~TerrainShapeOp~
+    }
+    class NeutralWorldDespawn {
+        +net_ids: Vec~EntityId~
     }
 
     ServerMessage <|-- StateSync
@@ -327,6 +344,8 @@ classDiagram
     ServerMessage <|-- RelayedInput
     ServerMessage <|-- Event
     ServerMessage <|-- Pong
+    ServerMessage <|-- TerrainShapeSync
+    ServerMessage <|-- NeutralWorldDespawn
 ```
 
 ### Game Events (inside `Event` message)
@@ -337,7 +356,7 @@ classDiagram
         <<enumeration>>
     }
     class Chat {
-        +sender: String
+        +sender: EntityId
         +message: String
     }
     class Kill {
@@ -347,29 +366,45 @@ classDiagram
     class Announcement {
         +text: String
     }
+    class CountdownStart
+    class CountdownCancel
     class GameStart {
         +config_json: String
     }
     class LobbyUpdate {
         +players: Vec~LobbyPlayerInfo~
+        +slots: u8[4]
+        +player_teams: u8[4]
     }
     class JoinAccepted {
         +player_id: u8
         +seat_index: u8
         +faction_index: u8
         +color_index: u8
+        +session_token: u64
     }
     class HostShutdown {
         +reason: String
+    }
+    class FactionEliminated {
+        +faction_index: u8
+    }
+    class Victory {
+        +winner_faction: u8
+        +winner_team: Option~u8~
     }
 
     GameEvent <|-- Chat
     GameEvent <|-- Kill
     GameEvent <|-- Announcement
+    GameEvent <|-- CountdownStart
+    GameEvent <|-- CountdownCancel
     GameEvent <|-- GameStart
     GameEvent <|-- LobbyUpdate
     GameEvent <|-- JoinAccepted
     GameEvent <|-- HostShutdown
+    GameEvent <|-- FactionEliminated
+    GameEvent <|-- Victory
 ```
 
 ---
@@ -459,6 +494,7 @@ flowchart TD
 ```
 
 **Replicated entity types:** `EntityKind`, `ResourceNode`, `Sapling`, `GrowingTree`, `GrowingResource`, `MatureTree`, `ExplosiveProp`
+(`NeutralKind` also includes `MobCamp`, reserved for future use but not yet replicated via `mark_replicated_entities`.)
 
 ---
 
@@ -658,7 +694,7 @@ ELO is updated after each recorded match. For single-player, opponent rating is 
 | File | Purpose |
 |------|---------|
 | `src/multiplayer/mod.rs` | Plugin wiring, shared resources, run conditions, NetStats, SessionTokens |
-| `src/multiplayer/transport.rs` | Matchbox transport re-exports plus LAN discovery (UDP :7877), HTTP file server (:7880), IP detection, and legacy transport helpers |
+| `src/multiplayer/transport/` | Transport directory: `mod.rs` (LAN discovery UDP :7877, HTTP file server :7880, IP detection, legacy helpers), `discovery.rs`, `ip.rs`, `tcp.rs`, `wire.rs` |
 | `src/multiplayer/server/input.rs` | Server-side input/command handling re-exports |
 | `src/multiplayer/server/replication.rs` | Server-side replication/broadcast re-exports |
 | `src/multiplayer/host_systems.rs` | Host command execution, snapshot building, delta sync, neutral baseline/delta emission, reconnect grace |
@@ -668,7 +704,7 @@ ELO is updated after each recorded match. For single-player, opponent rating is 
 | `src/multiplayer/client_systems.rs` | Staged client receive/apply implementation, interpolation, neutral world apply |
 | `src/multiplayer/debug_tap.rs` | HTTP debug server, TX/RX event recording |
 | `src/net_bridge.rs` | NetworkId assignment (entities + neutral objects), EntityNetMap |
-| `src/menu/multiplayer.rs` | Lobby UI, connection flow (start_hosting, connect_to_host_system, update_lobby_ui), config serialization |
+| `src/menu/multiplayer/` | Multiplayer menu directory: `mod.rs` (re-exports), `networking.rs` (start_hosting, connect_to_host_system), `lobby.rs` (lobby UI, update_lobby_ui), `pages.rs` (menu pages), `config.rs` (config serialization) |
 | `src/database.rs` | SQLite persistence — player profiles, match history, ELO, settings, presets. `ActiveProfile` is player identity source of truth |
 | `src/victory.rs` | Victory/defeat checks, `record_match_system` (records match + player names + ELO on game over) |
 | `game_state/src/message.rs` | All network message types + ServerFrame |

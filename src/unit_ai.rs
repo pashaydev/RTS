@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use std::f32::consts::TAU;
 
-use crate::blueprints::EntityKind;
+use crate::blueprints::{EntityKind, IsRanged};
 use crate::buildings::is_wall_like_kind;
 use crate::combat::{
     apply_auto_attack_intent, apply_auto_move_intent, apply_manual_attack_intent,
@@ -18,14 +18,21 @@ pub struct UnitAiPlugin;
 impl Plugin for UnitAiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DecisionTimer>()
+            .init_resource::<CombatHotspots>()
             .add_systems(
                 Update,
                 cleanup_assigned_workers_system.run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
-                decision_priority_system
+                update_combat_hotspots
                     .after(cleanup_assigned_workers_system)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                decision_priority_system
+                    .after(update_combat_hotspots)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
@@ -44,6 +51,12 @@ impl Plugin for UnitAiPlugin {
                 Update,
                 leash_return_system
                     .after(unit_state_executor_system)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                auto_heal_system
+                    .after(decision_priority_system)
                     .run_if(in_state(AppState::InGame)),
             );
     }
@@ -104,6 +117,26 @@ fn stance_leash_distance(stance: UnitStance, tuning: &CombatTuning) -> f32 {
     }
 }
 
+/// Collects positions of units currently in combat for ally-assist detection.
+fn update_combat_hotspots(
+    mut hotspots: ResMut<CombatHotspots>,
+    mut frame_counter: Local<u32>,
+    units: Query<(&Transform, &UnitState, &Faction), With<Unit>>,
+) {
+    *frame_counter = frame_counter.wrapping_add(1);
+    // Only update every 6 frames to save cost
+    if *frame_counter % 6 != 0 {
+        return;
+    }
+    hotspots.spots.clear();
+    for (tf, state, faction) in &units {
+        if let UnitState::Attacking(target) = *state {
+            hotspots.spots.push((tf.translation, target, *faction));
+        }
+    }
+    hotspots.spots.truncate(128);
+}
+
 fn decision_priority_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -112,6 +145,7 @@ fn decision_priority_system(
     budgeting: (Res<CombatBudget>, ResMut<CombatBudgetState>),
     teams: Res<TeamConfig>,
     spatial_grid: Res<SpatialHashGrid>,
+    hotspots: Res<CombatHotspots>,
     mut units: Query<
         (
             Entity,
@@ -128,6 +162,7 @@ fn decision_priority_system(
             Option<&CombatIntent>,
             Option<&CombatTargetLock>,
             Option<&mut CombatThinkTimer>,
+            Option<&TacticalRole>,
         ),
         With<Unit>,
     >,
@@ -140,6 +175,8 @@ fn decision_priority_system(
         &ArmorType,
         Option<&ThreatValue>,
         Option<&ReservedIncomingDamage>,
+        Option<&IsRanged>,
+        Option<&TacticalRole>,
     )>,
     mut batch_offset: Local<usize>,
     mut batch_total: Local<usize>,
@@ -183,6 +220,7 @@ fn decision_priority_system(
             combat_intent,
             target_lock,
             opt_think_timer,
+            opt_tactical_role,
         ),
     ) in units.iter_mut().enumerate()
     {
@@ -265,7 +303,8 @@ fn decision_priority_system(
         }
 
         if let Some(attack_r) = attack_range {
-            if budget_state.target_rescans_this_frame >= combat_budget.max_target_rescans_per_frame {
+            if budget_state.target_rescans_this_frame >= combat_budget.max_target_rescans_per_frame
+            {
                 continue;
             }
             let scan_range = attack_r.0 * stance_scan_multiplier(*stance, &combat_tuning);
@@ -283,7 +322,9 @@ fn decision_priority_system(
                         combat_intent,
                         Some(CombatIntent::Attack(target, IntentSource::Auto)) if *target == lock.target
                     );
-                    if !current_matches_lock || !matches!(*state, UnitState::Attacking(target) if target == lock.target) {
+                    if !current_matches_lock
+                        || !matches!(*state, UnitState::Attacking(target) if target == lock.target)
+                    {
                         apply_auto_attack_intent(
                             &mut commands,
                             entity,
@@ -321,13 +362,13 @@ fn decision_priority_system(
 
                 // Use scored targeting if profile available, else fall back to distance
                 if let Some(profile) = opt_targeting_profile {
-                    let Ok((t_health, t_armor, t_threat, t_reserved)) =
+                    let Ok((t_health, t_armor, t_threat, t_reserved, t_is_ranged, t_role)) =
                         target_data.get(*target_entity)
                     else {
                         continue;
                     };
                     let dmg_type = opt_damage_type.copied().unwrap_or(DamageType::Melee);
-                    if let Some(score) = target_score(&TargetScoreInput {
+                    if let Some(mut score) = target_score(&TargetScoreInput {
                         profile,
                         attacker_pos: tf.translation,
                         attacker_damage_type: dmg_type,
@@ -339,6 +380,32 @@ fn decision_priority_system(
                         target_is_building: is_building,
                         target_reserved_damage: t_reserved.map_or(0.0, |r| r.total()),
                     }) {
+                        // Tactical role modifiers
+                        let role = opt_tactical_role.copied().unwrap_or_default();
+                        let target_is_ranged = t_is_ranged.is_some()
+                            || matches!(
+                                t_role,
+                                Some(TacticalRole::RangedKiter | TacticalRole::Healer)
+                            );
+                        match role {
+                            TacticalRole::Frontline => {
+                                // Prefer engaging ranged/caster threats to protect backline
+                                if target_is_ranged {
+                                    score -= 0.4;
+                                }
+                            }
+                            TacticalRole::Flanker => {
+                                // Aggressively seek backline targets, avoid heavy armor
+                                if target_is_ranged {
+                                    score -= 0.5;
+                                }
+                                if *t_armor == ArmorType::Heavy {
+                                    score += 0.3;
+                                }
+                            }
+                            _ => {}
+                        }
+
                         if score < best_score {
                             best_score = score;
                             best_target = Some(*target_entity);
@@ -356,11 +423,41 @@ fn decision_priority_system(
                 }
             }
 
+            // Ally-assist: if no enemy found in scan range, check if nearby allies are fighting
+            if best_target.is_none() {
+                let assist_range = match stance {
+                    UnitStance::Defensive => 18.0,
+                    UnitStance::Aggressive => 30.0,
+                    _ => 0.0,
+                };
+                if assist_range > 0.0 {
+                    let mut best_assist_dist = assist_range;
+                    for (spot_pos, spot_target, spot_faction) in &hotspots.spots {
+                        if !teams.is_allied(faction, spot_faction) {
+                            continue;
+                        }
+                        let dist = tf.translation.distance(*spot_pos);
+                        if dist < best_assist_dist {
+                            // Validate target still exists and is hostile
+                            if let Ok(target_faction) = factions.get(*spot_target) {
+                                if teams.is_hostile(faction, target_faction) {
+                                    best_assist_dist = dist;
+                                    best_target = Some(*spot_target);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             if let Some(target) = best_target {
                 apply_auto_attack_intent(&mut commands, entity, target, tf.translation, now);
                 *state = UnitState::Attacking(target);
                 *source = TaskSource::Auto;
-            } else if matches!(combat_intent, Some(CombatIntent::Attack(_, IntentSource::Auto))) {
+            } else if matches!(
+                combat_intent,
+                Some(CombatIntent::Attack(_, IntentSource::Auto))
+            ) {
                 reset_combat_state(&mut commands, entity);
             }
             commands.entity(entity).insert(CombatThinkTimer {
@@ -578,6 +675,7 @@ pub fn unit_state_executor_system(
             Option<&MoveTarget>,
             Option<&AttackRange>,
             Option<&mut CombatThinkTimer>,
+            &UnitStance,
         ),
         With<Unit>,
     >,
@@ -607,6 +705,7 @@ pub fn unit_state_executor_system(
         move_target,
         attack_range,
         opt_think_timer,
+        stance,
     ) in &mut units
     {
         // Client: only process local player's units; remote units are driven by host state sync
@@ -615,7 +714,7 @@ pub fn unit_state_executor_system(
         }
 
         match *state {
-            UnitState::Idle | UnitState::HoldPosition => {
+            UnitState::Idle => {
                 // Remove stale targets
                 commands
                     .entity(entity)
@@ -624,6 +723,79 @@ pub fn unit_state_executor_system(
                     .remove::<ChaseTimer>();
                 if matches!(*source, TaskSource::Auto) {
                     reset_combat_state(&mut commands, entity);
+                }
+            }
+
+            UnitState::HoldPosition => {
+                // Never move when holding position
+                commands
+                    .entity(entity)
+                    .remove::<MoveTarget>()
+                    .remove::<ChaseTimer>();
+
+                // Auto-attack enemies in weapon range (unless Passive stance)
+                if *stance != UnitStance::Passive {
+                    if let Some(attack_r) = attack_range {
+                        let now = time.elapsed_secs_f64();
+                        let can_think = opt_think_timer
+                            .as_ref()
+                            .map_or(true, |timer| now >= timer.next_think_at);
+                        if can_think
+                            && budget_state.target_rescans_this_frame
+                                < combat_budget.max_target_rescans_per_frame
+                        {
+                            let scan_range = attack_r.0;
+                            let nearby = spatial_grid
+                                .query_radius_limited(tf.translation, scan_range, 8);
+                            budget_state.target_rescans_this_frame += 1;
+
+                            let mut closest_dist = f32::MAX;
+                            let mut closest_target = None;
+                            for (target_entity, target_pos) in &nearby {
+                                if *target_entity == entity {
+                                    continue;
+                                }
+                                let Some(target_faction) =
+                                    factions.get(*target_entity).ok()
+                                else {
+                                    continue;
+                                };
+                                if !teams.is_hostile(faction, target_faction) {
+                                    continue;
+                                }
+                                let dx = target_pos.x - tf.translation.x;
+                                let dz = target_pos.z - tf.translation.z;
+                                let dist = (dx * dx + dz * dz).sqrt();
+                                if dist < closest_dist {
+                                    closest_dist = dist;
+                                    closest_target = Some(*target_entity);
+                                }
+                            }
+
+                            if let Some(target) = closest_target {
+                                // Set target lock so resolve_combat_intents picks it up
+                                // CombatIntent::Hold is already set — it will fire without moving
+                                set_intent_target_lock(
+                                    &mut commands,
+                                    entity,
+                                    target,
+                                    IntentSource::Auto,
+                                    now,
+                                );
+                            } else {
+                                // No enemies in range — clear attack target
+                                commands.entity(entity).remove::<AttackTarget>();
+                            }
+
+                            commands.entity(entity).insert(CombatThinkTimer {
+                                next_think_at: now + 0.2,
+                                interval_secs: 0.2,
+                            });
+                        }
+                    }
+                } else {
+                    // Passive stance: no auto-attack
+                    commands.entity(entity).remove::<AttackTarget>();
                 }
             }
 
@@ -651,9 +823,34 @@ pub fn unit_state_executor_system(
                         .remove::<AttackTarget>()
                         .remove::<LeashOrigin>()
                         .remove::<ChaseTimer>();
-                    *state = UnitState::Idle;
-                    *source = TaskSource::Auto;
-                    task_queue.current = None;
+
+                    // Resume previous behavioral task if one exists
+                    match task_queue.current.as_ref().map(|t| &t.task) {
+                        Some(QueuedTask::AttackMove(dest)) => {
+                            let dest = *dest;
+                            *state = UnitState::AttackMoving(dest);
+                            commands.entity(entity).insert(MoveTarget(dest));
+                            apply_manual_attack_move_intent(
+                                &mut commands,
+                                entity,
+                                dest,
+                                time.elapsed_secs_f64(),
+                            );
+                        }
+                        Some(QueuedTask::Patrol(patrol_target)) => {
+                            let patrol_target = *patrol_target;
+                            *state = UnitState::Patrolling {
+                                target: patrol_target,
+                                origin: tf.translation,
+                            };
+                            commands.entity(entity).insert(MoveTarget(patrol_target));
+                        }
+                        _ => {
+                            *state = UnitState::Idle;
+                            *source = TaskSource::Auto;
+                            task_queue.current = None;
+                        }
+                    }
                 }
             }
 
@@ -702,7 +899,8 @@ pub fn unit_state_executor_system(
             }
 
             UnitState::MovingToBuild(building) => {
-                if let Ok((build_state, _, footprint, build_kind)) = construction_sites.get(building)
+                if let Ok((build_state, _, footprint, build_kind)) =
+                    construction_sites.get(building)
                 {
                     if *build_state != BuildingState::UnderConstruction {
                         commands.entity(entity).remove::<MoveTarget>();
@@ -713,9 +911,8 @@ pub fn unit_state_executor_system(
                         continue;
                     }
                     if let Ok(build_tf) = transforms.get(building) {
-                        let flat_dist_to_center =
-                            Vec2::new(tf.translation.x, tf.translation.z)
-                                .distance(Vec2::new(build_tf.translation.x, build_tf.translation.z));
+                        let flat_dist_to_center = Vec2::new(tf.translation.x, tf.translation.z)
+                            .distance(Vec2::new(build_tf.translation.x, build_tf.translation.z));
                         // Close enough to building center to start work
                         let is_wall_like = is_wall_like_kind(*build_kind);
                         let work_range = footprint.0
@@ -730,18 +927,10 @@ pub fn unit_state_executor_system(
                             *state = UnitState::Building(building);
                         } else {
                             // Walk toward an offset outside the footprint
-                            let stand_dist = footprint.0
-                                + if is_wall_like {
-                                    0.75
-                                } else {
-                                    1.5
-                                };
+                            let stand_dist = footprint.0 + if is_wall_like { 0.75 } else { 1.5 };
                             let angle = (entity.index_u32() as f32 * 2.399) % TAU;
-                            let offset = Vec3::new(
-                                angle.cos() * stand_dist,
-                                0.0,
-                                angle.sin() * stand_dist,
-                            );
+                            let offset =
+                                Vec3::new(angle.cos() * stand_dist, 0.0, angle.sin() * stand_dist);
                             let target_pos = build_tf.translation + offset;
                             commands.entity(entity).insert(MoveTarget(target_pos));
                         }
@@ -756,7 +945,8 @@ pub fn unit_state_executor_system(
             }
 
             UnitState::Building(building) => {
-                if let Ok((build_state, _, footprint, build_kind)) = construction_sites.get(building)
+                if let Ok((build_state, _, footprint, build_kind)) =
+                    construction_sites.get(building)
                 {
                     if *build_state != BuildingState::UnderConstruction {
                         commands.entity(entity).remove::<MoveTarget>();
@@ -765,9 +955,8 @@ pub fn unit_state_executor_system(
                         *source = TaskSource::Auto;
                         task_queue.current = None;
                     } else if let Ok(build_tf) = transforms.get(building) {
-                        let flat_dist_to_center =
-                            Vec2::new(tf.translation.x, tf.translation.z)
-                                .distance(Vec2::new(build_tf.translation.x, build_tf.translation.z));
+                        let flat_dist_to_center = Vec2::new(tf.translation.x, tf.translation.z)
+                            .distance(Vec2::new(build_tf.translation.x, build_tf.translation.z));
                         let max_work_range = footprint.0
                             + build_range
                             + if is_wall_like_kind(*build_kind) {
@@ -896,7 +1085,8 @@ pub fn unit_state_executor_system(
                         {
                             continue;
                         }
-                        let nearby = spatial_grid.query_radius_limited(tf.translation, scan_range, 8);
+                        let nearby =
+                            spatial_grid.query_radius_limited(tf.translation, scan_range, 8);
                         budget_state.target_rescans_this_frame += 1;
                         for (target_entity, _target_pos) in &nearby {
                             if *target_entity == entity {
@@ -920,6 +1110,94 @@ pub fn unit_state_executor_system(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Auto-heal system for Priests: scans nearby allies and heals the lowest-HP one.
+fn auto_heal_system(
+    mut commands: Commands,
+    time: Res<Time>,
+    spatial_grid: Res<SpatialHashGrid>,
+    teams: Res<TeamConfig>,
+    net_role: Res<NetRole>,
+    active_player: Res<ActivePlayer>,
+    mut priests: Query<
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            &mut UnitAbilities,
+            &UnitState,
+            &TacticalRole,
+            Option<&CastingAbility>,
+        ),
+        With<Unit>,
+    >,
+    allies: Query<(Entity, &Health, &Transform, &Faction), With<Unit>>,
+) {
+    for (entity, tf, faction, mut abilities, state, role, casting) in &mut priests {
+        if *role != TacticalRole::Healer {
+            continue;
+        }
+        // Only auto-heal when idle, holding, or attacking (not building, gathering, etc.)
+        if !matches!(
+            state,
+            UnitState::Idle | UnitState::HoldPosition | UnitState::Attacking(_)
+        ) {
+            continue;
+        }
+        // Don't interrupt an active cast
+        if casting.is_some() {
+            continue;
+        }
+        // Client: only process local player's units
+        if *net_role == NetRole::Client && *faction != active_player.0 {
+            continue;
+        }
+        // Check if PriestHeal is available and off cooldown
+        if !abilities.abilities.contains(&AbilityId::PriestHeal) {
+            continue;
+        }
+        if !abilities.is_ready(AbilityId::PriestHeal) {
+            continue;
+        }
+
+        // Scan nearby allies for lowest HP
+        let heal_range = 10.0;
+        let nearby = spatial_grid.query_radius_limited(tf.translation, heal_range, 8);
+        let mut best_target: Option<(Entity, f32)> = None; // (entity, hp_fraction)
+
+        for (nearby_entity, _nearby_pos) in &nearby {
+            if *nearby_entity == entity {
+                continue;
+            }
+            let Ok((ally_entity, ally_health, _ally_tf, ally_faction)) =
+                allies.get(*nearby_entity)
+            else {
+                continue;
+            };
+            if !teams.is_allied(faction, ally_faction) {
+                continue;
+            }
+            let hp_frac = ally_health.current / ally_health.max;
+            if hp_frac >= 0.7 || ally_health.current <= 0.0 {
+                continue; // Only heal if below 70% HP
+            }
+            if best_target.is_none() || hp_frac < best_target.unwrap().1 {
+                best_target = Some((ally_entity, hp_frac));
+            }
+        }
+
+        if let Some((target, _)) = best_target {
+            // Trigger the heal ability
+            abilities.trigger_cooldown(AbilityId::PriestHeal);
+            commands.entity(entity).insert(CastingAbility {
+                ability: AbilityId::PriestHeal,
+                target_pos: None,
+                target_entity: Some(target),
+                cast_timer: Timer::from_seconds(0.3, TimerMode::Once),
+            });
         }
     }
 }

@@ -26,10 +26,7 @@ impl Plugin for ResourcesPlugin {
             )
             .add_systems(
                 OnEnter(AppState::InGame),
-                (
-                    spawn_resource_nodes,
-                    spawn_decorations,
-                )
+                (spawn_resource_nodes, spawn_decorations)
                     .after(crate::ground::spawn_ground)
                     .run_if(not(resource_exists::<crate::save_load::PendingLoad>)),
             )
@@ -391,7 +388,8 @@ fn spawn_resource_nodes(
     let spawn_positions = config.spawn_positions(map_seed.0);
 
     let mut biome_counts: std::collections::HashMap<Biome, u32> = std::collections::HashMap::new();
-    let mut resource_counts: std::collections::HashMap<ResourceType, u32> = std::collections::HashMap::new();
+    let mut resource_counts: std::collections::HashMap<ResourceType, u32> =
+        std::collections::HashMap::new();
 
     let mut x = -half + 5.0;
     while x < half - 5.0 {
@@ -1491,10 +1489,7 @@ fn worker_ai_system(
     >,
     storage_auras: Query<(&Transform, &StorageAura, &BuildingState), With<Building>>,
     footprints: Query<&BuildingFootprint>,
-    mut sfx_state: (
-        bevy::ecs::message::MessageWriter<PlaySfx>,
-        Local<f32>,
-    ),
+    mut sfx_state: (bevy::ecs::message::MessageWriter<PlaySfx>, Local<f32>),
 ) {
     let gather_range = 3.0;
     let deposit_margin = 1.5; // distance from building edge worker can deposit
@@ -2006,7 +2001,15 @@ fn resource_processor_system(
         ),
         With<Building>,
     >,
-    mut nodes: Query<(Entity, &Transform, &mut ResourceNode, Option<&YardResourceNode>), Without<Building>>,
+    mut nodes: Query<
+        (
+            Entity,
+            &Transform,
+            &mut ResourceNode,
+            Option<&YardResourceNode>,
+        ),
+        Without<Building>,
+    >,
     vfx_assets: Option<Res<VfxAssets>>,
     unit_factions: Query<&Faction, With<Unit>>,
 ) {
@@ -2652,12 +2655,24 @@ fn deplete_resource_nodes(
     mut commands: Commands,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     time: Res<Time>,
-    nodes: Query<(Entity, &ResourceNode, &Transform, Option<&YardResourceNode>)>,
+    nodes: Query<
+        (
+            Entity,
+            &ResourceNode,
+            &Transform,
+            Option<&YardResourceNode>,
+            Option<&DepletionAnimation>,
+        ),
+    >,
 ) {
-    for (entity, node, transform, yard_tag) in &nodes {
+    for (entity, node, transform, yard_tag, depletion) in &nodes {
         if node.amount_remaining == 0 {
             // Yard trees regrow — don't despawn them
             if yard_tag.is_some() {
+                continue;
+            }
+            // Already animating
+            if depletion.is_some() {
                 continue;
             }
             event_log.push(
@@ -2665,9 +2680,34 @@ fn deplete_resource_nodes(
                 format!("{} node depleted", node.resource_type.display_name()),
                 crate::ui::event_log_widget::EventCategory::Resource,
                 Some(transform.translation),
-                None, // resource nodes are global, no faction
+                None,
             );
-            commands.entity(entity).try_despawn();
+
+            let kind = match node.resource_type {
+                ResourceType::Wood => {
+                    let angle = rand::random::<f32>() * std::f32::consts::TAU;
+                    DepletionKind::TreeFall {
+                        fall_direction: Vec3::new(angle.cos(), 0.0, angle.sin()),
+                    }
+                }
+                ResourceType::Oil => DepletionKind::OilSpray,
+                _ => DepletionKind::MinePuff,
+            };
+
+            let duration = match kind {
+                DepletionKind::TreeFall { .. } => 1.0,
+                DepletionKind::MinePuff => 0.6,
+                DepletionKind::OilSpray => 0.8,
+            };
+
+            commands
+                .entity(entity)
+                .remove::<ResourceNode>()
+                .insert(DepletionAnimation {
+                    timer: Timer::from_seconds(duration, TimerMode::Once),
+                    kind,
+                    initial_scale: transform.scale,
+                });
         }
     }
 }
@@ -2967,8 +3007,15 @@ fn processor_worker_visual_system(
             continue;
         };
 
-        let Ok((_, building_tf, processor, building_state, building_paused, building_fp, sawmill_yard)) =
-            processors.get(building_entity)
+        let Ok((
+            _,
+            building_tf,
+            processor,
+            building_state,
+            building_paused,
+            building_fp,
+            sawmill_yard,
+        )) = processors.get(building_entity)
         else {
             // Building gone — handled by unit_state_executor
             continue;

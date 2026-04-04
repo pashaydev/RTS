@@ -474,7 +474,9 @@ fn move_units(
             let floor_speed_mult = if is_unit {
                 let current_cell = WallGrid::world_to_grid(transform.translation);
                 let next_cell = WallGrid::world_to_grid(immediate_target);
-                if floor_grid.cells.contains_key(&current_cell) || floor_grid.cells.contains_key(&next_cell) {
+                if floor_grid.cells.contains_key(&current_cell)
+                    || floor_grid.cells.contains_key(&next_cell)
+                {
                     1.35
                 } else {
                     1.0

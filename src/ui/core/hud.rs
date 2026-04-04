@@ -15,7 +15,11 @@ pub struct MainHudRoot;
 #[derive(Component)]
 pub struct PlacementHintLabel;
 
-pub fn spawn_hud_roots(mut commands: Commands, theme: Res<Theme>, existing_roots: Query<Entity, With<UiRoot>>) {
+pub fn spawn_hud_roots(
+    mut commands: Commands,
+    theme: Res<Theme>,
+    existing_roots: Query<Entity, With<UiRoot>>,
+) {
     if !existing_roots.is_empty() {
         return;
     }

@@ -365,7 +365,10 @@ fn fade_out_system(
 /// Apply volume changes from AudioSettings to currently playing music.
 fn sync_music_volume(
     settings: Res<AudioSettings>,
-    mut steady_music: Query<&mut AudioSink, (With<MusicChannel>, Without<FadeIn>, Without<FadeOut>)>,
+    mut steady_music: Query<
+        &mut AudioSink,
+        (With<MusicChannel>, Without<FadeIn>, Without<FadeOut>),
+    >,
     mut fading_in_music: Query<(&mut AudioSink, &mut FadeIn), With<MusicChannel>>,
 ) {
     if !settings.is_changed() {

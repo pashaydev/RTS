@@ -704,8 +704,10 @@ fn mob_patrol(
     const SEPARATION_STRENGTH: f32 = 6.0;
 
     for (entity, mut tf, mut patrol, speed, kind, _health, intent, lock) in &mut mobs {
-        if matches!(intent, Some(CombatIntent::Attack(_, _) | CombatIntent::AttackMove(_, _)))
-            || lock.is_some()
+        if matches!(
+            intent,
+            Some(CombatIntent::Attack(_, _) | CombatIntent::AttackMove(_, _))
+        ) || lock.is_some()
         {
             continue;
         }
@@ -771,8 +773,7 @@ fn mob_patrol(
                         patrol.state = PatrolStateKind::Idle;
                         patrol.patrol_target = None;
                     } else {
-                        let step =
-                            dir.normalize() * speed.0 * 0.5 * time.delta_secs() + sep_step;
+                        let step = dir.normalize() * speed.0 * 0.5 * time.delta_secs() + sep_step;
                         tf.translation += step;
                         tf.translation.y =
                             height_map.sample(tf.translation.x, tf.translation.z) + y_off;
@@ -791,8 +792,7 @@ fn mob_patrol(
                     patrol.state = PatrolStateKind::Idle;
                 } else {
                     // Move faster when returning (1.5x speed)
-                    let step =
-                        dir.normalize() * speed.0 * 1.5 * time.delta_secs() + sep_step;
+                    let step = dir.normalize() * speed.0 * 1.5 * time.delta_secs() + sep_step;
                     tf.translation += step;
                     tf.translation.y =
                         height_map.sample(tf.translation.x, tf.translation.z) + y_off;
@@ -834,7 +834,9 @@ fn mob_aggro(
         if opt_think_timer.is_some_and(|timer| now < timer.next_think_at) {
             continue;
         }
-        if matches!(intent, Some(CombatIntent::Attack(_, _))) && lock.is_some_and(|lock| now <= lock.locked_until) {
+        if matches!(intent, Some(CombatIntent::Attack(_, _)))
+            && lock.is_some_and(|lock| now <= lock.locked_until)
+        {
             continue;
         }
         // Prefer units over buildings: only target buildings if no unit is in range
@@ -938,7 +940,10 @@ fn mob_leash(
             _ => lock.map(|lock| lock.target),
         };
         if target_entity.is_none() {
-            if matches!(patrol.state, PatrolStateKind::Chasing | PatrolStateKind::Attacking) {
+            if matches!(
+                patrol.state,
+                PatrolStateKind::Chasing | PatrolStateKind::Attacking
+            ) {
                 patrol.state = PatrolStateKind::Returning;
             }
             continue;
@@ -953,12 +958,14 @@ fn mob_leash(
 
         // Target gone or leash exceeded → return home
         let target_gone = target_entity.is_some_and(|target| !targets.contains(target));
-        if target_gone || dist_from_home > LEASH_DISTANCE || patrol.chase_elapsed > MAX_CHASE_SECS
-        {
+        if target_gone || dist_from_home > LEASH_DISTANCE || patrol.chase_elapsed > MAX_CHASE_SECS {
             patrol.state = PatrolStateKind::Returning;
             patrol.chase_elapsed = 0.0;
             reset_combat_state(&mut commands, mob_entity);
-            commands.entity(mob_entity).remove::<MoveTarget>().remove::<ChaseTimer>();
+            commands
+                .entity(mob_entity)
+                .remove::<MoveTarget>()
+                .remove::<ChaseTimer>();
             continue;
         }
 

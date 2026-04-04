@@ -2,22 +2,22 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use game_state::message::{ClientMessage, InputCommand, PlayerInput, ServerMessage};
 
+use crate::audio::{PlaySfx, SfxKind};
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::camera;
+use crate::combat::{
+    apply_manual_attack_intent, apply_manual_attack_move_intent, apply_manual_hold_intent,
+    apply_manual_move_intent, clear_combat_intent,
+};
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::minimap::MinimapInteraction;
 use crate::multiplayer::host_systems::execute_input_command;
 use crate::multiplayer::{ClientNetState, HostNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
-use crate::audio::{PlaySfx, SfxKind};
-use crate::combat::{
-    apply_manual_attack_intent, apply_manual_attack_move_intent, apply_manual_hold_intent,
-    apply_manual_move_intent, clear_combat_intent,
-};
 
 use super::picking::{ray_aabb_dist, ray_sphere_dist};
-use super::{enqueue_task, clear_task_queue, set_current_task};
+use super::{clear_task_queue, enqueue_task, set_current_task};
 
 // ── Right-click move / contextual actions ──
 
@@ -76,8 +76,7 @@ pub(crate) fn handle_right_click_move(
     ),
 ) {
     let (camera_q, windows) = viewport;
-    let (mobs, resource_nodes, construction_q, processor_buildings) =
-        target_queries;
+    let (mobs, resource_nodes, construction_q, processor_buildings) = target_queries;
     let (other_units, other_buildings) = enemy_detect;
     let (assigned_workers_q, building_aabb_q, height_map, graphics) = picking_extra;
     let (minimap_interaction, ui_clicked, ui_press, mut sfx) = ui_flags;
@@ -108,7 +107,8 @@ pub(crate) fn handle_right_click_move(
     let Ok((camera, cam_gt)) = camera_q.single() else {
         return;
     };
-    let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics) else {
+    let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics)
+    else {
         return;
     };
 
@@ -221,7 +221,7 @@ pub(crate) fn handle_right_click_move(
             .find(|h| h.action == RClickAction::AttackEnemy)
         {
             Some((h.entity, h.action))
-        }  else if let Some(h) = close_hits
+        } else if let Some(h) = close_hits
             .iter()
             .find(|h| h.action == RClickAction::GatherResource)
         {
@@ -389,7 +389,10 @@ pub(crate) fn handle_right_click_move(
                         );
                     }
                 }
-                sfx.write(PlaySfx { kind: SfxKind::UnitAttack, position: None });
+                sfx.write(PlaySfx {
+                    kind: SfxKind::UnitAttack,
+                    position: None,
+                });
             }
             RClickAction::AssignProcessor => {
                 if let Ok((_, processor, state, proc_faction)) =
@@ -477,11 +480,7 @@ pub(crate) fn handle_right_click_move(
                                 QueuedTask::Build(target_entity),
                             );
                         } else {
-                            clear_combat_intent(
-                                &mut commands,
-                                *entity,
-                                time.elapsed_secs_f64(),
-                            );
+                            clear_combat_intent(&mut commands, *entity, time.elapsed_secs_f64());
                             commands
                                 .entity(*entity)
                                 .remove::<AttackTarget>()
@@ -610,7 +609,6 @@ pub(crate) fn handle_right_click_move(
         }
     } else {
         if let Some(point) = height_map.raycast(ray) {
-
             // Ground fallback check for clicking slightly outside construction bounds
             let nearby_construction_radius = 5.0;
             let mut nearest_site: Option<(Entity, f32)> = None;
@@ -636,11 +634,7 @@ pub(crate) fn handle_right_click_move(
                                 QueuedTask::Build(site_entity),
                             );
                         } else {
-                            clear_combat_intent(
-                                &mut commands,
-                                *entity,
-                                time.elapsed_secs_f64(),
-                            );
+                            clear_combat_intent(&mut commands, *entity, time.elapsed_secs_f64());
                             commands
                                 .entity(*entity)
                                 .remove::<AttackTarget>()
@@ -746,7 +740,10 @@ pub(crate) fn handle_right_click_move(
                         }
                     }
                 }
-                sfx.write(PlaySfx { kind: SfxKind::UnitMove, position: Some(point) });
+                sfx.write(PlaySfx {
+                    kind: SfxKind::UnitMove,
+                    position: Some(point),
+                });
             }
         }
     }
@@ -934,7 +931,8 @@ pub(crate) fn handle_unit_command_hotkeys(
     let Ok((camera, cam_gt)) = camera_q.single() else {
         return;
     };
-    let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics) else {
+    let Some(ray) = camera::viewport_ray_from_window_cursor(camera, cam_gt, window, &graphics)
+    else {
         return;
     };
     let Some(dist) = ray.intersect_plane(Vec3::ZERO, InfinitePlane3d::new(Vec3::Y)) else {
@@ -1011,11 +1009,7 @@ pub(crate) fn handle_unit_command_hotkeys(
                         QueuedTask::Patrol(point),
                     );
                 } else {
-                    clear_combat_intent(
-                        &mut commands,
-                        *entity,
-                        time.elapsed_secs_f64(),
-                    );
+                    clear_combat_intent(&mut commands, *entity, time.elapsed_secs_f64());
                     commands
                         .entity(*entity)
                         .remove::<AttackTarget>()

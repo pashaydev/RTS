@@ -123,8 +123,12 @@ fn dispatch_page(
     match *page {
         MenuPage::Title => pages::spawn_title_page(commands, container, fonts, theme),
         MenuPage::NewGame => pages::spawn_new_game_page(commands, container, config, fonts, theme),
-        MenuPage::Options => pages::spawn_options_page(commands, container, graphics, audio_settings, fonts, theme),
-        MenuPage::Multiplayer => multiplayer::spawn_multiplayer_page(commands, container, fonts, theme),
+        MenuPage::Options => {
+            pages::spawn_options_page(commands, container, graphics, audio_settings, fonts, theme)
+        }
+        MenuPage::Multiplayer => {
+            multiplayer::spawn_multiplayer_page(commands, container, fonts, theme)
+        }
         MenuPage::HostLobby => {
             multiplayer::spawn_host_lobby_page(commands, container, config, fonts, lobby, theme)
         }
@@ -255,6 +259,7 @@ pub(crate) fn handle_menu_buttons(
     client_state: Option<Res<ClientNetState>>,
     db: Res<GameDatabase>,
     profile: Res<ActiveProfile>,
+    mut widget_registry: ResMut<crate::ui::core::framework::WidgetRegistry>,
 ) {
     for event in click_events.read() {
         let Ok(btn) = buttons.get(event.entity) else {
@@ -348,11 +353,18 @@ pub(crate) fn handle_menu_buttons(
                 // Refresh the page
                 commands.insert_resource(MenuDirty);
             }
+            MenuAction::ResetWidgetLayout => {
+                *widget_registry = crate::ui::core::framework::WidgetRegistry::default();
+                info!("Widget layout reset to defaults");
+            }
         }
     }
 }
 
-fn restore_config_from_save(config: &mut GameSetupConfig, saved: &crate::save_load::SavedGameConfig) {
+fn restore_config_from_save(
+    config: &mut GameSetupConfig,
+    saved: &crate::save_load::SavedGameConfig,
+) {
     config.player_name = saved.player_name.clone();
     config.local_player_slot = saved.local_player_slot;
     config.player_teams = saved.player_teams;
@@ -603,7 +615,11 @@ pub(crate) fn handle_selector_clicks(
             | SelectorField::ChromaticAberration
             | SelectorField::UiScale
             | SelectorField::ThemeMode => {
-                super::options::apply_selector_change(&selector.field, selector.index, &mut graphics);
+                super::options::apply_selector_change(
+                    &selector.field,
+                    selector.index,
+                    &mut graphics,
+                );
             }
             SelectorField::MusicVolume | SelectorField::SfxVolume => {
                 // Handled by volume_slider_system.
@@ -999,7 +1015,11 @@ pub(crate) fn menu_keyboard_nav(
         keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter);
 
     if up {
-        nav.index = if nav.index == 0 { count - 1 } else { nav.index - 1 };
+        nav.index = if nav.index == 0 {
+            count - 1
+        } else {
+            nav.index - 1
+        };
     }
     if down {
         nav.index = (nav.index + 1) % count;
@@ -1138,7 +1158,9 @@ pub(crate) fn menu_selector_keyboard_nav(
 
         if new != current {
             let (target_entity, _, _) = child_selectors[new];
-            click_events.write(UiClickEvent { entity: target_entity });
+            click_events.write(UiClickEvent {
+                entity: target_entity,
+            });
         }
     }
 }
@@ -1219,12 +1241,7 @@ pub(crate) fn reset_nav_focus_on_page_change(
 /// Uses `RelativeCursorPosition` to map cursor to 0.0–1.0 within the track.
 pub(crate) fn volume_slider_system(
     mouse: Res<ButtonInput<MouseButton>>,
-    sliders: Query<(
-        Entity,
-        &RangeSlider,
-        &Interaction,
-        &RelativeCursorPosition,
-    )>,
+    sliders: Query<(Entity, &RangeSlider, &Interaction, &RelativeCursorPosition)>,
     mut fills: Query<(&ChildOf, &mut Node), With<RangeSliderFill>>,
     mut labels: Query<(&RangeSliderLabel, &mut Text)>,
     mut graphics: ResMut<GraphicsSettings>,
@@ -1273,21 +1290,19 @@ pub(crate) fn volume_slider_system(
 
     let (pct, value_label) = match slider.field {
         SelectorField::Resolution => {
-            let steps = slider.steps.unwrap_or(super::options::RESOLUTION_OPTIONS.len());
+            let steps = slider
+                .steps
+                .unwrap_or(super::options::RESOLUTION_OPTIONS.len());
             if steps == 0 {
                 return;
             }
             let max_index = steps.saturating_sub(1) as f32;
             let index = (t * max_index).round() as usize;
-            super::options::apply_selector_change(
-                &SelectorField::Resolution,
-                index,
-                &mut graphics,
-            );
+            super::options::apply_selector_change(&SelectorField::Resolution, index, &mut graphics);
             let (w, h) = graphics.resolution;
-            let pct = super::options::resolution_slider_value(
-                super::options::resolution_index(graphics.resolution),
-            ) * 100.0;
+            let pct = super::options::resolution_slider_value(super::options::resolution_index(
+                graphics.resolution,
+            )) * 100.0;
             (pct, format!("{w}x{h}"))
         }
         SelectorField::MusicVolume => {

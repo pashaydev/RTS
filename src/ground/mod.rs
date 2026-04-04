@@ -60,7 +60,10 @@ impl Plugin for GroundPlugin {
         )
         .add_systems(
             Update,
-            (enqueue_building_terrain_updates, process_terrain_shape_update_queue)
+            (
+                enqueue_building_terrain_updates,
+                process_terrain_shape_update_queue,
+            )
                 .chain()
                 .in_set(GameFlowSet::Simulation)
                 .run_if(in_state(AppState::InGame)),

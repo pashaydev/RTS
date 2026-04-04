@@ -369,7 +369,10 @@ fn record_match_system(
 
         // Only rate games vs AI Medium+ or multiplayer
         let is_rated = *net_role != NetRole::Offline
-            || game_config.slots.iter().any(|s| matches!(s, SlotOccupant::Ai(d) if *d != AiDifficulty::Easy));
+            || game_config
+                .slots
+                .iter()
+                .any(|s| matches!(s, SlotOccupant::Ai(d) if *d != AiDifficulty::Easy));
 
         if is_rated {
             db.update_elo(&profile.id, match_id, local_won, opponent_rating);

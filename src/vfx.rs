@@ -20,6 +20,8 @@ impl Plugin for VfxPlugin {
                 footstep_dust_spawner,
                 update_footstep_dust,
                 update_combat_dust,
+                spawn_depletion_vfx,
+                animate_depletion,
                 summon_vfx_system,
                 animate_spawn,
                 animate_attack_lunge,
@@ -126,6 +128,7 @@ fn update_projectiles(
             Option<&ArmorType>,
             Option<&Faction>,
             Option<&mut ReservedIncomingDamage>,
+            Option<&HitRecoil>,
         ),
         Without<Projectile>,
     >,
@@ -134,20 +137,21 @@ fn update_projectiles(
     let Some(vfx) = vfx_assets else { return };
 
     for (proj_entity, mut proj_tf, projectile, opt_aoe) in &mut projectiles {
-        let Ok((target_tf, _, _, _, _)) = targets.get(projectile.target) else {
+        let Ok((target_tf, _, _, _, _, opt_existing_recoil)) = targets.get(projectile.target) else {
             // Target gone, despawn projectile
             commands.entity(proj_entity).try_despawn();
             continue;
         };
 
         let target_pos = target_tf.translation;
-        let target_scale = target_tf.scale;
+        // Use existing recoil's base_scale to avoid ratcheting scale up on repeated hits
+        let target_scale = opt_existing_recoil.map_or(target_tf.scale, |r| r.base_scale);
         let dir = target_pos - proj_tf.translation;
         let dist = dir.length();
 
         if dist < 0.5 {
             {
-                let Ok((_, mut health, opt_armor, _, opt_reserved)) =
+                let Ok((_, mut health, opt_armor, _, opt_reserved, _)) =
                     targets.get_mut(projectile.target)
                 else {
                     commands.entity(proj_entity).try_despawn();
@@ -174,7 +178,7 @@ fn update_projectiles(
                     if *splash_entity == projectile.target {
                         continue; // already damaged primary target
                     }
-                    if let Ok((_, mut splash_health, splash_armor, _, _)) =
+                    if let Ok((_, mut splash_health, splash_armor, _, _, _)) =
                         targets.get_mut(*splash_entity)
                     {
                         let splash_dist = (target_pos - *splash_pos).length();
@@ -591,6 +595,162 @@ pub fn apply_camera_shake(
 
         if shake.timer.is_finished() {
             commands.entity(entity).remove::<CameraShake>();
+        }
+    }
+}
+
+// ── Resource Depletion VFX ──
+
+/// Spawns burst particles when a depletion animation starts.
+fn spawn_depletion_vfx(
+    mut commands: Commands,
+    vfx_assets: Option<Res<VfxAssets>>,
+    existing_particles: Query<(), With<GatherParticle>>,
+    new_depletions: Query<(&Transform, &DepletionAnimation), Added<DepletionAnimation>>,
+) {
+    let Some(vfx) = vfx_assets else { return };
+    let particle_count = existing_particles.iter().count();
+
+    for (transform, depletion) in &new_depletions {
+        let pos = transform.translation;
+
+        match depletion.kind {
+            DepletionKind::MinePuff => {
+                // Rock chunks + dust burst radiating outward
+                let count = 10.min(MAX_VFX_PARTICLES.saturating_sub(particle_count));
+                for i in 0..count {
+                    let frac = i as f32 / count as f32;
+                    let angle = std::f32::consts::TAU * frac;
+                    let outward = Vec3::new(angle.cos(), 0.0, angle.sin());
+                    let up_bias = 1.5 + (frac * 13.7).sin().abs() * 1.5;
+                    let velocity = outward * (1.8 + frac * 1.2) + Vec3::Y * up_bias;
+                    let mesh = if i % 2 == 0 {
+                        vfx.cube_mesh.clone()
+                    } else {
+                        vfx.sphere_mesh.clone()
+                    };
+                    commands.spawn((
+                        GatherParticle {
+                            timer: Timer::from_seconds(0.6, TimerMode::Once),
+                            velocity,
+                            start_scale: 0.1 + frac * 0.06,
+                        },
+                        FogHideable::Vfx,
+                        Mesh3d(mesh),
+                        MeshMaterial3d(vfx.dust_material.clone()),
+                        Transform::from_translation(pos + Vec3::Y * 0.5)
+                            .with_scale(Vec3::splat(0.1)),
+                        NotShadowCaster,
+                        NotShadowReceiver,
+                    ));
+                }
+            }
+            DepletionKind::OilSpray => {
+                // Dark particles spraying upward
+                let count = 8.min(MAX_VFX_PARTICLES.saturating_sub(particle_count));
+                let material = vfx
+                    .resource_particle_materials
+                    .get(&crate::components::ResourceType::Oil)
+                    .cloned()
+                    .unwrap_or_else(|| vfx.dust_material.clone());
+                for i in 0..count {
+                    let frac = i as f32 / count as f32;
+                    let angle = std::f32::consts::TAU * frac;
+                    let spread = Vec3::new(angle.cos() * 0.6, 0.0, angle.sin() * 0.6);
+                    let velocity = spread * 1.5 + Vec3::Y * (3.0 + frac * 2.0);
+                    commands.spawn((
+                        GatherParticle {
+                            timer: Timer::from_seconds(0.7, TimerMode::Once),
+                            velocity,
+                            start_scale: 0.08 + frac * 0.04,
+                        },
+                        FogHideable::Vfx,
+                        Mesh3d(vfx.sphere_mesh.clone()),
+                        MeshMaterial3d(material.clone()),
+                        Transform::from_translation(pos + Vec3::Y * 0.3)
+                            .with_scale(Vec3::splat(0.08)),
+                        NotShadowCaster,
+                        NotShadowReceiver,
+                    ));
+                }
+            }
+            DepletionKind::TreeFall { .. } => {
+                // Small wood chip particles at the base
+                let count = 4.min(MAX_VFX_PARTICLES.saturating_sub(particle_count));
+                let material = vfx
+                    .resource_particle_materials
+                    .get(&crate::components::ResourceType::Wood)
+                    .cloned()
+                    .unwrap_or_else(|| vfx.dust_material.clone());
+                for i in 0..count {
+                    let frac = i as f32 / count as f32;
+                    let angle = std::f32::consts::TAU * frac;
+                    let velocity = Vec3::new(angle.cos() * 0.8, 1.0 + frac * 0.5, angle.sin() * 0.8);
+                    commands.spawn((
+                        GatherParticle {
+                            timer: Timer::from_seconds(0.5, TimerMode::Once),
+                            velocity,
+                            start_scale: 0.07,
+                        },
+                        FogHideable::Vfx,
+                        Mesh3d(vfx.cube_mesh.clone()),
+                        MeshMaterial3d(material.clone()),
+                        Transform::from_translation(pos + Vec3::Y * 0.2)
+                            .with_scale(Vec3::splat(0.07)),
+                        NotShadowCaster,
+                        NotShadowReceiver,
+                    ));
+                }
+            }
+        }
+    }
+}
+
+/// Animates depleting resource nodes (shrink, fall, sink) then despawns them.
+fn animate_depletion(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut query: Query<(Entity, &mut DepletionAnimation, &mut Transform)>,
+) {
+    for (entity, mut depletion, mut tf) in &mut query {
+        depletion.timer.tick(time.delta());
+        let t = depletion.timer.fraction();
+
+        match depletion.kind {
+            DepletionKind::TreeFall { fall_direction } => {
+                // Ease-in: accelerating fall (t^2)
+                let eased = t * t;
+                // Rotate up to ~85 degrees around an axis perpendicular to fall direction
+                let fall_angle = eased * std::f32::consts::FRAC_PI_2 * 0.94;
+                let rotation_axis = Vec3::Y.cross(fall_direction).normalize_or_zero();
+                let rotation_axis = if rotation_axis.length_squared() < 0.01 {
+                    Vec3::X // fallback
+                } else {
+                    rotation_axis
+                };
+                tf.rotation = Quat::from_axis_angle(rotation_axis, fall_angle);
+                // Slight scale reduction at the end
+                let scale_factor = 1.0 - eased * 0.15;
+                tf.scale = depletion.initial_scale * scale_factor;
+            }
+            DepletionKind::MinePuff => {
+                // Shrink and sink into ground
+                let eased = t * t; // ease-in
+                let scale_factor = 1.0 - eased;
+                tf.scale = depletion.initial_scale * scale_factor.max(0.01);
+                tf.translation.y -= 0.8 * time.delta_secs();
+            }
+            DepletionKind::OilSpray => {
+                // Shrink and sink, slightly slower
+                let eased = t * t;
+                let scale_factor = 1.0 - eased;
+                tf.scale = depletion.initial_scale * scale_factor.max(0.01);
+                tf.translation.y -= 0.5 * time.delta_secs();
+            }
+        }
+
+        if depletion.timer.is_finished() {
+            commands.entity(entity).try_despawn();
         }
     }
 }

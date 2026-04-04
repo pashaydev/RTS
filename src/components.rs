@@ -720,7 +720,31 @@ impl UnitStance {
     }
 }
 
-/// High-level role hint for the AI decision layer.
+/// Tactical role — drives unit-type-specific combat behavior (kiting, frontlining, healing, etc.).
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum TacticalRole {
+    /// Default: attack nearest scored target, no special positioning.
+    #[default]
+    Standard,
+    /// Ranged DPS (Archer, Mage): maintain distance from melee threats, kite backward.
+    RangedKiter,
+    /// Frontline (Tank, Knight): prefer targeting ranged/caster enemies to protect backline.
+    Frontline,
+    /// Support (Priest): auto-heal lowest-HP nearby ally.
+    Healer,
+    /// Mobile striker (Cavalry): bypass frontline, target ranged/caster units.
+    Flanker,
+    /// Siege (Catapult): stay back, target structures (handled by existing targeting profile).
+    SiegeSupport,
+}
+
+/// Snapshot of ongoing combat for ally-assist detection.
+/// Updated every few frames by `update_combat_hotspots`.
+#[derive(Resource, Default)]
+pub struct CombatHotspots {
+    /// (position of fighting ally, their attack target, ally's faction)
+    pub spots: Vec<(Vec3, Entity, Faction)>,
+}
 
 /// Remembers where a unit was when it started chasing a target (for leash return).
 #[derive(Component, Clone, Copy, Debug)]
@@ -2371,6 +2395,24 @@ pub struct CombatDust {
     pub start_scale: f32,
 }
 
+/// Visual effect when a resource node is fully depleted.
+#[derive(Component)]
+pub struct DepletionAnimation {
+    pub timer: Timer,
+    pub kind: DepletionKind,
+    pub initial_scale: Vec3,
+}
+
+#[derive(Clone, Copy)]
+pub enum DepletionKind {
+    /// Trees: tip over like felled timber
+    TreeFall { fall_direction: Vec3 },
+    /// Mines (Iron, Stone, Copper, Gold): dust/rock puff, shrink into ground
+    MinePuff,
+    /// Oil: dark particle spray, sink
+    OilSpray,
+}
+
 /// Marks a unit as dying — plays death animation then despawns.
 #[derive(Component)]
 pub struct Dying {
@@ -2901,6 +2943,7 @@ impl IconAssets {
             EntityKind::FireElemental => self.fire_elemental.clone(),
         }
     }
+
 }
 
 // ── Tree growth ──
@@ -3304,8 +3347,7 @@ pub struct ObstacleGrid {
 impl ObstacleGrid {
     /// Is a world-space position inside the border hills (unbuildable edge)?
     fn is_in_border(&self, x: f32, z: f32) -> bool {
-        self.playable_half > 0.0
-            && (x.abs() > self.playable_half || z.abs() > self.playable_half)
+        self.playable_half > 0.0 && (x.abs() > self.playable_half || z.abs() > self.playable_half)
     }
 
     /// Is a single grid cell blocked by an obstacle or border?
@@ -3705,7 +3747,6 @@ impl FactionColors {
             _ => TeamColor::Black,
         }
     }
-
 }
 
 /// Tracks which construction stage model is currently shown (0=foundation, 1=partial, 2=complete).
@@ -3923,12 +3964,16 @@ pub struct TextInputField {
 impl TextInputField {
     /// Returns `(start, end)` of the current selection, or `None` if nothing is selected.
     pub fn selection_range(&self) -> Option<(usize, usize)> {
-        self.selection_anchor.map(|anchor| {
-            let start = anchor.min(self.cursor_pos);
-            let end = anchor.max(self.cursor_pos);
-            if start == end { return (start, end); }
-            (start, end)
-        }).filter(|(s, e)| s != e)
+        self.selection_anchor
+            .map(|anchor| {
+                let start = anchor.min(self.cursor_pos);
+                let end = anchor.max(self.cursor_pos);
+                if start == end {
+                    return (start, end);
+                }
+                (start, end)
+            })
+            .filter(|(s, e)| s != e)
     }
 
     /// Delete the current selection, returning the deleted text. Resets anchor.

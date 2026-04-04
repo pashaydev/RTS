@@ -225,8 +225,10 @@ pub fn update_action_bar(
     ),
     ui_state: (Res<IconAssets>, Res<RallyPointMode>),
     formation: Res<ActiveFormation>,
+    faction_ages: Res<crate::ages::FactionAges>,
 ) {
     let (all_completed, base_state, active_player, all_resources) = player_state;
+    let current_age = faction_ages.get_age(&active_player.0);
     let (all_units, all_training_queues, all_buildings_for_cap) = unit_cap_queries;
     let (
         action_bar,
@@ -431,6 +433,7 @@ pub fn update_action_bar(
                     player_res,
                     layout_bucket,
                     &theme,
+                    current_age,
                 );
             } else {
                 spawn_found_base_panel(
@@ -1975,7 +1978,15 @@ fn spawn_building_action_bar(
     if let Some(queue) = training_queue {
         if !queue.queue.is_empty() || queue.timer.is_some() {
             spawn_separator(commands, container, theme);
-            spawn_training_queue_ui(commands, container, queue, icons, registry, layout_bucket, theme);
+            spawn_training_queue_ui(
+                commands,
+                container,
+                queue,
+                icons,
+                registry,
+                layout_bucket,
+                theme,
+            );
         }
     }
 
@@ -2432,6 +2443,7 @@ fn spawn_building_grid(
     player_res: &PlayerResources,
     layout_bucket: u8,
     theme: &Theme,
+    current_age: crate::ages::Age,
 ) {
     let building_kinds = registry.building_kinds();
     let available: Vec<EntityKind> = building_kinds
@@ -2439,6 +2451,11 @@ fn spawn_building_grid(
         .copied()
         .filter(|kind| {
             if founded && *kind == EntityKind::Base {
+                return false;
+            }
+            // Filter by age requirement
+            let required_age = crate::ages::required_age_for_building(*kind);
+            if current_age < required_age {
                 return false;
             }
             let bp = registry.get(*kind);

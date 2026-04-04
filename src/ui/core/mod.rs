@@ -12,6 +12,7 @@ pub mod tooltips;
 use bevy::prelude::*;
 
 use crate::components::*;
+use crate::database::GameDatabase;
 use crate::selection::SelectionSet;
 
 pub struct UiCorePlugin;
@@ -40,6 +41,8 @@ impl Plugin for UiCorePlugin {
             .init_resource::<framework::WidgetResizeState>()
             .init_resource::<framework::WidgetDragState>()
             .init_resource::<framework::GridInteractionActive>()
+            .init_resource::<framework::WidgetEditState>()
+            .init_resource::<framework::ScrollConsumedByWidget>()
             .init_resource::<ControlGroupState>()
             .configure_sets(
                 Update,
@@ -113,6 +116,8 @@ impl Plugin for UiCorePlugin {
                     framework::handle_widget_scroll,
                     framework::handle_widget_resize,
                     framework::update_resize_handle_visuals,
+                    framework::update_edit_mode_visuals,
+                    framework::dismiss_edit_mode,
                     framework::toggle_grid_overlay,
                 )
                     .in_set(UiCoreSet::Framework)
@@ -165,6 +170,14 @@ impl Plugin for UiCorePlugin {
                     .in_set(GameFlowSet::Ui),
             )
             // Font fallback in PostUpdate
-            .add_systems(PostUpdate, fonts::apply_default_fonts);
+            .add_systems(PostUpdate, fonts::apply_default_fonts)
+            // Load saved widget layout from DB
+            .add_systems(Startup, load_widget_layout_from_db);
+    }
+}
+
+fn load_widget_layout_from_db(db: Res<GameDatabase>, mut registry: ResMut<framework::WidgetRegistry>) {
+    if let Some(saved) = db.load_settings_blob::<framework::WidgetRegistry>("widget_layout") {
+        *registry = saved;
     }
 }

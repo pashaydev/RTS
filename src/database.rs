@@ -26,7 +26,8 @@ impl Plugin for DatabasePlugin {
                 Update,
                 sync_settings_to_db.run_if(
                     resource_changed::<GraphicsSettings>
-                        .or(resource_changed::<crate::audio::AudioSettings>),
+                        .or(resource_changed::<crate::audio::AudioSettings>)
+                        .or(resource_changed::<crate::ui::core::framework::WidgetRegistry>),
                 ),
             );
     }
@@ -35,12 +36,19 @@ impl Plugin for DatabasePlugin {
 /// Call early in `main()` before building the Bevy `App`.
 /// Opens the database, creates the profile, and returns resources + loaded settings
 /// so they can be inserted before window creation.
-pub fn init_early() -> (GameDatabase, ActiveProfile, GraphicsSettings, crate::audio::AudioSettings) {
+pub fn init_early() -> (
+    GameDatabase,
+    ActiveProfile,
+    GraphicsSettings,
+    crate::audio::AudioSettings,
+) {
     let db = GameDatabase::open();
     let profile = db.get_or_create_active_profile();
-    let graphics = db.load_settings_blob::<GraphicsSettings>("graphics")
+    let graphics = db
+        .load_settings_blob::<GraphicsSettings>("graphics")
         .unwrap_or_default();
-    let audio = db.load_settings_blob::<crate::audio::AudioSettings>("audio")
+    let audio = db
+        .load_settings_blob::<crate::audio::AudioSettings>("audio")
         .unwrap_or_default();
     (db, profile, graphics, audio)
 }
@@ -482,9 +490,7 @@ impl GameDatabase {
                         victory
                             .faction_status
                             .get(&local_faction)
-                            .map(|s| {
-                                *s != crate::victory::FactionStatus::Eliminated
-                            })
+                            .map(|s| *s != crate::victory::FactionStatus::Eliminated)
                             .unwrap_or(false)
                     } else {
                         w == local_faction
@@ -943,7 +949,15 @@ impl GameDatabase {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (match_id, file_path, file_size_bytes, label, duration_secs, map_seed, map_size);
+            let _ = (
+                match_id,
+                file_path,
+                file_size_bytes,
+                label,
+                duration_secs,
+                map_seed,
+                map_size,
+            );
             None
         }
     }
@@ -979,9 +993,7 @@ impl GameDatabase {
 
     pub fn delete_replay(&self, id: i64) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.with_conn(|conn| {
-            conn.execute("DELETE FROM replay_metadata WHERE id = ?1", [id])
-        });
+        self.with_conn(|conn| conn.execute("DELETE FROM replay_metadata WHERE id = ?1", [id]));
     }
 
     // ── Keybind profiles ────────────────────────────────────────────────
@@ -1057,7 +1069,15 @@ impl GameDatabase {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (profile_id, label, elapsed_secs, map_size, map_seed, num_players, data);
+            let _ = (
+                profile_id,
+                label,
+                elapsed_secs,
+                map_size,
+                map_seed,
+                num_players,
+                data,
+            );
             None
         }
     }
@@ -1112,9 +1132,7 @@ impl GameDatabase {
 
     pub fn delete_save(&self, save_id: i64) {
         #[cfg(not(target_arch = "wasm32"))]
-        self.with_conn(|conn| {
-            conn.execute("DELETE FROM game_saves WHERE id = ?1", [save_id])
-        });
+        self.with_conn(|conn| conn.execute("DELETE FROM game_saves WHERE id = ?1", [save_id]));
     }
 
     pub fn rename_save(&self, save_id: i64, label: &str) {
@@ -1161,6 +1179,7 @@ fn sync_settings_to_db(
     db: Res<GameDatabase>,
     graphics: Res<GraphicsSettings>,
     audio: Res<crate::audio::AudioSettings>,
+    widget_registry: Res<crate::ui::core::framework::WidgetRegistry>,
 ) {
     if !db.is_available() {
         return;
@@ -1175,6 +1194,12 @@ fn sync_settings_to_db(
     if audio.is_changed() {
         if let Ok(json) = serde_json::to_string_pretty(&*audio) {
             db.save_setting("audio", "_blob", &json);
+        }
+    }
+
+    if widget_registry.is_changed() {
+        if let Ok(json) = serde_json::to_string_pretty(&*widget_registry) {
+            db.save_setting("widget_layout", "_blob", &json);
         }
     }
 }

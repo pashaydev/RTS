@@ -12,7 +12,12 @@ use super::super::*;
 
 // ── Multiplayer Page ──
 
-pub(crate) fn spawn_multiplayer_page(commands: &mut Commands, container: Entity, fonts: &UiFonts, theme: &Theme) {
+pub(crate) fn spawn_multiplayer_page(
+    commands: &mut Commands,
+    container: Entity,
+    fonts: &UiFonts,
+    theme: &Theme,
+) {
     spawn_page_header(
         commands,
         container,
@@ -854,7 +859,11 @@ fn spawn_client_slot_card(
                     font_size: theme.typography.medium,
                     ..default()
                 },
-                TextColor(if is_me { theme.colors.accent } else { faction_color }),
+                TextColor(if is_me {
+                    theme.colors.accent
+                } else {
+                    faction_color
+                }),
             ));
             card.spawn((
                 Text::new(type_label),

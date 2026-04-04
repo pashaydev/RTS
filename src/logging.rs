@@ -1,9 +1,9 @@
 use bevy::app::AppExit;
 use bevy::ecs::message::MessageReader;
-use bevy::log::BoxedLayer;
 use bevy::log::tracing::{self, Event, Subscriber};
 use bevy::log::tracing_subscriber::layer::{Context, Layer};
 use bevy::log::tracing_subscriber::registry::LookupSpan;
+use bevy::log::BoxedLayer;
 use bevy::prelude::*;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -84,7 +84,9 @@ impl SessionLog {
             SessionLogFile {
                 session_id: state.session_id.clone(),
                 started_at_unix_ms: state.started_at_unix_ms,
-                finished_at_unix_ms: state.finished_at_unix_ms.unwrap_or(state.started_at_unix_ms),
+                finished_at_unix_ms: state
+                    .finished_at_unix_ms
+                    .unwrap_or(state.started_at_unix_ms),
                 base_dir: state.base_dir.to_string_lossy().into_owned(),
                 output_path: state.output_path.to_string_lossy().into_owned(),
                 entries: state.entries.clone(),
@@ -99,7 +101,10 @@ impl SessionLog {
         match serde_json::to_vec_pretty(&snapshot) {
             Ok(bytes) => {
                 if let Err(err) = std::fs::write(&output_path, bytes) {
-                    eprintln!("Failed to write session log JSON to {:?}: {}", output_path, err);
+                    eprintln!(
+                        "Failed to write session log JSON to {:?}: {}",
+                        output_path, err
+                    );
                 }
             }
             Err(err) => {
@@ -231,7 +236,9 @@ where
             file: metadata.file().map(str::to_string),
             line: metadata.line(),
             fields: Value::Object(visitor.fields),
-            message: visitor.message.unwrap_or_else(|| metadata.name().to_string()),
+            message: visitor
+                .message
+                .unwrap_or_else(|| metadata.name().to_string()),
         });
     }
 }

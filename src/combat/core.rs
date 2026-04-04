@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use crate::blueprints::{EntityKind, IsRanged};
 use crate::components::*;
 use crate::multiplayer::NetRole;
-use crate::spatial::WallSpatialGrid;
+use crate::spatial::{SpatialHashGrid, WallSpatialGrid};
 
 use super::{slot_anchor, CombatBudgetState};
 
@@ -39,6 +39,7 @@ fn intended_attack_target(
     match intent {
         Some(CombatIntent::Attack(target, _)) => Some(*target),
         Some(CombatIntent::AttackMove(_, _)) => target_lock.map(|lock| lock.target),
+        Some(CombatIntent::Hold) => target_lock.map(|lock| lock.target),
         _ => None,
     }
 }
@@ -75,9 +76,7 @@ fn resolve_combat_intents(
         _recovery,
     ) in &mut actors
     {
-        if net_role.as_ref() == &NetRole::Client
-            && faction.is_some_and(|f| *f != active_player.0)
-        {
+        if net_role.as_ref() == &NetRole::Client && faction.is_some_and(|f| *f != active_player.0) {
             continue;
         }
 
@@ -93,8 +92,13 @@ fn resolve_combat_intents(
                     .entity(entity)
                     .insert(AttackTarget(target))
                     .remove::<MoveTarget>();
+                // Hold intent: keep HoldPosition state (attack in place, don't chase)
+                let is_hold = matches!(intent, Some(CombatIntent::Hold));
                 if let Some(mut state) = opt_state {
-                    *state = UnitState::Attacking(target);
+                    if !is_hold {
+                        *state = UnitState::Attacking(target);
+                    }
+                    // HoldPosition stays — unit fires without moving
                 }
             }
             continue;
@@ -143,9 +147,10 @@ fn resolve_combat_intents(
             }
             CombatIntent::Hold => {
                 if !committed {
+                    // Hold: never move, but keep AttackTarget if we have a valid lock
+                    // (target scanning is done in unit_state_executor_system)
                     commands
                         .entity(entity)
-                        .remove::<AttackTarget>()
                         .remove::<MoveTarget>()
                         .remove::<ChaseTimer>();
                     if let Some(mut state) = opt_state {
@@ -322,11 +327,18 @@ pub fn approach_attack_target(
         (),
         (
             With<Building>,
-            Or<(With<WallSegmentPiece>, With<WallPostPiece>, With<WallCornerPiece>)>,
+            Or<(
+                With<WallSegmentPiece>,
+                With<WallPostPiece>,
+                With<WallCornerPiece>,
+            )>,
         ),
     >,
     all_transforms: Query<&Transform>,
     building_footprints: Query<&BuildingFootprint, With<Building>>,
+    tactical_roles: Query<&TacticalRole>,
+    spatial_grid: Res<SpatialHashGrid>,
+    factions: Query<&Faction>,
 ) {
     for (
         attacker_entity,
@@ -437,7 +449,9 @@ pub fn approach_attack_target(
 
         if !in_band {
             // Reposition until the target sits inside the allowed attack band.
-            if budget_state.repath_requests_this_frame >= combat_budget.max_repath_requests_per_frame {
+            if budget_state.repath_requests_this_frame
+                >= combat_budget.max_repath_requests_per_frame
+            {
                 continue;
             }
             let desired_pos = if is_ranged.is_none()
@@ -463,7 +477,9 @@ pub fn approach_attack_target(
                 )
             };
             if current_move_target.map_or(true, |current| current.0.distance(desired_pos) > 0.9) {
-                commands.entity(attacker_entity).insert(MoveTarget(desired_pos));
+                commands
+                    .entity(attacker_entity)
+                    .insert(MoveTarget(desired_pos));
             }
             budget_state.repath_requests_this_frame += 1;
 
@@ -505,6 +521,62 @@ pub fn approach_attack_target(
                 .entity(attacker_entity)
                 .remove::<MoveTarget>()
                 .remove::<ChaseTimer>();
+
+            // Ranged kiting: if a melee enemy is dangerously close, retreat backward
+            if is_ranged.is_some()
+                && tactical_roles
+                    .get(attacker_entity)
+                    .ok()
+                    .is_some_and(|r| *r == TacticalRole::RangedKiter)
+                && budget_state.repath_requests_this_frame
+                    < combat_budget.max_repath_requests_per_frame
+            {
+                let kite_threshold = range.0 * 0.35;
+                let nearby =
+                    spatial_grid.query_radius_limited(tf.translation, kite_threshold, 4);
+                let mut closest_melee_dist = f32::MAX;
+                let mut closest_melee_pos = Vec3::ZERO;
+                for (nearby_entity, nearby_pos) in &nearby {
+                    if *nearby_entity == attacker_entity {
+                        continue;
+                    }
+                    // Only kite from melee enemies (non-ranged, hostile)
+                    if tactical_roles
+                        .get(*nearby_entity)
+                        .ok()
+                        .is_some_and(|r| *r == TacticalRole::RangedKiter || *r == TacticalRole::SiegeSupport)
+                    {
+                        continue; // Not a melee threat
+                    }
+                    let Some(nearby_faction) = factions.get(*nearby_entity).ok() else {
+                        continue;
+                    };
+                    if !teams.is_hostile(faction, nearby_faction) {
+                        continue;
+                    }
+                    let dx = nearby_pos.x - tf.translation.x;
+                    let dz = nearby_pos.z - tf.translation.z;
+                    let dist = (dx * dx + dz * dz).sqrt();
+                    if dist < closest_melee_dist {
+                        closest_melee_dist = dist;
+                        closest_melee_pos = *nearby_pos;
+                    }
+                }
+                if closest_melee_dist < kite_threshold {
+                    // Retreat away from the melee threat
+                    let away = Vec2::new(
+                        tf.translation.x - closest_melee_pos.x,
+                        tf.translation.z - closest_melee_pos.z,
+                    );
+                    let dir = away.normalize_or_zero();
+                    let retreat_pos = tf.translation
+                        + Vec3::new(dir.x, 0.0, dir.y) * 4.0;
+                    commands
+                        .entity(attacker_entity)
+                        .insert(MoveTarget(retreat_pos));
+                    budget_state.repath_requests_this_frame += 1;
+                }
+            }
         }
     }
 }
@@ -616,6 +688,7 @@ fn resolve_attack_windups(
         &mut Health,
         Option<&ArmorType>,
         Option<&mut ReservedIncomingDamage>,
+        Option<&HitRecoil>,
     )>,
     building_footprints: Query<&BuildingFootprint, With<Building>>,
     camera_q: Query<Entity, With<RtsCamera>>,
@@ -648,7 +721,7 @@ fn resolve_attack_windups(
         }
 
         let target = windup.target;
-        let Ok((target_tf, mut health, opt_armor, opt_reserved)) = healths.get_mut(target) else {
+        let Ok((target_tf, mut health, opt_armor, opt_reserved, opt_existing_recoil)) = healths.get_mut(target) else {
             commands.entity(entity).remove::<AttackWindup>();
             commands.entity(entity).insert(AttackRecovery {
                 remaining_secs: profile.recovery_secs,
@@ -656,9 +729,7 @@ fn resolve_attack_windups(
             continue;
         };
 
-        let target_radius = building_footprints
-            .get(target)
-            .map_or(0.0, |fp| fp.0);
+        let target_radius = building_footprints.get(target).map_or(0.0, |fp| fp.0);
         let minimum_range = attack_timing.map_or(0.0, |timing| timing.minimum_range);
         let surface_dist =
             attack_surface_distance(atk_tf.translation, target_tf.translation, target_radius);
@@ -688,11 +759,14 @@ fn resolve_attack_windups(
                 reserved.reservations.push((entity, damage.0, travel_ttl));
             }
             // Ranged: spawn projectile (carries damage_type for on-hit multiplier)
-            let proj_visual = opt_entity_kind
-                .and_then(|k| crate::model_assets::projectile_visual_for(*k));
+            let proj_visual =
+                opt_entity_kind.and_then(|k| crate::model_assets::projectile_visual_for(*k));
             let use_model = proj_visual.is_some() && projectile_assets.is_some();
             let orient = use_model
-                && !matches!(proj_visual, Some(crate::model_assets::ProjectileVisualKind::CatapultRock));
+                && !matches!(
+                    proj_visual,
+                    Some(crate::model_assets::ProjectileVisualKind::CatapultRock)
+                );
             let proj_component = Projectile {
                 source: entity,
                 target,
@@ -789,12 +863,14 @@ fn resolve_attack_windups(
             });
 
             // ── Juice: hit recoil on target ──
+            // Use existing recoil's base_scale to avoid ratcheting scale up on repeated hits
+            let recoil_base = opt_existing_recoil.map_or(target_tf.scale, |r| r.base_scale);
             commands.entity(target).insert(HitRecoil {
                 direction: hit_dir_flat,
                 timer: Timer::from_seconds(0.2, TimerMode::Once),
                 strength: (0.18 + dealt * 0.006).min(0.5),
                 lift: (0.04 + dealt * 0.002).min(0.14),
-                base_scale: target_tf.scale,
+                base_scale: recoil_base,
                 applied_offset: Vec3::ZERO,
             });
 
@@ -1189,9 +1265,7 @@ pub fn target_score(input: &TargetScoreInput) -> Option<f32> {
 
     let hp_frac = (input.target_health.current / input.target_health.max.max(1.0)).clamp(0.0, 1.0);
 
-    let multiplier = input
-        .attacker_damage_type
-        .multiplier_vs(input.target_armor);
+    let multiplier = input.attacker_damage_type.multiplier_vs(input.target_armor);
 
     let overkill_frac = if input.target_health.current > 0.0 {
         (input.target_reserved_damage / input.target_health.current).min(2.0)

@@ -138,9 +138,8 @@ fn animate_procedural_mobs(
         if phase != MobAnimPhase::Dying {
             proc_mob.base_translation.x = tf.translation.x;
             proc_mob.base_translation.z = tf.translation.z;
-            proc_mob.base_translation.y = height_map
-                .sample(tf.translation.x, tf.translation.z)
-                + proc_mob.base_y_offset;
+            proc_mob.base_translation.y =
+                height_map.sample(tf.translation.x, tf.translation.z) + proc_mob.base_y_offset;
         }
 
         let base_scale = proc_mob.base_scale;

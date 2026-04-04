@@ -1,9 +1,9 @@
-mod audio;
 mod abilities;
 mod ages;
 mod ai;
 mod animation;
 mod attention;
+mod audio;
 mod blueprints;
 mod buildings;
 mod camera;
@@ -17,6 +17,7 @@ mod fog;
 mod fog_material;
 mod ground;
 mod hover_material;
+mod items;
 mod lighting;
 mod logging;
 mod menu;
@@ -29,9 +30,9 @@ mod orders;
 mod pathfinding;
 mod pathvis;
 mod pause_menu;
-mod save_load;
 mod procedural_mobs;
 mod resources;
+mod save_load;
 mod selection;
 mod spatial;
 mod terrain_material;
@@ -44,8 +45,8 @@ mod victory;
 mod water_material;
 
 use bevy::ecs::error;
-use bevy::prelude::*;
 use bevy::log::LogPlugin;
+use bevy::prelude::*;
 use bevy::window::PresentMode;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::OutlinePlugin;
@@ -77,8 +78,7 @@ fn main() {
         .unwrap_or_else(|| "assets".to_string());
 
     logging::configure_session_logging(
-        std::env::current_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
     );
 
     // Open database early so settings (graphics, audio) are loaded before window creation.
@@ -90,8 +90,16 @@ fn main() {
     let (w, h) = {
         let (mut w, mut h) = graphics.resolution;
         if let Some(window) = web_sys::window() {
-            w = window.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(w as f64) as u32;
-            h = window.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(h as f64) as u32;
+            w = window
+                .inner_width()
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(w as f64) as u32;
+            h = window
+                .inner_height()
+                .ok()
+                .and_then(|v| v.as_f64())
+                .unwrap_or(h as f64) as u32;
         }
         (w, h)
     };
@@ -203,6 +211,9 @@ fn main() {
             pathvis::PathVisPlugin,
             vfx::VfxPlugin,
             mobs::MobsPlugin,
+            items::ItemsPlugin,
+        ))
+        .add_plugins((
             combat::CombatPlugin,
             fog::FogPlugin,
         ))

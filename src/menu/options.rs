@@ -283,6 +283,21 @@ pub(crate) fn spawn_options_page(
         theme,
     );
 
+    // ── Gameplay Section ──
+
+    spawn_animated_section_divider(commands, container, "GAMEPLAY", fonts, theme);
+
+    let reset_btn = spawn_styled_button_nav(
+        commands,
+        "RESET WIDGET LAYOUT",
+        MenuButton(MenuAction::ResetWidgetLayout),
+        false,
+        fonts,
+        Some(14),
+        theme,
+    );
+    commands.entity(container).add_child(reset_btn);
+
     // ── Apply Button ──
 
     let apply_btn = spawn_styled_button_nav(
@@ -291,7 +306,7 @@ pub(crate) fn spawn_options_page(
         MenuButton(MenuAction::ApplySettings),
         true,
         fonts,
-        Some(14),
+        Some(15),
         theme,
     );
     commands.entity(container).add_child(apply_btn);
@@ -299,10 +314,7 @@ pub(crate) fn spawn_options_page(
 
 // ── Apply Settings ──
 
-pub(crate) fn apply_graphics_settings(
-    graphics: &GraphicsSettings,
-    window: &mut Window,
-) {
+pub(crate) fn apply_graphics_settings(graphics: &GraphicsSettings, window: &mut Window) {
     let (w, h) = graphics.resolution;
 
     window.mode = if graphics.fullscreen {

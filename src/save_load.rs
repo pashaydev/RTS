@@ -14,10 +14,10 @@ use crate::ai::types::{
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::*;
 use crate::database::{ActiveProfile, GameDatabase};
+use crate::fog::FogTextureUploadState;
 use crate::ground::{HeightMap, TerrainShapeSyncState};
 use crate::lighting::{DayCycle, DayPhase};
 use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
-use crate::fog::FogTextureUploadState;
 use crate::multiplayer::NetRole;
 use crate::victory::{FactionStatus as VictFactionStatus, VictoryState};
 
@@ -28,29 +28,27 @@ pub struct SaveLoadPlugin;
 impl Plugin for SaveLoadPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
-                Update,
-                (handle_quicksave, handle_quickload)
-                    .run_if(in_state(AppState::InGame)),
-            )
-            .add_systems(Update, handle_save_game_exclusive)
-            .add_systems(
-                OnEnter(AppState::InGame),
-                load_saved_game
-                    .after(crate::ground::spawn_ground)
-                    .run_if(resource_exists::<PendingLoad>),
-            )
-            .add_systems(
-                Update,
-                restore_fog_on_load
-                    .run_if(resource_exists::<PendingFogRestore>)
-                    .run_if(resource_exists::<FogOfWarMap>)
-                    .run_if(in_state(AppState::InGame)),
-            )
-            .add_systems(
-                Update,
-                restore_production_states
-                    .run_if(in_state(AppState::InGame)),
-            );
+            Update,
+            (handle_quicksave, handle_quickload).run_if(in_state(AppState::InGame)),
+        )
+        .add_systems(Update, handle_save_game_exclusive)
+        .add_systems(
+            OnEnter(AppState::InGame),
+            load_saved_game
+                .after(crate::ground::spawn_ground)
+                .run_if(resource_exists::<PendingLoad>),
+        )
+        .add_systems(
+            Update,
+            restore_fog_on_load
+                .run_if(resource_exists::<PendingFogRestore>)
+                .run_if(resource_exists::<FogOfWarMap>)
+                .run_if(in_state(AppState::InGame)),
+        )
+        .add_systems(
+            Update,
+            restore_production_states.run_if(in_state(AppState::InGame)),
+        );
     }
 }
 
@@ -62,7 +60,6 @@ impl Plugin for SaveLoadPlugin {
 pub struct SaveTrigger {
     pub label: Option<String>,
 }
-
 
 /// Inserted as a resource when loading a saved game.
 /// Prevents normal spawn systems from running; the load system reads this instead.
@@ -317,7 +314,7 @@ pub enum SavedTreeData {
 pub struct SavedTimer {
     pub elapsed: f32,
     pub duration: f32,
-    pub mode: u8,     // 0=Once, 1=Repeating
+    pub mode: u8, // 0=Once, 1=Repeating
     pub finished: bool,
 }
 
@@ -334,14 +331,29 @@ pub enum SavedUnitState {
     Moving([f32; 3]),
     Attacking(u32),
     Gathering(u32),
-    ReturningToDeposit { depot: u32, gather_node: Option<u32> },
-    Depositing { depot: u32, gather_node: Option<u32> },
-    WaitingForStorage { depot: u32, gather_node: Option<u32> },
+    ReturningToDeposit {
+        depot: u32,
+        gather_node: Option<u32>,
+    },
+    Depositing {
+        depot: u32,
+        gather_node: Option<u32>,
+    },
+    WaitingForStorage {
+        depot: u32,
+        gather_node: Option<u32>,
+    },
     MovingToPlot([f32; 3]),
     MovingToBuild(u32),
     Building(u32),
-    AssignedGathering { building: u32, phase: SavedAssignedPhase },
-    Patrolling { target: [f32; 3], origin: [f32; 3] },
+    AssignedGathering {
+        building: u32,
+        phase: SavedAssignedPhase,
+    },
+    Patrolling {
+        target: [f32; 3],
+        origin: [f32; 3],
+    },
     AttackMoving([f32; 3]),
     HoldPosition,
 }
@@ -472,7 +484,10 @@ pub struct SavedWallPlan {
 // ── Conversion helpers ──────────────────────────────────────────────────────
 
 fn resource_type_from_index(i: usize) -> ResourceType {
-    ResourceType::ALL.get(i).copied().unwrap_or(ResourceType::Wood)
+    ResourceType::ALL
+        .get(i)
+        .copied()
+        .unwrap_or(ResourceType::Wood)
 }
 
 fn faction_to_u8(f: &Faction) -> u8 {
@@ -495,7 +510,11 @@ fn save_timer(t: &Timer) -> SavedTimer {
     SavedTimer {
         elapsed: t.elapsed_secs(),
         duration: t.duration().as_secs_f32(),
-        mode: if t.mode() == TimerMode::Repeating { 1 } else { 0 },
+        mode: if t.mode() == TimerMode::Repeating {
+            1
+        } else {
+            0
+        },
         finished: t.is_finished(),
     }
 }
@@ -519,10 +538,7 @@ fn u16_to_entity_kind(v: u16) -> EntityKind {
     EntityKind::from_index(v).unwrap_or(EntityKind::Worker)
 }
 
-fn unit_state_to_saved(
-    state: &UnitState,
-    entity_map: &HashMap<Entity, u32>,
-) -> SavedUnitState {
+fn unit_state_to_saved(state: &UnitState, entity_map: &HashMap<Entity, u32>) -> SavedUnitState {
     match state {
         UnitState::Idle => SavedUnitState::Idle,
         UnitState::Moving(v) => SavedUnitState::Moving(vec3_to_arr(*v)),
@@ -542,44 +558,32 @@ fn unit_state_to_saved(
             depot: *entity_map.get(depot).unwrap_or(&u32::MAX),
             gather_node: gather_node.and_then(|e| entity_map.get(&e).copied()),
         },
-        UnitState::WaitingForStorage { depot, gather_node } => {
-            SavedUnitState::WaitingForStorage {
-                depot: *entity_map.get(depot).unwrap_or(&u32::MAX),
-                gather_node: gather_node.and_then(|e| entity_map.get(&e).copied()),
-            }
-        }
+        UnitState::WaitingForStorage { depot, gather_node } => SavedUnitState::WaitingForStorage {
+            depot: *entity_map.get(depot).unwrap_or(&u32::MAX),
+            gather_node: gather_node.and_then(|e| entity_map.get(&e).copied()),
+        },
         UnitState::MovingToPlot(v) => SavedUnitState::MovingToPlot(vec3_to_arr(*v)),
         UnitState::MovingToBuild(e) => {
             SavedUnitState::MovingToBuild(*entity_map.get(e).unwrap_or(&u32::MAX))
         }
-        UnitState::Building(e) => {
-            SavedUnitState::Building(*entity_map.get(e).unwrap_or(&u32::MAX))
-        }
-        UnitState::AssignedGathering { building, phase } => {
-            SavedUnitState::AssignedGathering {
-                building: *entity_map.get(building).unwrap_or(&u32::MAX),
-                phase: match phase {
-                    AssignedPhase::SeekingNode => SavedAssignedPhase::SeekingNode,
-                    AssignedPhase::MovingToNode(e) => {
-                        SavedAssignedPhase::MovingToNode(*entity_map.get(e).unwrap_or(&u32::MAX))
-                    }
-                    AssignedPhase::Harvesting { node, timer_secs } => {
-                        SavedAssignedPhase::Harvesting {
-                            node: *entity_map.get(node).unwrap_or(&u32::MAX),
-                            timer_secs: *timer_secs,
-                        }
-                    }
-                    AssignedPhase::ReturningToBuilding => {
-                        SavedAssignedPhase::ReturningToBuilding
-                    }
-                    AssignedPhase::Depositing { timer_secs } => {
-                        SavedAssignedPhase::Depositing {
-                            timer_secs: *timer_secs,
-                        }
-                    }
+        UnitState::Building(e) => SavedUnitState::Building(*entity_map.get(e).unwrap_or(&u32::MAX)),
+        UnitState::AssignedGathering { building, phase } => SavedUnitState::AssignedGathering {
+            building: *entity_map.get(building).unwrap_or(&u32::MAX),
+            phase: match phase {
+                AssignedPhase::SeekingNode => SavedAssignedPhase::SeekingNode,
+                AssignedPhase::MovingToNode(e) => {
+                    SavedAssignedPhase::MovingToNode(*entity_map.get(e).unwrap_or(&u32::MAX))
+                }
+                AssignedPhase::Harvesting { node, timer_secs } => SavedAssignedPhase::Harvesting {
+                    node: *entity_map.get(node).unwrap_or(&u32::MAX),
+                    timer_secs: *timer_secs,
                 },
-            }
-        }
+                AssignedPhase::ReturningToBuilding => SavedAssignedPhase::ReturningToBuilding,
+                AssignedPhase::Depositing { timer_secs } => SavedAssignedPhase::Depositing {
+                    timer_secs: *timer_secs,
+                },
+            },
+        },
         UnitState::Patrolling { target, origin } => SavedUnitState::Patrolling {
             target: vec3_to_arr(*target),
             origin: vec3_to_arr(*origin),
@@ -589,13 +593,8 @@ fn unit_state_to_saved(
     }
 }
 
-fn saved_to_unit_state(
-    state: &SavedUnitState,
-    id_map: &HashMap<u32, Entity>,
-) -> UnitState {
-    let resolve = |id: &u32| -> Entity {
-        id_map.get(id).copied().unwrap_or(Entity::PLACEHOLDER)
-    };
+fn saved_to_unit_state(state: &SavedUnitState, id_map: &HashMap<u32, Entity>) -> UnitState {
+    let resolve = |id: &u32| -> Entity { id_map.get(id).copied().unwrap_or(Entity::PLACEHOLDER) };
     match state {
         SavedUnitState::Idle => UnitState::Idle,
         SavedUnitState::Moving(v) => UnitState::Moving(arr_to_vec3(*v)),
@@ -611,40 +610,28 @@ fn saved_to_unit_state(
             depot: resolve(depot),
             gather_node: gather_node.map(|id| resolve(&id)),
         },
-        SavedUnitState::WaitingForStorage { depot, gather_node } => {
-            UnitState::WaitingForStorage {
-                depot: resolve(depot),
-                gather_node: gather_node.map(|id| resolve(&id)),
-            }
-        }
+        SavedUnitState::WaitingForStorage { depot, gather_node } => UnitState::WaitingForStorage {
+            depot: resolve(depot),
+            gather_node: gather_node.map(|id| resolve(&id)),
+        },
         SavedUnitState::MovingToPlot(v) => UnitState::MovingToPlot(arr_to_vec3(*v)),
         SavedUnitState::MovingToBuild(id) => UnitState::MovingToBuild(resolve(id)),
         SavedUnitState::Building(id) => UnitState::Building(resolve(id)),
-        SavedUnitState::AssignedGathering { building, phase } => {
-            UnitState::AssignedGathering {
-                building: resolve(building),
-                phase: match phase {
-                    SavedAssignedPhase::SeekingNode => AssignedPhase::SeekingNode,
-                    SavedAssignedPhase::MovingToNode(id) => {
-                        AssignedPhase::MovingToNode(resolve(id))
-                    }
-                    SavedAssignedPhase::Harvesting { node, timer_secs } => {
-                        AssignedPhase::Harvesting {
-                            node: resolve(node),
-                            timer_secs: *timer_secs,
-                        }
-                    }
-                    SavedAssignedPhase::ReturningToBuilding => {
-                        AssignedPhase::ReturningToBuilding
-                    }
-                    SavedAssignedPhase::Depositing { timer_secs } => {
-                        AssignedPhase::Depositing {
-                            timer_secs: *timer_secs,
-                        }
-                    }
+        SavedUnitState::AssignedGathering { building, phase } => UnitState::AssignedGathering {
+            building: resolve(building),
+            phase: match phase {
+                SavedAssignedPhase::SeekingNode => AssignedPhase::SeekingNode,
+                SavedAssignedPhase::MovingToNode(id) => AssignedPhase::MovingToNode(resolve(id)),
+                SavedAssignedPhase::Harvesting { node, timer_secs } => AssignedPhase::Harvesting {
+                    node: resolve(node),
+                    timer_secs: *timer_secs,
                 },
-            }
-        }
+                SavedAssignedPhase::ReturningToBuilding => AssignedPhase::ReturningToBuilding,
+                SavedAssignedPhase::Depositing { timer_secs } => AssignedPhase::Depositing {
+                    timer_secs: *timer_secs,
+                },
+            },
+        },
         SavedUnitState::Patrolling { target, origin } => UnitState::Patrolling {
             target: arr_to_vec3(*target),
             origin: arr_to_vec3(*origin),
@@ -790,11 +777,7 @@ struct BaseEntityFields {
     health: Option<[f32; 2]>,
 }
 
-fn collect_base_fields(
-    world: &World,
-    entity: Entity,
-    save_id: u32,
-) -> Option<BaseEntityFields> {
+fn collect_base_fields(world: &World, entity: Entity, save_id: u32) -> Option<BaseEntityFields> {
     let transform = world.get::<Transform>(entity)?;
     let kind = world.get::<EntityKind>(entity);
     let faction = world.get::<Faction>(entity);
@@ -815,12 +798,25 @@ fn collect_combat_components(
     entity: Entity,
     emap: &HashMap<Entity, u32>,
 ) -> (f32, f32, Option<[f32; 2]>, Option<f32>, Option<u32>) {
-    let attack_damage = world.get::<AttackDamage>(entity).map(|d| d.0).unwrap_or(0.0);
+    let attack_damage = world
+        .get::<AttackDamage>(entity)
+        .map(|d| d.0)
+        .unwrap_or(0.0);
     let attack_range = world.get::<AttackRange>(entity).map(|r| r.0).unwrap_or(0.0);
-    let attack_cooldown = world.get::<AttackCooldown>(entity).map(|c| [c.ready_in, c.interval]);
+    let attack_cooldown = world
+        .get::<AttackCooldown>(entity)
+        .map(|c| [c.ready_in, c.interval]);
     let aggro_range = world.get::<AggroRange>(entity).map(|a| a.0);
-    let attack_target_id = world.get::<AttackTarget>(entity).and_then(|t| emap.get(&t.0).copied());
-    (attack_damage, attack_range, attack_cooldown, aggro_range, attack_target_id)
+    let attack_target_id = world
+        .get::<AttackTarget>(entity)
+        .and_then(|t| emap.get(&t.0).copied());
+    (
+        attack_damage,
+        attack_range,
+        attack_cooldown,
+        aggro_range,
+        attack_target_id,
+    )
 }
 
 fn restore_combat_components(
@@ -834,7 +830,10 @@ fn restore_combat_components(
     commands.entity(entity).insert(AttackDamage(attack_damage));
     commands.entity(entity).insert(AttackRange(attack_range));
     if let Some([ready, interval]) = attack_cooldown {
-        commands.entity(entity).insert(AttackCooldown { ready_in: ready, interval });
+        commands.entity(entity).insert(AttackCooldown {
+            ready_in: ready,
+            interval,
+        });
     }
     if let Some(aggro) = aggro_range {
         commands.entity(entity).insert(AggroRange(aggro));
@@ -856,7 +855,15 @@ fn spawn_and_setup_base(
     let rot = Quat::from_rotation_y(saved.rot_y);
 
     let e = crate::blueprints::spawn_from_blueprint_with_faction(
-        commands, cache, kind, pos, registry, building_models, unit_models, height_map, faction,
+        commands,
+        cache,
+        kind,
+        pos,
+        registry,
+        building_models,
+        unit_models,
+        height_map,
+        faction,
     );
     commands.entity(e).insert(Transform {
         translation: pos,
@@ -912,51 +919,110 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
         res_map.insert(faction_to_u8(faction), pr.amounts.to_vec());
     }
     let active_player_faction = world.resource::<ActivePlayer>().0;
-    let ai_controlled_factions: Vec<u8> = world.resource::<AiControlledFactions>()
-        .factions.iter().map(faction_to_u8).collect();
-    let team_config_data: HashMap<u8, u8> = world.resource::<TeamConfig>()
-        .teams.iter().map(|(f, t)| (faction_to_u8(f), *t)).collect();
-    let faction_base_data: HashMap<u8, bool> = world.resource::<FactionBaseState>()
-        .founded.iter().map(|(f, b)| (faction_to_u8(f), *b)).collect();
+    let ai_controlled_factions: Vec<u8> = world
+        .resource::<AiControlledFactions>()
+        .factions
+        .iter()
+        .map(faction_to_u8)
+        .collect();
+    let team_config_data: HashMap<u8, u8> = world
+        .resource::<TeamConfig>()
+        .teams
+        .iter()
+        .map(|(f, t)| (faction_to_u8(f), *t))
+        .collect();
+    let faction_base_data: HashMap<u8, bool> = world
+        .resource::<FactionBaseState>()
+        .founded
+        .iter()
+        .map(|(f, b)| (faction_to_u8(f), *b))
+        .collect();
 
-    let day_cycle_data = world.get_resource::<DayCycle>().map(|dc| SavedDayCycle {
-        time: dc.time,
-        cycle_duration: dc.cycle_duration,
-        paused: dc.paused,
-        phase: match dc.phase {
-            DayPhase::Night => 0,
-            DayPhase::Dawn => 1,
-            DayPhase::Day => 2,
-            DayPhase::Dusk => 3,
-        },
-    }).unwrap_or(SavedDayCycle { time: 0.25, cycle_duration: 600.0, paused: false, phase: 2 });
+    let day_cycle_data = world
+        .get_resource::<DayCycle>()
+        .map(|dc| SavedDayCycle {
+            time: dc.time,
+            cycle_duration: dc.cycle_duration,
+            paused: dc.paused,
+            phase: match dc.phase {
+                DayPhase::Night => 0,
+                DayPhase::Dawn => 1,
+                DayPhase::Day => 2,
+                DayPhase::Dusk => 3,
+            },
+        })
+        .unwrap_or(SavedDayCycle {
+            time: 0.25,
+            cycle_duration: 600.0,
+            paused: false,
+            phase: 2,
+        });
 
-    let saved_victory = world.get_resource::<VictoryState>().map(|vs| SavedVictoryState {
-        faction_status: vs.faction_status.iter().map(|(f, s)| {
-            (faction_to_u8(f), match s {
-                VictFactionStatus::Alive => SavedFactionVictoryStatus { variant: 0, grace_remaining: None },
-                VictFactionStatus::GracePeriod { remaining } => SavedFactionVictoryStatus { variant: 1, grace_remaining: Some(*remaining) },
-                VictFactionStatus::Eliminated => SavedFactionVictoryStatus { variant: 2, grace_remaining: None },
-            })
-        }).collect(),
-        game_over: vs.game_over,
-        winner: vs.winner.map(|f| faction_to_u8(&f)),
-        winner_team: vs.winner_team,
-    }).unwrap_or(SavedVictoryState { faction_status: HashMap::new(), game_over: false, winner: None, winner_team: None });
+    let saved_victory = world
+        .get_resource::<VictoryState>()
+        .map(|vs| SavedVictoryState {
+            faction_status: vs
+                .faction_status
+                .iter()
+                .map(|(f, s)| {
+                    (
+                        faction_to_u8(f),
+                        match s {
+                            VictFactionStatus::Alive => SavedFactionVictoryStatus {
+                                variant: 0,
+                                grace_remaining: None,
+                            },
+                            VictFactionStatus::GracePeriod { remaining } => {
+                                SavedFactionVictoryStatus {
+                                    variant: 1,
+                                    grace_remaining: Some(*remaining),
+                                }
+                            }
+                            VictFactionStatus::Eliminated => SavedFactionVictoryStatus {
+                                variant: 2,
+                                grace_remaining: None,
+                            },
+                        },
+                    )
+                })
+                .collect(),
+            game_over: vs.game_over,
+            winner: vs.winner.map(|f| faction_to_u8(&f)),
+            winner_team: vs.winner_team,
+        })
+        .unwrap_or(SavedVictoryState {
+            faction_status: HashMap::new(),
+            game_over: false,
+            winner: None,
+            winner_team: None,
+        });
 
-    let saved_terrain_ops: Vec<SavedTerrainOp> = world.get_resource::<TerrainShapeSyncState>()
-        .map(|ts| ts.applied_history_ordered.iter().map(|op| SavedTerrainOp {
-            center: op.center, footprint: op.footprint, target_height: op.target_height,
-        }).collect()).unwrap_or_default();
+    let saved_terrain_ops: Vec<SavedTerrainOp> = world
+        .get_resource::<TerrainShapeSyncState>()
+        .map(|ts| {
+            ts.applied_history_ordered
+                .iter()
+                .map(|op| SavedTerrainOp {
+                    center: op.center,
+                    footprint: op.footprint,
+                    target_height: op.target_height,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     let saved_config = SavedGameConfig {
         player_name: config.player_name.clone(),
-        slots: config.slots.iter().map(|s| match s {
-            SlotOccupant::Human => "Human".to_string(),
-            SlotOccupant::Ai(d) => format!("Ai:{:?}", d),
-            SlotOccupant::Open => "Open".to_string(),
-            SlotOccupant::Closed => "Closed".to_string(),
-        }).collect(),
+        slots: config
+            .slots
+            .iter()
+            .map(|s| match s {
+                SlotOccupant::Human => "Human".to_string(),
+                SlotOccupant::Ai(d) => format!("Ai:{:?}", d),
+                SlotOccupant::Open => "Open".to_string(),
+                SlotOccupant::Closed => "Closed".to_string(),
+            })
+            .collect(),
         local_player_slot: config.local_player_slot,
         team_mode: format!("{:?}", config.team_mode),
         player_teams: config.player_teams,
@@ -981,15 +1047,18 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
     {
         let mut q = world.query_filtered::<Entity, (With<Unit>, Without<Mob>, Without<Dying>)>();
         for e in q.iter(world) {
-            entity_to_save_id.insert(e, next_id); next_id += 1;
+            entity_to_save_id.insert(e, next_id);
+            next_id += 1;
             unit_entities.push(e);
             all_game_entities.push(e);
         }
     }
     {
-        let mut q = world.query_filtered::<Entity, (With<Building>, Without<FloorTile>, Without<Dying>)>();
+        let mut q =
+            world.query_filtered::<Entity, (With<Building>, Without<FloorTile>, Without<Dying>)>();
         for e in q.iter(world) {
-            entity_to_save_id.insert(e, next_id); next_id += 1;
+            entity_to_save_id.insert(e, next_id);
+            next_id += 1;
             building_entities.push(e);
             all_game_entities.push(e);
         }
@@ -997,7 +1066,8 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
     {
         let mut q = world.query_filtered::<Entity, (With<ResourceNode>, Without<Dying>)>();
         for e in q.iter(world) {
-            entity_to_save_id.insert(e, next_id); next_id += 1;
+            entity_to_save_id.insert(e, next_id);
+            next_id += 1;
             node_entities.push(e);
             all_game_entities.push(e);
         }
@@ -1005,7 +1075,8 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
     {
         let mut q = world.query_filtered::<Entity, (With<Mob>, Without<Dying>)>();
         for e in q.iter(world) {
-            entity_to_save_id.insert(e, next_id); next_id += 1;
+            entity_to_save_id.insert(e, next_id);
+            next_id += 1;
             mob_entities.push(e);
             all_game_entities.push(e);
         }
@@ -1016,7 +1087,9 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
 
     // Helper macro-like closure to get components from world
     macro_rules! get {
-        ($entity:expr, $T:ty) => { world.get::<$T>($entity) };
+        ($entity:expr, $T:ty) => {
+            world.get::<$T>($entity)
+        };
     }
 
     // Units
@@ -1025,8 +1098,11 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
             warn!("Skipping unit entity {entity:?}: missing Transform");
             continue;
         };
-        let Some(state) = get!(entity, UnitState) else { continue };
-        let (atk_dmg, atk_rng, atk_cd, aggro, atk_target) = collect_combat_components(world, entity, emap);
+        let Some(state) = get!(entity, UnitState) else {
+            continue;
+        };
+        let (atk_dmg, atk_rng, atk_cd, aggro, atk_target) =
+            collect_combat_components(world, entity, emap);
 
         saved_entities.push(SavedEntity {
             save_id: base.save_id,
@@ -1040,27 +1116,40 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                 stance: get!(entity, UnitStance).map(stance_to_u8).unwrap_or(2),
                 speed: get!(entity, UnitSpeed).map(|s| s.0).unwrap_or(0.0),
                 carrying: get!(entity, Carrying).map(|c| SavedCarrying {
-                    amount: c.amount, weight: c.weight,
+                    amount: c.amount,
+                    weight: c.weight,
                     resource_type: c.resource_type.map(|r| r.index() as u8),
                 }),
-                experience: get!(entity, Experience).map(|e| [e.current, veterancy_to_u8(&e.level) as u32]),
+                experience: get!(entity, Experience)
+                    .map(|e| [e.current, veterancy_to_u8(&e.level) as u32]),
                 move_target: get!(entity, MoveTarget).map(|m| vec3_to_arr(m.0)),
                 attack_target_id: atk_target,
                 attack_damage: atk_dmg,
                 attack_range: atk_rng,
                 attack_cooldown: atk_cd,
                 aggro_range: aggro,
-                building_assignment_id: get!(entity, BuildingAssignment).and_then(|b| emap.get(&b.0).copied()),
+                building_assignment_id: get!(entity, BuildingAssignment)
+                    .and_then(|b| emap.get(&b.0).copied()),
                 gather_speed: get!(entity, GatherSpeed).map(|g| g.0),
                 carry_capacity: get!(entity, CarryCapacity).map(|c| c.0),
                 gather_accumulator: get!(entity, GatherAccumulator).map(|g| g.0).unwrap_or(0.0),
                 abilities: get!(entity, UnitAbilities)
-                    .map(|a| a.abilities.iter().map(ability_id_to_u8).collect()).unwrap_or_default(),
+                    .map(|a| a.abilities.iter().map(ability_id_to_u8).collect())
+                    .unwrap_or_default(),
                 ability_cooldowns: get!(entity, UnitAbilities)
-                    .map(|a| a.cooldowns.iter().map(|(id, cd)| (ability_id_to_u8(id), *cd)).collect()).unwrap_or_default(),
-                display_name: get!(entity, UnitDisplayName).map(|d| d.0.clone()).unwrap_or_default(),
+                    .map(|a| {
+                        a.cooldowns
+                            .iter()
+                            .map(|(id, cd)| (ability_id_to_u8(id), *cd))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                display_name: get!(entity, UnitDisplayName)
+                    .map(|d| d.0.clone())
+                    .unwrap_or_default(),
                 combat_intent: get!(entity, CombatIntent)
-                    .map(|c| combat_intent_to_saved(c, emap)).unwrap_or(SavedCombatIntent::None),
+                    .map(|c| combat_intent_to_saved(c, emap))
+                    .unwrap_or(SavedCombatIntent::None),
                 task_source: match get!(entity, TaskSource) {
                     Some(TaskSource::Manual) => 0,
                     _ => 1,
@@ -1075,7 +1164,9 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
             warn!("Skipping building entity {entity:?}: missing Transform");
             continue;
         };
-        let Some(state) = get!(entity, BuildingState) else { continue };
+        let Some(state) = get!(entity, BuildingState) else {
+            continue;
+        };
 
         saved_entities.push(SavedEntity {
             save_id: base.save_id,
@@ -1092,9 +1183,11 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                 level: get!(entity, BuildingLevel).map(|l| l.0).unwrap_or(1),
                 footprint: get!(entity, BuildingFootprint).map(|f| f.0).unwrap_or(3.0),
                 height: get!(entity, BuildingHeight).map(|h| h.0).unwrap_or(4.0),
-                construction_progress: get!(entity, ConstructionProgress).map(|c| save_timer(&c.timer)),
+                construction_progress: get!(entity, ConstructionProgress)
+                    .map(|c| save_timer(&c.timer)),
                 construction_workers: get!(entity, ConstructionWorkers).map(|c| c.0).unwrap_or(0),
-                upgrade_progress: get!(entity, UpgradeProgress).map(|u| (save_timer(&u.timer), u.target_level)),
+                upgrade_progress: get!(entity, UpgradeProgress)
+                    .map(|u| (save_timer(&u.timer), u.target_level)),
                 rally_point: get!(entity, RallyPoint).map(|r| vec3_to_arr(r.0)),
                 training_queue: get!(entity, TrainingQueue)
                     .map(|t| SavedTrainingQueue {
@@ -1102,25 +1195,40 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                         timer: t.timer.as_ref().map(save_timer),
                         total_trained: t.total_trained,
                     })
-                    .unwrap_or(SavedTrainingQueue { queue: Vec::new(), timer: None, total_trained: 0 }),
+                    .unwrap_or(SavedTrainingQueue {
+                        queue: Vec::new(),
+                        timer: None,
+                        total_trained: 0,
+                    }),
                 assigned_worker_ids: get!(entity, AssignedWorkers)
-                    .map(|a| a.workers.iter().filter_map(|e| emap.get(e).copied()).collect())
+                    .map(|a| {
+                        a.workers
+                            .iter()
+                            .filter_map(|e| emap.get(e).copied())
+                            .collect()
+                    })
                     .unwrap_or_default(),
-                resource_processor: get!(entity, ResourceProcessor).map(|p| SavedResourceProcessor {
-                    resource_types: p.resource_types.iter().map(|r| r.index() as u8).collect(),
-                    harvest_radius: p.harvest_radius, harvest_rate: p.harvest_rate,
-                    max_workers: p.max_workers, buffer: p.buffer,
-                    worker_rate_bonus: p.worker_rate_bonus,
-                    harvest_timer: save_timer(&p.harvest_timer),
-                    harvest_accumulator: p.harvest_accumulator,
+                resource_processor: get!(entity, ResourceProcessor).map(|p| {
+                    SavedResourceProcessor {
+                        resource_types: p.resource_types.iter().map(|r| r.index() as u8).collect(),
+                        harvest_radius: p.harvest_radius,
+                        harvest_rate: p.harvest_rate,
+                        max_workers: p.max_workers,
+                        buffer: p.buffer,
+                        worker_rate_bonus: p.worker_rate_bonus,
+                        harvest_timer: save_timer(&p.harvest_timer),
+                        harvest_accumulator: p.harvest_accumulator,
+                    }
                 }),
                 storage_inventory: get!(entity, StorageInventory).map(|s| SavedStorageInventory {
-                    amounts: s.amounts.to_vec(), caps: s.caps.to_vec(),
+                    amounts: s.amounts.to_vec(),
+                    caps: s.caps.to_vec(),
                 }),
                 production_state: get!(entity, ProductionState).map(|p| SavedProductionState {
                     active_recipe: p.active_recipe,
                     progress_timer: save_timer(&p.progress_timer),
-                    input_buffer: p.input_buffer.to_vec(), output_buffer: p.output_buffer.to_vec(),
+                    input_buffer: p.input_buffer.to_vec(),
+                    output_buffer: p.output_buffer.to_vec(),
                     auto_repeat: p.auto_repeat,
                 }),
                 attack_damage: get!(entity, AttackDamage).map(|d| d.0),
@@ -1138,7 +1246,9 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
             warn!("Skipping resource node entity {entity:?}: missing Transform");
             continue;
         };
-        let Some(node) = get!(entity, ResourceNode) else { continue };
+        let Some(node) = get!(entity, ResourceNode) else {
+            continue;
+        };
         saved_entities.push(SavedEntity {
             save_id: base.save_id,
             kind: 0,
@@ -1159,7 +1269,8 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
             warn!("Skipping mob entity {entity:?}: missing Transform");
             continue;
         };
-        let (atk_dmg, atk_rng, atk_cd, aggro, atk_target) = collect_combat_components(world, entity, emap);
+        let (atk_dmg, atk_rng, atk_cd, aggro, atk_target) =
+            collect_combat_components(world, entity, emap);
 
         saved_entities.push(SavedEntity {
             save_id: base.save_id,
@@ -1183,38 +1294,60 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
     // Skip projectiles, dying entities, and trees — they're ephemeral
 
     // Wall grid
-    let saved_wall_grid: Vec<SavedWallGridCell> = world.get_resource::<WallGrid>()
-        .map(|wg| wg.cells.iter().map(|((gx, gz), cell)| SavedWallGridCell {
-            gx: *gx, gz: *gz,
-            entity_save_id: *emap.get(&cell.entity).unwrap_or(&u32::MAX),
-            faction: faction_to_u8(&cell._faction),
-            piece_kind: cell.piece_kind as u8,
-            is_gate: cell.is_gate,
-            rotation_y: cell.rotation_y,
-        }).collect()).unwrap_or_default();
+    let saved_wall_grid: Vec<SavedWallGridCell> = world
+        .get_resource::<WallGrid>()
+        .map(|wg| {
+            wg.cells
+                .iter()
+                .map(|((gx, gz), cell)| SavedWallGridCell {
+                    gx: *gx,
+                    gz: *gz,
+                    entity_save_id: *emap.get(&cell.entity).unwrap_or(&u32::MAX),
+                    faction: faction_to_u8(&cell._faction),
+                    piece_kind: cell.piece_kind as u8,
+                    is_gate: cell.is_gate,
+                    rotation_y: cell.rotation_y,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     // Floor grid
-    let saved_floor_grid: Vec<SavedFloorGridCell> = world.get_resource::<FloorGrid>()
-        .map(|fg| fg.cells.iter().map(|((gx, gz), cell)| SavedFloorGridCell {
-            gx: *gx, gz: *gz,
-            entity_save_id: *emap.get(&cell.entity).unwrap_or(&u32::MAX),
-            faction: faction_to_u8(&cell._faction),
-        }).collect()).unwrap_or_default();
+    let saved_floor_grid: Vec<SavedFloorGridCell> = world
+        .get_resource::<FloorGrid>()
+        .map(|fg| {
+            fg.cells
+                .iter()
+                .map(|((gx, gz), cell)| SavedFloorGridCell {
+                    gx: *gx,
+                    gz: *gz,
+                    entity_save_id: *emap.get(&cell.entity).unwrap_or(&u32::MAX),
+                    faction: faction_to_u8(&cell._faction),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     // AI brains
-    let saved_ai: Vec<(u8, SavedAiBrain)> = world.get_resource::<AiState>()
-        .map(|ai| ai.factions.iter()
-            .map(|(faction, brain)| (faction_to_u8(faction), save_ai_brain(brain, emap)))
-            .collect())
+    let saved_ai: Vec<(u8, SavedAiBrain)> = world
+        .get_resource::<AiState>()
+        .map(|ai| {
+            ai.factions
+                .iter()
+                .map(|(faction, brain)| (faction_to_u8(faction), save_ai_brain(brain, emap)))
+                .collect()
+        })
         .unwrap_or_default();
 
     // Fog of war
-    let saved_fog = world.get_resource::<FogOfWarMap>().map(|fog| SavedFogOfWar {
-        grid_size: fog.grid_size,
-        step: fog.step,
-        half_map: fog.half_map,
-        explored: fog.explored.clone(),
-    });
+    let saved_fog = world
+        .get_resource::<FogOfWarMap>()
+        .map(|fog| SavedFogOfWar {
+            grid_size: fog.grid_size,
+            step: fog.step,
+            half_map: fog.half_map,
+            explored: fog.explored.clone(),
+        });
 
     // Build SaveData
     let save_data = SaveData {
@@ -1247,7 +1380,9 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
         }
     };
 
-    let num_players = config.slots.iter()
+    let num_players = config
+        .slots
+        .iter()
         .filter(|s| !matches!(s, SlotOccupant::Closed))
         .count() as i32;
 
@@ -1325,9 +1460,10 @@ fn save_ai_brain(brain: &AiFactionBrain, emap: &HashMap<Entity, u32>) -> SavedAi
             })
             .collect(),
         pending_builds: brain.pending_builds,
-        resource_goal: brain.resource_goal.as_ref().map(|rg| {
-            [rg.wood, rg.copper, rg.iron, rg.gold, rg.oil]
-        }),
+        resource_goal: brain
+            .resource_goal
+            .as_ref()
+            .map(|rg| [rg.wood, rg.copper, rg.iron, rg.gold, rg.oil]),
         income_rates: brain.income_rates.to_vec(),
         last_resource_snapshot: brain.last_resource_snapshot.to_vec(),
         attack_ready: brain.attack_ready,
@@ -1354,7 +1490,11 @@ fn save_ai_brain(brain: &AiFactionBrain, emap: &HashMap<Entity, u32>) -> SavedAi
         next_scout_waypoint: brain.next_scout_waypoint,
         scout_route: brain.scout_route.iter().map(|v| vec3_to_arr(*v)).collect(),
         wall_plan: brain.wall_plan.as_ref().map(|wp| SavedWallPlan {
-            runs: wp.runs.iter().map(|(a, b)| (vec3_to_arr(*a), vec3_to_arr(*b))).collect(),
+            runs: wp
+                .runs
+                .iter()
+                .map(|(a, b)| (vec3_to_arr(*a), vec3_to_arr(*b)))
+                .collect(),
             completed: wp.completed.clone(),
         }),
         base_position: brain.base_position.map(vec3_to_arr),
@@ -1567,7 +1707,13 @@ pub fn load_saved_game(
         let entity = match &saved.entity_type {
             SavedEntityType::Unit(unit_data) => {
                 let e = spawn_and_setup_base(
-                    &mut commands, &cache, &registry, bm, um, &height_map, saved,
+                    &mut commands,
+                    &cache,
+                    &registry,
+                    bm,
+                    um,
+                    &height_map,
+                    saved,
                 );
                 commands.entity(e).insert(u8_to_stance(unit_data.stance));
                 commands.entity(e).insert(UnitSpeed(unit_data.speed));
@@ -1575,7 +1721,9 @@ pub fn load_saved_game(
                     commands.entity(e).insert(Carrying {
                         amount: c.amount,
                         weight: c.weight,
-                        resource_type: c.resource_type.map(|i| resource_type_from_index(i as usize)),
+                        resource_type: c
+                            .resource_type
+                            .map(|i| resource_type_from_index(i as usize)),
                     });
                 }
                 if let Some([cur, lvl]) = unit_data.experience {
@@ -1592,9 +1740,12 @@ pub fn load_saved_game(
                     commands.entity(e).insert(MoveTarget(arr_to_vec3(mt)));
                 }
                 restore_combat_components(
-                    &mut commands, e,
-                    unit_data.attack_damage, unit_data.attack_range,
-                    unit_data.attack_cooldown, unit_data.aggro_range,
+                    &mut commands,
+                    e,
+                    unit_data.attack_damage,
+                    unit_data.attack_range,
+                    unit_data.attack_cooldown,
+                    unit_data.aggro_range,
                 );
                 if let Some(gs) = unit_data.gather_speed {
                     commands.entity(e).insert(GatherSpeed(gs));
@@ -1602,10 +1753,16 @@ pub fn load_saved_game(
                 if let Some(cc) = unit_data.carry_capacity {
                     commands.entity(e).insert(CarryCapacity(cc));
                 }
-                commands.entity(e).insert(GatherAccumulator(unit_data.gather_accumulator));
+                commands
+                    .entity(e)
+                    .insert(GatherAccumulator(unit_data.gather_accumulator));
                 if !unit_data.abilities.is_empty() {
                     commands.entity(e).insert(UnitAbilities {
-                        abilities: unit_data.abilities.iter().map(|a| u8_to_ability_id(*a)).collect(),
+                        abilities: unit_data
+                            .abilities
+                            .iter()
+                            .map(|a| u8_to_ability_id(*a))
+                            .collect(),
                         cooldowns: unit_data
                             .ability_cooldowns
                             .iter()
@@ -1614,13 +1771,21 @@ pub fn load_saved_game(
                     });
                 }
                 if !unit_data.display_name.is_empty() {
-                    commands.entity(e).insert(UnitDisplayName(unit_data.display_name.clone()));
+                    commands
+                        .entity(e)
+                        .insert(UnitDisplayName(unit_data.display_name.clone()));
                 }
                 e
             }
             SavedEntityType::Building(bld_data) => {
                 let e = spawn_and_setup_base(
-                    &mut commands, &cache, &registry, bm, um, &height_map, saved,
+                    &mut commands,
+                    &cache,
+                    &registry,
+                    bm,
+                    um,
+                    &height_map,
+                    saved,
                 );
                 let state = if bld_data.state == 1 {
                     BuildingState::Complete
@@ -1629,7 +1794,9 @@ pub fn load_saved_game(
                 };
                 commands.entity(e).insert(state);
                 commands.entity(e).insert(BuildingLevel(bld_data.level));
-                commands.entity(e).insert(BuildingFootprint(bld_data.footprint));
+                commands
+                    .entity(e)
+                    .insert(BuildingFootprint(bld_data.footprint));
                 commands.entity(e).insert(BuildingHeight(bld_data.height));
 
                 if let Some(ref cp) = bld_data.construction_progress {
@@ -1641,7 +1808,9 @@ pub fn load_saved_game(
                     commands.entity(e).remove::<ConstructionProgress>();
                 }
 
-                commands.entity(e).insert(ConstructionWorkers(bld_data.construction_workers));
+                commands
+                    .entity(e)
+                    .insert(ConstructionWorkers(bld_data.construction_workers));
 
                 if let Some((ref timer, target)) = bld_data.upgrade_progress {
                     commands.entity(e).insert(UpgradeProgress {
@@ -1715,9 +1884,12 @@ pub fn load_saved_game(
                 // Attack components for towers
                 if let Some(dmg) = bld_data.attack_damage {
                     restore_combat_components(
-                        &mut commands, e, dmg,
+                        &mut commands,
+                        e,
+                        dmg,
                         bld_data.attack_range.unwrap_or(0.0),
-                        bld_data.attack_cooldown, bld_data.aggro_range,
+                        bld_data.attack_cooldown,
+                        bld_data.aggro_range,
                     );
                 }
 
@@ -1758,15 +1930,24 @@ pub fn load_saved_game(
             }
             SavedEntityType::Mob(mob_data) => {
                 let e = spawn_and_setup_base(
-                    &mut commands, &cache, &registry, bm, um, &height_map, saved,
+                    &mut commands,
+                    &cache,
+                    &registry,
+                    bm,
+                    um,
+                    &height_map,
+                    saved,
                 );
                 if let Some(stance) = mob_data.stance {
                     commands.entity(e).insert(u8_to_stance(stance));
                 }
                 restore_combat_components(
-                    &mut commands, e,
-                    mob_data.attack_damage, mob_data.attack_range,
-                    mob_data.attack_cooldown, mob_data.aggro_range,
+                    &mut commands,
+                    e,
+                    mob_data.attack_damage,
+                    mob_data.attack_range,
+                    mob_data.attack_cooldown,
+                    mob_data.aggro_range,
                 );
                 e
             }
@@ -1957,7 +2138,8 @@ pub fn load_saved_game(
     for cell in &save.floor_grid {
         let faction = u8_to_faction(cell.faction);
         let world_pos = WallGrid::grid_to_world(cell.gx, cell.gz);
-        let ground_y = height_map.foundation_target_height_shaped(world_pos.x, world_pos.z, footprint);
+        let ground_y =
+            height_map.foundation_target_height_shaped(world_pos.x, world_pos.z, footprint);
         let entity = commands
             .spawn((
                 GameWorld,
@@ -2010,13 +2192,14 @@ pub fn load_saved_game(
     // 12. Remove PendingLoad to signal completion
     commands.remove_resource::<PendingLoad>();
 
-    info!("Game loaded successfully ({} entities)", save.entities.len());
+    info!(
+        "Game loaded successfully ({} entities)",
+        save.entities.len()
+    );
 }
 
 fn restore_ai_brain(saved: &SavedAiBrain, id_map: &HashMap<u32, Entity>) -> AiFactionBrain {
-    let resolve = |id: &u32| -> Entity {
-        id_map.get(id).copied().unwrap_or(Entity::PLACEHOLDER)
-    };
+    let resolve = |id: &u32| -> Entity { id_map.get(id).copied().unwrap_or(Entity::PLACEHOLDER) };
 
     AiFactionBrain {
         strategy_timer: saved.strategy_timer,
@@ -2160,11 +2343,15 @@ fn restore_fog_on_load(
     } else if data.explored.len() == fog_map.explored.len() {
         fog_map.explored.copy_from_slice(&data.explored);
         upload_state.explored_dirty = true;
-        info!("Restored fog of war explored state ({} cells)", data.explored.len());
+        info!(
+            "Restored fog of war explored state ({} cells)",
+            data.explored.len()
+        );
     } else {
         warn!(
             "Fog explored data length mismatch (save={}, current={}). Skipping fog restore.",
-            data.explored.len(), fog_map.explored.len(),
+            data.explored.len(),
+            fog_map.explored.len(),
         );
     }
     commands.remove_resource::<PendingFogRestore>();

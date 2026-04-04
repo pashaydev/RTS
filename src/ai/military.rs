@@ -5,8 +5,8 @@ use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::components::*;
 
 use super::helpers::*;
-use super::AiWorldSnapshot;
 use super::types::*;
+use super::AiWorldSnapshot;
 
 /// Minimum squad size before committing to an attack (staging requirement)
 const ATTACK_STAGING_MIN: usize = 4;

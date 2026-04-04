@@ -1,5 +1,7 @@
 use bevy::prelude::*;
 use std::collections::BTreeMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use super::core::fonts::UiFonts;
 use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
@@ -7,7 +9,7 @@ use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
 use crate::combat::clear_combat_intent;
 use crate::components::*;
-use crate::theme::{self, Theme};
+use crate::theme::Theme;
 
 pub struct ProductionQueueWidgetPlugin;
 
@@ -58,6 +60,11 @@ pub struct QueuePanelItem;
 #[derive(Component)]
 pub struct QueueFocusRow(pub Entity);
 
+#[derive(Component, Default)]
+pub(crate) struct QueuePanelState {
+    signature: u64,
+}
+
 struct CommandQueueGroup {
     representative: Entity,
     kind: EntityKind,
@@ -86,6 +93,7 @@ pub fn update_production_queue(
     resource_nodes: Query<&ResourceNode>,
     kind_lookup: Query<&EntityKind>,
     existing_items: Query<Entity, With<QueuePanelItem>>,
+    panel_state_q: Query<&QueuePanelState>,
     registry: Res<super::widget_framework::WidgetRegistry>,
 ) {
     use super::widget_framework::WidgetId;
@@ -102,10 +110,6 @@ pub fn update_production_queue(
         return;
     };
 
-    for item in &existing_items {
-        commands.entity(item).try_despawn();
-    }
-
     let selected_units: Vec<_> = selected_units
         .iter()
         .filter(|(_, _, faction, _, _)| **faction == active_player.0)
@@ -114,6 +118,38 @@ pub fn update_production_queue(
         .iter()
         .filter(|(_, _, faction, _)| **faction == active_player.0)
         .collect();
+
+    let active_buildings: Vec<_> = if selected_buildings.is_empty() {
+        buildings
+            .iter()
+            .filter(|(_, _, queue, faction)| {
+                **faction == active_player.0 && (!queue.queue.is_empty() || queue.timer.is_some())
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let signature = compute_panel_signature(
+        &selected_units,
+        &selected_buildings,
+        &active_buildings,
+        active_player.0,
+        registry.is_visible(WidgetId::ProductionQueue),
+    );
+    if panel_state_q
+        .get(content)
+        .is_ok_and(|state| state.signature == signature)
+    {
+        return;
+    }
+    commands
+        .entity(content)
+        .insert(QueuePanelState { signature });
+
+    for item in &existing_items {
+        commands.entity(item).try_despawn();
+    }
 
     let has_commands = !selected_units.is_empty();
     let has_selected_production = !selected_buildings.is_empty();
@@ -191,16 +227,18 @@ pub fn update_production_queue(
         );
 
         for (entity, kind, _faction, queue) in selected_buildings {
-            spawn_building_queue_card(&mut commands, content, entity, *kind, queue, &icons, true, &theme);
+            spawn_building_queue_card(
+                &mut commands,
+                content,
+                entity,
+                *kind,
+                queue,
+                &icons,
+                true,
+                &theme,
+            );
         }
     } else {
-        let active_buildings: Vec<_> = buildings
-            .iter()
-            .filter(|(_, _, queue, faction)| {
-                **faction == active_player.0 && (!queue.queue.is_empty() || queue.timer.is_some())
-            })
-            .collect();
-
         spawn_section_header(
             &mut commands,
             content,
@@ -229,6 +267,179 @@ pub fn update_production_queue(
     }
 }
 
+fn compute_panel_signature(
+    selected_units: &[(Entity, &EntityKind, &Faction, &UnitState, &TaskQueue)],
+    selected_buildings: &[(Entity, &EntityKind, &Faction, &TrainingQueue)],
+    active_buildings: &[(Entity, &EntityKind, &TrainingQueue, &Faction)],
+    active_player: Faction,
+    widget_visible: bool,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    widget_visible.hash(&mut hasher);
+    active_player.hash(&mut hasher);
+    selected_units.len().hash(&mut hasher);
+    selected_buildings.len().hash(&mut hasher);
+    active_buildings.len().hash(&mut hasher);
+
+    for (entity, kind, faction, state, queue) in selected_units {
+        entity.to_bits().hash(&mut hasher);
+        kind.hash(&mut hasher);
+        faction.hash(&mut hasher);
+        hash_unit_state(state, &mut hasher);
+        hash_task_queue(queue, &mut hasher);
+    }
+
+    for (entity, kind, faction, queue) in selected_buildings {
+        entity.to_bits().hash(&mut hasher);
+        kind.hash(&mut hasher);
+        faction.hash(&mut hasher);
+        hash_training_queue(queue, &mut hasher);
+    }
+
+    for (entity, kind, queue, faction) in active_buildings {
+        entity.to_bits().hash(&mut hasher);
+        kind.hash(&mut hasher);
+        faction.hash(&mut hasher);
+        hash_training_queue(queue, &mut hasher);
+    }
+
+    hasher.finish()
+}
+
+fn hash_task_queue(queue: &TaskQueue, hasher: &mut DefaultHasher) {
+    match &queue.current {
+        Some(entry) => {
+            true.hash(hasher);
+            entry.id.hash(hasher);
+            hash_queued_task(&entry.task, hasher);
+        }
+        None => false.hash(hasher),
+    }
+
+    queue.queue.len().hash(hasher);
+    for entry in &queue.queue {
+        entry.id.hash(hasher);
+        hash_queued_task(&entry.task, hasher);
+    }
+}
+
+fn hash_training_queue(queue: &TrainingQueue, hasher: &mut DefaultHasher) {
+    queue.queue.len().hash(hasher);
+    for kind in &queue.queue {
+        kind.hash(hasher);
+    }
+    queue.total_trained.hash(hasher);
+
+    match &queue.timer {
+        Some(timer) => {
+            true.hash(hasher);
+            ((timer.fraction() * 100.0).round() as u32).hash(hasher);
+            (timer.remaining_secs().round() as u32).hash(hasher);
+        }
+        None => false.hash(hasher),
+    }
+}
+
+fn hash_unit_state(state: &UnitState, hasher: &mut DefaultHasher) {
+    match state {
+        UnitState::Idle => 0u8.hash(hasher),
+        UnitState::Moving(pos) => {
+            1u8.hash(hasher);
+            hash_vec3(*pos, hasher);
+        }
+        UnitState::Attacking(entity) => {
+            2u8.hash(hasher);
+            entity.to_bits().hash(hasher);
+        }
+        UnitState::Gathering(entity) => {
+            3u8.hash(hasher);
+            entity.to_bits().hash(hasher);
+        }
+        UnitState::ReturningToDeposit { depot, gather_node } => {
+            4u8.hash(hasher);
+            depot.to_bits().hash(hasher);
+            gather_node.map(Entity::to_bits).hash(hasher);
+        }
+        UnitState::Depositing { depot, gather_node } => {
+            5u8.hash(hasher);
+            depot.to_bits().hash(hasher);
+            gather_node.map(Entity::to_bits).hash(hasher);
+        }
+        UnitState::WaitingForStorage { depot, gather_node } => {
+            6u8.hash(hasher);
+            depot.to_bits().hash(hasher);
+            gather_node.map(Entity::to_bits).hash(hasher);
+        }
+        UnitState::MovingToPlot(pos) => {
+            7u8.hash(hasher);
+            hash_vec3(*pos, hasher);
+        }
+        UnitState::MovingToBuild(entity) => {
+            8u8.hash(hasher);
+            entity.to_bits().hash(hasher);
+        }
+        UnitState::Building(entity) => {
+            9u8.hash(hasher);
+            entity.to_bits().hash(hasher);
+        }
+        UnitState::AssignedGathering { building, phase } => {
+            10u8.hash(hasher);
+            building.to_bits().hash(hasher);
+            std::mem::discriminant(phase).hash(hasher);
+        }
+        UnitState::Patrolling { target, origin } => {
+            11u8.hash(hasher);
+            hash_vec3(*target, hasher);
+            hash_vec3(*origin, hasher);
+        }
+        UnitState::AttackMoving(pos) => {
+            12u8.hash(hasher);
+            hash_vec3(*pos, hasher);
+        }
+        UnitState::HoldPosition => 13u8.hash(hasher),
+    }
+}
+
+fn hash_queued_task(task: &QueuedTask, hasher: &mut DefaultHasher) {
+    match task {
+        QueuedTask::Move(pos) => {
+            0u8.hash(hasher);
+            hash_vec3(*pos, hasher);
+        }
+        QueuedTask::AttackMove(pos) => {
+            1u8.hash(hasher);
+            hash_vec3(*pos, hasher);
+        }
+        QueuedTask::Attack(entity) => {
+            2u8.hash(hasher);
+            entity.to_bits().hash(hasher);
+        }
+        QueuedTask::Gather(entity) => {
+            3u8.hash(hasher);
+            entity.to_bits().hash(hasher);
+        }
+        QueuedTask::Build(entity) => {
+            4u8.hash(hasher);
+            entity.to_bits().hash(hasher);
+        }
+        QueuedTask::Patrol(pos) => {
+            5u8.hash(hasher);
+            hash_vec3(*pos, hasher);
+        }
+        QueuedTask::AssignToProcessor(entity) => {
+            6u8.hash(hasher);
+            entity.to_bits().hash(hasher);
+        }
+        QueuedTask::HoldPosition => 7u8.hash(hasher),
+    }
+}
+
+fn hash_vec3(value: Vec3, hasher: &mut DefaultHasher) {
+    value.x.to_bits().hash(hasher);
+    value.y.to_bits().hash(hasher);
+    value.z.to_bits().hash(hasher);
+}
+
 fn spawn_section_header(commands: &mut Commands, parent: Entity, label: String, theme: &Theme) {
     let header = commands
         .spawn((
@@ -248,7 +459,12 @@ fn spawn_section_header(commands: &mut Commands, parent: Entity, label: String, 
     commands.entity(parent).add_child(header);
 }
 
-fn spawn_focus_row(commands: &mut Commands, parent: Entity, entity: Entity, theme: &Theme) -> Entity {
+fn spawn_focus_row(
+    commands: &mut Commands,
+    parent: Entity,
+    entity: Entity,
+    theme: &Theme,
+) -> Entity {
     let row = commands
         .spawn((
             QueuePanelItem,
@@ -427,7 +643,13 @@ fn spawn_building_queue_card(
     theme: &Theme,
 ) {
     let row = spawn_focus_row(commands, parent, building, theme);
-    spawn_row_header(commands, row, icons.entity_icon(kind), kind.display_name(), theme);
+    spawn_row_header(
+        commands,
+        row,
+        icons.entity_icon(kind),
+        kind.display_name(),
+        theme,
+    );
 
     if let Some(current) = queue.queue.first() {
         let remaining = queue.timer.as_ref().map_or(0.0, Timer::remaining_secs);

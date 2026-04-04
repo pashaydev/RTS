@@ -11,7 +11,7 @@ Detailed gameplay documentation for the RTS Prototype. See the [README](../READM
 3. Expand gathering, processing, storage, and production
 4. Research Age II (Expansion) at the Base to unlock Workshop, Stable, Smelter, and more
 5. Research Age III (Conquest) for Siege Works, Mage Tower, and elite defenses
-6. Pressure camps for resource rewards or attack enemy factions
+6. Pressure camps for resource rewards, item drops, or attack enemy factions
 7. Win by eliminating all enemy Bases (60s grace period before elimination)
 
 ### Victory Conditions
@@ -185,6 +185,98 @@ Clearing mob camps grants resources to the killing faction:
 | Goblin (inner) | 30W, 15Cu |
 | Skeleton/Orc (mid) | 50W, 30Fe, 20Go |
 | Demon (outer) | 80W, 50Fe, 40Go |
+
+### Unit Inventory and Item Drops
+
+Units can now carry combat loot from neutral camps. This adds map objectives beyond raw resources, creates stronger timing windows after camp clears, and gives late-game armies more composition variety without replacing the core counter matrix.
+
+**Inventory capacity by production tier:**
+
+| Production source | Slot cap | Notes |
+|---|---:|---|
+| Age I production | 1 | Base, Barracks, Archery-range equivalent, basic spawns |
+| Age II production | 2 | Stable, Workshop, advanced military production |
+| Age III production | 3 | Siege Works, Mage Tower, Temple, elite production |
+
+- Slot cap is fixed when the unit is trained or summoned
+- Workers can pick up items but only gain passive effects; they cannot trigger weapon actives
+- One item per category can be equipped at a time (`armor`, `helmet`, `ring`, `sword`, `staff`, `bow`)
+- Melee units can equip `sword`; caster units can equip `staff`; ranged bow units can equip `bow`
+- Rings are universal utility items and can be mixed with any valid main-hand category
+- Items drop to the ground and must be manually picked up; they do not teleport into faction inventory
+- Dropped items persist briefly after camp death, then decay if no faction claims them
+
+**Drop structure:**
+
+| Camp band | Expected drops | Item quality rule |
+|---|---|---|
+| Goblin inner camps | 0-1 item | Mostly utility rings, basic helmets, padded armor |
+| Skeleton / Orc mid camps | 1 item | Standard armor and class weapons |
+| Demon outer camps | 1-2 items | Rare helmets, stronger weapons, double-ring rolls |
+
+- Camp bosses use weighted drop tables instead of guaranteed fixed rewards
+- Last-hit faction owns pickup priority for a short grace window
+- Neutral loot is visible to all factions after the ownership window expires
+
+### Starter Item Pool
+
+Each starter item is intentionally narrow: one item, one mechanic, one tactical reason to equip it.
+
+#### Armor
+
+| Item | Drop band | Mechanic |
+|---|---|---|
+| Padded Vest | Goblin | Reduces ranged projectile damage taken by 1 |
+| Bronze Cuirass | Skeleton / Orc | First melee hit received every 12s deals 50% damage |
+| Plate Cuirass | Demon | Wearer cannot be crit-bursted below 15% HP in one hit |
+
+#### Helmets
+
+| Item | Drop band | Mechanic |
+|---|---|---|
+| Kettle Helm | Goblin | Immune to bonus damage from high-ground ranged attacks |
+| Viking Helm | Skeleton / Orc | Gain 20% move speed for 2s after getting a kill |
+| Crusader Helm | Demon | Shortens silence, stun, and slow durations by 20% |
+
+#### Rings
+
+| Item | Drop band | Mechanic |
+|---|---|---|
+| Plain Band | Goblin | +1 inventory slot for carried consumable-style drops only |
+| Golden Band | Goblin | Killing a neutral refunds a small amount of missing energy/mana |
+| Wedding Band | Skeleton / Orc | While near one allied unit, both holders gain +1 armor |
+| Linked Rings | Skeleton / Orc | Share 20% of overheal from allied priests into a small shield |
+| Twin Rings | Demon | First ability cast after pickup has 35% shorter cooldown |
+| Jewel Ring | Demon | Reveals hidden / stealthed neutral ambushers within a small radius |
+
+#### Swords
+
+| Item | Drop band | Mechanic |
+|---|---|---|
+| Arming Sword | Skeleton / Orc | Every third basic attack applies a short bleed |
+| Viking Blade | Demon | Critically wounds targets below 35% HP for bonus execute damage |
+
+#### Staves
+
+| Item | Drop band | Mechanic |
+|---|---|---|
+| Battle Staff | Skeleton / Orc | Basic attacks splash a small amount of magic damage |
+| Mage Crozier | Demon | First spell cast after standing still for 2s has bonus range |
+
+#### Bows
+
+| Item | Drop band | Mechanic |
+|---|---|---|
+| War Bow | Skeleton / Orc | Attack-move shots slow targets briefly |
+| Yew Longbow | Demon | Remaining stationary for 1.5s grants one extended-range shot |
+
+### Itemization Design Rules
+
+- Items should create micro-decisions, not raw stat inflation
+- Neutral drops should reinforce map control and skirmish timing
+- Most mechanics should be readable from combat logs and simple HUD tooltips
+- Avoid stacking multiple sources of the same trigger on one unit
+- Early drops should be useful on basic units; late drops should unlock sharper specialist play
 
 ### Onboarding
 

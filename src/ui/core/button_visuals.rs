@@ -35,9 +35,12 @@ pub fn button_hover_visual(
                     }
                     UiInteractPhase::Pressed => {
                         *bg = BackgroundColor(theme.colors.btn_pressed);
-                        *bc = BorderColor::all(theme.colors.accent.with_alpha(
-                            0.7 + 0.3 * state.hold_progress,
-                        ));
+                        *bc = BorderColor::all(
+                            theme
+                                .colors
+                                .accent
+                                .with_alpha(0.7 + 0.3 * state.hold_progress),
+                        );
                     }
                     UiInteractPhase::Idle | UiInteractPhase::Disabled => {
                         *bg = BackgroundColor(theme.colors.bg_surface);
@@ -92,9 +95,10 @@ pub fn animated_button_chrome_system(
                     ButtonStyle::Filled => {
                         Color::srgba(0.35, 0.48, 0.65, 0.14 + 0.10 * state.click_flash)
                     }
-                    ButtonStyle::Ghost => {
-                        theme.colors.accent.with_alpha(0.10 + 0.12 * state.click_flash)
-                    }
+                    ButtonStyle::Ghost => theme
+                        .colors
+                        .accent
+                        .with_alpha(0.10 + 0.12 * state.click_flash),
                     ButtonStyle::Destructive => {
                         Color::srgba(0.85, 0.32, 0.32, 0.10 + 0.12 * state.click_flash)
                     }

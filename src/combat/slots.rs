@@ -12,10 +12,7 @@ impl Plugin for CombatSlotsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (
-                cleanup_stale_slot_claims,
-                assign_melee_slot_claims,
-            )
+            (cleanup_stale_slot_claims, assign_melee_slot_claims)
                 .chain()
                 .in_set(GameFlowSet::Simulation)
                 .before(approach_attack_target)
@@ -52,7 +49,12 @@ pub fn slot_anchor(
 fn cleanup_stale_slot_claims(
     mut commands: Commands,
     all_entities: Query<()>,
-    attackers: Query<(Entity, &SlotClaim, Option<&CombatIntent>, Option<&CombatTargetLock>)>,
+    attackers: Query<(
+        Entity,
+        &SlotClaim,
+        Option<&CombatIntent>,
+        Option<&CombatTargetLock>,
+    )>,
 ) {
     for (entity, claim, intent, lock) in &attackers {
         let intended = intended_attack_target(intent, lock);
@@ -99,16 +101,21 @@ fn assign_melee_slot_claims(
             let preferred_range = timing
                 .map(|timing| timing.minimum_range.max(range.0 * 0.85))
                 .unwrap_or(range.0.max(0.9));
-            per_target
+            per_target.entry(target).or_default().push((
+                entity,
+                tf.translation,
+                preferred_range,
+                claim.map(|claim| claim.slot_index),
+            ));
+            slot_cache
+                .active_targets
                 .entry(target)
-                .or_default()
-                .push((entity, tf.translation, preferred_range, claim.map(|claim| claim.slot_index)));
-            slot_cache.active_targets.entry(target).or_insert_with(|| MeleeSlotCacheEntry {
-                target_position: target_tf.translation,
-                last_update_time: now,
-                slot_count: 0,
-                occupancy_revision: 0,
-            });
+                .or_insert_with(|| MeleeSlotCacheEntry {
+                    target_position: target_tf.translation,
+                    last_update_time: now,
+                    slot_count: 0,
+                    occupancy_revision: 0,
+                });
         }
     }
 
@@ -119,7 +126,9 @@ fn assign_melee_slot_claims(
         let Ok(target_tf) = target_positions.get(target) else {
             continue;
         };
-        let target_radius = target_footprints.get(target).map_or(0.75, |fp| fp.0.max(0.75));
+        let target_radius = target_footprints
+            .get(target)
+            .map_or(0.75, |fp| fp.0.max(0.75));
         let slot_count = ((((target_radius + 1.1) * std::f32::consts::TAU) / 1.15).round()
             as usize)
             .clamp(6, 24);
@@ -128,8 +137,8 @@ fn assign_melee_slot_claims(
             let existing_bias = existing.unwrap_or(u16::MAX);
             (
                 existing_bias,
-                ((pos.x - target_tf.translation.x).powi(2) + (pos.z - target_tf.translation.z).powi(2))
-                    as i32,
+                ((pos.x - target_tf.translation.x).powi(2)
+                    + (pos.z - target_tf.translation.z).powi(2)) as i32,
                 entity.to_bits(),
             )
         });
@@ -147,7 +156,8 @@ fn assign_melee_slot_claims(
                 slot_count,
                 *preferred_range,
             );
-            let surface_dist = attack_surface_distance(*attacker_pos, target_tf.translation, target_radius);
+            let surface_dist =
+                attack_surface_distance(*attacker_pos, target_tf.translation, target_radius);
             if surface_dist > *preferred_range + 0.2 {
                 commands.entity(*entity).insert(MoveTarget(anchor));
             }
@@ -158,10 +168,7 @@ fn assign_melee_slot_claims(
             });
         }
 
-        let entry = slot_cache
-            .active_targets
-            .entry(target)
-            .or_default();
+        let entry = slot_cache.active_targets.entry(target).or_default();
         entry.target_position = target_tf.translation;
         entry.last_update_time = now;
         entry.slot_count = slot_count;
@@ -169,7 +176,7 @@ fn assign_melee_slot_claims(
         budget_state.slot_refreshes_this_frame += 1;
     }
 
-    slot_cache
-        .active_targets
-        .retain(|target, entry| target_positions.contains(*target) && now - entry.last_update_time < 2.0);
+    slot_cache.active_targets.retain(|target, entry| {
+        target_positions.contains(*target) && now - entry.last_update_time < 2.0
+    });
 }

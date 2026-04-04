@@ -7,8 +7,8 @@ use crate::ground::HeightMap;
 use crate::model_assets::BuildingModelAssets;
 
 use super::helpers::*;
-use super::AiWorldSnapshot;
 use super::types::*;
+use super::AiWorldSnapshot;
 
 // ════════════════════════════════════════════════════════════════════
 // System 2: Economy — Workers, construction, building placement, walls

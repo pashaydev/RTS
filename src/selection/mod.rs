@@ -1,5 +1,5 @@
-mod picking;
 mod click_select;
+mod picking;
 mod unit_commands;
 
 use bevy::prelude::*;
@@ -27,6 +27,7 @@ impl Plugin for SelectionPlugin {
             .init_resource::<NextTaskId>()
             .init_resource::<SubgroupCycleState>()
             .init_resource::<DoubleClickDetector>()
+            .init_resource::<picking::PickCycleState>()
             .add_systems(Startup, picking::setup_hover_assets)
             .add_systems(OnEnter(AppState::InGame), click_select::spawn_selection_box)
             .add_systems(
@@ -49,10 +50,8 @@ impl Plugin for SelectionPlugin {
             .add_systems(
                 Update,
                 (
-                    picking::update_hover
-                        .after(click_select::update_selection_box_visual),
-                    click_select::handle_click_select
-                        .after(picking::update_hover),
+                    picking::update_hover.after(click_select::update_selection_box_visual),
+                    click_select::handle_click_select.after(picking::update_hover),
                 )
                     .in_set(SelectionSet)
                     .in_set(GameFlowSet::Input)
@@ -96,8 +95,7 @@ impl Plugin for SelectionPlugin {
             )
             .add_systems(
                 PostUpdate,
-                click_select::clear_ui_press_on_release
-                    .run_if(in_state(AppState::InGame)),
+                click_select::clear_ui_press_on_release.run_if(in_state(AppState::InGame)),
             );
     }
 }

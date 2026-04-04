@@ -200,8 +200,7 @@ pub fn text_input_system(
                 continue;
             }
 
-            let shift =
-                keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+            let shift = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
 
             // ── Clipboard shortcuts ──
 

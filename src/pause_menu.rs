@@ -204,7 +204,13 @@ fn spawn_pause_overlay(
     }
 }
 
-fn spawn_pause_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts, theme: &Theme, role: NetRole) {
+fn spawn_pause_content(
+    commands: &mut Commands,
+    panel: Entity,
+    fonts: &UiFonts,
+    theme: &Theme,
+    role: NetRole,
+) {
     // Buttons
     let menu_label = if role == NetRole::Host {
         "End Match"
@@ -215,9 +221,8 @@ fn spawn_pause_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts, 
     // Save/Load only in single-player (offline) mode
     let is_offline = role == NetRole::Offline;
 
-    let mut buttons: Vec<(&str, PauseAction, bool)> = vec![
-        ("Continue", PauseAction::Continue, true),
-    ];
+    let mut buttons: Vec<(&str, PauseAction, bool)> =
+        vec![("Continue", PauseAction::Continue, true)];
     if is_offline {
         buttons.push(("Save Game", PauseAction::SaveGame, false));
         buttons.push(("Load Game", PauseAction::LoadGame, false));
@@ -271,11 +276,24 @@ fn spawn_options_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts
         .id();
     commands.entity(panel).add_child(placeholder);
 
-    let btn = spawn_overlay_button(commands, "Back", PauseAction::BackFromOptions, true, fonts, theme, Some(0));
+    let btn = spawn_overlay_button(
+        commands,
+        "Back",
+        PauseAction::BackFromOptions,
+        true,
+        fonts,
+        theme,
+        Some(0),
+    );
     commands.entity(panel).add_child(btn);
 }
 
-fn spawn_host_end_confirm_content(commands: &mut Commands, panel: Entity, fonts: &UiFonts, theme: &Theme) {
+fn spawn_host_end_confirm_content(
+    commands: &mut Commands,
+    panel: Entity,
+    fonts: &UiFonts,
+    theme: &Theme,
+) {
     let title = commands
         .spawn((
             Text::new("END MATCH FOR EVERYONE?"),
@@ -310,8 +328,15 @@ fn spawn_host_end_confirm_content(commands: &mut Commands, panel: Entity, fonts:
         .id();
     commands.entity(panel).add_child(body);
 
-    let cancel_btn =
-        spawn_overlay_button(commands, "Cancel", PauseAction::CancelHostEnd, false, fonts, theme, Some(0));
+    let cancel_btn = spawn_overlay_button(
+        commands,
+        "Cancel",
+        PauseAction::CancelHostEnd,
+        false,
+        fonts,
+        theme,
+        Some(0),
+    );
     let confirm_btn = spawn_overlay_button(
         commands,
         "End Match",
@@ -453,7 +478,13 @@ fn handle_pause_buttons(
                 for e in &pause_roots {
                     commands.entity(e).try_despawn();
                 }
-                spawn_pause_overlay(&mut commands, &fonts, &theme, PausePanel::Options, *net_role);
+                spawn_pause_overlay(
+                    &mut commands,
+                    &fonts,
+                    &theme,
+                    PausePanel::Options,
+                    *net_role,
+                );
             }
             PauseAction::Quit => {
                 exit.write(AppExit::Success);
@@ -553,7 +584,12 @@ fn broadcast_host_shutdown(
 
 // ── Death Screen ──
 
-fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, theme: &Theme, faction_stats: &FactionStats) {
+fn spawn_death_screen(
+    commands: &mut Commands,
+    fonts: &UiFonts,
+    theme: &Theme,
+    faction_stats: &FactionStats,
+) {
     let root = commands
         .spawn((
             DeathScreenRoot,
@@ -745,14 +781,35 @@ fn spawn_death_screen(commands: &mut Commands, fonts: &UiFonts, theme: &Theme, f
         .id();
     commands.entity(root).add_child(btn_row);
 
-    let menu_btn = spawn_overlay_button(commands, "Main Menu", PauseAction::MainMenu, false, fonts, theme, Some(0));
-    let spec_btn = spawn_overlay_button(commands, "Spectate", PauseAction::Spectate, true, fonts, theme, Some(1));
+    let menu_btn = spawn_overlay_button(
+        commands,
+        "Main Menu",
+        PauseAction::MainMenu,
+        false,
+        fonts,
+        theme,
+        Some(0),
+    );
+    let spec_btn = spawn_overlay_button(
+        commands,
+        "Spectate",
+        PauseAction::Spectate,
+        true,
+        fonts,
+        theme,
+        Some(1),
+    );
     commands.entity(btn_row).add_children(&[menu_btn, spec_btn]);
 }
 
 // ── Spectator HUD ──
 
-fn spawn_spectator_hud(commands: &mut Commands, fonts: &UiFonts, theme: &Theme, faction_stats: &FactionStats) {
+fn spawn_spectator_hud(
+    commands: &mut Commands,
+    fonts: &UiFonts,
+    theme: &Theme,
+    faction_stats: &FactionStats,
+) {
     let root = commands
         .spawn((
             SpectatorHudRoot,
@@ -987,7 +1044,11 @@ fn pause_keyboard_nav(
         keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter);
 
     if up {
-        nav.index = if nav.index == 0 { count - 1 } else { nav.index - 1 };
+        nav.index = if nav.index == 0 {
+            count - 1
+        } else {
+            nav.index - 1
+        };
     }
     if down {
         nav.index = (nav.index + 1) % count;
@@ -1057,7 +1118,12 @@ fn pause_nav_focus_visuals(
     }
 }
 
-fn spawn_pause_controls_hint(commands: &mut Commands, panel: Entity, fonts: &UiFonts, theme: &Theme) {
+fn spawn_pause_controls_hint(
+    commands: &mut Commands,
+    panel: Entity,
+    fonts: &UiFonts,
+    theme: &Theme,
+) {
     let hint = commands
         .spawn((
             ControlsHint,

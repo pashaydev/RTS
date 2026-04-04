@@ -1,12 +1,13 @@
 use bevy::prelude::*;
 use bevy::text::Font;
 
-
 #[derive(Resource, Clone)]
 pub struct UiFonts {
     pub heading: Handle<Font>,
     pub body: Handle<Font>,
     pub body_emphasis: Handle<Font>,
+    pub edit_icon: Handle<Image>,
+    pub close_icon: Handle<Image>,
 }
 
 impl FromWorld for UiFonts {
@@ -16,6 +17,8 @@ impl FromWorld for UiFonts {
             heading: asset_server.load("fonts/Oxanium.ttf"),
             body: asset_server.load("fonts/Rajdhani-Medium.ttf"),
             body_emphasis: asset_server.load("fonts/Rajdhani-SemiBold.ttf"),
+            edit_icon: asset_server.load("icons/edit_pencil.png"),
+            close_icon: asset_server.load("icons/close_cross.png"),
         }
     }
 }

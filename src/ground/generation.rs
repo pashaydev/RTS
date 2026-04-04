@@ -155,13 +155,9 @@ pub fn spawn_ground(
 
     for body_cells in &water_bodies {
         let (center, radius) = water_body_bounds(body_cells, step, actual_half_map);
-        if let Some(mesh) = build_water_body_mesh(
-            body_cells,
-            actual_grid_size,
-            step,
-            actual_half_map,
-            center,
-        ) {
+        if let Some(mesh) =
+            build_water_body_mesh(body_cells, actual_grid_size, step, actual_half_map, center)
+        {
             commands.spawn((
                 GameWorld,
                 WaterPlane,
@@ -188,12 +184,7 @@ pub fn spawn_ground(
     });
 }
 
-fn ensure_all_biomes(
-    biome_data: &mut [Biome],
-    grid_size: usize,
-    heights: &[f32],
-    half_map: f32,
-) {
+fn ensure_all_biomes(biome_data: &mut [Biome], grid_size: usize, heights: &[f32], half_map: f32) {
     let total_cells = biome_data.len();
     let min_cells = total_cells / 20;
     let target_biomes = [
@@ -208,7 +199,10 @@ fn ensure_all_biomes(
     let stride = grid_size / 8;
 
     for biome in target_biomes {
-        let mut count = biome_data.iter().filter(|&&candidate| candidate == biome).count();
+        let mut count = biome_data
+            .iter()
+            .filter(|&&candidate| candidate == biome)
+            .count();
         let mut patch_centers = Vec::new();
         let mut attempts = 0;
 

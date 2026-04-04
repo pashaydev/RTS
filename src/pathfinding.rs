@@ -108,27 +108,30 @@ pub struct PathfindingPlugin;
 
 impl Plugin for PathfindingPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(NavGridDirty { full: true, ..default() })
-            .init_resource::<PathRequestQueue>()
-            .add_systems(
-                OnEnter(AppState::InGame),
-                build_nav_grid.after(crate::ground::spawn_ground),
+        app.insert_resource(NavGridDirty {
+            full: true,
+            ..default()
+        })
+        .init_resource::<PathRequestQueue>()
+        .add_systems(
+            OnEnter(AppState::InGame),
+            build_nav_grid.after(crate::ground::spawn_ground),
+        )
+        .add_systems(
+            Update,
+            (
+                mark_nav_grid_dirty,
+                invalidate_stale_paths,
+                cleanup_orphan_paths,
+                refresh_nav_grid,
+                queue_path_requests,
+                process_path_requests,
             )
-            .add_systems(
-                Update,
-                (
-                    mark_nav_grid_dirty,
-                    invalidate_stale_paths,
-                    cleanup_orphan_paths,
-                    refresh_nav_grid,
-                    queue_path_requests,
-                    process_path_requests,
-                )
-                    .chain()
-                    .in_set(GameFlowSet::Simulation)
-                    .run_if(in_state(AppState::InGame))
-                    .run_if(resource_exists::<NavGrid>),
-            );
+                .chain()
+                .in_set(GameFlowSet::Simulation)
+                .run_if(in_state(AppState::InGame))
+                .run_if(resource_exists::<NavGrid>),
+        );
     }
 }
 
@@ -331,17 +334,9 @@ fn refresh_nav_grid(
 }
 
 /// Stamp a circular obstacle into the nav grid.
-fn stamp_obstacle(
-    nav_grid: &mut NavGrid,
-    pos: Vec3,
-    radius: f32,
-    margin_radius: f32,
-    gs: usize,
-) {
-    let (min_gx, min_gz) =
-        nav_grid.world_to_grid(pos.x - margin_radius, pos.z - margin_radius);
-    let (max_gx, max_gz) =
-        nav_grid.world_to_grid(pos.x + margin_radius, pos.z + margin_radius);
+fn stamp_obstacle(nav_grid: &mut NavGrid, pos: Vec3, radius: f32, margin_radius: f32, gs: usize) {
+    let (min_gx, min_gz) = nav_grid.world_to_grid(pos.x - margin_radius, pos.z - margin_radius);
+    let (max_gx, max_gz) = nav_grid.world_to_grid(pos.x + margin_radius, pos.z + margin_radius);
 
     for gz in min_gz..=max_gz.min(gs - 1) {
         for gx in min_gx..=max_gx.min(gs - 1) {
@@ -386,7 +381,11 @@ fn queue_path_requests(
             continue;
         }
 
-        if let Some(existing) = queue.requests.iter_mut().find(|request| request.entity == entity) {
+        if let Some(existing) = queue
+            .requests
+            .iter_mut()
+            .find(|request| request.entity == entity)
+        {
             existing.start = start;
             existing.goal = goal;
         } else {

@@ -167,7 +167,12 @@ pub fn spawn_styled_button_nav(
 }
 
 /// Spawns a controls hint row at the bottom-left of the screen.
-pub fn spawn_controls_hint(commands: &mut Commands, container: Entity, fonts: &UiFonts, theme: &Theme) {
+pub fn spawn_controls_hint(
+    commands: &mut Commands,
+    container: Entity,
+    fonts: &UiFonts,
+    theme: &Theme,
+) {
     let hint = commands
         .spawn((
             ControlsHint,
@@ -352,7 +357,9 @@ pub fn spawn_selector_row(
     field: SelectorField,
     theme: &Theme,
 ) {
-    spawn_selector_row_nav(commands, container, label, options, selected, field, None, theme);
+    spawn_selector_row_nav(
+        commands, container, label, options, selected, field, None, theme,
+    );
 }
 
 pub fn spawn_selector_row_nav(
@@ -378,7 +385,8 @@ pub fn spawn_selector_row_nav(
     if let Some(idx) = nav_index {
         ec.insert(NavFocusable(idx));
     }
-    let row = ec.with_children(|parent| {
+    let row = ec
+        .with_children(|parent| {
             parent.spawn((
                 Text::new(label),
                 TextFont {
@@ -455,9 +463,9 @@ pub struct SliderDragState {
 
 fn slider_fill_percent(value: f32, steps: Option<usize>) -> f32 {
     match steps {
-        Some(steps) if steps > 1 => (value.clamp(0.0, 1.0) * (steps - 1) as f32).round()
-            / (steps - 1) as f32
-            * 100.0,
+        Some(steps) if steps > 1 => {
+            (value.clamp(0.0, 1.0) * (steps - 1) as f32).round() / (steps - 1) as f32 * 100.0
+        }
         _ => value.clamp(0.0, 1.0) * 100.0,
     }
 }

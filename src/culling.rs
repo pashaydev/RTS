@@ -180,8 +180,19 @@ fn distance_lod_system(
     };
     let cam_pos = cam_gtf.translation();
 
-    for (gtf, mut visibility, is_decoration, is_deco_chunk, is_frustum_culled, is_mature_tree, is_growing_tree, is_sapling, is_water, bounds, cull_reason) in
-        &mut entities
+    for (
+        gtf,
+        mut visibility,
+        is_decoration,
+        is_deco_chunk,
+        is_frustum_culled,
+        is_mature_tree,
+        is_growing_tree,
+        is_sapling,
+        is_water,
+        bounds,
+        cull_reason,
+    ) in &mut entities
     {
         if is_frustum_culled {
             continue;
