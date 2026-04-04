@@ -17,7 +17,9 @@ impl Plugin for VictoryPlugin {
         app.insert_resource(VictoryState::default()).add_systems(
             Update,
             (
-                victory_check_system,
+                init_faction_status_system,
+                update_faction_status_system,
+                check_winner_system,
                 record_match_system,
                 victory_ui_spawn_system,
                 victory_ui_button_system,
@@ -82,28 +84,15 @@ struct VictoryMenuButton;
 
 // ── Systems ──
 
-fn victory_check_system(
-    time: Res<Time>,
-    net_role: Res<NetRole>,
+/// One-time initialization: populate faction statuses for all active factions.
+fn init_faction_status_system(
     mut victory: ResMut<VictoryState>,
-    teams: Res<TeamConfig>,
-    _active_player: Res<ActivePlayer>,
-    _ai_factions: Res<AiControlledFactions>,
-    buildings: Query<(&EntityKind, &Faction, &BuildingState), With<Building>>,
-    all_resources: Res<AllPlayerResources>,
-    mut event_log: ResMut<GameEventLog>,
     game_config: Res<GameSetupConfig>,
 ) {
-    if victory.game_over {
+    if victory.game_over || !victory.faction_status.is_empty() {
         return;
     }
 
-    victory.check_timer.tick(time.delta());
-    if !victory.check_timer.just_finished() {
-        return;
-    }
-
-    // Determine which factions are active in this match
     let active_factions: Vec<Faction> = game_config
         .active_factions()
         .into_iter()
@@ -111,14 +100,30 @@ fn victory_check_system(
         .collect();
 
     if active_factions.len() < 2 {
-        return; // Need at least 2 factions for victory conditions
+        return;
     }
 
-    // Initialize faction statuses on first check
-    if victory.faction_status.is_empty() {
-        for &faction in &active_factions {
-            victory.faction_status.insert(faction, FactionStatus::Alive);
-        }
+    for &faction in &active_factions {
+        victory.faction_status.insert(faction, FactionStatus::Alive);
+    }
+}
+
+/// Tick the check timer, count bases per faction, and transition statuses:
+/// Alive → GracePeriod (lost all bases) → Eliminated (grace expired + can't rebuild).
+fn update_faction_status_system(
+    time: Res<Time>,
+    net_role: Res<NetRole>,
+    mut victory: ResMut<VictoryState>,
+    buildings: Query<(&EntityKind, &Faction, &BuildingState), With<Building>>,
+    mut event_log: ResMut<GameEventLog>,
+) {
+    if victory.game_over || victory.faction_status.is_empty() {
+        return;
+    }
+
+    victory.check_timer.tick(time.delta());
+    if !victory.check_timer.just_finished() {
+        return;
     }
 
     // Count completed bases per faction
@@ -129,21 +134,12 @@ fn victory_check_system(
         }
     }
 
-    // Base cost for rebuild check
-    let base_cost = crate::blueprints::ResourceCost::new()
-        .with(ResourceType::Wood, 90)
-        .with(ResourceType::Iron, 15);
+    // Collect faction keys to avoid borrow conflict with the HashMap
+    let factions: Vec<Faction> = victory.faction_status.keys().copied().collect();
 
-    // Update faction statuses
-    let delta = time.delta_secs();
-    let mut newly_eliminated = Vec::new();
-
-    for &faction in &active_factions {
+    for faction in factions {
         let bases = base_counts.get(&faction).copied().unwrap_or(0);
-        let status = victory
-            .faction_status
-            .entry(faction)
-            .or_insert(FactionStatus::Alive);
+        let status = victory.faction_status.get_mut(&faction).unwrap();
 
         match status {
             FactionStatus::Alive => {
@@ -167,7 +163,6 @@ fn victory_check_system(
             }
             FactionStatus::GracePeriod { remaining } => {
                 if bases > 0 {
-                    // Rebuilt a base — back to alive
                     *status = FactionStatus::Alive;
                     event_log.push(
                         time.elapsed_secs(),
@@ -177,57 +172,56 @@ fn victory_check_system(
                         Some(faction),
                     );
                 } else {
-                    *remaining -= delta * CHECK_INTERVAL_SECS; // approximate: timer fires every CHECK_INTERVAL
-                                                               // Check if they can afford to rebuild
-                    let can_rebuild = all_resources
-                        .resources
-                        .get(&faction)
-                        .map(|r| r.can_afford_cost(&base_cost))
-                        .unwrap_or(false);
+                    *remaining -= CHECK_INTERVAL_SECS;
 
-                    if *remaining <= 0.0 && !can_rebuild {
+                    if *remaining <= 0.0 {
                         *status = FactionStatus::Eliminated;
-                        newly_eliminated.push(faction);
+                        event_log.push_with_level(
+                            time.elapsed_secs(),
+                            format!("{} has been eliminated!", faction.display_name()),
+                            EventCategory::Alert,
+                            LogLevel::Error,
+                            None,
+                            Some(faction),
+                        );
+                        if *net_role == NetRole::Host {
+                            victory.pending_net_events.push(
+                                game_state::message::GameEvent::FactionEliminated {
+                                    faction_index: faction.to_net_index(),
+                                },
+                            );
+                        }
                     }
                 }
             }
             FactionStatus::Eliminated => {}
         }
     }
+}
 
-    // Log eliminations and queue network events
-    for faction in &newly_eliminated {
-        event_log.push_with_level(
-            time.elapsed_secs(),
-            format!("{} has been eliminated!", faction.display_name()),
-            EventCategory::Alert,
-            LogLevel::Error,
-            None,
-            Some(*faction),
-        );
-        if *net_role == NetRole::Host {
-            victory
-                .pending_net_events
-                .push(game_state::message::GameEvent::FactionEliminated {
-                    faction_index: faction.to_net_index(),
-                });
-        }
+/// Determine if the game is over: last faction or last team standing.
+fn check_winner_system(
+    time: Res<Time>,
+    mut victory: ResMut<VictoryState>,
+    teams: Res<TeamConfig>,
+    net_role: Res<NetRole>,
+    mut event_log: ResMut<GameEventLog>,
+) {
+    if victory.game_over || victory.faction_status.is_empty() {
+        return;
     }
 
-    // Check for winner: last faction (or team) standing
-    let alive_factions: Vec<Faction> = active_factions
+    let alive_factions: Vec<Faction> = victory
+        .faction_status
         .iter()
-        .filter(|f| {
-            victory
-                .faction_status
-                .get(f)
-                .map(|s| *s != FactionStatus::Eliminated)
-                .unwrap_or(true)
-        })
-        .copied()
+        .filter(|(_, s)| **s != FactionStatus::Eliminated)
+        .map(|(f, _)| *f)
         .collect();
 
-    if alive_factions.len() <= 1 && !active_factions.is_empty() {
+    let total_factions = victory.faction_status.len();
+
+    // FFA check: last faction standing
+    if alive_factions.len() <= 1 && total_factions >= 2 {
         victory.game_over = true;
         if let Some(&winner) = alive_factions.first() {
             victory.winner = Some(winner);
@@ -250,36 +244,37 @@ fn victory_check_system(
                     });
             }
         }
-    } else {
-        // Team-based check: if all surviving factions belong to the same team
-        let alive_teams: Vec<u8> = alive_factions
-            .iter()
-            .filter_map(|f| teams.teams.get(f).copied())
-            .collect::<std::collections::HashSet<u8>>()
-            .into_iter()
-            .collect();
+        return;
+    }
 
-        if alive_teams.len() == 1 && !alive_factions.is_empty() {
-            victory.game_over = true;
-            victory.winner = Some(alive_factions[0]);
-            victory.winner_team = Some(alive_teams[0]);
-            event_log.push_with_level(
-                time.elapsed_secs(),
-                format!("Team {} is victorious!", alive_teams[0] + 1),
-                EventCategory::Alert,
-                LogLevel::Warning,
-                None,
-                None,
-            );
-            if *net_role == NetRole::Host {
-                let wt = victory.winner_team;
-                victory
-                    .pending_net_events
-                    .push(game_state::message::GameEvent::Victory {
-                        winner_faction: alive_factions[0].to_net_index(),
-                        winner_team: wt,
-                    });
-            }
+    // Team check: all surviving factions belong to the same team
+    let alive_teams: Vec<u8> = alive_factions
+        .iter()
+        .filter_map(|f| teams.teams.get(f).copied())
+        .collect::<std::collections::HashSet<u8>>()
+        .into_iter()
+        .collect();
+
+    if alive_teams.len() == 1 && !alive_factions.is_empty() {
+        victory.game_over = true;
+        victory.winner = Some(alive_factions[0]);
+        victory.winner_team = Some(alive_teams[0]);
+        event_log.push_with_level(
+            time.elapsed_secs(),
+            format!("Team {} is victorious!", alive_teams[0] + 1),
+            EventCategory::Alert,
+            LogLevel::Warning,
+            None,
+            None,
+        );
+        if *net_role == NetRole::Host {
+            let wt = victory.winner_team;
+            victory
+                .pending_net_events
+                .push(game_state::message::GameEvent::Victory {
+                    winner_faction: alive_factions[0].to_net_index(),
+                    winner_team: wt,
+                });
         }
     }
 }

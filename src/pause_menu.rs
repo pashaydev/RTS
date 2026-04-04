@@ -1,13 +1,27 @@
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
 
+use crate::ages::FactionAges;
+use crate::ai::types::AiState;
+use crate::ai::AiWorldSnapshot;
+use crate::combat::CombatBudgetState;
 use crate::components::*;
-use crate::fog::FogTweakSettings;
+use crate::fog::{FogTextureUploadState, FogTextures, FogTweakSettings};
+use crate::ground::{TerrainShapeSyncState, TerrainShapeUpdateQueue, TerrainSurfaceDirtyQueue};
 use crate::multiplayer::{HostNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
+use crate::pathfinding::{NavGrid, NavGridDirty, PathRequestQueue};
+use crate::spatial::{SpatialHashGrid, WallSpatialGrid};
 use crate::theme::{self, Theme};
+use crate::ui::core::framework::{
+    GridInteractionActive, WidgetDragState, WidgetEditState, WidgetRegistry, WidgetResizeState,
+};
 use crate::ui::core::interactions::UiClickEvent;
 use crate::ui::fonts::UiFonts;
+use crate::ui::widgets::event_log_widget::{EventLogRenderState, GameEventLog};
+use crate::ui::widgets::group_hotkeys_widget::ControlGroups;
+use crate::ui::widgets::hints_widget::HintState;
+use crate::victory::VictoryState;
 
 /// Tracks keyboard focus index for pause menu navigation.
 #[derive(Resource, Default)]
@@ -1192,8 +1206,8 @@ fn cleanup_game_world(
     pause_roots: Query<Entity, With<PauseOverlayRoot>>,
     death_roots: Query<Entity, With<DeathScreenRoot>>,
     spectator_roots: Query<Entity, With<SpectatorHudRoot>>,
-    mut fog_settings: ResMut<FogTweakSettings>,
 ) {
+    // ── Despawn entities ──
     for e in &game_entities {
         commands.entity(e).try_despawn();
     }
@@ -1207,11 +1221,90 @@ fn cleanup_game_world(
         commands.entity(e).try_despawn();
     }
 
-    // Reset overlay
-    commands.insert_resource(InGameOverlay::None);
-    // Reset fog settings
-    *fog_settings = FogTweakSettings::default();
-    // Reset stats
+    // ── Reset all game-state resources ──
+    // Most of these are initialized via init_resource (which only inserts if
+    // absent), so they MUST be reset here to get fresh state on the next game.
+
+    // Core game state
+    commands.insert_resource(ActivePlayer::default());
+    commands.insert_resource(AllPlayerResources::default());
+    commands.insert_resource(AllCompletedBuildings::default());
+    commands.insert_resource(FactionBaseState::default());
+    commands.insert_resource(TeamConfig::default());
+    commands.insert_resource(FactionColors::default());
+    commands.insert_resource(AiControlledFactions::default());
+    commands.insert_resource(VictoryState::default());
+    commands.insert_resource(FactionAges::default());
+
+    // AI
+    commands.insert_resource(AiState::default());
+    commands.insert_resource(AiWorldSnapshot::default());
+    commands.insert_resource(AllyNotifications::default());
+    commands.insert_resource(AiFactionSettings::default());
+
+    // Combat & unit AI
+    commands.insert_resource(DecisionTimer::default());
+    commands.insert_resource(CombatHotspots::default());
+    commands.insert_resource(CombatTuning::default());
+    commands.insert_resource(CombatBudget::default());
+    commands.insert_resource(CombatStatsDebug::default());
+    commands.insert_resource(MeleeSlotCache::default());
+    commands.insert_resource(CombatBudgetState::default());
+
+    // Economy
+    commands.insert_resource(CarriedResourceTotals::default());
+    commands.insert_resource(PendingCarriedDrains::default());
+
+    // Pathfinding & spatial
+    commands.insert_resource(PathRequestQueue::default());
+    commands.insert_resource(NavGridDirty::default());
+    commands.insert_resource(SpatialHashGrid::default());
+    commands.insert_resource(WallSpatialGrid::default());
+
+    // Fog of war
+    commands.insert_resource(FogTweakSettings::default());
+    commands.remove_resource::<FogOfWarMap>();
+    commands.remove_resource::<FogTextures>();
+    commands.remove_resource::<FogTextureUploadState>();
+
+    // Selection & input
+    commands.insert_resource(DragState::default());
+    commands.insert_resource(CommandMode::default());
+    commands.insert_resource(SubgroupCycleState::default());
+    commands.insert_resource(DoubleClickDetector::default());
+    commands.insert_resource(UiClickedThisFrame::default());
+    commands.insert_resource(UiPressActive::default());
+    commands.insert_resource(NextTaskId::default());
+    commands.insert_resource(InspectedEnemy::default());
+    commands.insert_resource(ActiveFormation::default());
+    commands.insert_resource(ControlGroupState::default());
+
+    // UI state
+    commands.insert_resource(InGameOverlay::default());
+    commands.insert_resource(GameEventLog::default());
+    commands.insert_resource(EventLogRenderState::default());
+    commands.insert_resource(ControlGroups::default());
+    commands.insert_resource(HintState::default());
+    commands.insert_resource(WidgetRegistry::default());
+    commands.insert_resource(WidgetResizeState::default());
+    commands.insert_resource(WidgetDragState::default());
+    commands.insert_resource(GridInteractionActive::default());
+    commands.insert_resource(WidgetEditState::default());
+
+    // Buildings & terrain
+    commands.insert_resource(BuildingPlacementState::default());
+    commands.insert_resource(WallGrid::default());
+    commands.insert_resource(FloorGrid::default());
+    commands.insert_resource(TerrainShapeUpdateQueue::default());
+    commands.insert_resource(TerrainShapeSyncState::default());
+    commands.insert_resource(TerrainSurfaceDirtyQueue::default());
+
+    // Pause menu
     commands.insert_resource(FactionStats::default());
     commands.insert_resource(StatsTimer::default());
+    commands.insert_resource(PauseNavFocus::default());
+
+    // Remove non-Default resources (recreated in OnEnter(InGame))
+    commands.remove_resource::<NavGrid>();
+    commands.remove_resource::<MatchStartTime>();
 }

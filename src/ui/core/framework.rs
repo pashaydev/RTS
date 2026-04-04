@@ -581,11 +581,16 @@ pub fn update_edit_mode_visuals(
     widgets: Query<&Widget>,
     title_bars: Query<(&WidgetTitleBar, &Interaction)>,
     mut edit_btns: Query<
-        (&WidgetEditButton, &mut Visibility, &mut BackgroundColor),
+        (
+            &WidgetEditButton,
+            &Interaction,
+            &mut Visibility,
+            &mut BackgroundColor,
+        ),
         (Without<WidgetResizeHandle>, Without<WidgetCloseButton>),
     >,
     mut close_btns: Query<
-        (&WidgetCloseButton, &mut Visibility),
+        (&WidgetCloseButton, &Interaction, &mut Visibility),
         (Without<WidgetResizeHandle>, Without<WidgetEditButton>),
     >,
     mut resize_handles: Query<
@@ -602,9 +607,17 @@ pub fn update_edit_mode_visuals(
         let title_hovered =
             *interaction == Interaction::Hovered || *interaction == Interaction::Pressed;
         let is_editing = edit_state.active == Some(title_bar.0);
-        let show = title_hovered || is_editing;
+        let edit_hovered = edit_btns.iter().any(|(edit_btn, interaction, _, _)| {
+            edit_btn.0 == title_bar.0
+                && matches!(*interaction, Interaction::Hovered | Interaction::Pressed)
+        });
+        let close_hovered = close_btns.iter().any(|(close_btn, interaction, _)| {
+            close_btn.0 == title_bar.0
+                && matches!(*interaction, Interaction::Hovered | Interaction::Pressed)
+        });
+        let show = title_hovered || edit_hovered || close_hovered || is_editing;
 
-        for (edit_btn, mut vis, mut bg) in &mut edit_btns {
+        for (edit_btn, _, mut vis, mut bg) in &mut edit_btns {
             if edit_btn.0 == title_bar.0 {
                 *vis = if show {
                     Visibility::Inherited
@@ -619,7 +632,7 @@ pub fn update_edit_mode_visuals(
             }
         }
 
-        for (close_btn, mut vis) in &mut close_btns {
+        for (close_btn, _, mut vis) in &mut close_btns {
             if close_btn.0 == title_bar.0 {
                 *vis = if show {
                     Visibility::Inherited
