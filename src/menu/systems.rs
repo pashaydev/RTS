@@ -335,10 +335,7 @@ pub(crate) fn handle_menu_buttons(
                     match rmp_serde::from_slice::<crate::save_load::SaveData>(&blob) {
                         Ok(save_data) => {
                             info!("Loading save id={save_id}");
-                            // Restore GameSetupConfig from save
-                            config.map_seed = save_data.map_seed;
-                            // Parse map_size, resource_density, etc. from saved strings
-                            restore_config_from_save(&mut config, &save_data.game_config);
+                            crate::save_load::restore_config_from_save(&mut config, &save_data);
                             commands.insert_resource(crate::save_load::PendingLoad { save_data });
                             next_state.set(AppState::InGame);
                         }
@@ -358,61 +355,6 @@ pub(crate) fn handle_menu_buttons(
                 info!("Widget layout reset to defaults");
             }
         }
-    }
-}
-
-fn restore_config_from_save(
-    config: &mut GameSetupConfig,
-    saved: &crate::save_load::SavedGameConfig,
-) {
-    config.player_name = saved.player_name.clone();
-    config.local_player_slot = saved.local_player_slot;
-    config.player_teams = saved.player_teams;
-    config.day_cycle_secs = saved.day_cycle_secs;
-    config.starting_resources_mult = saved.starting_resources_mult;
-    config.map_seed = saved.map_seed;
-
-    // Parse map_size
-    config.map_size = match saved.map_size.as_str() {
-        "Small" => MapSize::Small,
-        "Large" => MapSize::Large,
-        _ => MapSize::Medium,
-    };
-
-    // Parse resource_density
-    config.resource_density = match saved.resource_density.as_str() {
-        "Sparse" => ResourceDensity::Sparse,
-        "Dense" => ResourceDensity::Dense,
-        _ => ResourceDensity::Normal,
-    };
-
-    // Parse team_mode
-    config.team_mode = match saved.team_mode.as_str() {
-        "Teams" => TeamMode::Teams,
-        _ => TeamMode::FFA,
-    };
-
-    // Parse slots
-    for (i, slot_str) in saved.slots.iter().enumerate() {
-        if i >= config.slots.len() {
-            break;
-        }
-        config.slots[i] = if slot_str == "Human" {
-            SlotOccupant::Human
-        } else if slot_str == "Open" {
-            SlotOccupant::Open
-        } else if slot_str == "Closed" {
-            SlotOccupant::Closed
-        } else if let Some(diff_str) = slot_str.strip_prefix("Ai:") {
-            let diff = match diff_str {
-                "Easy" => AiDifficulty::Easy,
-                "Hard" => AiDifficulty::Hard,
-                _ => AiDifficulty::Medium,
-            };
-            SlotOccupant::Ai(diff)
-        } else {
-            SlotOccupant::Closed
-        };
     }
 }
 

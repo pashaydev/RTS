@@ -14,6 +14,8 @@ use crate::ai::types::{
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::components::*;
 use crate::database::{ActiveProfile, GameDatabase};
+use crate::items::{ItemKind, ItemPickup, ItemRuntimeState, PickupCollectVfx, UnitInventory};
+use crate::ui::widgets::group_hotkeys_widget::ControlGroups;
 use crate::fog::FogTextureUploadState;
 use crate::ground::{HeightMap, TerrainShapeSyncState};
 use crate::lighting::{DayCycle, DayPhase};
@@ -94,7 +96,7 @@ pub struct SaveFeedback {
 
 // ── Save Data Structures ────────────────────────────────────────────────────
 
-const SAVE_VERSION: u32 = 2;
+const SAVE_VERSION: u32 = 3;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SaveData {
@@ -117,6 +119,8 @@ pub struct SaveData {
     pub ai_brains: Vec<(u8, SavedAiBrain)>,
     #[serde(default)]
     pub fog_of_war: Option<SavedFogOfWar>,
+    #[serde(default)]
+    pub control_groups: Vec<Vec<u32>>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -211,6 +215,8 @@ pub enum SavedEntityType {
     Projectile(SavedProjectileData),
     Dying(SavedDyingData),
     Tree(SavedTreeData),
+    ItemPickup(SavedItemPickupData),
+    GrowingResource(SavedGrowingResourceData),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -235,6 +241,14 @@ pub struct SavedUnitData {
     pub display_name: String,
     pub combat_intent: SavedCombatIntent,
     pub task_source: u8,
+    #[serde(default)]
+    pub inventory_items: Vec<u8>,
+    #[serde(default)]
+    pub item_states: Vec<SavedItemStateEntry>,
+    #[serde(default)]
+    pub status_effects: Vec<SavedStatusEffect>,
+    #[serde(default)]
+    pub veterancy_applied: Option<u8>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -257,6 +271,10 @@ pub struct SavedBuildingData {
     pub attack_cooldown: Option<[f32; 2]>,
     pub aggro_range: Option<f32>,
     pub attack_target_id: Option<u32>,
+    #[serde(default)]
+    pub tower_auto_attack: Option<bool>,
+    #[serde(default)]
+    pub paused: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -274,6 +292,8 @@ pub struct SavedMobData {
     pub attack_range: f32,
     pub attack_cooldown: Option<[f32; 2]>,
     pub aggro_range: Option<f32>,
+    #[serde(default)]
+    pub status_effects: Vec<SavedStatusEffect>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -308,6 +328,37 @@ pub enum SavedTreeData {
         target_scale: f32,
     },
     Mature,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct SavedStatusEffect {
+    pub kind: u8, // 0=Slow, 1=Stun, 2=Burning
+    pub remaining: f32,
+    pub strength: f32,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SavedItemStateEntry {
+    pub item: u8, // ItemKind index
+    pub enabled: bool,
+    pub cooldown_remaining: f32,
+    pub active_toggled: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SavedItemPickupData {
+    pub item_kind: u8, // ItemKind index
+    pub owner_faction: Option<u8>,
+    pub expires_at: f32,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct SavedGrowingResourceData {
+    pub resource_type: u8,
+    pub amount: u32,
+    pub timer_elapsed: f32,
+    pub timer_duration: f32,
+    pub target_scale: f32,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -712,6 +763,85 @@ fn u8_to_ability_id(v: u8) -> AbilityId {
     }
 }
 
+fn item_kind_to_u8(k: &ItemKind) -> u8 {
+    match k {
+        ItemKind::PaddedVest => 0,
+        ItemKind::BronzeCuirass => 1,
+        ItemKind::PlateCuirass => 2,
+        ItemKind::CrusaderHelm => 3,
+        ItemKind::KettleHelm => 4,
+        ItemKind::VikingHelm => 5,
+        ItemKind::JewelRing => 6,
+        ItemKind::PlainBand => 7,
+        ItemKind::WeddingBand => 8,
+        ItemKind::GoldenBand => 9,
+        ItemKind::TwinRings => 10,
+        ItemKind::LinkedRings => 11,
+        ItemKind::ArmingSword => 12,
+        ItemKind::VikingBlade => 13,
+        ItemKind::BattleStaff => 14,
+        ItemKind::MageCrozier => 15,
+        ItemKind::YewLongbow => 16,
+        ItemKind::WarBow => 17,
+    }
+}
+
+fn u8_to_item_kind(v: u8) -> ItemKind {
+    match v {
+        0 => ItemKind::PaddedVest,
+        1 => ItemKind::BronzeCuirass,
+        2 => ItemKind::PlateCuirass,
+        3 => ItemKind::CrusaderHelm,
+        4 => ItemKind::KettleHelm,
+        5 => ItemKind::VikingHelm,
+        6 => ItemKind::JewelRing,
+        7 => ItemKind::PlainBand,
+        8 => ItemKind::WeddingBand,
+        9 => ItemKind::GoldenBand,
+        10 => ItemKind::TwinRings,
+        11 => ItemKind::LinkedRings,
+        12 => ItemKind::ArmingSword,
+        13 => ItemKind::VikingBlade,
+        14 => ItemKind::BattleStaff,
+        15 => ItemKind::MageCrozier,
+        16 => ItemKind::YewLongbow,
+        _ => ItemKind::WarBow,
+    }
+}
+
+fn status_effect_to_saved(effects: &StatusEffects) -> Vec<SavedStatusEffect> {
+    effects
+        .effects
+        .iter()
+        .map(|e| SavedStatusEffect {
+            kind: match e.kind {
+                StatusEffectKind::Slow => 0,
+                StatusEffectKind::Stun => 1,
+                StatusEffectKind::Burning => 2,
+            },
+            remaining: e.remaining,
+            strength: e.strength,
+        })
+        .collect()
+}
+
+fn saved_to_status_effects(saved: &[SavedStatusEffect]) -> StatusEffects {
+    StatusEffects {
+        effects: saved
+            .iter()
+            .map(|s| ActiveStatusEffect {
+                kind: match s.kind {
+                    0 => StatusEffectKind::Slow,
+                    1 => StatusEffectKind::Stun,
+                    _ => StatusEffectKind::Burning,
+                },
+                remaining: s.remaining,
+                strength: s.strength,
+            })
+            .collect(),
+    }
+}
+
 fn ai_top_state_to_u8(s: &AiTopState) -> u8 {
     match s {
         AiTopState::Founding => 0,
@@ -1030,7 +1160,7 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
         resource_density: format!("{:?}", config.resource_density),
         day_cycle_secs: config.day_cycle_secs,
         starting_resources_mult: config.starting_resources_mult,
-        map_seed: config.map_seed,
+        map_seed,
     };
 
     // Collect all game entities using component-based queries
@@ -1154,6 +1284,27 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                     Some(TaskSource::Manual) => 0,
                     _ => 1,
                 },
+                inventory_items: get!(entity, UnitInventory)
+                    .map(|inv| inv.items.iter().map(item_kind_to_u8).collect())
+                    .unwrap_or_default(),
+                item_states: get!(entity, ItemRuntimeState)
+                    .map(|rt| {
+                        rt.items
+                            .iter()
+                            .map(|s| SavedItemStateEntry {
+                                item: item_kind_to_u8(&s.item),
+                                enabled: s.enabled,
+                                cooldown_remaining: s.cooldown_remaining,
+                                active_toggled: s.active_toggled,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                status_effects: get!(entity, StatusEffects)
+                    .map(|s| status_effect_to_saved(s))
+                    .unwrap_or_default(),
+                veterancy_applied: get!(entity, VeterancyApplied)
+                    .map(|v| veterancy_to_u8(&v.0)),
             }),
         });
     }
@@ -1236,6 +1387,8 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                 attack_cooldown: get!(entity, AttackCooldown).map(|c| [c.ready_in, c.interval]),
                 aggro_range: get!(entity, AggroRange).map(|a| a.0),
                 attack_target_id: get!(entity, AttackTarget).and_then(|t| emap.get(&t.0).copied()),
+                tower_auto_attack: get!(entity, TowerAutoAttackEnabled).map(|t| t.0),
+                paused: world.get::<BuildingPaused>(entity).is_some(),
             }),
         });
     }
@@ -1287,11 +1440,73 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                 attack_range: atk_rng,
                 attack_cooldown: atk_cd,
                 aggro_range: aggro,
+                status_effects: get!(entity, StatusEffects)
+                    .map(|s| status_effect_to_saved(s))
+                    .unwrap_or_default(),
             }),
         });
     }
 
     // Skip projectiles, dying entities, and trees — they're ephemeral
+
+    // Item pickups on the ground
+    {
+        let mut q = world.query_filtered::<Entity, (With<ItemPickup>, Without<PickupCollectVfx>)>();
+        let pickup_entities: Vec<Entity> = q.iter(world).collect();
+        for entity in pickup_entities {
+            let Some(tf) = world.get::<Transform>(entity) else {
+                continue;
+            };
+            let Some(pickup) = world.get::<ItemPickup>(entity) else {
+                continue;
+            };
+            saved_entities.push(SavedEntity {
+                save_id: next_id,
+                kind: 0,
+                faction: None,
+                pos: vec3_to_arr(tf.translation),
+                rot_y: 0.0,
+                health: None,
+                entity_type: SavedEntityType::ItemPickup(SavedItemPickupData {
+                    item_kind: item_kind_to_u8(&pickup.item),
+                    owner_faction: pickup.owner.as_ref().map(faction_to_u8),
+                    expires_at: pickup.expires_at,
+                }),
+            });
+            next_id += 1;
+        }
+    }
+
+    // Growing resources (mid-respawn)
+    {
+        let mut q =
+            world.query_filtered::<Entity, (With<GrowingResource>, Without<ResourceNode>)>();
+        let growing_entities: Vec<Entity> = q.iter(world).collect();
+        for entity in growing_entities {
+            let Some(tf) = world.get::<Transform>(entity) else {
+                continue;
+            };
+            let Some(gr) = world.get::<GrowingResource>(entity) else {
+                continue;
+            };
+            saved_entities.push(SavedEntity {
+                save_id: next_id,
+                kind: 0,
+                faction: None,
+                pos: vec3_to_arr(tf.translation),
+                rot_y: tf.rotation.to_euler(EulerRot::YXZ).0,
+                health: None,
+                entity_type: SavedEntityType::GrowingResource(SavedGrowingResourceData {
+                    resource_type: gr.resource_type.index() as u8,
+                    amount: gr.amount,
+                    timer_elapsed: gr.timer.elapsed_secs(),
+                    timer_duration: gr.timer.duration().as_secs_f32(),
+                    target_scale: gr.target_scale,
+                }),
+            });
+            next_id += 1;
+        }
+    }
 
     // Wall grid
     let saved_wall_grid: Vec<SavedWallGridCell> = world
@@ -1349,6 +1564,17 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
             explored: fog.explored.clone(),
         });
 
+    // Control groups
+    let saved_control_groups: Vec<Vec<u32>> = world
+        .get_resource::<ControlGroups>()
+        .map(|cg| {
+            cg.groups
+                .iter()
+                .map(|group| group.iter().filter_map(|e| emap.get(e).copied()).collect())
+                .collect()
+        })
+        .unwrap_or_else(|| vec![Vec::new(); 9]);
+
     // Build SaveData
     let save_data = SaveData {
         version: SAVE_VERSION,
@@ -1369,6 +1595,7 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
         entities: saved_entities,
         ai_brains: saved_ai,
         fog_of_war: saved_fog,
+        control_groups: saved_control_groups,
     };
 
     // Serialize to MessagePack
@@ -1536,6 +1763,57 @@ fn handle_quicksave(
     }
 }
 
+/// Restore `GameSetupConfig` from save data so that `resolve_map_seed` and `spawn_ground`
+/// regenerate exactly the same terrain. Uses the resolved `save.map_seed` (not the
+/// potentially-zero value in `game_config.map_seed`) so random seeds are reproduced.
+pub fn restore_config_from_save(config: &mut GameSetupConfig, save: &SaveData) {
+    let saved = &save.game_config;
+    config.player_name = saved.player_name.clone();
+    config.local_player_slot = saved.local_player_slot;
+    config.player_teams = saved.player_teams;
+    config.day_cycle_secs = saved.day_cycle_secs;
+    config.starting_resources_mult = saved.starting_resources_mult;
+    // Use the resolved seed from MapSeed resource, not the config seed (which may be 0/random).
+    config.map_seed = save.map_seed;
+
+    config.map_size = match saved.map_size.as_str() {
+        "Small" => MapSize::Small,
+        "Large" => MapSize::Large,
+        _ => MapSize::Medium,
+    };
+    config.resource_density = match saved.resource_density.as_str() {
+        "Sparse" => ResourceDensity::Sparse,
+        "Dense" => ResourceDensity::Dense,
+        _ => ResourceDensity::Normal,
+    };
+    config.team_mode = match saved.team_mode.as_str() {
+        "Teams" => TeamMode::Teams,
+        _ => TeamMode::FFA,
+    };
+
+    for (i, slot_str) in saved.slots.iter().enumerate() {
+        if i >= config.slots.len() {
+            break;
+        }
+        config.slots[i] = if slot_str == "Human" {
+            SlotOccupant::Human
+        } else if slot_str == "Open" {
+            SlotOccupant::Open
+        } else if slot_str == "Closed" {
+            SlotOccupant::Closed
+        } else if let Some(diff_str) = slot_str.strip_prefix("Ai:") {
+            let diff = match diff_str {
+                "Easy" => AiDifficulty::Easy,
+                "Hard" => AiDifficulty::Hard,
+                _ => AiDifficulty::Medium,
+            };
+            SlotOccupant::Ai(diff)
+        } else {
+            SlotOccupant::Closed
+        };
+    }
+}
+
 fn handle_quickload(
     keyboard: Res<ButtonInput<KeyCode>>,
     net_role: Res<NetRole>,
@@ -1544,6 +1822,7 @@ fn handle_quickload(
     mut commands: Commands,
     mut next_state: ResMut<NextState<AppState>>,
     overlay: Res<InGameOverlay>,
+    mut config: ResMut<GameSetupConfig>,
 ) {
     if *net_role != NetRole::Offline {
         return;
@@ -1558,6 +1837,9 @@ fn handle_quickload(
                 match rmp_serde::from_slice::<SaveData>(&blob) {
                     Ok(save_data) => {
                         info!("Quickloading save id={}", most_recent.id);
+                        // Restore config (especially map_seed) so resolve_map_seed
+                        // regenerates the exact same terrain on OnEnter(InGame).
+                        restore_config_from_save(&mut config, &save_data);
                         commands.insert_resource(PendingLoad { save_data });
                         next_state.set(AppState::MainMenu);
                         // The menu system will detect PendingLoad and immediately
@@ -1586,6 +1868,7 @@ pub fn load_saved_game(
     unit_models: Option<Res<UnitModelAssets>>,
     height_map: Res<HeightMap>,
     _biome_map: Res<BiomeMap>,
+    time: Res<Time>,
 ) {
     let Some(pending) = pending else { return };
     let save = &pending.save_data;
@@ -1775,6 +2058,48 @@ pub fn load_saved_game(
                         .entity(e)
                         .insert(UnitDisplayName(unit_data.display_name.clone()));
                 }
+                // Restore inventory
+                if !unit_data.inventory_items.is_empty() {
+                    commands.entity(e).insert(UnitInventory {
+                        capacity: crate::items::inferred_inventory_capacity(
+                            u16_to_entity_kind(saved.kind),
+                        ),
+                        items: unit_data
+                            .inventory_items
+                            .iter()
+                            .map(|i| u8_to_item_kind(*i))
+                            .collect(),
+                    });
+                }
+                if !unit_data.item_states.is_empty() {
+                    commands.entity(e).insert(ItemRuntimeState {
+                        items: unit_data
+                            .item_states
+                            .iter()
+                            .map(|s| crate::items::ItemStateEntry {
+                                item: u8_to_item_kind(s.item),
+                                enabled: s.enabled,
+                                disabled_reason: None,
+                                cooldown_remaining: s.cooldown_remaining,
+                                active_toggled: s.active_toggled,
+                            })
+                            .collect(),
+                    });
+                }
+                // Restore status effects
+                if !unit_data.status_effects.is_empty() {
+                    commands
+                        .entity(e)
+                        .insert(saved_to_status_effects(&unit_data.status_effects));
+                }
+                // Restore veterancy applied marker
+                if let Some(v) = unit_data.veterancy_applied {
+                    commands.entity(e).insert(VeterancyApplied(match v {
+                        1 => VeterancyLevel::Veteran,
+                        2 => VeterancyLevel::Elite,
+                        _ => VeterancyLevel::Recruit,
+                    }));
+                }
                 e
             }
             SavedEntityType::Building(bld_data) => {
@@ -1893,6 +2218,15 @@ pub fn load_saved_game(
                     );
                 }
 
+                // Tower auto-attack toggle
+                if let Some(auto_atk) = bld_data.tower_auto_attack {
+                    commands.entity(e).insert(TowerAutoAttackEnabled(auto_atk));
+                }
+                // Building paused state
+                if bld_data.paused {
+                    commands.entity(e).insert(BuildingPaused);
+                }
+
                 // For complete buildings, set scale to full (blueprint starts at construction scale)
                 if state == BuildingState::Complete {
                     commands.entity(e).insert(Transform {
@@ -1949,6 +2283,11 @@ pub fn load_saved_game(
                     mob_data.attack_cooldown,
                     mob_data.aggro_range,
                 );
+                if !mob_data.status_effects.is_empty() {
+                    commands
+                        .entity(e)
+                        .insert(saved_to_status_effects(&mob_data.status_effects));
+                }
                 e
             }
             SavedEntityType::Projectile(_proj_data) => {
@@ -2005,6 +2344,55 @@ pub fn load_saved_game(
                         commands.entity(e).insert(MatureTree);
                     }
                 }
+                e
+            }
+            SavedEntityType::ItemPickup(pickup_data) => {
+                let remaining =
+                    pickup_data.expires_at - save.elapsed_secs as f32;
+                if remaining <= 0.0 {
+                    continue; // Already expired
+                }
+                let item = u8_to_item_kind(pickup_data.item_kind);
+                let owner = pickup_data.owner_faction.map(u8_to_faction);
+                let e = commands
+                    .spawn((
+                        GameWorld,
+                        ItemPickup {
+                            item,
+                            owner,
+                            expires_at: time.elapsed_secs() + remaining,
+                        },
+                        Transform::from_translation(pos),
+                        Visibility::Visible,
+                    ))
+                    .id();
+                e
+            }
+            SavedEntityType::GrowingResource(gr_data) => {
+                let rt = resource_type_from_index(gr_data.resource_type as usize);
+                let mut timer =
+                    Timer::from_seconds(gr_data.timer_duration, TimerMode::Once);
+                timer.tick(std::time::Duration::from_secs_f32(gr_data.timer_elapsed));
+                let e = commands
+                    .spawn((
+                        GameWorld,
+                        GrowingResource {
+                            timer,
+                            target_scale: gr_data.target_scale,
+                            resource_type: rt,
+                            amount: gr_data.amount,
+                        },
+                        Transform {
+                            translation: pos,
+                            rotation: rot,
+                            scale: Vec3::splat(
+                                gr_data.target_scale
+                                    * (gr_data.timer_elapsed / gr_data.timer_duration)
+                                        .clamp(0.0, 1.0),
+                            ),
+                        },
+                    ))
+                    .id();
                 e
             }
         };
@@ -2182,14 +2570,27 @@ pub fn load_saved_game(
         });
     }
 
-    // 12. Insert MatchStartTime adjusted for elapsed time
-    // The match start time should be set so that (current_time - match_start) = elapsed_secs
-    // But we don't have current time here. We'll set it to 0 and adjust elapsed_secs
-    // on the MatchStartTime resource. The actual time.elapsed_secs_f64() at this point
-    // is unknown, so we'll use a deferred approach.
-    commands.insert_resource(MatchStartTime(0.0));
+    // 12. Insert MatchStartTime so game clock continues from saved elapsed time
+    commands.insert_resource(MatchStartTime(
+        time.elapsed_secs_f64() - save.elapsed_secs,
+    ));
 
-    // 12. Remove PendingLoad to signal completion
+    // 13. Restore control groups
+    if !save.control_groups.is_empty() {
+        let mut groups: [Vec<Entity>; 9] = Default::default();
+        for (i, group_ids) in save.control_groups.iter().enumerate() {
+            if i >= 9 {
+                break;
+            }
+            groups[i] = group_ids
+                .iter()
+                .filter_map(|id| id_to_entity.get(id).copied())
+                .collect();
+        }
+        commands.insert_resource(ControlGroups { groups });
+    }
+
+    // 14. Remove PendingLoad to signal completion
     commands.remove_resource::<PendingLoad>();
 
     info!(
