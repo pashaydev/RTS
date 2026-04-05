@@ -458,9 +458,9 @@ fn collect_item_pickups(
 fn animate_pickup_visuals(
     time: Res<Time>,
     pickup_roots: Query<Has<Hovered>, With<ItemPickup>>,
-    mut backdrops: Query<(&ChildOf, &mut Transform), With<PickupBackdrop>>,
-    mut stems: Query<(&ChildOf, &mut Transform), With<PickupStem>>,
-    mut rings: Query<(&ChildOf, &mut Transform), With<PickupAuraRing>>,
+    mut backdrops: Query<(&ChildOf, &mut Transform), (With<PickupBackdrop>, Without<PickupStem>, Without<PickupAuraRing>)>,
+    mut stems: Query<(&ChildOf, &mut Transform), (With<PickupStem>, Without<PickupBackdrop>, Without<PickupAuraRing>)>,
+    mut rings: Query<(&ChildOf, &mut Transform), (With<PickupAuraRing>, Without<PickupBackdrop>, Without<PickupStem>)>,
 ) {
     let t = time.elapsed_secs();
 
