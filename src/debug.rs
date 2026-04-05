@@ -18,6 +18,7 @@ use crate::components::{
 };
 use crate::fog::FogTweakSettings;
 use crate::ground::HeightMap;
+use crate::items::{ItemKind, SpawnItemPickup, UnitInventory};
 use crate::lighting::{
     DayCycle, EntityClusterLight, EntityLightConfig, EntityLightGrid, LightingOverrides, SunLight,
 };
@@ -115,6 +116,7 @@ impl Plugin for DebugPlugin {
                     sync_entity_selected_tweaks,
                     sync_runtime_debug_tweaks,
                     sync_resource_debug_tweaks,
+                    sync_item_debug_tweaks,
                     sync_ai_debug_tweaks,
                     sync_network_debug_tweaks,
                     initialize_debug_folder_defaults,
@@ -367,6 +369,8 @@ const AI_FOLDER: &str = "Game/AI Settings";
 const SAVE_FOLDER: &str = "Game/Save & Load";
 const FRUSTUM_FOLDER: &str = "Game/Frustum Debug";
 const RESOURCES_FOLDER: &str = "Game/Resources";
+const ITEMS_SPAWN_FOLDER: &str = "Items/Spawn";
+const ITEMS_SELECTED_FOLDER: &str = "Items/Selected";
 const NET_CONN_FOLDER: &str = "Network/Connection";
 const NET_TRAFFIC_FOLDER: &str = "Network/Traffic";
 
@@ -475,6 +479,34 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_button(RESOURCES_FOLDER, "Add All Resources");
     tweaks.add_readonly(RESOURCES_FOLDER, "Status", "Ready");
 
+    // Item debug folders
+    let item_names: Vec<String> = ItemKind::ALL
+        .iter()
+        .map(|item| item.display_name().to_string())
+        .collect();
+    tweaks.add_cycle_enum(ITEMS_SPAWN_FOLDER, "Item", item_names, 0);
+    tweaks.add_cycle_enum(
+        ITEMS_SPAWN_FOLDER,
+        "Owner",
+        vec![
+            "None".to_string(),
+            "Player 1".to_string(),
+            "Player 2".to_string(),
+            "Player 3".to_string(),
+            "Player 4".to_string(),
+            "Neutral".to_string(),
+        ],
+        0,
+    );
+    tweaks.add_float(ITEMS_SPAWN_FOLDER, "Lifetime", 45.0, 5.0, 300.0, 5.0);
+    tweaks.add_button(ITEMS_SPAWN_FOLDER, "Drop at Camera");
+    tweaks.add_button(ITEMS_SPAWN_FOLDER, "Drop at Cursor");
+    tweaks.add_readonly(ITEMS_SPAWN_FOLDER, "Status", "Ready");
+
+    tweaks.add_readonly(ITEMS_SELECTED_FOLDER, "Units", "0");
+    tweaks.add_readonly(ITEMS_SELECTED_FOLDER, "Capacity", "0");
+    tweaks.add_readonly(ITEMS_SELECTED_FOLDER, "Items", "--");
+
     // Network folders — driven by the field table in multiplayer::mod
     for field in crate::multiplayer::NET_STAT_FIELDS {
         let folder = net_folder(field.folder_key);
@@ -520,6 +552,30 @@ fn get_selected_kind_and_faction(tweaks: &DebugTweaks) -> (EntityKind, Faction) 
         _ => Faction::Neutral,
     };
     (kind, faction)
+}
+
+fn selected_item_kind(tweaks: &DebugTweaks) -> ItemKind {
+    let item_idx = tweaks
+        .get_cycle_selected(ITEMS_SPAWN_FOLDER, "Item")
+        .unwrap_or(0);
+    ItemKind::ALL
+        .get(item_idx)
+        .copied()
+        .unwrap_or(ItemKind::PaddedVest)
+}
+
+fn selected_item_owner(tweaks: &DebugTweaks) -> Option<Faction> {
+    match tweaks
+        .get_cycle_selected(ITEMS_SPAWN_FOLDER, "Owner")
+        .unwrap_or(0)
+    {
+        0 => None,
+        1 => Some(Faction::Player1),
+        2 => Some(Faction::Player2),
+        3 => Some(Faction::Player3),
+        4 => Some(Faction::Player4),
+        _ => Some(Faction::Neutral),
+    }
 }
 
 fn format_debug_vec3(v: Vec3) -> String {
@@ -1145,6 +1201,79 @@ fn sync_resource_debug_tweaks(
                 );
             }
         }
+    }
+}
+
+fn sync_item_debug_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    pressed: Res<DebugButtonPressed>,
+    camera_q: Query<&RtsCamera>,
+    cam_query: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    selected_inventories: Query<&UnitInventory, With<Selected>>,
+    mut item_spawns: MessageWriter<SpawnItemPickup>,
+) {
+    let inventories: Vec<&UnitInventory> = selected_inventories.iter().collect();
+    tweaks.set_readonly_if_changed(ITEMS_SELECTED_FOLDER, "Units", &inventories.len().to_string());
+
+    let total_capacity: usize = inventories
+        .iter()
+        .map(|inventory| inventory.capacity as usize)
+        .sum();
+    tweaks.set_readonly_if_changed(
+        ITEMS_SELECTED_FOLDER,
+        "Capacity",
+        &total_capacity.to_string(),
+    );
+
+    let equipped_items: Vec<&'static str> = inventories
+        .iter()
+        .flat_map(|inventory| inventory.items.iter().copied())
+        .map(ItemKind::display_name)
+        .collect();
+    let items_text = if equipped_items.is_empty() {
+        "--".to_string()
+    } else {
+        equipped_items.join(", ")
+    };
+    tweaks.set_readonly_if_changed(ITEMS_SELECTED_FOLDER, "Items", &items_text);
+
+    for (folder, label) in &pressed.pressed {
+        if folder != ITEMS_SPAWN_FOLDER {
+            continue;
+        }
+
+        let position = match label.as_str() {
+            "Drop at Camera" => camera_q.iter().next().map(|camera| camera.pivot),
+            "Drop at Cursor" => cursor_ground_pos(&cam_query, &windows),
+            _ => None,
+        };
+
+        let Some(position) = position else {
+            if label == "Drop at Cursor" {
+                tweaks.set_readonly_if_changed(
+                    ITEMS_SPAWN_FOLDER,
+                    "Status",
+                    "No ground point under cursor",
+                );
+            }
+            continue;
+        };
+
+        let item = selected_item_kind(&tweaks);
+        item_spawns.write(SpawnItemPickup {
+            item,
+            position,
+            owner: selected_item_owner(&tweaks),
+            lifetime_secs: tweaks
+                .get_float(ITEMS_SPAWN_FOLDER, "Lifetime")
+                .unwrap_or(45.0),
+        });
+        tweaks.set_readonly_if_changed(
+            ITEMS_SPAWN_FOLDER,
+            "Status",
+            &format!("Dropped {}", item.display_name()),
+        );
     }
 }
 

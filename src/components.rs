@@ -311,6 +311,25 @@ impl Default for GraphicsSettings {
 // GraphicsSettings is loaded from SQLite via database::init_early() and
 // saved back by sync_settings_to_db when the resource changes.
 
+/// Dynamic resolution list populated from monitor video modes at runtime.
+/// Falls back to a sensible default list on WASM or when no monitor data is available.
+#[derive(Resource, Clone, Debug)]
+pub struct AvailableResolutions(pub Vec<(u32, u32)>);
+
+impl Default for AvailableResolutions {
+    fn default() -> Self {
+        Self(vec![
+            (1280, 720),
+            (1366, 768),
+            (1600, 900),
+            (1920, 1080),
+            (2560, 1440),
+            (3440, 1440),
+            (3840, 2160),
+        ])
+    }
+}
+
 // ── Resource types ──
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]

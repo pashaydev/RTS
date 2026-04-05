@@ -1,5 +1,6 @@
 use bevy::prelude::*;
-use bevy::window::PresentMode;
+use bevy::window::{Monitor, PresentMode, PrimaryMonitor};
+use std::collections::BTreeSet;
 
 use super::helpers::*;
 use super::*;
@@ -7,40 +8,129 @@ use crate::components::*;
 use crate::theme::Theme;
 use crate::ui::fonts::UiFonts;
 
-// ── Resolution Options ──
-
-pub(crate) const RESOLUTION_OPTIONS: &[(u32, u32)] = &[
-    (1280, 720),
-    (1366, 768),
-    (1600, 900),
-    (1920, 1080),
-    (2560, 1440),
-    (3440, 1440),
-    (3840, 2160),
-];
+// ── Resolution Helpers ──
 
 fn resolution_label(w: u32, h: u32) -> String {
     format!("{w}x{h}")
 }
 
-pub(crate) fn resolution_index(resolution: (u32, u32)) -> usize {
-    RESOLUTION_OPTIONS
+pub(crate) fn resolution_index(resolutions: &[(u32, u32)], resolution: (u32, u32)) -> usize {
+    resolutions
         .iter()
         .position(|&r| r == resolution)
-        .unwrap_or(3)
+        .unwrap_or_else(|| {
+            // Find closest by pixel count
+            let target = resolution.0 as u64 * resolution.1 as u64;
+            resolutions
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, &(w, h))| {
+                    ((w as u64 * h as u64) as i64 - target as i64).unsigned_abs()
+                })
+                .map(|(i, _)| i)
+                .unwrap_or(0)
+        })
 }
 
-pub(crate) fn resolution_slider_value(index: usize) -> f32 {
-    if RESOLUTION_OPTIONS.len() <= 1 {
-        0.0
-    } else {
-        index.min(RESOLUTION_OPTIONS.len() - 1) as f32 / (RESOLUTION_OPTIONS.len() - 1) as f32
+pub(crate) fn step_resolution_index(
+    resolutions: &[(u32, u32)],
+    current_index: usize,
+    delta: isize,
+) -> usize {
+    let max_index = resolutions.len().saturating_sub(1) as isize;
+    (current_index as isize + delta).clamp(0, max_index) as usize
+}
+
+/// Check if a resolution has a standard display aspect ratio (16:9, 16:10, 21:9, 4:3, 5:4, 32:9).
+fn is_standard_aspect_ratio(w: u32, h: u32) -> bool {
+    if h == 0 {
+        return false;
+    }
+    let ratio = w as f64 / h as f64;
+    const STANDARD_RATIOS: &[f64] = &[
+        16.0 / 9.0,  // 1.778 — 1920x1080, 2560x1440, 3840x2160
+        16.0 / 10.0, // 1.600 — 1920x1200, 2560x1600
+        21.0 / 9.0,  // 2.333 — 3440x1440, 2560x1080
+        4.0 / 3.0,   // 1.333 — 1024x768, 1600x1200
+        5.0 / 4.0,   // 1.250 — 1280x1024
+        32.0 / 9.0,  // 3.556 — 5120x1440 (super ultrawide)
+    ];
+    // Allow ~3% tolerance to account for rounding after scale factor division
+    STANDARD_RATIOS.iter().any(|&std| (ratio - std).abs() / std < 0.03)
+}
+
+// ── Marker for the resolution row (greyed out when fullscreen) ──
+
+#[derive(Component)]
+pub(crate) struct ResolutionRow;
+
+/// Inserted after monitor resolutions have been queried to avoid re-running.
+#[derive(Resource)]
+pub(crate) struct ResolutionsPopulated;
+
+// ── Populate Available Resolutions from Monitor ──
+
+pub(crate) fn populate_available_resolutions(
+    mut commands: Commands,
+    monitors: Query<&Monitor, With<PrimaryMonitor>>,
+    mut resolutions: ResMut<AvailableResolutions>,
+) {
+    let Ok(monitor) = monitors.single() else {
+        return;
+    };
+
+    commands.insert_resource(ResolutionsPopulated);
+
+    // Collect unique resolutions, converting physical video modes to logical
+    // (dividing by scale factor) so the list reflects what users actually see.
+    let scale = monitor.scale_factor.max(1.0);
+    let mut res_set: BTreeSet<(u64, u32, u32)> = BTreeSet::new();
+
+    for vm in &monitor.video_modes {
+        let w = (vm.physical_size.x as f64 / scale).round() as u32;
+        let h = (vm.physical_size.y as f64 / scale).round() as u32;
+        if w >= 1024 && h >= 720 && is_standard_aspect_ratio(w, h) {
+            res_set.insert((w as u64 * h as u64, w, h));
+        }
+    }
+
+    // Add the monitor's native logical resolution
+    let native_w = (monitor.physical_width as f64 / scale).round() as u32;
+    let native_h = (monitor.physical_height as f64 / scale).round() as u32;
+    if native_w >= 1024 && native_h >= 720 {
+        res_set.insert((native_w as u64 * native_h as u64, native_w, native_h));
+    }
+
+    if !res_set.is_empty() {
+        resolutions.0 = res_set.into_iter().map(|(_, w, h)| (w, h)).collect();
     }
 }
 
-pub(crate) fn step_resolution_index(current_index: usize, delta: isize) -> usize {
-    let max_index = RESOLUTION_OPTIONS.len().saturating_sub(1) as isize;
-    (current_index as isize + delta).clamp(0, max_index) as usize
+// ── Detect native resolution for first-launch default ──
+
+pub(crate) fn detect_native_resolution(
+    monitors: Query<&Monitor, With<PrimaryMonitor>>,
+    mut graphics: ResMut<GraphicsSettings>,
+    resolutions: Res<AvailableResolutions>,
+) {
+    // Only override the default 1280x720 — if the user already changed it, respect that
+    if graphics.resolution != (1280, 720) {
+        return;
+    }
+
+    let Ok(monitor) = monitors.single() else {
+        return;
+    };
+
+    let scale = monitor.scale_factor.max(1.0);
+    let native_w = (monitor.physical_width as f64 / scale).round() as u32;
+    let native_h = (monitor.physical_height as f64 / scale).round() as u32;
+
+    // Pick the closest available resolution to the native one
+    let idx = resolution_index(&resolutions.0, (native_w, native_h));
+    if idx < resolutions.0.len() {
+        graphics.resolution = resolutions.0[idx];
+    }
 }
 
 // ── Options Page ──
@@ -50,6 +140,7 @@ pub(crate) fn spawn_options_page(
     container: Entity,
     graphics: &GraphicsSettings,
     audio_settings: &crate::audio::AudioSettings,
+    resolutions: &AvailableResolutions,
     fonts: &UiFonts,
     theme: &Theme,
 ) {
@@ -84,19 +175,6 @@ pub(crate) fn spawn_options_page(
 
     spawn_animated_section_divider(commands, container, "GRAPHICS", fonts, theme);
 
-    let res_idx = resolution_index(graphics.resolution);
-    spawn_range_slider(
-        commands,
-        container,
-        "Resolution:",
-        resolution_slider_value(res_idx),
-        resolution_label(graphics.resolution.0, graphics.resolution.1),
-        SelectorField::Resolution,
-        Some(RESOLUTION_OPTIONS.len()),
-        Some(0),
-        theme,
-    );
-
     let fs_idx = if graphics.fullscreen { 0 } else { 1 };
     spawn_selector_row_nav(
         commands,
@@ -105,6 +183,38 @@ pub(crate) fn spawn_options_page(
         &["ON", "OFF"],
         fs_idx,
         SelectorField::Fullscreen,
+        Some(0),
+        theme,
+    );
+
+    // Resolution arrow selector — greyed out when fullscreen is ON
+    let res_idx = resolution_index(&resolutions.0, graphics.resolution);
+    let res_label = if let Some(&(w, h)) = resolutions.0.get(res_idx) {
+        resolution_label(w, h)
+    } else {
+        resolution_label(graphics.resolution.0, graphics.resolution.1)
+    };
+
+    let res_row = commands
+        .spawn((
+            ResolutionRow,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(container).add_child(res_row);
+
+    spawn_arrow_selector(
+        commands,
+        res_row,
+        "Resolution:",
+        &res_label,
+        res_idx,
+        resolutions.0.len(),
+        SelectorField::Resolution,
         Some(1),
         theme,
     );
@@ -334,17 +444,119 @@ pub(crate) fn apply_graphics_settings(graphics: &GraphicsSettings, window: &mut 
     };
 }
 
+// ── Toggle resolution row visibility when fullscreen changes ──
+
+pub(crate) fn toggle_resolution_row_visibility(
+    graphics: Res<GraphicsSettings>,
+    res_rows: Query<Entity, With<ResolutionRow>>,
+    children_q: Query<&Children>,
+    selectors: Query<&MenuSelector>,
+    mut text_colors: Query<&mut TextColor>,
+    theme: Res<Theme>,
+) {
+    if !graphics.is_changed() {
+        return;
+    }
+    let disabled = graphics.fullscreen;
+    for row_entity in &res_rows {
+        // Recursively update text colors on all children to show greyed-out state
+        let mut stack = vec![row_entity];
+        while let Some(entity) = stack.pop() {
+            if let Ok(mut tc) = text_colors.get_mut(entity) {
+                tc.0 = if disabled {
+                    theme.colors.text_disabled
+                } else if selectors.get(entity).is_ok() {
+                    Color::WHITE
+                } else {
+                    theme.colors.text_secondary
+                };
+            }
+            if let Ok(children) = children_q.get(entity) {
+                for child in children.iter() {
+                    stack.push(child);
+                }
+            }
+        }
+    }
+}
+
+// ── Sync Arrow Selector for Resolution ──
+
+pub(crate) fn sync_resolution_arrow_selector(
+    graphics: Res<GraphicsSettings>,
+    resolutions: Res<AvailableResolutions>,
+    mut labels: Query<(&ArrowSelectorLabel, &mut Text)>,
+    mut selectors: Query<&mut MenuSelector>,
+    arrow_parents: Query<&Children>,
+    res_rows: Query<&Children, With<ResolutionRow>>,
+) {
+    if !graphics.is_changed() {
+        return;
+    }
+
+    let total = resolutions.0.len();
+    if total == 0 {
+        return;
+    }
+    let current_idx = resolution_index(&resolutions.0, graphics.resolution);
+    let (w, h) = resolutions.0.get(current_idx).copied().unwrap_or(graphics.resolution);
+
+    // Update label text
+    for (lbl, mut text) in &mut labels {
+        if lbl.0 == SelectorField::Resolution {
+            **text = resolution_label(w, h);
+        }
+    }
+
+    // Update arrow button indices — find MenuSelector children in ResolutionRow
+    for row_children in &res_rows {
+        for child in row_children.iter() {
+            // The actual arrow buttons are nested inside the NavFocusable row
+            if let Ok(inner_children) = arrow_parents.get(child) {
+                let mut arrow_selectors: Vec<Entity> = Vec::new();
+                for inner_child in inner_children.iter() {
+                    if let Ok(sel) = selectors.get(inner_child) {
+                        if sel.field == SelectorField::Resolution {
+                            arrow_selectors.push(inner_child);
+                        }
+                    }
+                }
+                // First arrow = prev, second arrow = next
+                if arrow_selectors.len() == 2 {
+                    let prev_idx = if current_idx == 0 {
+                        total.saturating_sub(1)
+                    } else {
+                        current_idx - 1
+                    };
+                    let next_idx = if current_idx + 1 >= total {
+                        0
+                    } else {
+                        current_idx + 1
+                    };
+                    if let Ok(mut sel) = selectors.get_mut(arrow_selectors[0]) {
+                        sel.index = prev_idx;
+                    }
+                    if let Ok(mut sel) = selectors.get_mut(arrow_selectors[1]) {
+                        sel.index = next_idx;
+                    }
+                }
+            }
+        }
+    }
+}
+
 // ── Selector Handling ──
 
 pub(crate) fn apply_selector_change(
     field: &SelectorField,
     index: usize,
     graphics: &mut GraphicsSettings,
+    resolutions: &AvailableResolutions,
 ) {
     match field {
         SelectorField::Resolution => {
-            if index < RESOLUTION_OPTIONS.len() {
-                graphics.resolution = RESOLUTION_OPTIONS[index];
+            if index < resolutions.0.len() {
+                graphics.resolution = resolutions.0[index];
             }
         }
         SelectorField::Fullscreen => {

@@ -9,7 +9,10 @@ use super::core::shared::{hp_color, spawn_hp_bar};
 use super::group_hotkeys_widget::{group_color, ControlGroups};
 use crate::blueprints::EntityKind;
 use crate::components::*;
-use crate::items::{inferred_inventory_capacity, ItemAssets, ItemKind, ItemRuntimeState, UnitInventory};
+use crate::items::{
+    inferred_inventory_capacity, InventoryChanged, ItemAssets, ItemKind, ItemPickupCollected,
+    ItemPickupFailed, ItemRuntimeState, RequestDropItem, UnitInventory,
+};
 use crate::theme::Theme;
 
 pub struct SelectionWidgetPlugin;
@@ -17,13 +20,49 @@ pub struct SelectionWidgetPlugin;
 #[derive(Component)]
 struct FormationControls;
 
+#[derive(Component)]
+struct DropInventoryItemButton {
+    unit: Entity,
+    slot: usize,
+}
+
+#[derive(Component)]
+struct InventorySlotButton {
+    unit: Entity,
+    slot: usize,
+}
+
+#[derive(Clone, Debug)]
+struct InventoryWarningState {
+    text: String,
+    expires_at: f32,
+}
+
+#[derive(Resource, Default)]
+struct SelectionInventoryUiState {
+    warning: Option<InventoryWarningState>,
+    focused_unit: Option<Entity>,
+    focused_slot: Option<usize>,
+}
+
 impl Plugin for SelectionWidgetPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.init_resource::<SelectionInventoryUiState>()
+        .add_systems(
             Update,
             spawn_selection_widget
                 .run_if(in_state(AppState::InGame))
                 .run_if(any_with_component::<MainHudRoot>),
+        )
+        .add_systems(
+            Update,
+            (
+                maintain_selection_inventory_ui_state,
+                handle_item_inventory_feedback,
+                handle_inventory_slot_focus,
+                handle_drop_inventory_item_click,
+            )
+                .run_if(in_state(AppState::InGame)),
         )
         .add_systems(
             Update,
@@ -192,6 +231,108 @@ fn handle_toggle_unit_labels_click(
     }
 }
 
+fn handle_item_inventory_feedback(
+    time: Res<Time>,
+    mut inventory_ui: ResMut<SelectionInventoryUiState>,
+    mut pickup_failed: MessageReader<ItemPickupFailed>,
+    mut pickup_collected: MessageReader<ItemPickupCollected>,
+    mut inventory_changed: MessageReader<InventoryChanged>,
+) {
+    let mut clear_warning = false;
+
+    for failure in pickup_failed.read() {
+        inventory_ui.warning = Some(InventoryWarningState {
+            text: format!("{}: {}", failure.item.display_name(), failure.reason.label()),
+            expires_at: time.elapsed_secs() + 4.0,
+        });
+    }
+
+    for _ in pickup_collected.read() {
+        clear_warning = true;
+    }
+    for _ in inventory_changed.read() {
+        clear_warning = true;
+    }
+
+    if clear_warning {
+        inventory_ui.warning = None;
+    }
+}
+
+fn maintain_selection_inventory_ui_state(
+    time: Res<Time>,
+    ui_mode: Res<UiMode>,
+    mut inventory_ui: ResMut<SelectionInventoryUiState>,
+) {
+    if inventory_ui
+        .warning
+        .as_ref()
+        .is_some_and(|warning| time.elapsed_secs() >= warning.expires_at)
+    {
+        inventory_ui.warning = None;
+    }
+
+    match &*ui_mode {
+        UiMode::SelectedUnits(units) if units.len() == 1 => {
+            let unit = units[0];
+            if inventory_ui.focused_unit != Some(unit) {
+                inventory_ui.focused_unit = Some(unit);
+                inventory_ui.focused_slot = None;
+            }
+        }
+        _ => {
+            inventory_ui.focused_unit = None;
+            inventory_ui.focused_slot = None;
+        }
+    }
+
+    if ui_mode.is_changed() {
+        inventory_ui.warning = None;
+    }
+}
+
+fn handle_inventory_slot_focus(
+    interactions: Query<(&Interaction, &InventorySlotButton), (Changed<Interaction>, With<Button>)>,
+    mut inventory_ui: ResMut<SelectionInventoryUiState>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for (interaction, button) in &interactions {
+        match *interaction {
+            Interaction::Hovered => {
+                inventory_ui.focused_unit = Some(button.unit);
+                inventory_ui.focused_slot = Some(button.slot);
+            }
+            Interaction::Pressed => {
+                inventory_ui.focused_unit = Some(button.unit);
+                inventory_ui.focused_slot = Some(button.slot);
+                ui_clicked.0 = 2;
+                ui_press.0 = true;
+            }
+            Interaction::None => {}
+        }
+    }
+}
+
+fn handle_drop_inventory_item_click(
+    interactions: Query<(&Interaction, &DropInventoryItemButton), (Changed<Interaction>, With<Button>)>,
+    mut drop_requests: MessageWriter<RequestDropItem>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for (interaction, button) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+        drop_requests.write(RequestDropItem {
+            unit: button.unit,
+            slot: button.slot,
+        });
+    }
+}
+
 fn update_label_visibility_footer(
     label_visibility: Res<EntityLabelVisibility>,
     theme: Res<Theme>,
@@ -248,15 +389,20 @@ pub fn clear_stale_inspected(
     }
 }
 
-pub fn rebuild_selection_panel(
+fn rebuild_selection_panel(
     mut commands: Commands,
-    ui_mode: Res<UiMode>,
-    theme: Res<Theme>,
-    inspected: Res<InspectedEnemy>,
-    active_player: Res<ActivePlayer>,
-    teams: Res<TeamConfig>,
-    icons: Res<IconAssets>,
-    item_assets: Res<ItemAssets>,
+    resources: (
+        Res<UiMode>,
+        Res<Theme>,
+        Res<SelectionInventoryUiState>,
+        Res<InspectedEnemy>,
+        Res<ActivePlayer>,
+        Res<TeamConfig>,
+        Res<IconAssets>,
+        Res<ItemAssets>,
+        Res<ControlGroups>,
+        Res<ActiveFormation>,
+    ),
     panel_q: Query<Entity, With<SelectionInfoBody>>,
     children_q: Query<&Children>,
     selected_units: Query<
@@ -305,9 +451,27 @@ pub fn rebuild_selection_panel(
         >,
         Query<(&EntityKind, &BuildingState, &Health), With<Building>>,
     ),
-    control_groups: Res<ControlGroups>,
-    formation: Res<ActiveFormation>,
+    selected_inventory_updates: Query<
+        (),
+        (
+            With<Unit>,
+            With<Selected>,
+            Or<(Changed<UnitInventory>, Changed<ItemRuntimeState>)>,
+        ),
+    >,
 ) {
+    let (
+        ui_mode,
+        theme,
+        inventory_ui,
+        inspected,
+        active_player,
+        teams,
+        icons,
+        item_assets,
+        control_groups,
+        formation,
+    ) = resources;
     let (faction_q, inspected_unit_q, inspected_building_q) = inspected_queries;
     let Ok(panel_entity) = panel_q.single() else {
         return;
@@ -319,8 +483,10 @@ pub fn rebuild_selection_panel(
 
     if !panel_is_empty
         && !ui_mode.is_changed()
+        && !inventory_ui.is_changed()
         && !inspected.is_changed()
         && !formation.is_changed()
+        && selected_inventory_updates.is_empty()
     {
         return;
     }
@@ -335,6 +501,10 @@ pub fn rebuild_selection_panel(
         *ui_mode,
         UiMode::SelectedUnits(_) | UiMode::SelectedBuilding(_)
     );
+
+    if let Some(warning) = inventory_ui.warning.as_ref() {
+        spawn_inventory_warning(&mut commands, panel_entity, &warning.text, &theme);
+    }
 
     match &*ui_mode {
         UiMode::SelectedUnits(entities) if entities.len() == 1 => {
@@ -365,6 +535,7 @@ pub fn rebuild_selection_panel(
                     stance.copied(),
                     inventory,
                     runtime_state,
+                    &inventory_ui,
                     &icons,
                     &item_assets,
                     &theme,
@@ -703,6 +874,7 @@ pub fn rebuild_selection_panel(
                 None,
                 None,
                 None,
+                &inventory_ui,
                 &icons,
                 &item_assets,
                 &theme,
@@ -862,6 +1034,39 @@ fn spawn_selection_footer(
         .insert(ButtonAnimState::new(button_bg.to_srgba().to_f32_array()));
 }
 
+fn spawn_inventory_warning(
+    commands: &mut Commands,
+    parent: Entity,
+    warning: &str,
+    theme: &Theme,
+) {
+    let banner = commands
+        .spawn((
+            Node {
+                width: Val::Percent(100.0),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
+                margin: UiRect::bottom(Val::Px(6.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(8.0)),
+                ..default()
+            },
+            BackgroundColor(theme.colors.warning.with_alpha(0.12)),
+            BorderColor::all(theme.colors.warning.with_alpha(0.75)),
+        ))
+        .id();
+    commands.entity(parent).add_child(banner);
+    commands.entity(banner).with_children(|banner| {
+        banner.spawn((
+            Text::new(warning),
+            TextFont {
+                font_size: theme.typography.small,
+                ..default()
+            },
+            TextColor(theme.colors.warning),
+        ));
+    });
+}
+
 fn label_visibility_presentation(
     theme: &Theme,
     show_unit_labels: bool,
@@ -883,7 +1088,7 @@ fn label_visibility_presentation(
     }
 }
 
-pub fn spawn_friendly_detail_card(
+fn spawn_friendly_detail_card(
     commands: &mut Commands,
     parent: Entity,
     entity: Entity,
@@ -896,6 +1101,7 @@ pub fn spawn_friendly_detail_card(
     stance: Option<UnitStance>,
     inventory: Option<&UnitInventory>,
     runtime_state: Option<&ItemRuntimeState>,
+    inventory_ui: &SelectionInventoryUiState,
     icons: &IconAssets,
     item_assets: &ItemAssets,
     theme: &Theme,
@@ -1057,9 +1263,11 @@ pub fn spawn_friendly_detail_card(
     spawn_single_inventory_section(
         commands,
         info,
+        entity,
         kind,
         inventory,
         runtime_state,
+        inventory_ui,
         item_assets,
         theme,
     );
@@ -1078,9 +1286,11 @@ fn displayed_inventory_items(inventory: Option<&UnitInventory>) -> &[ItemKind] {
 fn spawn_single_inventory_section(
     commands: &mut Commands,
     parent: Entity,
+    unit: Entity,
     kind: EntityKind,
     inventory: Option<&UnitInventory>,
     runtime_state: Option<&ItemRuntimeState>,
+    inventory_ui: &SelectionInventoryUiState,
     item_assets: &ItemAssets,
     theme: &Theme,
 ) {
@@ -1089,6 +1299,16 @@ fn spawn_single_inventory_section(
         return;
     }
     let items = displayed_inventory_items(inventory);
+    let focused_slot = inventory_ui
+        .focused_slot
+        .filter(|slot| inventory_ui.focused_unit == Some(unit) && *slot < capacity)
+        .or_else(|| {
+            if items.is_empty() {
+                None
+            } else {
+                Some(0)
+            }
+        });
 
     let section = commands
         .spawn(Node {
@@ -1134,6 +1354,17 @@ fn spawn_single_inventory_section(
         ));
     });
 
+    commands.entity(section).with_children(|section| {
+        section.spawn((
+            Text::new("Hover a slot to inspect it. Drop works on the focused slot only."),
+            TextFont {
+                font_size: theme.typography.tiny,
+                ..default()
+            },
+            TextColor(theme.colors.text_secondary),
+        ));
+    });
+
     let slots = commands
         .spawn(Node {
             width: Val::Percent(100.0),
@@ -1148,160 +1379,229 @@ fn spawn_single_inventory_section(
 
     for slot in 0..capacity {
         let filled = items.get(slot).copied();
+        let is_focused = focused_slot == Some(slot);
         let slot_node = commands
             .spawn((
+                Button,
+                StandardButton,
+                InventorySlotButton { unit, slot },
                 Node {
-                    width: Val::Px(40.0),
-                    height: Val::Px(40.0),
-                    justify_content: JustifyContent::Center,
-                    align_items: AlignItems::Center,
+                    width: Val::Px(64.0),
+                    height: Val::Px(64.0),
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::FlexStart,
+                    flex_direction: FlexDirection::Column,
                     border: UiRect::all(Val::Px(1.0)),
                     border_radius: BorderRadius::all(Val::Px(6.0)),
+                    padding: UiRect::all(Val::Px(6.0)),
                     ..default()
                 },
-                BorderColor::all(if filled.is_some() {
+                BorderColor::all(if is_focused {
                     theme.colors.accent
+                } else if filled.is_some() {
+                    theme.colors.accent.with_alpha(0.45)
                 } else {
                     theme.colors.border_subtle
                 }),
-                BackgroundColor(theme.colors.icon_frame_bg),
+                BackgroundColor(if is_focused {
+                    theme.colors.accent.with_alpha(0.12)
+                } else {
+                    theme.colors.icon_frame_bg
+                }),
             ))
             .id();
         commands.entity(slots).add_child(slot_node);
 
-        if let Some(item) = filled {
-            commands.entity(slot_node).with_children(|slot| {
-                slot.spawn((
+        commands.entity(slot_node).with_children(|slot_parent| {
+            slot_parent.spawn((
+                Text::new(format!("S{}", slot + 1)),
+                TextFont {
+                    font_size: theme.typography.tiny,
+                    ..default()
+                },
+                TextColor(theme.colors.text_secondary),
+            ));
+            if let Some(item) = filled {
+                slot_parent.spawn((
                     ImageNode::new(item_assets.icon(item)),
                     Node {
-                        width: Val::Px(28.0),
-                        height: Val::Px(28.0),
+                        width: Val::Px(30.0),
+                        height: Val::Px(30.0),
+                        align_self: AlignSelf::Center,
                         ..default()
                     },
                 ));
-            });
-        } else {
-            commands.entity(slot_node).with_children(|slot| {
-                slot.spawn((
-                    Text::new("+"),
+                slot_parent.spawn((
+                    Text::new(item.category().label()),
                     TextFont {
-                        font_size: theme.typography.large,
+                        font_size: theme.typography.tiny,
+                        ..default()
+                    },
+                    TextColor(theme.colors.accent),
+                ));
+            } else {
+                slot_parent.spawn((
+                    Text::new("Empty"),
+                    TextFont {
+                        font_size: theme.typography.small,
                         ..default()
                     },
                     TextColor(theme.colors.text_disabled),
+                    Node {
+                        margin: UiRect::top(Val::Px(10.0)),
+                        ..default()
+                    },
                 ));
-            });
-        }
+            }
+        });
     }
 
-    if items.is_empty() {
-        let empty = commands
-            .spawn((
-                Text::new("No items equipped."),
-                TextFont {
-                    font_size: theme.typography.small,
-                    ..default()
-                },
-                TextColor(theme.colors.text_secondary),
-            ))
-            .id();
-        commands.entity(section).add_child(empty);
-        return;
-    }
-
-    let list = commands
+    let details = commands
         .spawn(Node {
             width: Val::Percent(100.0),
             flex_direction: FlexDirection::Column,
-            row_gap: Val::Px(4.0),
+            row_gap: Val::Px(6.0),
+            padding: UiRect::all(Val::Px(8.0)),
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(6.0)),
             ..default()
         })
+        .insert(BorderColor::all(theme.colors.border_subtle))
+        .insert(BackgroundColor(theme.colors.bg_surface))
         .id();
-    commands.entity(section).add_child(list);
+    commands.entity(section).add_child(details);
 
-    for &item in items.iter().take(capacity) {
-        let row = commands
-            .spawn(Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(8.0),
-                ..default()
-            })
-            .id();
-        commands.entity(list).add_child(row);
-
-        let icon = commands
-            .spawn((
-                ImageNode::new(item_assets.icon(item)),
-                Node {
-                    width: Val::Px(20.0),
-                    height: Val::Px(20.0),
-                    ..default()
-                },
-            ))
-            .id();
-        commands.entity(row).add_child(icon);
-
-        let text_col = commands
-            .spawn(Node {
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(1.0),
-                ..default()
-            })
-            .id();
-        commands.entity(row).add_child(text_col);
-
-        let status = runtime_state
-            .and_then(|state| state.items.iter().find(|entry| entry.item == item))
-            .map(|entry| {
-                if entry.cooldown_remaining > 0.0 {
-                    format!("Cooldown {:.1}s", entry.cooldown_remaining)
-                } else if entry.enabled {
-                    if entry.active_toggled {
-                        "Active".to_string()
+    match focused_slot.and_then(|slot| items.get(slot).copied().map(|item| (slot, item))) {
+        Some((slot, item)) => {
+            let status = runtime_state
+                .and_then(|state| state.items.iter().find(|entry| entry.item == item))
+                .map(|entry| {
+                    if entry.cooldown_remaining > 0.0 {
+                        format!("Cooldown {:.1}s", entry.cooldown_remaining)
+                    } else if entry.enabled {
+                        if entry.active_toggled {
+                            "Active".to_string()
+                        } else {
+                            "Ready".to_string()
+                        }
                     } else {
-                        "Enabled".to_string()
+                        entry
+                            .disabled_reason
+                            .map(|reason| format!("Disabled: {}", reason.label()))
+                            .unwrap_or_else(|| "Disabled".to_string())
                     }
-                } else {
-                    entry
-                        .disabled_reason
-                        .map(|reason| format!("Disabled: {}", reason.label()))
-                        .unwrap_or_else(|| "Disabled".to_string())
-                }
-            })
-            .unwrap_or_else(|| "Enabled".to_string());
+                })
+                .unwrap_or_else(|| "Ready".to_string());
 
-        commands.entity(text_col).with_children(|col| {
-            col.spawn((
-                Text::new(format!(
-                    "{} [{}]",
-                    item.display_name(),
-                    item.category().label()
-                )),
-                TextFont {
-                    font_size: theme.typography.small,
+            let header = commands
+                .spawn(Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    column_gap: Val::Px(8.0),
                     ..default()
-                },
-                TextColor(theme.colors.text_primary),
-            ));
-            col.spawn((
-                Text::new(item.effect_summary()),
-                TextFont {
-                    font_size: theme.typography.tiny,
-                    ..default()
-                },
-                TextColor(theme.colors.text_secondary),
-            ));
-            col.spawn((
-                Text::new(status),
-                TextFont {
-                    font_size: theme.typography.tiny,
-                    ..default()
-                },
-                TextColor(theme.colors.accent),
-            ));
-        });
+                })
+                .id();
+            commands.entity(details).add_child(header);
+
+            commands.entity(header).with_children(|header| {
+                header.spawn((
+                    Text::new(item.display_name()),
+                    TextFont {
+                        font_size: theme.typography.body,
+                        ..default()
+                    },
+                    TextColor(theme.colors.text_primary),
+                ));
+                header.spawn((
+                    Text::new(format!("Slot {}", slot + 1)),
+                    TextFont {
+                        font_size: theme.typography.tiny,
+                        ..default()
+                    },
+                    TextColor(theme.colors.text_secondary),
+                ));
+            });
+
+            commands.entity(details).with_children(|details| {
+                details.spawn((
+                    Text::new(format!("Category: {}", item.category().label())),
+                    TextFont {
+                        font_size: theme.typography.small,
+                        ..default()
+                    },
+                    TextColor(theme.colors.accent),
+                ));
+                details.spawn((
+                    Text::new(format!("Status: {}", status)),
+                    TextFont {
+                        font_size: theme.typography.small,
+                        ..default()
+                    },
+                    TextColor(theme.colors.text_primary),
+                ));
+                details.spawn((
+                    Text::new(item.effect_summary()),
+                    TextFont {
+                        font_size: theme.typography.small,
+                        ..default()
+                    },
+                    TextColor(theme.colors.text_secondary),
+                ));
+            });
+
+            let drop_button = commands
+                .spawn((
+                    Button,
+                    StandardButton,
+                    DropInventoryItemButton { unit, slot },
+                    ui_components::compact_button_node(10.0, 5.0),
+                    ui_components::ghost_button_chrome(theme, ui_components::UiTone::Destructive),
+                    ActionTooltipTrigger {
+                        text: format!(
+                            "Drop {}\nPlace this item back on the ground",
+                            item.display_name()
+                        ),
+                    },
+                ))
+                .with_children(|button| {
+                    button.spawn((
+                        Text::new("Drop Selected Item"),
+                        TextFont {
+                            font_size: theme.typography.tiny,
+                            ..default()
+                        },
+                        TextColor(theme.colors.warning),
+                    ));
+                })
+                .id();
+            commands.entity(details).add_child(drop_button);
+        }
+        None if items.is_empty() => {
+            commands.entity(details).with_children(|details| {
+                details.spawn((
+                    Text::new("No items equipped."),
+                    TextFont {
+                        font_size: theme.typography.small,
+                        ..default()
+                    },
+                    TextColor(theme.colors.text_secondary),
+                ));
+            });
+        }
+        None => {
+            commands.entity(details).with_children(|details| {
+                details.spawn((
+                    Text::new("Select a filled slot to inspect its details."),
+                    TextFont {
+                        font_size: theme.typography.small,
+                        ..default()
+                    },
+                    TextColor(theme.colors.text_secondary),
+                ));
+            });
+        }
     }
 }
 

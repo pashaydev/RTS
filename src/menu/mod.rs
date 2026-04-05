@@ -226,6 +226,7 @@ impl Plugin for MenuPlugin {
         app.init_resource::<MenuPage>()
             .init_resource::<MenuNavFocus>()
             .init_resource::<helpers::SliderDragState>()
+            .init_resource::<crate::components::AvailableResolutions>()
             .configure_sets(
                 Update,
                 (
@@ -236,6 +237,15 @@ impl Plugin for MenuPlugin {
                 )
                     .chain()
                     .run_if(in_state(AppState::MainMenu)),
+            )
+            .add_systems(
+                Update,
+                (
+                    options::populate_available_resolutions,
+                    options::detect_native_resolution,
+                )
+                    .chain()
+                    .run_if(not(resource_exists::<options::ResolutionsPopulated>)),
             )
             .add_systems(
                 OnEnter(AppState::MainMenu),
@@ -279,6 +289,8 @@ impl Plugin for MenuPlugin {
                 (
                     multiplayer::update_lobby_ui,
                     systems::sync_range_slider_visuals,
+                    options::toggle_resolution_row_visibility,
+                    options::sync_resolution_arrow_selector,
                 )
                     .in_set(MenuSet::Visuals),
             )

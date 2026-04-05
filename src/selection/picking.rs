@@ -6,6 +6,7 @@ use crate::camera;
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::hover_material::{HoverRingMaterial, HoverRingSettings};
+use crate::items::ItemPickup;
 
 // ── Ray-sphere intersection ──
 
@@ -91,6 +92,7 @@ pub(crate) struct PickResult {
     pub is_building: bool,
     pub is_mob: bool,
     pub is_resource: bool,
+    pub is_pickup: bool,
 }
 
 /// Persistent state for click-cycling through overlapping entities.
@@ -145,6 +147,7 @@ struct PickHit {
     is_building: bool,
     is_mob: bool,
     is_resource: bool,
+    is_pickup: bool,
 }
 
 /// Pick the best entity for click selection.
@@ -166,6 +169,7 @@ pub fn pick_for_click(
     buildings: &Query<(Entity, &BuildingFootprint, &BuildingHeight), With<Building>>,
     mobs: &Query<Entity, With<Mob>>,
     resource_nodes: &Query<Entity, With<ResourceNode>>,
+    pickups: &Query<Entity, With<ItemPickup>>,
     height_map: &HeightMap,
     skip_entity: Option<Entity>,
 ) -> Option<PickResult> {
@@ -179,8 +183,9 @@ pub fn pick_for_click(
         let is_building = buildings.contains(entity);
         let is_mob = mobs.contains(entity);
         let is_resource = resource_nodes.contains(entity);
+        let is_pickup = pickups.contains(entity);
 
-        if !is_unit && !is_building && !is_mob && !is_resource {
+        if !is_unit && !is_building && !is_mob && !is_resource && !is_pickup {
             continue;
         }
 
@@ -216,6 +221,7 @@ pub fn pick_for_click(
             is_building,
             is_mob,
             is_resource,
+            is_pickup,
         });
     }
 
@@ -236,16 +242,18 @@ pub fn pick_for_click(
     let max_screen = hits.iter().map(|h| h.screen_dist).fold(0.0_f32, f32::max);
     let screen_range = (max_screen - min_screen).max(0.01);
 
-    // Type priority bonus (lower is better): unit=0, building=1, resource=2, mob=3
+    // Type priority bonus (lower is better): unit=0, building=1, pickup=2, resource=3, mob=4
     let type_priority = |h: &PickHit| -> f32 {
         if h.is_unit {
             0.0
         } else if h.is_building {
             0.05
-        } else if h.is_resource {
+        } else if h.is_pickup {
             0.10
-        } else {
+        } else if h.is_resource {
             0.15
+        } else {
+            0.20
         }
     };
 
@@ -271,6 +279,7 @@ pub fn pick_for_click(
         is_building: best.is_building,
         is_mob: best.is_mob,
         is_resource: best.is_resource,
+        is_pickup: best.is_pickup,
     })
 }
 
@@ -300,6 +309,7 @@ pub(crate) fn update_hover(
     buildings: Query<(Entity, &BuildingFootprint, &BuildingHeight), With<Building>>,
     mobs: Query<Entity, With<Mob>>,
     resource_nodes: Query<Entity, With<ResourceNode>>,
+    pickups: Query<Entity, With<ItemPickup>>,
     hovered: Query<Entity, With<Hovered>>,
     placement: Res<BuildingPlacementState>,
     ui_interactions: Query<&Interaction, With<Node>>,
@@ -345,6 +355,7 @@ pub(crate) fn update_hover(
         &buildings,
         &mobs,
         &resource_nodes,
+        &pickups,
         &height_map,
         None, // no skip for hover
     ) {

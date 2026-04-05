@@ -50,6 +50,27 @@ pub enum ItemKind {
 }
 
 impl ItemKind {
+    pub const ALL: &'static [Self] = &[
+        Self::PaddedVest,
+        Self::BronzeCuirass,
+        Self::PlateCuirass,
+        Self::CrusaderHelm,
+        Self::KettleHelm,
+        Self::VikingHelm,
+        Self::JewelRing,
+        Self::PlainBand,
+        Self::WeddingBand,
+        Self::GoldenBand,
+        Self::TwinRings,
+        Self::LinkedRings,
+        Self::ArmingSword,
+        Self::VikingBlade,
+        Self::BattleStaff,
+        Self::MageCrozier,
+        Self::YewLongbow,
+        Self::WarBow,
+    ];
+
     pub fn category(self) -> ItemCategory {
         match self {
             Self::PaddedVest | Self::BronzeCuirass | Self::PlateCuirass => ItemCategory::Armor,
@@ -180,7 +201,13 @@ pub struct ItemPickupLabel {
 pub struct PickupBillboard;
 
 #[derive(Component)]
-pub struct PickupBeam;
+pub struct PickupBackdrop;
+
+#[derive(Component)]
+pub struct PickupStem;
+
+#[derive(Component)]
+pub struct PickupAuraRing;
 
 #[derive(Component)]
 pub struct PickupCollectVfx {

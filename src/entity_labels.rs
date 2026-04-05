@@ -6,7 +6,7 @@ use crate::blueprints::EntityKind;
 use crate::camera;
 use crate::components::*;
 use crate::fog::FogTweakSettings;
-use crate::items::{ItemPickup, ItemPickupLabel, RequestPickupItem};
+use crate::items::{ItemPickup, ItemPickupLabel};
 use crate::selection::SelectionSet;
 use crate::theme::Theme;
 use crate::ui::fonts;
@@ -110,6 +110,7 @@ struct FocusData {
     name: String,
     hp_ratio: Option<f32>,
     extra: Option<String>,
+    interactive: bool,
 }
 
 #[derive(Clone)]
@@ -423,6 +424,7 @@ struct RawCandidate {
     is_selected: bool,
     is_hovered: bool,
     is_unit: bool,
+    is_pickup: bool,
     faction_priority: u8,
     kind_name: String,
 }
@@ -478,8 +480,8 @@ fn collect_candidates(
         let is_resource = resource_opt.is_some() && kind_opt.is_none();
         let is_pickup = pickup_label_opt.is_some();
 
-        // Units: show ambient labels only if toggle is on
-        if is_unit && !label_visibility.show_unit_labels && !is_hovered && !is_selected {
+        // Units & mobs: show ambient labels only if toggle is on
+        if (is_unit || is_mob) && !label_visibility.show_unit_labels && !is_hovered && !is_selected {
             continue;
         }
 
@@ -612,6 +614,7 @@ fn collect_candidates(
             is_selected,
             is_hovered,
             is_unit,
+            is_pickup,
             faction_priority: fp,
             kind_name,
         });
@@ -657,6 +660,7 @@ fn extract_focus_and_ambient(
                 name: c.name,
                 hp_ratio: c.hp_ratio,
                 extra: c.extra,
+                interactive: !c.is_pickup,
             });
         } else if c.is_unit && !c.is_selected && !c.is_hovered {
             // Ambient groupable unit
@@ -1276,7 +1280,7 @@ fn entity_label_system(
                             EntityLabel {
                                 target: f.entity,
                                 base_color: f.color,
-                                interactive: true,
+                                interactive: f.interactive,
                             },
                             BorderColor::all(f.color.with_alpha(0.6)),
                         ));
@@ -1375,7 +1379,7 @@ fn spawn_focus_label(
             EntityLabel {
                 target: f.entity,
                 base_color: f.color,
-                interactive: true,
+                interactive: f.interactive,
             },
             Node {
                 position_type: PositionType::Absolute,
@@ -1393,7 +1397,11 @@ fn spawn_focus_label(
             BackgroundColor(Color::srgba(0.05, 0.05, 0.07, 0.85)),
             BorderColor::all(f.color.with_alpha(0.6)),
             GlobalZIndex(-4),
-            Interaction::default(),
+            if f.interactive {
+                Interaction::default()
+            } else {
+                Interaction::None
+            },
         ))
         .with_children(|parent| {
             // Name text
@@ -1502,10 +1510,7 @@ fn handle_label_interaction(
     mut border_query: Query<&mut BorderColor>,
     hovered_via_label: Query<Entity, With<HoveredViaLabel>>,
     selected: Query<Entity, With<Selected>>,
-    selected_units: Query<Entity, (With<Selected>, With<Unit>)>,
-    pickups: Query<(), With<ItemPickup>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut pickup_requests: MessageWriter<RequestPickupItem>,
 ) {
     for (label_entity, label, interaction) in &mut labels {
         if !label.interactive {
@@ -1529,15 +1534,6 @@ fn handle_label_interaction(
                 }
             }
             Interaction::Pressed => {
-                if pickups.contains(label.target) {
-                    for picker in &selected_units {
-                        pickup_requests.write(RequestPickupItem {
-                            picker,
-                            pickup: label.target,
-                        });
-                    }
-                    continue;
-                }
                 let shift =
                     keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
                 if !shift {

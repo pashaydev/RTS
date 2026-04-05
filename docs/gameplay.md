@@ -413,7 +413,9 @@ Use `RTS_NET_DEBUG_PORT` to pin the port.
 | `Shift` + click | Add or remove from selection |
 | `Ctrl + 1-9` | Assign control group |
 | `Shift + 1-9` | Add to control group |
+| `Alt + 1-9` | Steal into control group (assign selected, remove from other groups) |
 | `1-9` | Recall control group |
+| `Tab` | Cycle through subgroups in current selection |
 
 ### Orders
 
@@ -424,11 +426,15 @@ Use `RTS_NET_DEBUG_PORT` to pin the port.
 | Right click resource | Gather with workers |
 | Right click construction | Assign workers to build |
 | Right click processor | Assign workers to processor |
-| `A` + left click | Attack-move |
+| `F` + left click | Attack-move |
 | `P` + left click | Patrol |
 | `H` | Hold position |
-| `S` | Stop |
+| `X` | Stop (cancel all orders) |
 | `V` | Cycle stance |
+| `G` | Cycle formation |
+| `L` | Toggle unit labels |
+| `Q` | Use first ability |
+| `W` | Use second ability |
 | `Escape` | Cancel command mode |
 
 ### Building and UI
@@ -441,16 +447,17 @@ Use `RTS_NET_DEBUG_PORT` to pin the port.
 | `Gatehouse` | Convert wall segment |
 | Left click | Confirm placement |
 | Right click / `Escape` | Cancel placement |
+| `H` / `J` | Rotate placement left / right 90° |
 | Rally button | Enter rally mode |
 | `F1` | Resources |
 | `F2` | Army Overview |
 | `F3` | Selection |
 | `F4` | Actions |
-| `F5` | Minimap |
+| `F5` | Minimap (also Quicksave when no overlay) |
 | `F6` | Production Queue |
 | `F7` | Tech Tree |
 | `F8` | Control Groups |
-| `F9` | Event Log |
+| `F9` | Event Log (also Quickload when no overlay) |
 | `F10` | Debug |
 
 ## Reference Data
@@ -459,13 +466,13 @@ Use `RTS_NET_DEBUG_PORT` to pin the port.
 
 | Biome | Terrain Color | Primary Resource | Secondary Resource |
 |---|---|---|---|
-| Grassland | Green | Stone | Wood |
+| Grassland | Green | Stone | Copper, Iron |
 | Forest | Dark Green | Wood | Copper |
 | Desert | Sandy yellow | Copper | Iron |
 | Beach | Sand | Stone | — |
 | Wetland | Olive green | Iron | Copper |
 | Water | Blue | Oil | — |
-| Mountain | Gray/white | Stone | Gold |
+| Mountain | Gray/white | Stone | Iron, Copper |
 
 ### Buildings
 
@@ -476,7 +483,7 @@ Use `RTS_NET_DEBUG_PORT` to pin the port.
 | Storage | 55W 15I 10Sn | 8s | Base | I | Depot with gather aura |
 | Sawmill | 50W 15I | 12s | Base | I | Produces Planks and Charcoal |
 | Mine | 70W 35I | 15s | Base | I | Ore processing and upgrades |
-| House | 10Sn | — | Base | I | Increases unit cap (+4/6/8 per level) |
+| House | 45W 10I 10Sn | 7s | Base | I | Increases unit cap (+4/6/8 per level) |
 | Outpost | 20W 10I 8Sn | 6s | Base | I | Vision and wall-control anchor |
 | Watch Tower | 35W 15I 15Sn | 8s | Base | I | Early defense |
 | Wall Segment | 12W 8Sn | 4s | Base | I | Plotted wall section |

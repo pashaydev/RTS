@@ -24,6 +24,7 @@ pub(crate) fn spawn_menu(
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
     audio_settings: Res<crate::audio::AudioSettings>,
+    resolutions: Res<AvailableResolutions>,
     fonts: Res<UiFonts>,
     restart: Option<Res<RestartRequested>>,
     pending_load: Option<Res<crate::save_load::PendingLoad>>,
@@ -95,6 +96,7 @@ pub(crate) fn spawn_menu(
         &config,
         &graphics,
         &audio_settings,
+        &resolutions,
         &fonts,
         &lobby,
         &net_role,
@@ -112,6 +114,7 @@ fn dispatch_page(
     config: &GameSetupConfig,
     graphics: &GraphicsSettings,
     audio_settings: &crate::audio::AudioSettings,
+    resolutions: &AvailableResolutions,
     fonts: &UiFonts,
     lobby: &LobbyState,
     net_role: &Option<Res<NetRole>>,
@@ -124,7 +127,7 @@ fn dispatch_page(
         MenuPage::Title => pages::spawn_title_page(commands, container, fonts, theme),
         MenuPage::NewGame => pages::spawn_new_game_page(commands, container, config, fonts, theme),
         MenuPage::Options => {
-            pages::spawn_options_page(commands, container, graphics, audio_settings, fonts, theme)
+            pages::spawn_options_page(commands, container, graphics, audio_settings, resolutions, fonts, theme)
         }
         MenuPage::Multiplayer => {
             multiplayer::spawn_multiplayer_page(commands, container, fonts, theme)
@@ -154,6 +157,7 @@ pub(crate) fn refresh_menu_page(
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
     audio_settings: Res<crate::audio::AudioSettings>,
+    resolutions: Res<AvailableResolutions>,
     fonts: Res<UiFonts>,
     lobby: Res<LobbyState>,
     net_role: Option<Res<NetRole>>,
@@ -183,6 +187,7 @@ pub(crate) fn refresh_menu_page(
         &config,
         &graphics,
         &audio_settings,
+        &resolutions,
         &fonts,
         &lobby,
         &net_role,
@@ -202,6 +207,7 @@ pub(crate) fn rebuild_dirty_menu(
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
     audio_settings: Res<crate::audio::AudioSettings>,
+    resolutions: Res<AvailableResolutions>,
     fonts: Res<UiFonts>,
     lobby: Res<LobbyState>,
     net_role: Option<Res<NetRole>>,
@@ -232,6 +238,7 @@ pub(crate) fn rebuild_dirty_menu(
         &config,
         &graphics,
         &audio_settings,
+        &resolutions,
         &fonts,
         &lobby,
         &net_role,
@@ -394,6 +401,7 @@ pub(crate) fn handle_selector_clicks(
     all_selectors: Query<&MenuSelector>,
     mut config: ResMut<GameSetupConfig>,
     mut graphics: ResMut<GraphicsSettings>,
+    resolutions: Res<AvailableResolutions>,
     mut lobby: Option<ResMut<LobbyState>>,
     host_state: Option<Res<HostNetState>>,
     page: Res<MenuPage>,
@@ -416,6 +424,10 @@ pub(crate) fn handle_selector_clicks(
     }
 
     for selector in &to_process {
+        // Ignore resolution changes while fullscreen is active
+        if selector.field == SelectorField::Resolution && graphics.fullscreen {
+            continue;
+        }
         match selector.field {
             SelectorField::SlotType(slot_idx) => {
                 if slot_idx < 4 {
@@ -561,6 +573,7 @@ pub(crate) fn handle_selector_clicks(
                     &selector.field,
                     selector.index,
                     &mut graphics,
+                    &resolutions,
                 );
             }
             SelectorField::MusicVolume | SelectorField::SfxVolume => {
@@ -586,6 +599,7 @@ pub(crate) fn handle_selector_clicks(
 pub(crate) fn update_selector_visuals(
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
+    resolutions: Res<AvailableResolutions>,
     page: Res<MenuPage>,
     preferred_faction: Option<Res<super::PreferredFaction>>,
     mut selectors: Query<(
@@ -673,7 +687,7 @@ pub(crate) fn update_selector_visuals(
                 .map_or(false, |&(v, _)| {
                     (v - config.starting_resources_mult).abs() < 0.01
                 }),
-            SelectorField::Resolution => super::options::RESOLUTION_OPTIONS
+            SelectorField::Resolution => resolutions.0
                 .get(selector.index)
                 .map_or(false, |&r| r == graphics.resolution),
             SelectorField::Fullscreen => (selector.index == 0) == graphics.fullscreen,
@@ -816,7 +830,26 @@ pub(crate) fn update_selector_visuals(
             theme.colors.text_secondary
         };
 
-        *bg = BackgroundColor(new_bg);
+        let selection_changed = should_be_selected != was_selected.is_some();
+
+        // Update background via ButtonAnimState to avoid fighting with
+        // animated_button_hover_system (which also writes BackgroundColor each frame).
+        if let Some(mut anim) = anim_state {
+            if should_be_selected {
+                // Selected: override the animated hover system's target with accent color.
+                let bg_arr = new_bg.to_srgba().to_f32_array();
+                anim.bg_target = bg_arr;
+                if selection_changed {
+                    // Snap immediately on selection change for responsive feel.
+                    anim.bg_current = bg_arr;
+                }
+            }
+            // Unselected: don't touch bg_target — let animated_button_hover_system
+            // handle idle/hover/pressed states naturally.
+        } else {
+            // No ButtonAnimState — write BackgroundColor directly (fallback).
+            *bg = BackgroundColor(new_bg);
+        }
 
         commands
             .entity(entity)
@@ -825,10 +858,6 @@ pub(crate) fn update_selector_visuals(
             } else {
                 Color::NONE
             }));
-
-        if let Some(mut anim) = anim_state {
-            anim.bg_current = new_bg.to_srgba().to_f32_array();
-        }
 
         if let Some(children) = children {
             for child in children.iter() {
@@ -1001,7 +1030,6 @@ pub(crate) fn menu_selector_keyboard_nav(
     selectors: Query<(Entity, &MenuSelector, Option<&SelectedOption>)>,
     sliders: Query<&RangeSlider>,
     mut click_events: MessageWriter<UiClickEvent>,
-    mut graphics: ResMut<GraphicsSettings>,
     mut audio_settings: ResMut<crate::audio::AudioSettings>,
     menu_btns: Query<&MenuButton>,
     text_focus: Query<&TextInputFocused>,
@@ -1042,22 +1070,6 @@ pub(crate) fn menu_selector_keyboard_nav(
                 };
 
                 match slider.field {
-                    SelectorField::Resolution => {
-                        let current_index = super::options::resolution_index(graphics.resolution);
-                        let new_index = if left {
-                            super::options::step_resolution_index(current_index, -1)
-                        } else {
-                            super::options::step_resolution_index(current_index, 1)
-                        };
-                        if new_index != current_index {
-                            super::options::apply_selector_change(
-                                &SelectorField::Resolution,
-                                new_index,
-                                &mut graphics,
-                            );
-                        }
-                        handled_slider = true;
-                    }
                     SelectorField::MusicVolume => {
                         let delta = if left { -0.01 } else { 0.01 };
                         audio_settings.music_volume =
@@ -1186,7 +1198,6 @@ pub(crate) fn volume_slider_system(
     sliders: Query<(Entity, &RangeSlider, &Interaction, &RelativeCursorPosition)>,
     mut fills: Query<(&ChildOf, &mut Node), With<RangeSliderFill>>,
     mut labels: Query<(&RangeSliderLabel, &mut Text)>,
-    mut graphics: ResMut<GraphicsSettings>,
     mut audio_settings: ResMut<crate::audio::AudioSettings>,
     mut drag: ResMut<SliderDragState>,
 ) {
@@ -1231,22 +1242,6 @@ pub(crate) fn volume_slider_system(
     let t = (normalized.x + 0.5).clamp(0.0, 1.0);
 
     let (pct, value_label) = match slider.field {
-        SelectorField::Resolution => {
-            let steps = slider
-                .steps
-                .unwrap_or(super::options::RESOLUTION_OPTIONS.len());
-            if steps == 0 {
-                return;
-            }
-            let max_index = steps.saturating_sub(1) as f32;
-            let index = (t * max_index).round() as usize;
-            super::options::apply_selector_change(&SelectorField::Resolution, index, &mut graphics);
-            let (w, h) = graphics.resolution;
-            let pct = super::options::resolution_slider_value(super::options::resolution_index(
-                graphics.resolution,
-            )) * 100.0;
-            (pct, format!("{w}x{h}"))
-        }
         SelectorField::MusicVolume => {
             let value = (t * 100.0).round() / 100.0;
             audio_settings.music_volume = value;
@@ -1277,24 +1272,17 @@ pub(crate) fn volume_slider_system(
 }
 
 pub(crate) fn sync_range_slider_visuals(
-    graphics: Res<GraphicsSettings>,
     audio_settings: Res<crate::audio::AudioSettings>,
     sliders: Query<(Entity, &RangeSlider)>,
     mut fills: Query<(&ChildOf, &mut Node), With<RangeSliderFill>>,
     mut labels: Query<(&RangeSliderLabel, &mut Text)>,
 ) {
-    if !graphics.is_changed() && !audio_settings.is_changed() {
+    if !audio_settings.is_changed() {
         return;
     }
 
     for (slider_entity, slider) in &sliders {
         let (pct, value_label) = match slider.field {
-            SelectorField::Resolution => {
-                let index = super::options::resolution_index(graphics.resolution);
-                let pct = super::options::resolution_slider_value(index) * 100.0;
-                let (w, h) = graphics.resolution;
-                (pct, format!("{w}x{h}"))
-            }
             SelectorField::MusicVolume => {
                 let pct = (audio_settings.music_volume * 100.0).round();
                 (pct, format!("{pct:.0}%"))

@@ -438,6 +438,131 @@ pub fn spawn_selector_row_nav(
     commands.entity(container).add_child(row);
 }
 
+// ── Arrow Selector (compact < value > for many options) ──
+
+/// Marker for the value label in an arrow selector.
+#[derive(Component)]
+pub struct ArrowSelectorLabel(pub SelectorField);
+
+/// Spawns a compact arrow selector: `[Label:] [<] [value] [>]`
+/// Used when there are too many options to show as individual buttons.
+pub fn spawn_arrow_selector(
+    commands: &mut Commands,
+    container: Entity,
+    label: &str,
+    value_text: &str,
+    selected_index: usize,
+    total_options: usize,
+    field: SelectorField,
+    nav_index: Option<usize>,
+    theme: &Theme,
+) {
+    let mut ec = commands.spawn(Node {
+        width: Val::Percent(100.0),
+        flex_direction: FlexDirection::Row,
+        align_items: AlignItems::Center,
+        margin: UiRect::vertical(Val::Px(6.0)),
+        padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
+        border: UiRect::left(Val::Px(2.0)),
+        ..default()
+    });
+    ec.insert(BorderColor::all(Color::NONE));
+    if let Some(idx) = nav_index {
+        ec.insert(NavFocusable(idx));
+    }
+    let row = ec
+        .with_children(|parent| {
+            // Label
+            parent.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: theme.typography.medium,
+                    ..default()
+                },
+                TextColor(theme.colors.text_secondary),
+                Node {
+                    width: Val::Px(120.0),
+                    ..default()
+                },
+            ));
+
+            // Left arrow button
+            let prev_idx = if selected_index == 0 {
+                total_options.saturating_sub(1)
+            } else {
+                selected_index - 1
+            };
+            parent
+                .spawn((
+                    MenuSelector {
+                        field,
+                        index: prev_idx,
+                    },
+                    Button,
+                    ui_components::compact_button_node_with_margin(10.0, 5.0, 2.0),
+                    ui_components::ghost_button_chrome(theme, ui_components::UiTone::Neutral),
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        Text::new("<"),
+                        TextFont {
+                            font_size: theme.typography.medium,
+                            ..default()
+                        },
+                        TextColor(theme.colors.text_secondary),
+                        Pickable::IGNORE,
+                    ));
+                });
+
+            // Current value display
+            parent.spawn((
+                ArrowSelectorLabel(field),
+                Text::new(value_text),
+                TextFont {
+                    font_size: theme.typography.medium,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                Node {
+                    width: Val::Px(120.0),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ));
+
+            // Right arrow button
+            let next_idx = if selected_index + 1 >= total_options {
+                0
+            } else {
+                selected_index + 1
+            };
+            parent
+                .spawn((
+                    MenuSelector {
+                        field,
+                        index: next_idx,
+                    },
+                    Button,
+                    ui_components::compact_button_node_with_margin(10.0, 5.0, 2.0),
+                    ui_components::ghost_button_chrome(theme, ui_components::UiTone::Neutral),
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        Text::new(">"),
+                        TextFont {
+                            font_size: theme.typography.medium,
+                            ..default()
+                        },
+                        TextColor(theme.colors.text_secondary),
+                        Pickable::IGNORE,
+                    ));
+                });
+        })
+        .id();
+    commands.entity(container).add_child(row);
+}
+
 // ── Range Slider ──
 
 /// Marker on the slider track container. Stores which field it controls.

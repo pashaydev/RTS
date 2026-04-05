@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::components::*;
+use crate::menu::helpers::SelectedOption;
 use crate::theme::Theme;
 
 use super::interactions::{UiInteractPhase, UiInteractState};
@@ -139,58 +140,70 @@ pub fn animated_button_hover_system(
         &ButtonStyle,
         &mut BackgroundColor,
         &mut Transform,
+        Has<SelectedOption>,
     )>,
 ) {
     let dt = time.delta_secs();
     let speed = 14.0_f32;
     let alpha = 1.0 - (-speed * dt).exp();
 
-    for (state, mut anim, style, mut bg, mut transform) in &mut query {
+    for (state, mut anim, style, mut bg, mut transform, is_selected) in &mut query {
         match state.phase {
             UiInteractPhase::Hovered => {
                 anim.scale_target = 1.02;
                 anim.lift_target = 1.5;
-                match style {
-                    ButtonStyle::Filled => {
-                        anim.bg_target = [0.30, 0.35, 0.45, 0.25];
-                    }
-                    ButtonStyle::Ghost => {
-                        anim.bg_target = [0.29, 0.62, 1.0, 0.10];
-                    }
-                    ButtonStyle::Destructive => {
-                        anim.bg_target = [0.80, 0.27, 0.27, 0.10];
+                // Don't override bg_target for selected buttons — their color is
+                // managed by update_selector_visuals to keep the accent highlight.
+                if !is_selected {
+                    match style {
+                        ButtonStyle::Filled => {
+                            anim.bg_target = [0.30, 0.35, 0.45, 0.25];
+                        }
+                        ButtonStyle::Ghost => {
+                            anim.bg_target = [0.29, 0.62, 1.0, 0.10];
+                        }
+                        ButtonStyle::Destructive => {
+                            anim.bg_target = [0.80, 0.27, 0.27, 0.10];
+                        }
                     }
                 }
             }
             UiInteractPhase::Pressed => {
                 anim.scale_target = 0.97 + 0.02 * state.hold_progress;
                 anim.lift_target = 0.0;
-                match style {
-                    ButtonStyle::Filled => {
-                        anim.bg_target = [
-                            lerp(0.35, 0.40, state.hold_progress),
-                            lerp(0.45, 0.50, state.hold_progress),
-                            lerp(0.60, 0.65, state.hold_progress),
-                            0.35,
-                        ];
-                    }
-                    ButtonStyle::Ghost => {
-                        anim.bg_target = [0.29, 0.62, 1.0, lerp(0.18, 0.28, state.hold_progress)];
-                    }
-                    ButtonStyle::Destructive => {
-                        anim.bg_target = [0.80, 0.27, 0.27, lerp(0.18, 0.28, state.hold_progress)];
+                if !is_selected {
+                    match style {
+                        ButtonStyle::Filled => {
+                            anim.bg_target = [
+                                lerp(0.35, 0.40, state.hold_progress),
+                                lerp(0.45, 0.50, state.hold_progress),
+                                lerp(0.60, 0.65, state.hold_progress),
+                                0.35,
+                            ];
+                        }
+                        ButtonStyle::Ghost => {
+                            anim.bg_target =
+                                [0.29, 0.62, 1.0, lerp(0.18, 0.28, state.hold_progress)];
+                        }
+                        ButtonStyle::Destructive => {
+                            anim.bg_target =
+                                [0.80, 0.27, 0.27, lerp(0.18, 0.28, state.hold_progress)];
+                        }
                     }
                 }
             }
             UiInteractPhase::Idle | UiInteractPhase::Disabled => {
                 anim.scale_target = 1.0 + 0.025 * state.click_flash;
                 anim.lift_target = 1.5 * state.click_flash;
-                match style {
-                    ButtonStyle::Filled => {
-                        anim.bg_target = [0.15, 0.15, 0.15, 0.0];
-                    }
-                    ButtonStyle::Ghost | ButtonStyle::Destructive => {
-                        anim.bg_target = [0.0, 0.0, 0.0, 0.0];
+                // Don't override bg_target for selected buttons.
+                if !is_selected {
+                    match style {
+                        ButtonStyle::Filled => {
+                            anim.bg_target = [0.15, 0.15, 0.15, 0.0];
+                        }
+                        ButtonStyle::Ghost | ButtonStyle::Destructive => {
+                            anim.bg_target = [0.0, 0.0, 0.0, 0.0];
+                        }
                     }
                 }
             }

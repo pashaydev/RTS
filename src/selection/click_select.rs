@@ -8,6 +8,7 @@ use crate::blueprints::{EntityKind, EntityVisualCache};
 use crate::camera;
 use crate::components::*;
 use crate::ground::HeightMap;
+use crate::items::{ItemPickup, RequestPickupItem};
 use crate::minimap::MinimapInteraction;
 
 use super::picking::{pick_for_click, PickCycleState};
@@ -144,17 +145,20 @@ pub(crate) fn handle_click_select(
         Query<(Entity, &BuildingFootprint, &BuildingHeight), With<Building>>,
         Query<Entity, With<Mob>>,
         Query<Entity, With<ResourceNode>>,
+        Query<Entity, With<ItemPickup>>,
     ),
-    selected: Query<Entity, With<Selected>>,
-    unit_transforms: Query<&GlobalTransform, With<Unit>>,
+    selection_queries: (
+        Query<Entity, With<Selected>>,
+        Query<Entity, (With<Selected>, With<Unit>)>,
+        Query<&GlobalTransform, With<Unit>>,
+    ),
     flags: (
         Res<MinimapInteraction>,
         Res<UiClickedThisFrame>,
         Res<UiPressActive>,
     ),
     ui_interactions: Query<&Interaction, With<Node>>,
-    active_player: Res<ActivePlayer>,
-    faction_q: Query<&Faction>,
+    ownership: (Res<ActivePlayer>, Query<&Faction>),
     height_map: Res<HeightMap>,
     mut extra: (
         Res<Time<Real>>,
@@ -162,11 +166,14 @@ pub(crate) fn handle_click_select(
         Query<&EntityKind>,
         bevy::ecs::message::MessageWriter<PlaySfx>,
     ),
+    mut pickup_requests: bevy::ecs::message::MessageWriter<RequestPickupItem>,
 ) {
     let (ref camera_q, ref windows, ref graphics) = viewport;
     let (ref mut drag, ref mut inspected, ref mut pick_cycle) = state;
-    let (ref units, ref buildings, ref mobs, ref resource_nodes) = entity_queries;
+    let (ref units, ref buildings, ref mobs, ref resource_nodes, ref pickups) = entity_queries;
+    let (ref selected, ref selected_units, ref unit_transforms) = selection_queries;
     let (ref minimap_interaction, ref ui_clicked, ref ui_press) = flags;
+    let (ref active_player, ref faction_q) = ownership;
     let (ref time, ref mut dbl_click, ref entity_kinds, ref mut sfx) = extra;
     if !mouse.just_released(MouseButton::Left) {
         return;
@@ -218,7 +225,7 @@ pub(crate) fn handle_click_select(
             let max_y = start.y.max(end.y);
 
             if !shift {
-                for entity in &selected {
+                for entity in selected.iter() {
                     commands.entity(entity).remove::<Selected>();
                 }
             }
@@ -282,6 +289,7 @@ pub(crate) fn handle_click_select(
             &buildings,
             &mobs,
             &resource_nodes,
+            &pickups,
             &height_map,
             skip,
         );
@@ -292,13 +300,19 @@ pub(crate) fn handle_click_select(
                 pick_cycle.advance(cursor, result.entity);
             }
 
-            if result.is_mob {
+            if result.is_pickup {
+                inspected.entity = None;
+                pickup_requests.write(RequestPickupItem {
+                    pickup: result.entity,
+                    pickers: selected_units.iter().collect(),
+                });
+            } else if result.is_mob {
                 inspected.entity = Some(result.entity);
             } else if result.is_resource {
                 // Resources can always be inspected/selected
                 inspected.entity = None;
                 if !shift {
-                    for entity in &selected {
+                    for entity in selected.iter() {
                         commands.entity(entity).remove::<Selected>();
                     }
                 }
@@ -327,7 +341,7 @@ pub(crate) fn handle_click_select(
                         if let Ok(clicked_kind) = entity_kinds.get(result.entity) {
                             let target_kind = *clicked_kind;
                             // Deselect all
-                            for entity in &selected {
+                            for entity in selected.iter() {
                                 commands.entity(entity).remove::<Selected>();
                             }
                             // Select all own units of same type visible on screen
@@ -364,7 +378,7 @@ pub(crate) fn handle_click_select(
                         dbl_click.last_click_entity = None;
                     } else {
                         if !shift {
-                            for entity in &selected {
+                            for entity in selected.iter() {
                                 commands.entity(entity).remove::<Selected>();
                             }
                         }
@@ -387,7 +401,7 @@ pub(crate) fn handle_click_select(
             pick_cycle.reset();
             inspected.entity = None;
             if !shift {
-                for entity in &selected {
+                for entity in selected.iter() {
                     commands.entity(entity).remove::<Selected>();
                 }
             }
