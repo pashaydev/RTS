@@ -18,56 +18,6 @@ pub(crate) fn spawn_title_page(
     fonts: &UiFonts,
     theme: &Theme,
 ) {
-    let title = commands
-        .spawn((
-            TitleShimmer { phase_offset: 0.0 },
-            Text::new("RTS PROTOTYPE"),
-            fonts::heading(fonts, theme.typography.display),
-            TextColor(Color::WHITE),
-            Node {
-                margin: UiRect::bottom(Val::Px(8.0)),
-                ..default()
-            },
-            UiScaleIn {
-                from: 0.9,
-                timer: Timer::from_seconds(0.5, TimerMode::Once),
-                elastic: true,
-            },
-        ))
-        .id();
-    commands.entity(container).add_child(title);
-
-    let subtitle = commands
-        .spawn((
-            Text::new("COMMAND YOUR EMPIRE"),
-            fonts::body_emphasis(fonts, theme.typography.body),
-            TextColor(theme.colors.text_secondary),
-            Node {
-                margin: UiRect::bottom(Val::Px(16.0)),
-                ..default()
-            },
-        ))
-        .id();
-    commands.entity(container).add_child(subtitle);
-
-    let sep = commands
-        .spawn((
-            UiLineExpand {
-                target_width: 280.0,
-                timer: Timer::from_seconds(0.4, TimerMode::Once),
-            },
-            Node {
-                width: Val::Px(0.0),
-                height: Val::Px(1.0),
-                margin: UiRect::bottom(Val::Px(28.0)),
-                align_self: AlignSelf::Center,
-                ..default()
-            },
-            BackgroundColor(theme.colors.accent),
-        ))
-        .id();
-    commands.entity(container).add_child(sep);
-
     for (i, (label, action)) in [
         ("NEW GAME", MenuAction::NewGame),
         ("LOAD GAME", MenuAction::LoadGame),
@@ -298,7 +248,7 @@ pub(crate) fn spawn_new_game_page(
         .id();
     commands.entity(container).add_child(seed_row);
 
-    // Start Game button with glow pulse
+    // Start Game button
     let start_btn = commands
         .spawn((
             MenuButton(MenuAction::StartGame),
@@ -306,10 +256,6 @@ pub(crate) fn spawn_new_game_page(
             Button,
             ButtonAnimState::new(theme.colors.accent.to_srgba().to_f32_array()),
             ButtonStyle::Filled,
-            UiGlowPulse {
-                color: theme.colors.accent,
-                intensity: 0.6,
-            },
             Node {
                 width: Val::Px(280.0),
                 height: Val::Px(80.0),
@@ -325,13 +271,6 @@ pub(crate) fn spawn_new_game_page(
             },
             BackgroundColor(theme.colors.accent),
             BorderColor::all(Color::NONE),
-            BoxShadow::new(
-                Color::srgba(0.29, 0.62, 1.0, 0.3),
-                Val::Px(0.0),
-                Val::Px(0.0),
-                Val::Px(0.0),
-                Val::Px(8.0),
-            ),
         ))
         .with_children(|parent| {
             parent.spawn((

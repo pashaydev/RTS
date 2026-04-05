@@ -121,7 +121,7 @@ fn discover_animation_players(
     }
 }
 
-fn find_animation_player(
+pub(crate) fn find_animation_player(
     entity: Entity,
     children_q: &Query<&Children>,
     anim_players: &Query<Entity, With<AnimationPlayer>>,

@@ -5,6 +5,7 @@ use rand::Rng;
 
 use super::helpers::*;
 use crate::components::*;
+use crate::ui::core::text_input::ScrollablePanel;
 use crate::database::{ActiveProfile, GameDatabase};
 use crate::theme::Theme;
 use crate::ui::core::interactions::UiClickEvent;
@@ -20,15 +21,18 @@ use crate::multiplayer::{ClientNetState, HostNetState, LobbyState, NetRole};
 
 pub(crate) fn spawn_menu(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     page: Res<MenuPage>,
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
     audio_settings: Res<crate::audio::AudioSettings>,
     resolutions: Res<AvailableResolutions>,
     fonts: Res<UiFonts>,
-    restart: Option<Res<RestartRequested>>,
-    pending_load: Option<Res<crate::save_load::PendingLoad>>,
-    mut next_state: ResMut<NextState<AppState>>,
+    early_exit: (
+        Option<Res<RestartRequested>>,
+        Option<Res<crate::save_load::PendingLoad>>,
+        ResMut<NextState<AppState>>,
+    ),
     lobby: Res<LobbyState>,
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
@@ -36,6 +40,8 @@ pub(crate) fn spawn_menu(
     db: Res<GameDatabase>,
     profile: Res<ActiveProfile>,
 ) {
+    let (restart, pending_load, mut next_state) = early_exit;
+
     if restart.is_some() {
         commands.remove_resource::<RestartRequested>();
         next_state.set(AppState::InGame);
@@ -48,10 +54,11 @@ pub(crate) fn spawn_menu(
         return;
     }
 
+    // 3D camera for the scroll model
     commands.spawn((
         MenuCamera,
         DespawnOnExit(AppState::MainMenu),
-        Camera2d,
+        Camera3d::default(),
         Camera {
             clear_color: ClearColorConfig::Custom(theme.colors.bg_menu),
             ..default()
@@ -70,7 +77,7 @@ pub(crate) fn spawn_menu(
                 flex_direction: FlexDirection::Column,
                 ..default()
             },
-            BackgroundColor(theme.colors.bg_menu),
+            BackgroundColor(Color::NONE),
         ))
         .id();
 
@@ -163,9 +170,10 @@ pub(crate) fn refresh_menu_page(
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
     theme: Res<Theme>,
-    db: Res<GameDatabase>,
-    profile: Res<ActiveProfile>,
+    db_and_profile: (Res<GameDatabase>, Res<ActiveProfile>),
 ) {
+    let (db, profile) = db_and_profile;
+
     if !page.is_changed() {
         return;
     }
@@ -249,7 +257,8 @@ pub(crate) fn rebuild_dirty_menu(
     );
 }
 
-// ── Menu Button Handler ──
+
+// ��─ Menu Button Handler ──
 
 pub(crate) fn handle_menu_buttons(
     mut click_events: MessageReader<UiClickEvent>,
@@ -615,6 +624,12 @@ pub(crate) fn update_selector_visuals(
     theme: Res<Theme>,
 ) {
     for (selector, mut bg, children, entity, was_selected, anim_state) in &mut selectors {
+        // Arrow selectors (Resolution) have their own visual handling via
+        // sync_resolution_arrow_selector — skip them to avoid overriding ghost styling.
+        if selector.field == SelectorField::Resolution {
+            continue;
+        }
+
         let is_multiplayer = matches!(*page, MenuPage::HostLobby | MenuPage::JoinLobby);
         let should_be_selected = match selector.field {
             SelectorField::SlotType(slot_idx) => {
@@ -687,9 +702,7 @@ pub(crate) fn update_selector_visuals(
                 .map_or(false, |&(v, _)| {
                     (v - config.starting_resources_mult).abs() < 0.01
                 }),
-            SelectorField::Resolution => resolutions.0
-                .get(selector.index)
-                .map_or(false, |&r| r == graphics.resolution),
+            SelectorField::Resolution => unreachable!("skipped above"),
             SelectorField::Fullscreen => (selector.index == 0) == graphics.fullscreen,
             SelectorField::Vsync => (selector.index == 0) == graphics.vsync,
             SelectorField::Shadows => {
@@ -1053,14 +1066,13 @@ pub(crate) fn menu_selector_keyboard_nav(
             continue;
         }
 
-        // Collect selector children of this row
+        // Collect selector children of this row (in spawn/visual order)
         let mut child_selectors: Vec<(Entity, usize, bool)> = Vec::new();
         for child in children.iter() {
             if let Ok((e, sel, selected)) = selectors.get(child) {
                 child_selectors.push((e, sel.index, selected.is_some()));
             }
         }
-        child_selectors.sort_by_key(|&(_, idx, _)| idx);
 
         if child_selectors.is_empty() {
             let mut handled_slider = false;
@@ -1092,6 +1104,23 @@ pub(crate) fn menu_selector_keyboard_nav(
 
             continue;
         }
+
+        // Arrow selector pattern: no child has SelectedOption (e.g. Resolution < value >).
+        // Use spawn order (not sorted by index) so left=first button, right=second button.
+        let is_arrow_selector = child_selectors.iter().all(|&(_, _, sel)| !sel);
+        if is_arrow_selector && child_selectors.len() >= 2 {
+            if left || right {
+                let target = if left { 0 } else { 1 };
+                let (target_entity, _, _) = child_selectors[target];
+                click_events.write(UiClickEvent {
+                    entity: target_entity,
+                });
+            }
+            continue;
+        }
+
+        // For regular option-button selectors, sort by index for left-right navigation
+        child_selectors.sort_by_key(|&(_, idx, _)| idx);
 
         let current = child_selectors
             .iter()
@@ -1125,15 +1154,14 @@ pub(crate) fn menu_nav_focus_visuals(
     all_focusable: Query<(Entity, Option<&MenuButton>), With<NavFocusable>>,
     nav_focused_q: Query<(Entity, Option<&MenuButton>), With<NavFocused>>,
     mut commands: Commands,
-    children_q: Query<&Children>,
-    mut text_colors: Query<&mut TextColor>,
     theme: Res<Theme>,
 ) {
     if focused.is_empty() {
         return;
     }
 
-    // Style newly focused items
+    // Style newly focused items — only add focus ring (border + shadow).
+    // Text colors are managed by update_selector_visuals / spawn, not focus state.
     for entity in &focused {
         commands.entity(entity).insert((
             BorderColor::all(theme.colors.accent),
@@ -1145,31 +1173,57 @@ pub(crate) fn menu_nav_focus_visuals(
                 Val::Px(10.0),
             ),
         ));
-        if let Ok(children) = children_q.get(entity) {
-            for child in children.iter() {
-                if let Ok(mut tc) = text_colors.get_mut(child) {
-                    tc.0 = Color::WHITE;
-                }
-            }
-        }
     }
 
     // Reset unfocused items
-    for (entity, is_btn) in &all_focusable {
+    for (entity, _) in &all_focusable {
         if nav_focused_q.iter().any(|(e, _)| e == entity) {
             continue;
         }
-        // Selector rows: reset left border
-        if is_btn.is_none() {
-            commands
-                .entity(entity)
-                .insert(BorderColor::all(Color::NONE));
-        } else {
-            commands
-                .entity(entity)
-                .insert(BorderColor::all(Color::NONE));
-        }
+        commands
+            .entity(entity)
+            .insert(BorderColor::all(Color::NONE));
         commands.entity(entity).remove::<BoxShadow>();
+    }
+}
+
+/// Scrolls the menu panel to keep the keyboard-focused item visible.
+pub(crate) fn scroll_to_focused(
+    nav: Res<MenuNavFocus>,
+    focusables: Query<&NavFocusable>,
+    mut panels: Query<(&mut ScrollPosition, &ComputedNode), With<ScrollablePanel>>,
+) {
+    if !nav.is_changed() {
+        return;
+    }
+
+    let count = focusables.iter().count();
+    if count <= 1 {
+        return;
+    }
+
+    for (mut scroll_pos, panel_node) in &mut panels {
+        let scale_inv = panel_node.inverse_scale_factor();
+        let panel_height = panel_node.size().y * scale_inv;
+        let content_height = panel_node.content_size().y * scale_inv;
+        let max_scroll = (content_height - panel_height).max(0.0);
+        if max_scroll < 1.0 {
+            continue;
+        }
+
+        // Estimate each item's position proportionally within the content
+        let item_height = content_height / count as f32;
+        let item_top = nav.index as f32 * item_height;
+        let item_bottom = item_top + item_height;
+
+        let visible_top = scroll_pos.y;
+        let visible_bottom = scroll_pos.y + panel_height;
+
+        if item_top < visible_top {
+            scroll_pos.y = (item_top - 10.0).max(0.0);
+        } else if item_bottom > visible_bottom {
+            scroll_pos.y = (item_bottom - panel_height + 10.0).min(max_scroll);
+        }
     }
 }
 

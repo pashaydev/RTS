@@ -320,10 +320,6 @@ pub(crate) fn spawn_host_lobby_page(
             Button,
             ButtonAnimState::new(theme.colors.accent.to_srgba().to_f32_array()),
             ButtonStyle::Filled,
-            UiGlowPulse {
-                color: theme.colors.accent,
-                intensity: 0.6,
-            },
             Node {
                 width: Val::Px(280.0),
                 height: Val::Px(80.0),
@@ -333,13 +329,6 @@ pub(crate) fn spawn_host_lobby_page(
                 ..default()
             },
             BackgroundColor(theme.colors.accent),
-            BoxShadow::new(
-                Color::srgba(0.29, 0.62, 1.0, 0.3),
-                Val::Px(0.0),
-                Val::Px(0.0),
-                Val::Px(0.0),
-                Val::Px(8.0),
-            ),
         ))
         .with_children(|parent| {
             parent.spawn((
@@ -438,12 +427,7 @@ pub(crate) fn spawn_join_lobby_page(
                 },
                 BackgroundColor(banner_dot_color),
             ));
-            if is_connecting {
-                dot.insert(UiGlowPulse {
-                    color: theme.colors.warning,
-                    intensity: 0.8,
-                });
-            }
+            let _ = &dot; // dot may pulse in the future
             parent.spawn((
                 Text::new(banner_text),
                 TextFont {

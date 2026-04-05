@@ -81,11 +81,13 @@ pub(crate) fn populate_available_resolutions(
 
     commands.insert_resource(ResolutionsPopulated);
 
-    // Collect unique resolutions, converting physical video modes to logical
-    // (dividing by scale factor) so the list reflects what users actually see.
     let scale = monitor.scale_factor.max(1.0);
+    let native_w = (monitor.physical_width as f64 / scale).round() as u32;
+    let native_h = (monitor.physical_height as f64 / scale).round() as u32;
+
     let mut res_set: BTreeSet<(u64, u32, u32)> = BTreeSet::new();
 
+    // Collect unique resolutions from monitor video modes, converting to logical pixels.
     for vm in &monitor.video_modes {
         let w = (vm.physical_size.x as f64 / scale).round() as u32;
         let h = (vm.physical_size.y as f64 / scale).round() as u32;
@@ -94,11 +96,33 @@ pub(crate) fn populate_available_resolutions(
         }
     }
 
-    // Add the monitor's native logical resolution
-    let native_w = (monitor.physical_width as f64 / scale).round() as u32;
-    let native_h = (monitor.physical_height as f64 / scale).round() as u32;
+    // Always include the native logical resolution (skip aspect ratio check).
     if native_w >= 1024 && native_h >= 720 {
         res_set.insert((native_w as u64 * native_h as u64, native_w, native_h));
+    }
+
+    // Add common resolutions that fit within the native size as fallbacks.
+    // On HiDPI displays, video modes divided by scale factor often produce
+    // non-standard values, leaving very few options. These ensure a usable list.
+    const COMMON: &[(u32, u32)] = &[
+        (1280, 720),
+        (1280, 800),
+        (1366, 768),
+        (1440, 900),
+        (1600, 900),
+        (1600, 1000),
+        (1680, 1050),
+        (1920, 1080),
+        (1920, 1200),
+        (2560, 1440),
+        (2560, 1600),
+        (3440, 1440),
+        (3840, 2160),
+    ];
+    for &(w, h) in COMMON {
+        if w <= native_w && h <= native_h {
+            res_set.insert((w as u64 * h as u64, w, h));
+        }
     }
 
     if !res_set.is_empty() {
@@ -451,7 +475,11 @@ pub(crate) fn toggle_resolution_row_visibility(
     res_rows: Query<Entity, With<ResolutionRow>>,
     children_q: Query<&Children>,
     selectors: Query<&MenuSelector>,
+    arrow_labels: Query<&ArrowSelectorLabel>,
     mut text_colors: Query<&mut TextColor>,
+    mut bg_colors: Query<&mut BackgroundColor>,
+    mut border_colors: Query<&mut BorderColor>,
+    value_bgs: Query<&ArrowSelectorValueBg>,
     theme: Res<Theme>,
 ) {
     if !graphics.is_changed() {
@@ -465,11 +493,32 @@ pub(crate) fn toggle_resolution_row_visibility(
             if let Ok(mut tc) = text_colors.get_mut(entity) {
                 tc.0 = if disabled {
                     theme.colors.text_disabled
-                } else if selectors.get(entity).is_ok() {
+                } else if arrow_labels.get(entity).is_ok() {
+                    // Value label between arrows
                     Color::WHITE
+                } else if selectors.get(entity).is_ok() {
+                    // Arrow button text
+                    theme.colors.text_secondary
                 } else {
                     theme.colors.text_secondary
                 };
+            }
+            // Update value background opacity when disabled
+            if value_bgs.get(entity).is_ok() {
+                if let Ok(mut bg) = bg_colors.get_mut(entity) {
+                    bg.0 = if disabled {
+                        Color::srgba(0.15, 0.15, 0.15, 0.1)
+                    } else {
+                        Color::srgba(0.18, 0.40, 0.85, 0.15)
+                    };
+                }
+                if let Ok(mut bc) = border_colors.get_mut(entity) {
+                    *bc = BorderColor::all(if disabled {
+                        Color::srgba(0.3, 0.3, 0.3, 0.2)
+                    } else {
+                        Color::srgba(0.29, 0.62, 1.0, 0.3)
+                    });
+                }
             }
             if let Ok(children) = children_q.get(entity) {
                 for child in children.iter() {
@@ -521,18 +570,10 @@ pub(crate) fn sync_resolution_arrow_selector(
                         }
                     }
                 }
-                // First arrow = prev, second arrow = next
+                // First arrow = prev, second arrow = next (clamped — no wrap)
                 if arrow_selectors.len() == 2 {
-                    let prev_idx = if current_idx == 0 {
-                        total.saturating_sub(1)
-                    } else {
-                        current_idx - 1
-                    };
-                    let next_idx = if current_idx + 1 >= total {
-                        0
-                    } else {
-                        current_idx + 1
-                    };
+                    let prev_idx = current_idx.saturating_sub(1);
+                    let next_idx = (current_idx + 1).min(total.saturating_sub(1));
                     if let Ok(mut sel) = selectors.get_mut(arrow_selectors[0]) {
                         sel.index = prev_idx;
                     }

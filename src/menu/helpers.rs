@@ -63,7 +63,7 @@ pub struct SlotCardsContainer;
 
 // ── Panel ──
 
-pub fn spawn_menu_panel(commands: &mut Commands, theme: &Theme) -> Entity {
+pub fn spawn_menu_panel(commands: &mut Commands, _theme: &Theme) -> Entity {
     commands
         .spawn((
             ScrollablePanel,
@@ -76,26 +76,9 @@ pub fn spawn_menu_panel(commands: &mut Commands, theme: &Theme) -> Entity {
                 align_items: AlignItems::Center,
                 padding: UiRect::all(Val::Px(24.0)),
                 overflow: Overflow::scroll_y(),
-                border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.07, 0.07, 0.07, 0.0)),
-            BorderColor::all(theme.colors.separator),
-            BoxShadow::new(
-                Color::srgba(0.0, 0.0, 0.0, 0.6),
-                Val::Px(0.0),
-                Val::Px(4.0),
-                Val::Px(0.0),
-                Val::Px(8.0),
-            ),
-            UiFadeIn {
-                timer: Timer::from_seconds(0.3, TimerMode::Once),
-            },
-            UiScaleIn {
-                from: 0.96,
-                timer: Timer::from_seconds(0.3, TimerMode::Once),
-                elastic: false,
-            },
+            BackgroundColor(Color::NONE),
         ))
         .id()
 }
@@ -139,21 +122,6 @@ pub fn spawn_styled_button_nav(
     ));
     if let Some(idx) = nav_index {
         entity_commands.insert(NavFocusable(idx));
-    }
-    if accent {
-        entity_commands.insert((
-            UiGlowPulse {
-                color: theme.colors.accent,
-                intensity: 0.5,
-            },
-            BoxShadow::new(
-                Color::srgba(0.29, 0.62, 1.0, 0.2),
-                Val::Px(0.0),
-                Val::Px(0.0),
-                Val::Px(0.0),
-                Val::Px(6.0),
-            ),
-        ));
     }
     entity_commands.with_children(|parent| {
         parent.spawn((
@@ -304,12 +272,8 @@ pub fn spawn_animated_section_divider(
         })
         .with_children(|parent| {
             parent.spawn((
-                UiLineExpand {
-                    target_width: 40.0,
-                    timer: Timer::from_seconds(0.4, TimerMode::Once),
-                },
                 Node {
-                    width: Val::Px(0.0),
+                    width: Val::Px(40.0),
                     height: Val::Px(1.0),
                     margin: UiRect::right(Val::Px(8.0)),
                     ..default()
@@ -328,12 +292,7 @@ pub fn spawn_animated_section_divider(
             ));
 
             parent.spawn((
-                UiLineExpand {
-                    target_width: 400.0,
-                    timer: Timer::from_seconds(0.5, TimerMode::Once),
-                },
                 Node {
-                    width: Val::Px(0.0),
                     height: Val::Px(1.0),
                     flex_grow: 1.0,
                     margin: UiRect::left(Val::Px(8.0)),
@@ -444,6 +403,10 @@ pub fn spawn_selector_row_nav(
 #[derive(Component)]
 pub struct ArrowSelectorLabel(pub SelectorField);
 
+/// Marker for the value background container in an arrow selector.
+#[derive(Component)]
+pub struct ArrowSelectorValueBg;
+
 /// Spawns a compact arrow selector: `[Label:] [<] [value] [>]`
 /// Used when there are too many options to show as individual buttons.
 pub fn spawn_arrow_selector(
@@ -486,12 +449,8 @@ pub fn spawn_arrow_selector(
                 },
             ));
 
-            // Left arrow button
-            let prev_idx = if selected_index == 0 {
-                total_options.saturating_sub(1)
-            } else {
-                selected_index - 1
-            };
+            // Left arrow button (clamped — no wrap)
+            let prev_idx = selected_index.saturating_sub(1);
             parent
                 .spawn((
                     MenuSelector {
@@ -514,29 +473,38 @@ pub fn spawn_arrow_selector(
                     ));
                 });
 
-            // Current value display
-            parent.spawn((
-                ArrowSelectorLabel(field),
-                Text::new(value_text),
-                TextFont {
-                    font_size: theme.typography.medium,
-                    ..default()
-                },
-                TextColor(Color::WHITE),
-                Node {
-                    width: Val::Px(120.0),
-                    justify_content: JustifyContent::Center,
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
+            // Current value display with selected-state highlight
+            parent
+                .spawn((
+                    ArrowSelectorValueBg,
+                    Node {
+                        width: Val::Px(120.0),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgba(0.18, 0.40, 0.85, 0.15)),
+                    BorderColor::all(Color::srgba(0.29, 0.62, 1.0, 0.3)),
+                    Pickable::IGNORE,
+                ))
+                .with_children(|val_bg| {
+                    val_bg.spawn((
+                        ArrowSelectorLabel(field),
+                        Text::new(value_text),
+                        TextFont {
+                            font_size: theme.typography.medium,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        Pickable::IGNORE,
+                    ));
+                });
 
-            // Right arrow button
-            let next_idx = if selected_index + 1 >= total_options {
-                0
-            } else {
-                selected_index + 1
-            };
+            // Right arrow button (clamped — no wrap)
+            let next_idx = (selected_index + 1).min(total_options.saturating_sub(1));
             parent
                 .spawn((
                     MenuSelector {

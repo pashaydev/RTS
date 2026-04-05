@@ -9,9 +9,15 @@ use bevy::prelude::*;
 use crate::components::*;
 use crate::ui::core::text_input;
 
+// ── Scroll 3D Menu ──
+
+/// Marker for the 3D scroll scene entity.
+#[derive(Component)]
+pub(crate) struct MenuScroll;
+
 // ── Resources & Components ──
 
-#[derive(Resource, Default, PartialEq, Eq)]
+#[derive(Resource, Default, PartialEq, Eq, Clone)]
 pub(crate) enum MenuPage {
     #[default]
     Title,
@@ -321,6 +327,7 @@ impl Plugin for MenuPlugin {
                     multiplayer::kick_player_system,
                     multiplayer::lobby_ping_system,
                     systems::menu_nav_focus_visuals,
+                    systems::scroll_to_focused,
                 )
                     .in_set(MenuSet::Visuals),
             );
