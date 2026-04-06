@@ -9,8 +9,8 @@ use bevy::prelude::*;
 )]
 pub enum ThemeMode {
     #[default]
-    Dark,
-    Light,
+    Dark,  // "Iron"
+    Light, // "Parchment"
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -19,29 +19,31 @@ pub enum ThemeMode {
 
 #[derive(Clone, Debug)]
 pub struct ColorPalette {
-    // Backgrounds
-    pub bg_panel: Color,
-    pub bg_surface: Color,
-    pub bg_elevated: Color,
+    // Backgrounds (The Material Hierarchy)
+    pub bg_panel: Color,     // Surface (The Desk)
+    pub bg_surface: Color,   // Surface Container (Bolted Plates)
+    pub bg_elevated: Color,  // Surface Container High (Raised Modules)
+    pub bg_recessed: Color,  // Surface Container Lowest (Etched Readouts)
     pub bg_transparent: Color,
     pub bg_menu: Color,
 
-    // Text
-    pub text_primary: Color,
-    pub text_secondary: Color,
-    pub text_disabled: Color,
+    // Text (The Dialogue)
+    pub text_primary: Color,   // Authoritative (Noto Serif style)
+    pub text_secondary: Color, // Active Intel (Primary Teal)
+    pub text_disabled: Color,  // Weathered Metal
 
     // Accent / Status
-    pub accent: Color,
-    pub destructive: Color,
-    pub success: Color,
-    pub warning: Color,
+    pub accent: Color,      // Primary Teal (#accdcc)
+    pub prestige: Color,    // Burnished Gold (#e9c176)
+    pub destructive: Color, // Error/Danger (#ffb4ab)
+    pub success: Color,     // Desaturated Green
+    pub warning: Color,     // Burnished Gold (Semantic)
 
-    // Borders / separators
+    // Borders / Separators (The "Etched" look)
     pub separator: Color,
     pub border_subtle: Color,
 
-    // Buttons
+    // Buttons (Physical Command)
     pub btn_primary: Color,
     pub btn_hover: Color,
     pub btn_pressed: Color,
@@ -49,7 +51,7 @@ pub struct ColorPalette {
     // HP bar
     pub hp_bar_bg: Color,
 
-    // Stat colors
+    // Stat colors (Industrial Precision)
     pub stat_dmg: Color,
     pub stat_rng: Color,
     pub stat_spd: Color,
@@ -72,138 +74,135 @@ pub struct ColorPalette {
 impl ColorPalette {
     pub fn dark() -> Self {
         Self {
-            // Backgrounds
-            bg_panel: Color::srgba(0.07, 0.07, 0.07, 0.94),
-            bg_surface: Color::srgba(0.12, 0.12, 0.12, 0.94),
-            bg_elevated: Color::srgba(0.14, 0.14, 0.14, 0.94),
+            // Backgrounds: Deep Charcoal "Iron"
+            bg_panel: Color::srgb(0.07, 0.08, 0.09),    // #121416
+            bg_surface: Color::srgb(0.10, 0.11, 0.12),  // #1a1d1f
+            bg_elevated: Color::srgb(0.14, 0.15, 0.16), // #23272a
+            bg_recessed: Color::srgb(0.04, 0.04, 0.05), // #0a0b0c
             bg_transparent: Color::srgba(0.0, 0.0, 0.0, 0.0),
-            bg_menu: Color::srgb(0.04, 0.04, 0.05),
+            bg_menu: Color::srgb(0.05, 0.05, 0.06),
 
-            // Text
-            text_primary: Color::srgb(0.88, 0.88, 0.88),
-            text_secondary: Color::srgb(0.53, 0.53, 0.53),
-            text_disabled: Color::srgb(0.33, 0.33, 0.33),
+            // Text: High contrast vs Teal/Gold
+            text_primary: Color::srgb(0.88, 0.91, 0.91),   // Authoritative Off-white
+            text_secondary: Color::srgb(0.67, 0.80, 0.80), // #accdcc (Teal)
+            text_disabled: Color::srgb(0.35, 0.38, 0.40),  // Weathered
 
             // Accent / Status
-            accent: Color::srgb(0.29, 0.62, 1.0),
-            destructive: Color::srgb(0.80, 0.27, 0.27),
-            success: Color::srgb(0.30, 0.69, 0.31),
-            warning: Color::srgb(1.0, 0.65, 0.15),
+            accent: Color::srgb(0.67, 0.80, 0.80),      // Primary Teal
+            prestige: Color::srgb(0.91, 0.76, 0.46),    // Burnished Gold
+            destructive: Color::srgb(1.0, 0.71, 0.67),  // Soft Red Error
+            success: Color::srgb(0.55, 0.75, 0.55),     // Desaturated Green
+            warning: Color::srgb(0.91, 0.76, 0.46),     // Gold
 
-            // Borders
-            separator: Color::srgb(0.20, 0.20, 0.20),
-            border_subtle: Color::srgb(0.33, 0.33, 0.33),
+            // Borders: Etched into metal
+            separator: Color::srgba(0.67, 0.80, 0.80, 0.1),
+            border_subtle: Color::srgba(0.91, 0.76, 0.46, 0.15),
 
-            // Buttons
-            btn_primary: Color::srgba(0.15, 0.15, 0.15, 0.0),
-            btn_hover: Color::srgba(0.22, 0.22, 0.22, 0.94),
-            btn_pressed: Color::srgba(0.10, 0.10, 0.10, 0.94),
+            // Buttons: Heavy toggles
+            btn_primary: Color::srgba(0.12, 0.13, 0.15, 0.0),
+            btn_hover: Color::srgba(0.67, 0.80, 0.80, 0.08), // Teal glow
+            btn_pressed: Color::srgba(0.05, 0.05, 0.06, 0.94),
 
-            // HP bar
-            hp_bar_bg: Color::srgba(0.08, 0.08, 0.08, 0.9),
+            // HP bar: Segmented feel
+            hp_bar_bg: Color::srgba(0.05, 0.05, 0.06, 0.9),
 
-            // Stats
-            stat_dmg: Color::srgb(0.85, 0.35, 0.30),
-            stat_rng: Color::srgb(0.40, 0.70, 0.95),
-            stat_spd: Color::srgb(0.40, 0.80, 0.45),
+            // Stats: Clinical Work Sans palette
+            stat_dmg: Color::srgb(1.0, 0.71, 0.67),
+            stat_rng: Color::srgb(0.67, 0.80, 0.80),
+            stat_spd: Color::srgb(0.91, 0.76, 0.46),
 
-            // Panel accents
-            panel_accent_friendly: Color::srgba(0.29, 0.62, 1.0, 0.6),
-            panel_accent_enemy: Color::srgba(0.80, 0.27, 0.27, 0.6),
-            panel_accent_construction: Color::srgba(1.0, 0.65, 0.15, 0.6),
-            icon_frame_bg: Color::srgba(0.16, 0.16, 0.18, 0.95),
+            // Panel accents: Sharp edge highlights
+            panel_accent_friendly: Color::srgba(0.67, 0.80, 0.80, 0.4),
+            panel_accent_enemy: Color::srgba(1.0, 0.71, 0.67, 0.4),
+            panel_accent_construction: Color::srgba(0.91, 0.76, 0.46, 0.4),
+            icon_frame_bg: Color::srgba(0.10, 0.11, 0.12, 0.95),
 
-            // Input
-            input_bg: Color::srgba(0.12, 0.12, 0.12, 0.94),
-            input_border: Color::srgb(0.33, 0.33, 0.33),
-            input_border_focused: Color::srgb(0.29, 0.62, 1.0),
+            // Input: Recessed
+            input_bg: Color::srgb(0.04, 0.04, 0.05),
+            input_border: Color::srgb(0.14, 0.15, 0.16),
+            input_border_focused: Color::srgb(0.91, 0.76, 0.46), // Gold focus
 
-            // Grid
-            grid_line: Color::srgba(0.29, 0.62, 1.0, 0.15),
+            // Grid: Tactical overlay
+            grid_line: Color::srgba(0.67, 0.80, 0.80, 0.08),
         }
     }
 
     pub fn light() -> Self {
         Self {
-            // Backgrounds
-            bg_panel: Color::srgba(0.96, 0.96, 0.97, 0.94),
-            bg_surface: Color::srgba(1.0, 1.0, 1.0, 0.94),
-            bg_elevated: Color::srgba(0.98, 0.98, 0.99, 0.94),
+            // Backgrounds: Weathered "Parchment"
+            bg_panel: Color::srgb(0.94, 0.92, 0.88),
+            bg_surface: Color::srgb(0.98, 0.97, 0.95),
+            bg_elevated: Color::srgb(1.0, 1.0, 1.0),
+            bg_recessed: Color::srgb(0.88, 0.85, 0.80),
             bg_transparent: Color::srgba(0.0, 0.0, 0.0, 0.0),
-            bg_menu: Color::srgb(0.93, 0.93, 0.95),
+            bg_menu: Color::srgb(0.90, 0.88, 0.85),
 
-            // Text
-            text_primary: Color::srgb(0.13, 0.13, 0.15),
-            text_secondary: Color::srgb(0.45, 0.45, 0.50),
-            text_disabled: Color::srgb(0.70, 0.70, 0.72),
+            // Text: Ink on paper
+            text_primary: Color::srgb(0.12, 0.14, 0.16),
+            text_secondary: Color::srgb(0.25, 0.45, 0.45), // Darker Teal
+            text_disabled: Color::srgb(0.65, 0.65, 0.68),
 
             // Accent / Status
-            accent: Color::srgb(0.22, 0.55, 0.95),
-            destructive: Color::srgb(0.80, 0.27, 0.27),
-            success: Color::srgb(0.30, 0.69, 0.31),
-            warning: Color::srgb(1.0, 0.65, 0.15),
+            accent: Color::srgb(0.25, 0.45, 0.45),
+            prestige: Color::srgb(0.75, 0.55, 0.25), // Tarnished Gold
+            destructive: Color::srgb(0.80, 0.25, 0.25),
+            success: Color::srgb(0.30, 0.55, 0.30),
+            warning: Color::srgb(0.75, 0.55, 0.25),
 
             // Borders
-            separator: Color::srgb(0.82, 0.82, 0.85),
-            border_subtle: Color::srgb(0.75, 0.75, 0.78),
+            separator: Color::srgba(0.12, 0.14, 0.16, 0.1),
+            border_subtle: Color::srgba(0.75, 0.55, 0.25, 0.2),
 
             // Buttons
-            btn_primary: Color::srgba(0.90, 0.90, 0.92, 0.0),
-            btn_hover: Color::srgba(0.85, 0.85, 0.88, 0.94),
-            btn_pressed: Color::srgba(0.80, 0.80, 0.83, 0.94),
+            btn_primary: Color::srgba(0.88, 0.85, 0.80, 0.0),
+            btn_hover: Color::srgba(0.25, 0.45, 0.45, 0.05),
+            btn_pressed: Color::srgba(0.80, 0.78, 0.75, 0.94),
 
             // HP bar
-            hp_bar_bg: Color::srgba(0.90, 0.90, 0.90, 0.9),
+            hp_bar_bg: Color::srgba(0.85, 0.82, 0.78, 0.9),
 
-            // Stats (same in both themes — they're semantic colors)
-            stat_dmg: Color::srgb(0.85, 0.35, 0.30),
-            stat_rng: Color::srgb(0.40, 0.70, 0.95),
-            stat_spd: Color::srgb(0.40, 0.80, 0.45),
+            // Stats
+            stat_dmg: Color::srgb(0.80, 0.25, 0.25),
+            stat_rng: Color::srgb(0.25, 0.45, 0.45),
+            stat_spd: Color::srgb(0.75, 0.55, 0.25),
 
             // Panel accents
-            panel_accent_friendly: Color::srgba(0.22, 0.55, 0.95, 0.6),
-            panel_accent_enemy: Color::srgba(0.80, 0.27, 0.27, 0.6),
-            panel_accent_construction: Color::srgba(1.0, 0.65, 0.15, 0.6),
-            icon_frame_bg: Color::srgba(0.92, 0.92, 0.94, 0.95),
+            panel_accent_friendly: Color::srgba(0.25, 0.45, 0.45, 0.3),
+            panel_accent_enemy: Color::srgba(0.80, 0.25, 0.25, 0.3),
+            panel_accent_construction: Color::srgba(0.75, 0.55, 0.25, 0.3),
+            icon_frame_bg: Color::srgba(0.98, 0.97, 0.95, 0.95),
 
             // Input
-            input_bg: Color::srgba(1.0, 1.0, 1.0, 0.94),
-            input_border: Color::srgb(0.75, 0.75, 0.78),
-            input_border_focused: Color::srgb(0.22, 0.55, 0.95),
+            input_bg: Color::srgb(1.0, 1.0, 1.0),
+            input_border: Color::srgb(0.85, 0.82, 0.78),
+            input_border_focused: Color::srgb(0.25, 0.45, 0.45),
 
             // Grid
-            grid_line: Color::srgba(0.22, 0.55, 0.95, 0.15),
+            grid_line: Color::srgba(0.25, 0.45, 0.45, 0.1),
         }
     }
 
-    /// HP threshold color (same in both themes).
-    pub fn hp_high(&self) -> Color {
-        self.success
-    }
-    pub fn hp_mid(&self) -> Color {
-        self.warning
-    }
-    pub fn hp_low(&self) -> Color {
-        self.destructive
-    }
+    pub fn hp_high(&self) -> Color { self.accent } // Teal for safety
+    pub fn hp_mid(&self) -> Color { self.prestige } // Gold for warning
+    pub fn hp_low(&self) -> Color { self.destructive } // Red for danger
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Typography
+// Typography (Noto Serif vs Work Sans)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Debug)]
 pub struct Typography {
-    pub display: f32, // 48 — menu title
-    pub heading: f32, // 28 — section headers
-    pub button: f32,  // 18 — menu buttons, large labels
-    pub large: f32,   // 15 — popups, unit names
-    pub medium: f32,  // 13 — selector labels, resource counts
-    pub body: f32,    // 12 — standard text, tooltips
-    pub small: f32,   // 10 — widget titles, costs
-    pub caption: f32, // 10 — toolbar, queue labels
-    pub tiny: f32,    //  8 — close buttons, badges
-    pub micro: f32,   //  8 — event log timestamps
+    pub display: f32, // 48 — Noto Serif (Mission Titles)
+    pub heading: f32, // 28 — Noto Serif (Section Headers)
+    pub button: f32,  // 18 — Work Sans (Command Actions)
+    pub large: f32,   // 15 — Work Sans (Unit Names)
+    pub medium: f32,  // 13 — Work Sans (Resource Labels)
+    pub body: f32,    // 12 — Work Sans (Standard Data)
+    pub small: f32,   // 10 — Work Sans (Technical Specs)
+    pub caption: f32, // 10 — Work Sans (Serial Numbers)
+    pub tiny: f32,    //  8 — Badges
+    pub micro: f32,   //  8 — Event Log
 }
 
 impl Default for Typography {
@@ -236,11 +235,7 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self {
-            mode: ThemeMode::Dark,
-            colors: ColorPalette::dark(),
-            typography: Typography::default(),
-        }
+        Self::from_mode(ThemeMode::Dark)
     }
 }
 
@@ -266,58 +261,47 @@ impl Theme {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Deprecated const aliases — kept for incremental migration.
-// Prefer `Res<Theme>` access in new code.
+// Deprecated const aliases (Updated for Tactical Command Interface)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Panel backgrounds
-pub const BG_PANEL: Color = Color::srgba(0.07, 0.07, 0.07, 0.94);
-pub const BG_SURFACE: Color = Color::srgba(0.12, 0.12, 0.12, 0.94);
-pub const BG_ELEVATED: Color = Color::srgba(0.14, 0.14, 0.14, 0.94);
+pub const BG_PANEL: Color = Color::srgb(0.07, 0.08, 0.09);
+pub const BG_SURFACE: Color = Color::srgb(0.10, 0.11, 0.12);
+pub const BG_ELEVATED: Color = Color::srgb(0.14, 0.15, 0.16);
+pub const BG_RECESSED: Color = Color::srgb(0.04, 0.04, 0.05);
 pub const BG_TRANSPARENT: Color = Color::srgba(0.0, 0.0, 0.0, 0.0);
-pub const BG_MENU: Color = Color::srgb(0.04, 0.04, 0.05);
 
-// Text colors
-pub const TEXT_PRIMARY: Color = Color::srgb(0.88, 0.88, 0.88);
-pub const TEXT_SECONDARY: Color = Color::srgb(0.53, 0.53, 0.53);
-pub const TEXT_DISABLED: Color = Color::srgb(0.33, 0.33, 0.33);
+pub const TEXT_PRIMARY: Color = Color::srgb(0.88, 0.91, 0.91);
+pub const TEXT_SECONDARY: Color = Color::srgb(0.67, 0.80, 0.80);
+pub const TEXT_DISABLED: Color = Color::srgb(0.35, 0.38, 0.40);
 
-// Accent / status
-pub const ACCENT: Color = Color::srgb(0.29, 0.62, 1.0);
-pub const DESTRUCTIVE: Color = Color::srgb(0.80, 0.27, 0.27);
-pub const SUCCESS: Color = Color::srgb(0.30, 0.69, 0.31);
-pub const WARNING: Color = Color::srgb(1.0, 0.65, 0.15);
+pub const ACCENT: Color = Color::srgb(0.67, 0.80, 0.80);
+pub const PRESTIGE: Color = Color::srgb(0.91, 0.76, 0.46);
+pub const DESTRUCTIVE: Color = Color::srgb(1.0, 0.71, 0.67);
+pub const SUCCESS: Color = Color::srgb(0.55, 0.75, 0.55);
+pub const WARNING: Color = PRESTIGE;
 
-// Borders / separators
-pub const SEPARATOR: Color = Color::srgb(0.20, 0.20, 0.20);
-pub const BORDER_SUBTLE: Color = Color::srgb(0.33, 0.33, 0.33);
+pub const SEPARATOR: Color = Color::srgba(0.67, 0.80, 0.80, 0.1);
+pub const BORDER_SUBTLE: Color = Color::srgba(0.91, 0.76, 0.46, 0.15);
 
-// Buttons
-pub const BTN_PRIMARY: Color = Color::srgba(0.15, 0.15, 0.15, 0.0);
-pub const BTN_HOVER: Color = Color::srgba(0.22, 0.22, 0.22, 0.94);
-pub const BTN_PRESSED: Color = Color::srgba(0.10, 0.10, 0.10, 0.94);
+pub const BTN_PRIMARY: Color = Color::srgba(0.12, 0.13, 0.15, 0.0);
+pub const BTN_HOVER: Color = Color::srgba(0.67, 0.80, 0.80, 0.08);
+pub const BTN_PRESSED: Color = Color::srgba(0.05, 0.05, 0.06, 0.94);
 
-// HP bar backgrounds
-pub const HP_BAR_BG: Color = Color::srgba(0.08, 0.08, 0.08, 0.9);
-pub const HP_HIGH: Color = SUCCESS;
-pub const HP_MID: Color = WARNING;
+pub const HP_BAR_BG: Color = Color::srgba(0.05, 0.05, 0.06, 0.9);
+pub const HP_HIGH: Color = ACCENT;
+pub const HP_MID: Color = PRESTIGE;
 pub const HP_LOW: Color = DESTRUCTIVE;
 
-// Stat colors
-pub const STAT_DMG: Color = Color::srgb(0.85, 0.35, 0.30);
-pub const STAT_RNG: Color = Color::srgb(0.40, 0.70, 0.95);
-pub const STAT_SPD: Color = Color::srgb(0.40, 0.80, 0.45);
+pub const STAT_DMG: Color = DESTRUCTIVE;
+pub const STAT_RNG: Color = ACCENT;
+pub const STAT_SPD: Color = PRESTIGE;
 
-// Panel accents
-pub const PANEL_ACCENT_FRIENDLY: Color = Color::srgba(0.29, 0.62, 1.0, 0.6);
-pub const PANEL_ACCENT_ENEMY: Color = Color::srgba(0.80, 0.27, 0.27, 0.6);
-pub const PANEL_ACCENT_CONSTRUCTION: Color = Color::srgba(1.0, 0.65, 0.15, 0.6);
-pub const ICON_FRAME_BG: Color = Color::srgba(0.16, 0.16, 0.18, 0.95);
+pub const PANEL_ACCENT_FRIENDLY: Color = Color::srgba(0.67, 0.80, 0.80, 0.4);
+pub const PANEL_ACCENT_ENEMY: Color = Color::srgba(1.0, 0.71, 0.67, 0.4);
+pub const PANEL_ACCENT_CONSTRUCTION: Color = Color::srgba(0.91, 0.76, 0.46, 0.4);
 
-// Input fields
-pub const INPUT_BG: Color = BG_SURFACE;
-pub const INPUT_BORDER: Color = BORDER_SUBTLE;
-pub const INPUT_BORDER_FOCUSED: Color = ACCENT;
+pub const GRID_LINE: Color = Color::srgba(0.67, 0.80, 0.80, 0.08);
+
 
 // Font sizes
 pub const FONT_DISPLAY: f32 = 48.0;
@@ -330,6 +314,3 @@ pub const FONT_SMALL: f32 = 10.0;
 pub const FONT_CAPTION: f32 = 10.0;
 pub const FONT_TINY: f32 = 8.0;
 pub const FONT_MICRO: f32 = 8.0;
-
-// Grid overlay
-pub const GRID_LINE: Color = Color::srgba(0.29, 0.62, 1.0, 0.15);

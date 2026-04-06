@@ -13,8 +13,8 @@ use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, Ent
 use crate::components::{
     AiControlledFactions, AiFactionSettings, AllPlayerResources, AllyNotifications, AllyNotifyKind,
     AppState, AttackTarget, CullReason, Faction, FrustumCulled, FrustumDebugMode, GameFlowSet,
-    GameSetupConfig, GameWorld, Health, MoveTarget, ResourceType, RtsCamera, Selected,
-    UiPressActive, UnitSpeed,
+    GameSetupConfig, GameWorld, GrassDebugSettings, GrassRebuildState, Health, MoveTarget,
+    ResourceType, RtsCamera, Selected, UiPressActive, UnitSpeed,
 };
 use crate::fog::FogTweakSettings;
 use crate::ground::HeightMap;
@@ -96,6 +96,7 @@ impl Plugin for DebugPlugin {
                     #[cfg(not(target_arch = "wasm32"))]
                     sync_entity_light_tweaks,
                     sync_fog_tweaks,
+                    sync_grass_debug_tweaks,
                 )
                     .run_if(in_state(AppState::InGame)),
             )
@@ -373,8 +374,11 @@ const ITEMS_SPAWN_FOLDER: &str = "Items/Spawn";
 const ITEMS_SELECTED_FOLDER: &str = "Items/Selected";
 const NET_CONN_FOLDER: &str = "Network/Connection";
 const NET_TRAFFIC_FOLDER: &str = "Network/Traffic";
+const GRASS_FOLDER: &str = "Visuals/Grass";
 
 fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
+    let grass_defaults = GrassDebugSettings::default();
+
     // Spawn folder
     let entity_names: Vec<String> = EntityKind::ALL
         .iter()
@@ -513,6 +517,129 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
         tweaks.add_readonly(folder, field.label, "--");
     }
     tweaks.add_readonly(NET_CONN_FOLDER, "Tap API", "--");
+
+    register_grass_debug_tweaks(&mut tweaks, &grass_defaults);
+}
+
+fn register_grass_debug_tweaks(tweaks: &mut DebugTweaks, defaults: &GrassDebugSettings) {
+    tweaks.add_bool(GRASS_FOLDER, "Enabled", defaults.enabled);
+    tweaks.add_float(GRASS_FOLDER, "Spacing", defaults.spacing, 0.5, 3.0, 0.02);
+    tweaks.add_float(
+        GRASS_FOLDER,
+        "Row Step Factor",
+        defaults.row_step_factor,
+        0.25,
+        1.5,
+        0.01,
+    );
+    tweaks.add_float(GRASS_FOLDER, "Jitter", defaults.jitter, 0.0, 1.5, 0.02);
+    tweaks.add_float(
+        GRASS_FOLDER,
+        "Density Threshold",
+        defaults.density_threshold,
+        0.0,
+        1.0,
+        0.01,
+    );
+    tweaks.add_float(
+        GRASS_FOLDER,
+        "Grassland Weight",
+        defaults.grassland_weight,
+        0.0,
+        1.5,
+        0.01,
+    );
+    tweaks.add_float(
+        GRASS_FOLDER,
+        "Wetland Weight",
+        defaults.wetland_weight,
+        0.0,
+        1.5,
+        0.01,
+    );
+    tweaks.add_float(
+        GRASS_FOLDER,
+        "Forest Weight",
+        defaults.forest_weight,
+        0.0,
+        1.5,
+        0.01,
+    );
+    tweaks.add_float(GRASS_FOLDER, "Scale Min", defaults.scale_min, 0.1, 3.0, 0.01);
+    tweaks.add_float(GRASS_FOLDER, "Scale Max", defaults.scale_max, 0.1, 3.0, 0.01);
+    tweaks.add_float(
+        GRASS_FOLDER,
+        "Lean Strength",
+        defaults.lean_strength,
+        0.0,
+        2.0,
+        0.05,
+    );
+    tweaks.add_readonly(GRASS_FOLDER, "Status", "Enabled | rebuild pending");
+}
+
+fn sync_grass_debug_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    mut grass_settings: ResMut<GrassDebugSettings>,
+    mut grass_rebuild: ResMut<GrassRebuildState>,
+) {
+    let mut next_settings = grass_settings.clone();
+
+    if let Some(value) = tweaks.get_bool(GRASS_FOLDER, "Enabled") {
+        next_settings.enabled = value;
+    }
+    if let Some(value) = tweaks.get_float(GRASS_FOLDER, "Spacing") {
+        next_settings.spacing = value.max(0.1);
+    }
+    if let Some(value) = tweaks.get_float(GRASS_FOLDER, "Row Step Factor") {
+        next_settings.row_step_factor = value.max(0.1);
+    }
+    if let Some(value) = tweaks.get_float(GRASS_FOLDER, "Jitter") {
+        next_settings.jitter = value.max(0.0);
+    }
+    if let Some(value) = tweaks.get_float(GRASS_FOLDER, "Density Threshold") {
+        next_settings.density_threshold = value.clamp(0.0, 1.0);
+    }
+    if let Some(value) = tweaks.get_float(GRASS_FOLDER, "Grassland Weight") {
+        next_settings.grassland_weight = value.max(0.0);
+    }
+    if let Some(value) = tweaks.get_float(GRASS_FOLDER, "Wetland Weight") {
+        next_settings.wetland_weight = value.max(0.0);
+    }
+    if let Some(value) = tweaks.get_float(GRASS_FOLDER, "Forest Weight") {
+        next_settings.forest_weight = value.max(0.0);
+    }
+    if let Some(value) = tweaks.get_float(GRASS_FOLDER, "Scale Min") {
+        next_settings.scale_min = value.max(0.05);
+    }
+    if let Some(value) = tweaks.get_float(GRASS_FOLDER, "Scale Max") {
+        next_settings.scale_max = value.max(next_settings.scale_min);
+    }
+    if let Some(value) = tweaks.get_float(GRASS_FOLDER, "Lean Strength") {
+        next_settings.lean_strength = value.max(0.0);
+    }
+
+    if *grass_settings != next_settings {
+        *grass_settings = next_settings;
+        grass_rebuild.dirty = true;
+    }
+
+    let status = format!(
+        "{} | {} | {} chunks | {} instances",
+        if grass_settings.enabled {
+            "Enabled"
+        } else {
+            "Disabled"
+        },
+        if grass_rebuild.dirty {
+            "rebuild pending"
+        } else {
+            "clean"
+        },
+        grass_rebuild.chunk_count,
+        grass_rebuild.instance_count,
+    );
+    tweaks.set_readonly_if_changed(GRASS_FOLDER, "Status", &status);
 }
 
 fn cursor_ground_pos(

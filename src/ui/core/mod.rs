@@ -1,6 +1,7 @@
 pub mod animations;
 pub mod button_visuals;
 pub mod components;
+pub mod constants;
 pub mod fonts;
 pub mod framework;
 pub mod hud;

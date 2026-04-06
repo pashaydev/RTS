@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
+use super::core::constants::*;
 use super::core::hud::MainHudRoot;
 use crate::components::*;
 
@@ -86,7 +87,7 @@ pub fn hints_system(
                         width: Val::Percent(50.0),
                         padding: UiRect::all(Val::Px(10.0)),
                         justify_content: JustifyContent::Center,
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        border_radius: RADIUS_MD,
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.1, 0.15, 0.25, 0.85)),

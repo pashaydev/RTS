@@ -15,6 +15,7 @@ use crate::minimap::MinimapInteraction;
 use crate::multiplayer::host_systems::execute_input_command;
 use crate::multiplayer::{ClientNetState, HostNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
+use crate::items::{ItemPickup, RequestPickupItem};
 
 use super::picking::{ray_aabb_dist, ray_sphere_dist};
 use super::{clear_task_queue, enqueue_task, set_current_task};
@@ -44,6 +45,7 @@ pub(crate) fn handle_right_click_move(
         Query<Entity, With<ResourceNode>>,
         Query<(Entity, &GlobalTransform), (With<Building>, With<ConstructionProgress>)>,
         Query<(Entity, &ResourceProcessor, &BuildingState, &Faction), With<Building>>,
+        Query<Entity, With<ItemPickup>>,
     ),
     // Queries for contextual right-click: enemy units, all units with faction, buildings with faction
     enemy_detect: (
@@ -60,7 +62,9 @@ pub(crate) fn handle_right_click_move(
         Res<MinimapInteraction>,
         Res<UiClickedThisFrame>,
         Res<UiPressActive>,
+        Query<Entity, (With<ItemPickup>, With<Hovered>)>,
         bevy::ecs::message::MessageWriter<PlaySfx>,
+        bevy::ecs::message::MessageWriter<RequestPickupItem>,
     ),
     net_params: (
         Res<NetRole>,
@@ -76,10 +80,11 @@ pub(crate) fn handle_right_click_move(
     ),
 ) {
     let (camera_q, windows) = viewport;
-    let (mobs, resource_nodes, construction_q, processor_buildings) = target_queries;
+    let (mobs, resource_nodes, construction_q, processor_buildings, pickups) = target_queries;
     let (other_units, other_buildings) = enemy_detect;
     let (assigned_workers_q, building_aabb_q, height_map, graphics) = picking_extra;
-    let (minimap_interaction, ui_clicked, ui_press, mut sfx) = ui_flags;
+    let (minimap_interaction, ui_clicked, ui_press, hovered_pickups, mut sfx, mut pickup_requests) =
+        ui_flags;
     let (
         net_role,
         client_net,
@@ -94,6 +99,23 @@ pub(crate) fn handle_right_click_move(
     ) = net_params;
 
     if !mouse.just_pressed(MouseButton::Right) {
+        return;
+    }
+
+    let units_vec: Vec<(Entity, EntityKind)> = selected_units
+        .iter()
+        .filter(|(_, _, faction, _)| **faction == active_player.0)
+        .map(|(e, k, _, _)| (e, *k))
+        .collect();
+    if units_vec.is_empty() {
+        return;
+    }
+
+    if let Some(pickup) = hovered_pickups.iter().next() {
+        pickup_requests.write(RequestPickupItem {
+            pickup,
+            pickers: units_vec.iter().map(|(entity, _)| *entity).collect(),
+        });
         return;
     }
 
@@ -112,18 +134,10 @@ pub(crate) fn handle_right_click_move(
         return;
     };
 
-    let units_vec: Vec<(Entity, EntityKind)> = selected_units
-        .iter()
-        .filter(|(_, _, faction, _)| **faction == active_player.0)
-        .map(|(e, k, _, _)| (e, *k))
-        .collect();
-    if units_vec.is_empty() {
-        return;
-    }
-
     // Contextual right-click action types
     #[derive(Clone, Copy, PartialEq)]
     enum RClickAction {
+        PickupItem,      // item pickup
         AttackEnemy,     // enemy unit or mob
         GatherResource,  // resource node (workers)
         AssistBuild,     // construction site (workers)
@@ -156,7 +170,9 @@ pub(crate) fn handle_right_click_move(
         };
 
         // Determine the best action for this hit
-        let action = if mobs.contains(entity) {
+        let action = if pickups.contains(entity) {
+            Some(RClickAction::PickupItem)
+        } else if mobs.contains(entity) {
             // Mobs are always hostile
             Some(RClickAction::AttackEnemy)
         } else if let Ok((_, unit_faction)) = other_units.get(entity) {
@@ -215,8 +231,13 @@ pub(crate) fn handle_right_click_move(
         let threshold = closest_dist + 2.0;
         let close_hits: Vec<_> = hits.into_iter().filter(|h| h.dist <= threshold).collect();
 
-        // Priority tie-breaker: attack enemy > resource > construction > processor > ally
+        // Priority tie-breaker: pickup > attack enemy > resource > construction > processor > ally
         if let Some(h) = close_hits
+            .iter()
+            .find(|h| h.action == RClickAction::PickupItem)
+        {
+            Some((h.entity, h.action))
+        } else if let Some(h) = close_hits
             .iter()
             .find(|h| h.action == RClickAction::AttackEnemy)
         {
@@ -361,6 +382,12 @@ pub(crate) fn handle_right_click_move(
 
     if let Some((target_entity, action)) = target_action {
         match action {
+            RClickAction::PickupItem => {
+                pickup_requests.write(RequestPickupItem {
+                    pickup: target_entity,
+                    pickers: units_vec.iter().map(|(entity, _)| *entity).collect(),
+                });
+            }
             RClickAction::AttackEnemy => {
                 for (entity, _kind) in &units_vec {
                     if shift {
@@ -419,24 +446,19 @@ pub(crate) fn handle_right_click_move(
                                         QueuedTask::AssignToProcessor(target_entity),
                                     );
                                 } else {
-                                    if let Ok(gt) =
-                                        pickables.get(target_entity).map(|(_, gt, _, _)| gt)
-                                    {
+                                    if pickables.get(target_entity).is_ok() {
                                         clear_combat_intent(
                                             &mut commands,
                                             *entity,
                                             time.elapsed_secs_f64(),
                                         );
-                                        commands
-                                            .entity(*entity)
-                                            .remove::<AttackTarget>()
-                                            .insert(MoveTarget(gt.translation()))
-                                            .insert(UnitState::AssignedGathering {
-                                                building: target_entity,
-                                                phase: AssignedPhase::SeekingNode,
-                                            })
-                                            .insert(BuildingAssignment(target_entity))
-                                            .insert(TaskSource::Manual);
+                                        commands.entity(*entity).remove::<AttackTarget>();
+                                        crate::resources::assign_worker_to_processor(
+                                            &mut commands,
+                                            *entity,
+                                            target_entity,
+                                            TaskSource::Manual,
+                                        );
                                         set_current_task(
                                             &mut task_queues,
                                             &mut next_task_id,
@@ -826,17 +848,21 @@ pub(crate) fn handle_unit_command_hotkeys(
         }
 
         if keys.just_pressed(KeyCode::KeyX) {
-            for (entity, _kind, faction) in &selected_units {
+            for (entity, kind, faction) in &selected_units {
                 if *faction != active_player.0 {
                     continue;
                 }
                 clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
-                commands
-                    .entity(entity)
-                    .remove::<MoveTarget>()
-                    .remove::<AttackTarget>()
-                    .insert(UnitState::Idle)
-                    .insert(TaskSource::Auto);
+                if *kind == EntityKind::Worker {
+                    crate::resources::unassign_worker_from_processor(&mut commands, entity);
+                } else {
+                    commands
+                        .entity(entity)
+                        .remove::<MoveTarget>()
+                        .remove::<AttackTarget>()
+                        .insert(UnitState::Idle)
+                        .insert(TaskSource::Auto);
+                }
                 clear_task_queue(&mut task_queues, entity);
             }
             *cmd_mode = CommandMode::Normal;

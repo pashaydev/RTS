@@ -629,7 +629,6 @@ fn camera_edge_scroll(
 fn camera_zoom_input(
     mut scroll_events: MessageReader<MouseWheel>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    cursor_over_ui: Res<CursorOverUi>,
     scroll_consumed: Res<crate::ui::core::framework::ScrollConsumedByWidget>,
     windows: Query<&Window, With<PrimaryWindow>>,
     widget_q: Query<(&ComputedNode, &UiGlobalTransform), With<crate::ui::core::framework::Widget>>,
@@ -660,7 +659,10 @@ fn camera_zoom_input(
             MouseScrollUnit::Line => ev.y,
             MouseScrollUnit::Pixel => ev.y / 16.0,
         };
-        if !cursor_over_ui.0 && !cursor_in_widget && !scroll_consumed.0 {
+        // Wheel zoom should only yield to UI that actually owns the pointer region
+        // or consumed the scroll this frame. A global "some UI node is hovered"
+        // flag is too broad and can suppress world zoom away from widgets.
+        if !cursor_in_widget && !scroll_consumed.0 {
             cam.target_distance *= 1.0 - scroll * ZOOM_SENSITIVITY;
         }
     }

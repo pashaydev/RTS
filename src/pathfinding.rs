@@ -10,7 +10,7 @@ use std::time::Instant;
 use web_time::Instant;
 
 use crate::components::*;
-use crate::ground::HeightMap;
+use crate::ground::{playable_half_map, HeightMap};
 use crate::spatial::WallSpatialGrid;
 
 // ── Constants ──
@@ -80,6 +80,11 @@ impl NavGrid {
 
     pub fn index(&self, gx: usize, gz: usize) -> usize {
         gz * self.grid_size + gx
+    }
+
+    pub fn is_world_passable(&self, x: f32, z: f32) -> bool {
+        let (gx, gz) = self.world_to_grid(x, z);
+        self.costs[self.index(gx, gz)] > 0
     }
 }
 
@@ -187,6 +192,7 @@ fn cleanup_orphan_paths(
 
 fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut commands: Commands) {
     let half_map = height_map.half_map;
+    let playable_half = playable_half_map(height_map.map_size);
     let step = NAV_GRID_STEP;
     let grid_size = (height_map.map_size / step).round() as usize + 1;
     let total = grid_size * grid_size;
@@ -199,6 +205,11 @@ fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut comm
             let idx = gz * grid_size + gx;
             let wx = gx as f32 * step - half_map;
             let wz = gz as f32 * step - half_map;
+
+            if wx.abs() > playable_half || wz.abs() > playable_half {
+                costs[idx] = 0;
+                continue;
+            }
 
             let biome = biome_map.get_biome(wx, wz);
             match biome {
@@ -356,6 +367,7 @@ fn stamp_obstacle(nav_grid: &mut NavGrid, pos: Vec3, radius: f32, margin_radius:
 fn queue_path_requests(
     mut commands: Commands,
     mut queue: ResMut<PathRequestQueue>,
+    nav_grid: Res<NavGrid>,
     new_movers: Query<
         (Entity, &Transform, &MoveTarget),
         (
@@ -376,8 +388,8 @@ fn queue_path_requests(
         let goal = target.0;
         let flat_dist = Vec2::new(goal.x - start.x, goal.z - start.z).length();
 
-        // Skip pathfinding for very short moves
-        if flat_dist < DIRECT_MOVE_THRESHOLD {
+        // Skip pathfinding only when the direct segment stays entirely walkable.
+        if flat_dist < DIRECT_MOVE_THRESHOLD && is_direct_path_walkable(&nav_grid, start, goal) {
             continue;
         }
 
@@ -443,11 +455,10 @@ fn process_path_requests(
                 .collect();
 
             if !waypoints.is_empty() {
-                let destination = *waypoints.last().unwrap();
                 commands.entity(request.entity).insert(NavPath {
                     waypoints,
                     current_index: 0,
-                    destination,
+                    destination: request.goal,
                 });
             }
         }
@@ -466,23 +477,24 @@ pub fn find_path(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> Option<Vec<(f32
     let (sx, sz) = nav_grid.world_to_grid(start.x, start.z);
     let (gx, gz) = nav_grid.world_to_grid(goal.x, goal.z);
     let start_idx = nav_grid.index(sx, sz);
-    let goal_idx = nav_grid.index(gx, gz);
+    let original_goal_idx = nav_grid.index(gx, gz);
 
-    if start_idx == goal_idx {
+    if start_idx == original_goal_idx && nav_grid.costs[original_goal_idx] > 0 {
         let (wx, wz) = nav_grid.grid_to_world(gx, gz);
         return Some(vec![(wx, wz)]);
     }
 
     // If goal is impassable, find nearest passable cell
-    let goal_idx = if nav_grid.costs[goal_idx] == 0 {
+    let goal_idx = if nav_grid.costs[original_goal_idx] == 0 {
         if let Some(alt) = find_nearest_passable(nav_grid, gx, gz) {
             alt
         } else {
             return None;
         }
     } else {
-        goal_idx
+        original_goal_idx
     };
+    let goal_is_projected = goal_idx != original_goal_idx;
 
     // If start is impassable, find nearest passable
     let start_idx = if nav_grid.costs[start_idx] == 0 {
@@ -523,10 +535,11 @@ pub fn find_path(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> Option<Vec<(f32
                 })
                 .collect();
 
-            // Always append the exact goal position so NavPath.destination
-            // matches MoveTarget exactly (avoids invalidation from grid-snap error).
             let mut result = world_path;
-            result.push((goal.x, goal.z));
+            if !goal_is_projected {
+                // Preserve the exact destination when the target itself is valid.
+                result.push((goal.x, goal.z));
+            }
 
             return Some(result);
         }
@@ -588,6 +601,17 @@ pub fn find_path(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> Option<Vec<(f32
     }
 
     None
+}
+
+fn is_direct_path_walkable(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> bool {
+    if !nav_grid.is_world_passable(start.x, start.z) || !nav_grid.is_world_passable(goal.x, goal.z)
+    {
+        return false;
+    }
+
+    let (sx, sz) = nav_grid.world_to_grid(start.x, start.z);
+    let (gx, gz) = nav_grid.world_to_grid(goal.x, goal.z);
+    line_of_sight(nav_grid, sx, sz, gx, gz)
 }
 
 fn reconstruct_path(came_from: &[usize], start: usize, goal: usize) -> Vec<usize> {

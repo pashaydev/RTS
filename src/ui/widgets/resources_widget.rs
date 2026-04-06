@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use super::core::constants::*;
 use super::core::fonts::UiFonts;
 use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
@@ -216,7 +217,7 @@ fn spawn_resource_row(
                 Node {
                     width: Val::Px(6.0),
                     height: Val::Px(6.0),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    border_radius: RADIUS_SM,
                     ..default()
                 },
                 BackgroundColor(color),

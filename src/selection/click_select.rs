@@ -301,11 +301,17 @@ pub(crate) fn handle_click_select(
             }
 
             if result.is_pickup {
-                inspected.entity = None;
-                pickup_requests.write(RequestPickupItem {
-                    pickup: result.entity,
-                    pickers: selected_units.iter().collect(),
-                });
+                let pickers: Vec<Entity> = selected_units.iter().collect();
+                if pickers.is_empty() {
+                    // No units selected — just inspect the pickup
+                    inspected.entity = Some(result.entity);
+                } else {
+                    inspected.entity = None;
+                    pickup_requests.write(RequestPickupItem {
+                        pickup: result.entity,
+                        pickers,
+                    });
+                }
             } else if result.is_mob {
                 inspected.entity = Some(result.entity);
             } else if result.is_resource {

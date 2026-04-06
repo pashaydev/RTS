@@ -256,3 +256,8 @@ pub fn edge_distance_to_square(x: f32, z: f32, half_map: f32) -> f32 {
 pub fn is_in_mountain_border(x: f32, z: f32, half_map: f32, settings: BorderSettings) -> bool {
     edge_distance_to_square(x, z, half_map) <= settings.thickness
 }
+
+pub fn playable_half_map(map_size: f32) -> f32 {
+    let border = BorderSettings::from_map_size(map_size);
+    map_size * 0.5 - border.thickness - border.transition
+}

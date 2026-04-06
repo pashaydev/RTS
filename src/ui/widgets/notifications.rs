@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use super::core::constants::*;
 use super::core::hud::MainHudRoot;
 use crate::components::*;
 use crate::theme::{self, Theme};
@@ -108,7 +109,7 @@ pub fn update_ally_notifications(
                     },
                     Node {
                         padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
-                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        border_radius: RADIUS_LG,
                         margin: UiRect::left(Val::Px(-150.0)),
                         min_width: Val::Px(200.0),
                         justify_content: JustifyContent::Center,

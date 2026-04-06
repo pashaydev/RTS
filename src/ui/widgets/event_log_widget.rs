@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use std::collections::VecDeque;
 
-use super::core::fonts::UiFonts;
-use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::constants::*;
+use super::core::framework::WidgetId;
 use super::core::hud::MainHudRoot;
 use crate::components::{ActivePlayer, AppState, Faction, RtsCamera, TeamConfig};
 use crate::theme::{self, Theme};
@@ -32,26 +32,7 @@ impl Plugin for EventLogWidgetPlugin {
     }
 }
 
-fn spawn_event_log_widget(
-    mut commands: Commands,
-    registry: Res<WidgetRegistry>,
-    fonts: Res<UiFonts>,
-    theme: Res<Theme>,
-    root_q: Query<Entity, Added<MainHudRoot>>,
-) {
-    let Ok(hud_root) = root_q.single() else {
-        return;
-    };
-    spawn_widget_frame(
-        &mut commands,
-        hud_root,
-        WidgetId::EventLog,
-        registry.slots.get(&WidgetId::EventLog).unwrap(),
-        registry.is_visible(WidgetId::EventLog),
-        &fonts,
-        &theme,
-    );
-}
+widget_spawn_system!(spawn_event_log_widget, WidgetId::EventLog);
 
 // ── Log Level ──
 
@@ -339,7 +320,7 @@ pub fn update_event_log(
                 Button,
                 Node {
                     padding: UiRect::axes(Val::Px(5.0), Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    border_radius: RADIUS_LG,
                     ..default()
                 },
                 BackgroundColor(bg),
@@ -434,7 +415,7 @@ pub fn update_event_log(
                     flex_wrap: FlexWrap::Wrap,
                     column_gap: Val::Px(3.0),
                     padding: UiRect::axes(Val::Px(2.0), Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(2.0)),
+                    border_radius: RADIUS_XS,
                     ..default()
                 },
                 BackgroundColor(Color::NONE),

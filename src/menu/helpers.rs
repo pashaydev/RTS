@@ -91,17 +91,6 @@ pub fn spawn_styled_button(
     marker: impl Bundle,
     accent: bool,
     fonts: &UiFonts,
-    theme: &Theme,
-) -> Entity {
-    spawn_styled_button_nav(commands, label, marker, accent, fonts, None, theme)
-}
-
-pub fn spawn_styled_button_nav(
-    commands: &mut Commands,
-    label: &str,
-    marker: impl Bundle,
-    accent: bool,
-    fonts: &UiFonts,
     nav_index: Option<usize>,
     theme: &Theme,
 ) -> Entity {
@@ -308,20 +297,6 @@ pub fn spawn_animated_section_divider(
 // ── Selector Row ──
 
 pub fn spawn_selector_row(
-    commands: &mut Commands,
-    container: Entity,
-    label: &str,
-    options: &[&str],
-    selected: usize,
-    field: SelectorField,
-    theme: &Theme,
-) {
-    spawn_selector_row_nav(
-        commands, container, label, options, selected, field, None, theme,
-    );
-}
-
-pub fn spawn_selector_row_nav(
     commands: &mut Commands,
     container: Entity,
     label: &str,

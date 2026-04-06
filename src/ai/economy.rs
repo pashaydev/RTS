@@ -275,7 +275,12 @@ pub fn ai_economy_system(
                 if assigned >= slots {
                     break;
                 }
-                crate::resources::assign_worker_to_processor(&mut commands, w_entity, proc_entity);
+                crate::resources::assign_worker_to_processor(
+                    &mut commands,
+                    w_entity,
+                    proc_entity,
+                    TaskSource::Auto,
+                );
                 commands
                     .entity(proc_entity)
                     .entry::<AssignedWorkers>()

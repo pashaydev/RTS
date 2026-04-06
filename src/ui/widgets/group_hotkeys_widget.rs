@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use super::core::fonts::UiFonts;
-use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::constants::*;
+use super::core::framework::WidgetId;
 use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
 use crate::components::*;
@@ -36,26 +36,7 @@ impl Plugin for GroupHotkeysWidgetPlugin {
     }
 }
 
-fn spawn_group_hotkeys_widget(
-    mut commands: Commands,
-    registry: Res<WidgetRegistry>,
-    fonts: Res<UiFonts>,
-    theme: Res<Theme>,
-    root_q: Query<Entity, Added<MainHudRoot>>,
-) {
-    let Ok(hud_root) = root_q.single() else {
-        return;
-    };
-    spawn_widget_frame(
-        &mut commands,
-        hud_root,
-        WidgetId::GroupHotkeys,
-        registry.slots.get(&WidgetId::GroupHotkeys).unwrap(),
-        registry.is_visible(WidgetId::GroupHotkeys),
-        &fonts,
-        &theme,
-    );
-}
+widget_spawn_system!(spawn_group_hotkeys_widget, WidgetId::GroupHotkeys);
 
 // ── Control Groups Resource ──
 
@@ -221,9 +202,9 @@ pub fn update_group_hotkeys_widget(
                 Node {
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
-                    padding: UiRect::all(Val::Px(4.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(6.0)),
+                    padding: PAD_SM,
+                    border: BORDER_1,
+                    border_radius: RADIUS_LG,
                     min_width: Val::Px(40.0),
                     min_height: Val::Px(40.0),
                     flex_direction: FlexDirection::Column,

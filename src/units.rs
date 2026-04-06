@@ -7,7 +7,7 @@ use crate::blueprints::{
 use crate::components::*;
 use crate::ground::HeightMap;
 use crate::model_assets::UnitModelAssets;
-use crate::pathfinding::{NavDirect, NavPath, NavPending};
+use crate::pathfinding::{NavDirect, NavGrid, NavPath, NavPending};
 use crate::spatial::{SpatialHashGrid, WallSpatialGrid};
 use std::f32::consts::PI;
 
@@ -186,7 +186,14 @@ fn spawn_all_players(
 }
 
 /// Extract the building entity a unit is currently targeting/interacting with.
-fn target_building(state: &UnitState, attack_target: Option<&AttackTarget>) -> Option<Entity> {
+///
+/// `BuildingAssignment` is used as a fallback so transient worker-state desyncs
+/// don't make assigned workers behave like fully idle bodies in avoidance.
+fn target_building(
+    state: &UnitState,
+    attack_target: Option<&AttackTarget>,
+    building_assignment: Option<&BuildingAssignment>,
+) -> Option<Entity> {
     match state {
         UnitState::MovingToBuild(e) | UnitState::Building(e) => Some(*e),
         UnitState::ReturningToDeposit { depot, .. }
@@ -194,7 +201,9 @@ fn target_building(state: &UnitState, attack_target: Option<&AttackTarget>) -> O
         | UnitState::WaitingForStorage { depot, .. } => Some(*depot),
         UnitState::AssignedGathering { building, .. } => Some(*building),
         UnitState::Attacking(e) => Some(*e),
-        _ => attack_target.map(|at| at.0),
+        _ => attack_target
+            .map(|at| at.0)
+            .or_else(|| building_assignment.map(|assignment| assignment.0)),
     }
 }
 
@@ -202,6 +211,7 @@ fn steer_avoidance(
     time: Res<Time>,
     spatial_grid: Res<SpatialHashGrid>,
     wall_grid: Res<WallSpatialGrid>,
+    nav_grid: Option<Res<NavGrid>>,
     net_role: Res<crate::multiplayer::NetRole>,
     active_player: Res<ActivePlayer>,
     mut units: Query<
@@ -211,12 +221,13 @@ fn steer_avoidance(
             Option<&MoveTarget>,
             &UnitState,
             Option<&AttackTarget>,
+            Option<&BuildingAssignment>,
             &Faction,
         ),
         (Or<(With<Unit>, With<Mob>)>, Without<Building>),
     >,
     buildings: Query<
-        (&Transform, &BuildingFootprint),
+        (Entity, &Transform, &BuildingFootprint),
         (With<Building>, Without<Unit>, Without<FloorTile>),
     >,
 ) {
@@ -230,7 +241,7 @@ fn steer_avoidance(
     let building_avoidance_radius = 1.5; // extra margin beyond footprint
     let building_strength = 15.0;
 
-    for (entity, mut transform, move_target, unit_state, attack_target, faction) in &mut units {
+    for (entity, mut transform, move_target, unit_state, attack_target, building_assignment, faction) in &mut units {
         // Client: only apply avoidance to local player's units; remote units positioned by state sync
         if *net_role == crate::multiplayer::NetRole::Client && *faction != active_player.0 {
             continue;
@@ -250,7 +261,7 @@ fn steer_avoidance(
         };
 
         // Determine which building (if any) this unit is trying to reach
-        let my_target_building = target_building(unit_state, attack_target);
+        let my_target_building = target_building(unit_state, attack_target, building_assignment);
 
         // ── Unit-to-unit avoidance ──
         let nearby = spatial_grid.query_radius(my_pos, unit_avoidance_radius);
@@ -312,7 +323,7 @@ fn steer_avoidance(
                 if my_target_building == Some(*b_entity) {
                     continue;
                 }
-                if let Ok((_, footprint)) = buildings.get(*b_entity) {
+                if let Ok((_, _, footprint)) = buildings.get(*b_entity) {
                     let diff = my_pos - *b_pos;
                     let flat_diff = Vec3::new(diff.x, 0.0, diff.z);
                     let dist = flat_diff.length();
@@ -330,11 +341,56 @@ fn steer_avoidance(
             // Cap separation to avoid teleporting
             let max_sep = if is_moving { 6.0 } else { 9.0 } * time.delta_secs();
             let sep_vec = separation * effective_strength * time.delta_secs();
-            let sep_len = sep_vec.length();
-            if sep_len > max_sep {
-                transform.translation += sep_vec * (max_sep / sep_len);
+            let applied_sep = if sep_vec.length() > max_sep {
+                sep_vec.clamp_length_max(max_sep)
             } else {
-                transform.translation += sep_vec;
+                sep_vec
+            };
+
+            let is_blocked = |pos: Vec3| -> bool {
+                if nav_grid
+                    .as_ref()
+                    .is_some_and(|grid| !grid.is_world_passable(pos.x, pos.z))
+                {
+                    return true;
+                }
+
+                let nearby_walls = wall_grid.query_radius(pos, 3.0);
+                if nearby_walls.iter().any(|(_wall_entity, wall_pos, wall_fp, _wall_faction)| {
+                    let a = Vec2::new(pos.x, pos.z);
+                    let b = Vec2::new(wall_pos.x, wall_pos.z);
+                    a.distance(b) < wall_fp + 0.6
+                }) {
+                    return true;
+                }
+
+                if nav_grid.is_none() {
+                    for (building_entity, building_tf, footprint) in &buildings {
+                        if my_target_building == Some(building_entity) {
+                            continue;
+                        }
+                        let a = Vec2::new(pos.x, pos.z);
+                        let b = Vec2::new(building_tf.translation.x, building_tf.translation.z);
+                        if a.distance(b) < footprint.0 + 0.8 {
+                            return true;
+                        }
+                    }
+                }
+
+                false
+            };
+
+            let candidate = transform.translation + applied_sep;
+            if !is_blocked(candidate) {
+                transform.translation = candidate;
+            } else {
+                let slide_x = transform.translation + Vec3::new(applied_sep.x, 0.0, 0.0);
+                let slide_z = transform.translation + Vec3::new(0.0, 0.0, applied_sep.z);
+                if applied_sep.x.abs() > 0.001 && !is_blocked(slide_x) {
+                    transform.translation = slide_x;
+                } else if applied_sep.z.abs() > 0.001 && !is_blocked(slide_z) {
+                    transform.translation = slide_z;
+                }
             }
         }
     }
@@ -346,6 +402,7 @@ fn move_units(
     teams: Res<TeamConfig>,
     wall_grid: Res<WallSpatialGrid>,
     floor_grid: Res<FloorGrid>,
+    nav_grid: Option<Res<NavGrid>>,
     net_role: Res<crate::multiplayer::NetRole>,
     active_player: Res<ActivePlayer>,
     mut query: Query<
@@ -518,6 +575,13 @@ fn move_units(
 
             // Wall collision check helper
             let is_blocked = |pos: Vec3| -> bool {
+                if nav_grid
+                    .as_ref()
+                    .is_some_and(|grid| !grid.is_world_passable(pos.x, pos.z))
+                {
+                    return true;
+                }
+
                 let nearby_walls = wall_grid.query_radius(pos, 3.0);
                 nearby_walls
                     .iter()

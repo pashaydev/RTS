@@ -3,7 +3,10 @@ use bevy::prelude::*;
 
 use crate::blueprints::{EntityKind, IsRanged};
 use crate::components::*;
+use crate::items::{ItemKind, SpawnItemPickup, UnitInventory};
+use crate::items::vfx::{ItemVfxTrigger, ItemVfxTriggerKind};
 use crate::multiplayer::NetRole;
+use crate::mobs::CampItemDrops;
 use crate::spatial::{SpatialHashGrid, WallSpatialGrid};
 
 use super::{slot_anchor, CombatBudgetState};
@@ -20,9 +23,11 @@ impl Plugin for CombatPlugin {
                 approach_attack_target,
                 start_attack_windups,
                 resolve_attack_windups,
+                emit_item_combat_vfx,
                 tick_attack_recovery,
                 explode_props,
                 handle_death,
+                emit_item_death_vfx,
                 tick_dying,
             )
                 .chain()
@@ -990,6 +995,7 @@ fn handle_death(
     mut commands: Commands,
     net_role: Res<NetRole>,
     active_player: Res<ActivePlayer>,
+    mut item_pickup_spawns: MessageWriter<SpawnItemPickup>,
     dead: Query<
         (
             Entity,
@@ -1001,6 +1007,7 @@ fn handle_death(
             Option<&UnitState>,
             Option<&Faction>,
             Option<&CampReward>,
+            Option<&CampItemDrops>,
         ),
         Without<Dying>,
     >,
@@ -1023,7 +1030,7 @@ fn handle_death(
     // On client: only detect death for local player's entities (remote deaths come via EntityDespawn)
     let dead_list: Vec<_> = dead
         .iter()
-        .filter(|(_, health, _, _, _, _, _, opt_faction, _)| {
+        .filter(|(_, health, _, _, _, _, _, opt_faction, _, _)| {
             if health.current > 0.0 {
                 return false;
             }
@@ -1045,6 +1052,7 @@ fn handle_death(
                 opt_unit_state,
                 opt_faction,
                 opt_reward,
+                opt_item_drops,
             )| {
                 (
                     entity,
@@ -1055,6 +1063,7 @@ fn handle_death(
                     opt_unit_state.copied(),
                     opt_faction.copied(),
                     opt_reward.cloned(),
+                    opt_item_drops.cloned(),
                 )
             },
         )
@@ -1069,10 +1078,29 @@ fn handle_death(
         opt_unit_state,
         opt_faction,
         opt_camp_reward,
+        opt_camp_item_drops,
     ) in &dead_list
     {
         // Grant camp reward resources to the killing faction (host only)
         if !is_client {
+            if let (Some(drop_table), Some(transform)) = (opt_camp_item_drops, opt_transform) {
+                for (idx, &item) in drop_table.items.iter().enumerate() {
+                    let angle = if drop_table.items.len() == 1 {
+                        0.0
+                    } else {
+                        idx as f32 / drop_table.items.len() as f32 * std::f32::consts::TAU
+                    };
+                    let radius = if drop_table.items.len() == 1 { 0.0 } else { 0.9 };
+                    item_pickup_spawns.write(SpawnItemPickup {
+                        item,
+                        position: transform.translation
+                            + Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius),
+                        owner: None,
+                        lifetime_secs: 90.0,
+                    });
+                }
+            }
+
             if let Some(reward) = opt_camp_reward {
                 // Find who was attacking this mob to determine the rewarded faction
                 let killer_faction = attackers_with_target
@@ -1300,6 +1328,158 @@ fn tick_damage_reservations(time: Res<Time>, mut query: Query<&mut ReservedIncom
             *ttl -= dt;
             *ttl > 0.0
         });
+    }
+}
+
+/// Emits item VFX triggers when units with equipped items land or receive melee hits.
+/// Runs after resolve_attack_windups — detects freshly inserted HitReaction components.
+fn emit_item_combat_vfx(
+    mut vfx_writer: MessageWriter<ItemVfxTrigger>,
+    // Units that just got hit (have HitReaction with freshly added timer)
+    hit_targets: Query<
+        (Entity, &Transform, &UnitInventory, &HitReaction),
+        Changed<HitReaction>,
+    >,
+    // Attackers with active lunge (just landed a hit)
+    hit_attackers: Query<
+        (Entity, &Transform, &UnitInventory, &AttackLunge, &AttackTarget),
+        Changed<AttackLunge>,
+    >,
+    target_transforms: Query<&Transform>,
+    target_healths: Query<&Health>,
+) {
+    // Defensive item triggers (target was hit)
+    for (_entity, transform, inventory, _reaction) in &hit_targets {
+        let pos = transform.translation;
+        for &item in &inventory.items {
+            match item {
+                ItemKind::PaddedVest => {
+                    vfx_writer.write(ItemVfxTrigger {
+                        owner: _entity,
+                        item,
+                        kind: ItemVfxTriggerKind::RangedHitAbsorbed { pos },
+                    });
+                }
+                ItemKind::BronzeCuirass => {
+                    vfx_writer.write(ItemVfxTrigger {
+                        owner: _entity,
+                        item,
+                        kind: ItemVfxTriggerKind::MeleeDeflect { pos },
+                    });
+                }
+                ItemKind::PlateCuirass => {
+                    vfx_writer.write(ItemVfxTrigger {
+                        owner: _entity,
+                        item,
+                        kind: ItemVfxTriggerKind::LethalPrevented { pos },
+                    });
+                }
+                ItemKind::CrusaderHelm => {
+                    vfx_writer.write(ItemVfxTrigger {
+                        owner: _entity,
+                        item,
+                        kind: ItemVfxTriggerKind::CCReduced { pos },
+                    });
+                }
+                ItemKind::KettleHelm => {
+                    vfx_writer.write(ItemVfxTrigger {
+                        owner: _entity,
+                        item,
+                        kind: ItemVfxTriggerKind::HeightDeflect { pos },
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Offensive item triggers (attacker landed a melee hit)
+    for (_entity, atk_tf, inventory, lunge, attack_target) in &hit_attackers {
+        let target_pos = target_transforms
+            .get(attack_target.0)
+            .map(|t| t.translation)
+            .unwrap_or(atk_tf.translation + lunge.direction * 1.5);
+
+        let target_hp_low = target_healths
+            .get(attack_target.0)
+            .map(|h| h.current / h.max < 0.3)
+            .unwrap_or(false);
+
+        for &item in &inventory.items {
+            match item {
+                ItemKind::ArmingSword => {
+                    vfx_writer.write(ItemVfxTrigger {
+                        owner: _entity,
+                        item,
+                        kind: ItemVfxTriggerKind::BleedProc {
+                            pos: target_pos,
+                            direction: lunge.direction,
+                        },
+                    });
+                }
+                ItemKind::VikingBlade if target_hp_low => {
+                    vfx_writer.write(ItemVfxTrigger {
+                        owner: _entity,
+                        item,
+                        kind: ItemVfxTriggerKind::ExecuteStrike { target_pos },
+                    });
+                }
+                ItemKind::BattleStaff => {
+                    vfx_writer.write(ItemVfxTrigger {
+                        owner: _entity,
+                        item,
+                        kind: ItemVfxTriggerKind::SplashImpact { pos: target_pos },
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Emits item VFX triggers when a unit with kill-rewarding items gets a kill.
+/// Runs after handle_death. Finds the killer by checking who was attacking the dying entity.
+fn emit_item_death_vfx(
+    mut vfx_writer: MessageWriter<ItemVfxTrigger>,
+    dying_q: Query<Entity, Added<Dying>>,
+    inventory_q: Query<(&Transform, &UnitInventory)>,
+    attacker_q: Query<(Entity, &AttackTarget)>,
+) {
+    for dead_entity in &dying_q {
+        // Find the killer: who was targeting this entity
+        let Some((killer_entity, _)) = attacker_q
+            .iter()
+            .find(|(_, at)| at.0 == dead_entity)
+        else {
+            continue;
+        };
+        let Ok((killer_tf, inventory)) = inventory_q.get(killer_entity) else {
+            continue;
+        };
+
+        for &item in &inventory.items {
+            match item {
+                ItemKind::VikingHelm => {
+                    vfx_writer.write(ItemVfxTrigger {
+                        owner: killer_entity,
+                        item,
+                        kind: ItemVfxTriggerKind::KillMoveBurst {
+                            pos: killer_tf.translation,
+                        },
+                    });
+                }
+                ItemKind::GoldenBand => {
+                    vfx_writer.write(ItemVfxTrigger {
+                        owner: killer_entity,
+                        item,
+                        kind: ItemVfxTriggerKind::EnergyRestored {
+                            pos: killer_tf.translation,
+                        },
+                    });
+                }
+                _ => {}
+            }
+        }
     }
 }
 

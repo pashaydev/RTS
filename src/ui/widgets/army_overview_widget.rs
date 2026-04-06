@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
-use super::core::fonts::UiFonts;
+use super::core::constants::*;
 use super::core::framework::{
-    find_widget_content, spawn_widget_frame, Widget, WidgetContent, WidgetId, WidgetRegistry,
+    find_widget_content, Widget, WidgetContent, WidgetId, WidgetRegistry,
 };
 use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
@@ -32,26 +32,7 @@ impl Plugin for ArmyOverviewWidgetPlugin {
     }
 }
 
-fn spawn_army_overview_widget(
-    mut commands: Commands,
-    registry: Res<WidgetRegistry>,
-    fonts: Res<UiFonts>,
-    theme: Res<Theme>,
-    root_q: Query<Entity, Added<MainHudRoot>>,
-) {
-    let Ok(hud_root) = root_q.single() else {
-        return;
-    };
-    spawn_widget_frame(
-        &mut commands,
-        hud_root,
-        WidgetId::ArmyOverview,
-        registry.slots.get(&WidgetId::ArmyOverview).unwrap(),
-        registry.is_visible(WidgetId::ArmyOverview),
-        &fonts,
-        &theme,
-    );
-}
+widget_spawn_system!(spawn_army_overview_widget, WidgetId::ArmyOverview);
 
 #[derive(Component)]
 pub struct ArmyOverviewContent;
@@ -75,16 +56,20 @@ struct UnitCount {
 }
 
 fn count_player_units(
-    units: &Query<(&EntityKind, &Faction, Option<&UnitState>), With<Unit>>,
+    units: &Query<
+        (&EntityKind, &Faction, Option<&UnitState>, Option<&BuildingAssignment>),
+        With<Unit>,
+    >,
     faction: Faction,
 ) -> Vec<UnitCount> {
     let mut counts: Vec<UnitCount> = Vec::new();
-    for (kind, unit_faction, unit_state) in units {
+    for (kind, unit_faction, unit_state, building_assignment) in units {
         if *unit_faction != faction {
             continue;
         }
-        let is_idle_worker =
-            *kind == EntityKind::Worker && unit_state.is_some_and(|s| *s == UnitState::Idle);
+        let is_idle_worker = *kind == EntityKind::Worker
+            && unit_state.is_some_and(|s| *s == UnitState::Idle)
+            && building_assignment.is_none();
 
         if let Some(entry) = counts.iter_mut().find(|c| c.kind == *kind) {
             entry.total += 1;
@@ -166,7 +151,10 @@ fn update_army_overview(
     widget_q: Query<(&Widget, &Children)>,
     content_q: Query<Entity, With<WidgetContent>>,
     existing: Query<Entity, With<ArmyOverviewContent>>,
-    units: Query<(&EntityKind, &Faction, Option<&UnitState>), With<Unit>>,
+    units: Query<
+        (&EntityKind, &Faction, Option<&UnitState>, Option<&BuildingAssignment>),
+        With<Unit>,
+    >,
     training_queues: Query<(&Faction, &TrainingQueue), With<Building>>,
     buildings: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
     registry: Res<WidgetRegistry>,
@@ -183,7 +171,7 @@ fn update_army_overview(
     let total: u32 = counts.iter().map(|c| c.total).sum();
     let unit_cap = faction_unit_cap_stats(
         active_player.0,
-        units.iter().map(|(_, faction, _)| faction),
+        units.iter().map(|(_, faction, _, _)| faction),
         training_queues.iter(),
         buildings.iter(),
     );
@@ -231,8 +219,8 @@ fn update_army_overview(
                     align_items: AlignItems::Center,
                     column_gap: Val::Px(2.0),
                     padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
-                    border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    border: BORDER_1,
+                    border_radius: RADIUS_MD,
                     ..default()
                 },
                 BackgroundColor(theme.colors.bg_surface),
@@ -312,7 +300,7 @@ fn update_army_overview(
                     width: Val::Percent(100.0),
                     padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
                     margin: UiRect::top(Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(2.0)),
+                    border_radius: RADIUS_XS,
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.8, 0.6, 0.1, 0.25)),

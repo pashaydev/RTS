@@ -66,28 +66,36 @@ impl Plugin for UnitAiPlugin {
 /// and ejects workers whose building no longer exists.
 pub fn cleanup_assigned_workers_system(
     mut commands: Commands,
-    mut buildings: Query<&mut AssignedWorkers, With<Building>>,
-    workers: Query<Entity, With<Unit>>,
-    unit_states: Query<&UnitState, With<Unit>>,
+    mut buildings: Query<(Entity, &mut AssignedWorkers), With<Building>>,
+    workers: Query<(Entity, &UnitState, Option<&BuildingAssignment>), With<Unit>>,
 ) {
-    for mut aw in &mut buildings {
+    for (building_entity, mut aw) in &mut buildings {
         aw.workers.retain(|&worker| {
-            // Remove if worker entity no longer exists
-            if workers.get(worker).is_err() {
-                return false;
+            matches!(
+                workers.get(worker),
+                Ok((
+                    _,
+                    UnitState::AssignedGathering { building, .. },
+                    _
+                )) if *building == building_entity
+            )
+        });
+    }
+
+    // Canonicalize the worker-side assignment marker from the authoritative UnitState.
+    for (worker, state, assignment) in &workers {
+        match *state {
+            UnitState::AssignedGathering { building, .. } => {
+                if assignment.map(|a| a.0) != Some(building) {
+                    commands.entity(worker).insert(BuildingAssignment(building));
+                }
             }
-            // Remove if worker is no longer AssignedGathering (was unassigned externally)
-            if let Ok(state) = unit_states.get(worker) {
-                let still_assigned = matches!(state, UnitState::AssignedGathering { .. });
-                if !still_assigned {
-                    // Clean up the BuildingAssignment marker
+            _ => {
+                if assignment.is_some() {
                     commands.entity(worker).remove::<BuildingAssignment>();
                 }
-                still_assigned
-            } else {
-                false
             }
-        });
+        }
     }
 }
 
@@ -627,11 +635,12 @@ pub fn task_queue_advance_system(
                 };
 
                 if can_assign {
-                    *state = UnitState::AssignedGathering {
+                    crate::resources::assign_worker_to_processor(
+                        &mut commands,
+                        entity,
                         building,
-                        phase: AssignedPhase::SeekingNode,
-                    };
-                    commands.entity(entity).insert(BuildingAssignment(building));
+                        TaskSource::Manual,
+                    );
                     // Add to building's AssignedWorkers
                     if let Ok(mut aw) = assigned_workers_q.get_mut(building) {
                         if !aw.workers.contains(&entity) {

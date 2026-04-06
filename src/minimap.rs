@@ -8,6 +8,7 @@ use bevy::window::PrimaryWindow;
 
 use crate::components::*;
 use crate::fog::FogTweakSettings;
+use crate::ground::playable_half_map;
 use crate::ui::core::hud::MainHudRoot;
 
 const MINIMAP_TEX_SIZE: usize = 200;
@@ -21,8 +22,8 @@ struct MinimapTexture {
     handle: Handle<Image>,
     base_pixels: Vec<[u8; 4]>,
     scratch_pixels: Vec<[u8; 4]>,
-    map_size: f32,
-    half_map: f32,
+    view_size: f32,
+    view_half: f32,
     refresh_timer: Timer,
 }
 
@@ -79,15 +80,15 @@ fn biome_color(biome: Biome) -> [u8; 4] {
     }
 }
 
-fn world_to_minimap(wx: f32, wz: f32, map_size: f32, half_map: f32) -> (usize, usize) {
-    let px = ((wx + half_map) / map_size * MINIMAP_TEX_SIZE as f32) as usize;
-    let py = ((wz + half_map) / map_size * MINIMAP_TEX_SIZE as f32) as usize;
+fn world_to_minimap(wx: f32, wz: f32, view_size: f32, view_half: f32) -> (usize, usize) {
+    let px = ((wx + view_half) / view_size * MINIMAP_TEX_SIZE as f32) as usize;
+    let py = ((wz + view_half) / view_size * MINIMAP_TEX_SIZE as f32) as usize;
     (px.min(MINIMAP_TEX_SIZE - 1), py.min(MINIMAP_TEX_SIZE - 1))
 }
 
-fn minimap_to_world(px: f32, py: f32, map_size: f32, half_map: f32) -> (f32, f32) {
-    let wx = (px / MINIMAP_TEX_SIZE as f32) * map_size - half_map;
-    let wz = (py / MINIMAP_TEX_SIZE as f32) * map_size - half_map;
+fn minimap_to_world(px: f32, py: f32, view_size: f32, view_half: f32) -> (f32, f32) {
+    let wx = (px / MINIMAP_TEX_SIZE as f32) * view_size - view_half;
+    let wz = (py / MINIMAP_TEX_SIZE as f32) * view_size - view_half;
     (wx, wz)
 }
 
@@ -156,14 +157,15 @@ fn setup_minimap(
         return;
     }
 
-    let map_size = biome_map.map_size;
-    let half_map = map_size * 0.5;
+    let view_half = playable_half_map(biome_map.map_size);
+    let view_size = view_half * 2.0;
 
     // Pre-compute biome base pixels
     let mut base_pixels = vec![[0u8; 4]; MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE];
     for py in 0..MINIMAP_TEX_SIZE {
         for px in 0..MINIMAP_TEX_SIZE {
-            let (wx, wz) = minimap_to_world(px as f32 + 0.5, py as f32 + 0.5, map_size, half_map);
+            let (wx, wz) =
+                minimap_to_world(px as f32 + 0.5, py as f32 + 0.5, view_size, view_half);
             let biome = biome_map.get_biome(wx, wz);
             base_pixels[py * MINIMAP_TEX_SIZE + px] = biome_color(biome);
         }
@@ -189,8 +191,8 @@ fn setup_minimap(
         handle: handle.clone(),
         base_pixels,
         scratch_pixels: vec![[0u8; 4]; MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE],
-        map_size,
-        half_map,
+        view_size,
+        view_half,
         refresh_timer: Timer::from_seconds(1.0 / MINIMAP_REFRESH_HZ, TimerMode::Repeating),
     });
 
@@ -266,8 +268,8 @@ fn update_minimap_texture(
     }
 
     let handle = minimap_tex.handle.clone();
-    let map_size = minimap_tex.map_size;
-    let half_map = minimap_tex.half_map;
+    let view_size = minimap_tex.view_size;
+    let view_half = minimap_tex.view_half;
 
     let Some(image) = images.get_mut(&handle) else {
         warn_once!("Minimap: image handle not found in assets");
@@ -299,7 +301,12 @@ fn update_minimap_texture(
                 for py in 0..MINIMAP_TEX_SIZE {
                     for px in 0..MINIMAP_TEX_SIZE {
                         let (wx, wz) =
-                            minimap_to_world(px as f32 + 0.5, py as f32 + 0.5, map_size, half_map);
+                            minimap_to_world(
+                                px as f32 + 0.5,
+                                py as f32 + 0.5,
+                                view_size,
+                                view_half,
+                            );
                         let ix = ((wx + fog.half_map) / fog.step).round() as usize;
                         let iz = ((wz + fog.half_map) / fog.step).round() as usize;
                         let fog_idx = if ix < fog.grid_size && iz < fog.grid_size {
@@ -390,7 +397,7 @@ fn update_minimap_texture(
                 }
             }
         }
-        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, map_size, half_map);
+        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, view_size, view_half);
         draw_dot(buf, px, py, 1, [255, 220, 50, 255]);
     }
 
@@ -403,7 +410,7 @@ fn update_minimap_texture(
                 }
             }
         }
-        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, map_size, half_map);
+        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, view_size, view_half);
         draw_dot(buf, px, py, 1, [220, 40, 40, 255]);
     }
 
@@ -423,7 +430,7 @@ fn update_minimap_texture(
             Faction::Player4 => [50, 200, 80, 255],
             Faction::Neutral => [220, 40, 40, 255],
         };
-        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, map_size, half_map);
+        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, view_size, view_half);
         draw_dot(buf, px, py, 2, color);
     }
 
@@ -443,7 +450,7 @@ fn update_minimap_texture(
             Faction::Player4 => [50, 255, 80, 255],
             Faction::Neutral => [220, 40, 40, 255],
         };
-        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, map_size, half_map);
+        let (px, py) = world_to_minimap(tf.translation.x, tf.translation.z, view_size, view_half);
         draw_dot(buf, px, py, 1, color);
     }
 
@@ -466,7 +473,7 @@ fn update_minimap_texture(
                         let t = -ray.origin.y / ray.direction.y;
                         if t > 0.0 {
                             let hit = ray.origin + ray.direction * t;
-                            let (px, py) = world_to_minimap(hit.x, hit.z, map_size, half_map);
+                            let (px, py) = world_to_minimap(hit.x, hit.z, view_size, view_half);
                             minimap_corners.push((px as i32, py as i32));
                         }
                     }
@@ -523,8 +530,8 @@ fn handle_minimap_click(
         let (wx, wz) = minimap_to_world(
             uv_x * MINIMAP_TEX_SIZE as f32,
             uv_y * MINIMAP_TEX_SIZE as f32,
-            minimap_tex.map_size,
-            minimap_tex.half_map,
+            minimap_tex.view_size,
+            minimap_tex.view_half,
         );
 
         if let Ok(mut cam) = camera_q.single_mut() {

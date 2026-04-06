@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::blueprints::EntityKind;
+use crate::tree_occlusion_material::TreeOcclusionMaterial;
 
 // ── Map Seed ──
 
@@ -1394,13 +1395,95 @@ pub struct GrassChunk {
 #[derive(Resource, Default)]
 pub struct GrassChunkMap(pub std::collections::HashMap<(i32, i32), Entity>);
 
-#[derive(Resource)]
-pub struct GrassGltfHandle(pub Handle<bevy::gltf::Gltf>);
-
 #[derive(Resource, Clone)]
 pub struct GrassInstanceAssets {
     pub mesh: Handle<Mesh>,
-    pub material: Handle<StandardMaterial>,
+    pub material: Handle<crate::grass_material::GrassMaterial>,
+}
+
+#[derive(Resource, Clone, Debug, PartialEq)]
+pub struct GrassDebugSettings {
+    pub enabled: bool,
+    pub spacing: f32,
+    pub row_step_factor: f32,
+    pub jitter: f32,
+    pub density_threshold: f32,
+    pub grassland_weight: f32,
+    pub wetland_weight: f32,
+    pub forest_weight: f32,
+    pub scale_min: f32,
+    pub scale_max: f32,
+    pub lean_strength: f32,
+}
+
+impl Default for GrassDebugSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            spacing: 0.58,
+            row_step_factor: 0.86,
+            jitter: 0.58 * 0.38,
+            density_threshold: 0.22,
+            grassland_weight: 1.0,
+            wetland_weight: 0.45,
+            forest_weight: 0.18,
+            scale_min: 0.80,
+            scale_max: 1.25,
+            lean_strength: 1.0,
+        }
+    }
+}
+
+#[derive(Resource, Debug)]
+pub struct GrassRebuildState {
+    pub dirty: bool,
+    pub chunk_count: usize,
+    pub instance_count: u32,
+}
+
+impl Default for GrassRebuildState {
+    fn default() -> Self {
+        Self {
+            dirty: true,
+            chunk_count: 0,
+            instance_count: 0,
+        }
+    }
+}
+
+#[derive(Resource, Clone, Debug)]
+pub struct GrassRenderSettings {
+    pub base_color: Vec4,
+    pub tip_color: Vec4,
+    pub wind_strength: f32,
+    pub wind_speed: f32,
+    pub wind_direction: Vec4,
+    pub random_lean: f32,
+    pub blade_width: f32,
+    pub blade_height: f32,
+    pub width_thicken: f32,
+    pub normal_up_bias: f32,
+    pub normal_blend_start: f32,
+    pub normal_blend_end: f32,
+}
+
+impl Default for GrassRenderSettings {
+    fn default() -> Self {
+        Self {
+            base_color: Vec4::new(0.12, 0.28, 0.04, 1.0),
+            tip_color: Vec4::new(0.45, 0.65, 0.15, 1.0),
+            wind_strength: 0.08,
+            wind_speed: 1.2,
+            wind_direction: Vec4::new(1.0, 0.0, 0.6, 0.0),
+            random_lean: 0.35,
+            blade_width: 0.06,
+            blade_height: 0.5,
+            width_thicken: 0.6,
+            normal_up_bias: 0.4,
+            normal_blend_start: 40.0,
+            normal_blend_end: 120.0,
+        }
+    }
 }
 
 // ── Decoration chunk instancing ──
@@ -2108,6 +2191,7 @@ pub enum AllyNotifyKind {
     Attacking,
     ReadyToAttack,
     EnemySpotted,
+    ItemPickupFail,
 }
 
 impl AllyNotifyKind {
@@ -2116,6 +2200,7 @@ impl AllyNotifyKind {
             Self::UnderAttack => Color::srgb(1.0, 0.6, 0.2),
             Self::Attacking | Self::ReadyToAttack => Color::srgb(0.3, 0.8, 1.0),
             Self::EnemySpotted => Color::srgb(0.9, 0.9, 0.3),
+            Self::ItemPickupFail => Color::srgb(0.9, 0.55, 0.55),
         }
     }
 }
@@ -2135,9 +2220,13 @@ impl AllyNotifications {
         world_pos: Option<Vec3>,
         game_time: f32,
     ) {
-        // Throttle: max 1 per kind per 10s
+        // Throttle: max 1 per kind per N seconds (shorter for item feedback)
+        let throttle_secs = match kind {
+            AllyNotifyKind::ItemPickupFail => 2.0,
+            _ => 10.0,
+        };
         if let Some(&last) = self.last_per_kind.get(&kind) {
-            if game_time - last < 10.0 {
+            if game_time - last < throttle_secs {
                 return;
             }
         }
@@ -2990,7 +3079,7 @@ pub struct TreeAlphaFixed;
 /// Deduplicated handles to tree leaf materials (those with a base_color_texture).
 /// Used by the dynamic alpha cutoff system to thin canopies at distance.
 #[derive(Resource, Default)]
-pub struct TreeLeafMaterials(pub Vec<Handle<StandardMaterial>>);
+pub struct TreeLeafMaterials(pub Vec<Handle<TreeOcclusionMaterial>>);
 
 #[derive(Resource)]
 pub struct TreeGrowthConfig {
@@ -3644,10 +3733,7 @@ pub struct CancelUnitTaskButton {
 }
 
 #[derive(Component)]
-pub struct AttackMoveButton;
-
-#[derive(Component)]
-pub struct PatrolButton;
+pub struct CommandModeButton(pub CommandMode);
 
 #[derive(Component)]
 pub struct HoldPositionButton;

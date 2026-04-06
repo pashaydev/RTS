@@ -49,6 +49,7 @@ pub enum ItemKind {
     WarBow,
 }
 
+
 impl ItemKind {
     pub const ALL: &'static [Self] = &[
         Self::PaddedVest,
@@ -132,6 +133,7 @@ impl ItemKind {
             Self::WarBow => "Attack-move shots apply a slow.",
         }
     }
+
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
@@ -190,6 +192,11 @@ pub struct ItemPickup {
     pub expires_at: f32,
 }
 
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PendingItemPickup {
+    pub pickup: Entity,
+}
+
 #[derive(Component, Clone, Debug)]
 pub struct ItemPickupLabel {
     pub name: String,
@@ -219,6 +226,7 @@ pub struct PickupBob {
     pub base_y: f32,
     pub phase: f32,
 }
+
 
 pub fn inferred_inventory_capacity(kind: EntityKind) -> u8 {
     match kind {

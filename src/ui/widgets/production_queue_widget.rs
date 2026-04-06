@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
-use super::core::fonts::UiFonts;
-use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::constants::*;
+use super::core::framework::WidgetId;
 use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
 use crate::combat::clear_combat_intent;
@@ -33,26 +33,7 @@ impl Plugin for ProductionQueueWidgetPlugin {
     }
 }
 
-fn spawn_production_queue_widget(
-    mut commands: Commands,
-    registry: Res<WidgetRegistry>,
-    fonts: Res<UiFonts>,
-    theme: Res<Theme>,
-    root_q: Query<Entity, Added<MainHudRoot>>,
-) {
-    let Ok(hud_root) = root_q.single() else {
-        return;
-    };
-    spawn_widget_frame(
-        &mut commands,
-        hud_root,
-        WidgetId::ProductionQueue,
-        registry.slots.get(&WidgetId::ProductionQueue).unwrap(),
-        registry.is_visible(WidgetId::ProductionQueue),
-        &fonts,
-        &theme,
-    );
-}
+widget_spawn_system!(spawn_production_queue_widget, WidgetId::ProductionQueue);
 
 #[derive(Component)]
 pub struct QueuePanelItem;
@@ -477,7 +458,7 @@ fn spawn_focus_row(
                 row_gap: Val::Px(4.0),
                 padding: UiRect::all(Val::Px(6.0)),
                 margin: UiRect::top(Val::Px(4.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+                border_radius: RADIUS_LG,
                 ..default()
             },
             BackgroundColor(theme.colors.bg_surface),
@@ -612,7 +593,7 @@ fn spawn_command_line(
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    border_radius: RADIUS_MD,
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.75, 0.22, 0.22, 0.12)),
@@ -707,7 +688,7 @@ fn spawn_building_queue_card(
                 Node {
                     width: Val::Px(72.0),
                     height: Val::Px(5.0),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    border_radius: RADIUS_SM,
                     ..default()
                 },
                 BackgroundColor(theme.colors.hp_bar_bg),
@@ -723,7 +704,7 @@ fn spawn_building_queue_card(
                                 .map_or(0.0, |timer| timer.fraction() * 100.0),
                         ),
                         height: Val::Percent(100.0),
-                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                        border_radius: RADIUS_SM,
                         ..default()
                     },
                     BackgroundColor(theme.colors.accent),
@@ -767,7 +748,7 @@ fn spawn_building_queue_card(
                         align_items: AlignItems::Center,
                         column_gap: Val::Px(4.0),
                         padding: UiRect::axes(Val::Px(5.0), Val::Px(3.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        border_radius: RADIUS_MD,
                         ..default()
                     },
                     BackgroundColor(theme.colors.bg_panel),

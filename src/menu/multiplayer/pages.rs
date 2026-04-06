@@ -58,6 +58,7 @@ pub(crate) fn spawn_multiplayer_page(
             MenuButton(MenuAction::HostGame),
             true,
             fonts,
+            None,
             theme,
         );
         commands.entity(container).add_child(host_btn);
@@ -69,6 +70,7 @@ pub(crate) fn spawn_multiplayer_page(
         MenuButton(MenuAction::JoinGame),
         false,
         fonts,
+        None,
         theme,
     );
     commands.entity(container).add_child(join_btn);
@@ -247,6 +249,7 @@ pub(crate) fn spawn_host_lobby_page(
         &["Small", "Medium", "Large"],
         map_idx,
         SelectorField::MapSize,
+        None,
         theme,
     );
 
@@ -262,6 +265,7 @@ pub(crate) fn spawn_host_lobby_page(
         &["Sparse", "Normal", "Dense"],
         res_idx,
         SelectorField::ResourceDensity,
+        None,
         theme,
     );
 
@@ -277,6 +281,7 @@ pub(crate) fn spawn_host_lobby_page(
         &day_labels,
         day_idx,
         SelectorField::DayCycle,
+        None,
         theme,
     );
 
@@ -292,6 +297,7 @@ pub(crate) fn spawn_host_lobby_page(
         &start_labels,
         start_idx,
         SelectorField::StartingRes,
+        None,
         theme,
     );
 
@@ -620,6 +626,7 @@ pub(crate) fn spawn_join_lobby_page(
             &["Any", "1", "2", "3", "4"],
             0,
             SelectorField::PreferredFaction,
+            None,
             theme,
         );
     }
@@ -659,6 +666,7 @@ pub(crate) fn spawn_join_lobby_page(
             MenuButton(MenuAction::ConnectToHost),
             true,
             fonts,
+            None,
             theme,
         );
         commands.entity(container).add_child(connect_btn);

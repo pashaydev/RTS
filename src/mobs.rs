@@ -9,6 +9,7 @@ use crate::combat::{
 };
 use crate::components::*;
 use crate::ground::{is_in_mountain_border, BorderSettings, HeightMap};
+use crate::items::ItemKind;
 use crate::model_assets::UnitModelAssets;
 
 pub struct MobsPlugin;
@@ -36,6 +37,11 @@ struct CampSpawn {
     center: Vec3,
     reward_kind: EntityKind,
     members: Vec<CampMemberSpawn>,
+}
+
+#[derive(Component, Clone)]
+pub struct CampItemDrops {
+    pub items: Vec<ItemKind>,
 }
 
 #[derive(Clone, Copy)]
@@ -605,6 +611,7 @@ fn spawn_mob_camps(
 
         // Determine camp reward based on mob tier
         let camp_reward = camp_reward_for_kind(camp.reward_kind);
+        let camp_item_drops = camp_item_drops_for_kind(&mut rng, camp.reward_kind);
 
         for (i, member) in camp.members.iter().enumerate() {
             let member_bp = registry.get(member.kind);
@@ -653,9 +660,14 @@ fn spawn_mob_camps(
             ));
 
             if member.boss {
-                entity_cmd.insert((Boss, camp_reward.clone(), CombatFxKind::Siege));
+                entity_cmd.insert((
+                    Boss,
+                    camp_reward.clone(),
+                    camp_item_drops.clone(),
+                    CombatFxKind::Siege,
+                ));
             } else if i == 0 && camp.members.iter().all(|m| !m.boss) {
-                entity_cmd.insert(camp_reward.clone());
+                entity_cmd.insert((camp_reward.clone(), camp_item_drops.clone()));
             }
         }
     }
@@ -679,6 +691,48 @@ fn camp_reward_for_kind(kind: EntityKind) -> CampReward {
         _ => ResourceCost::new(),
     };
     CampReward { resources }
+}
+
+fn camp_item_drops_for_kind(rng: &mut StdRng, kind: EntityKind) -> CampItemDrops {
+    use ItemKind::*;
+
+    let pool: &[ItemKind] = match kind {
+        EntityKind::Goblin => &[PaddedVest, KettleHelm, PlainBand, ArmingSword, BattleStaff, YewLongbow],
+        EntityKind::Skeleton | EntityKind::Orc => &[
+            BronzeCuirass,
+            CrusaderHelm,
+            WeddingBand,
+            GoldenBand,
+            VikingBlade,
+            MageCrozier,
+            WarBow,
+        ],
+        EntityKind::Demon => &[
+            PlateCuirass,
+            VikingHelm,
+            JewelRing,
+            TwinRings,
+            LinkedRings,
+            VikingBlade,
+            MageCrozier,
+            WarBow,
+        ],
+        _ => &[PlainBand],
+    };
+
+    let count = match rng.random_range(0..100) {
+        0..=1 => 3,
+        2..=11 => 2,
+        _ => 1,
+    };
+
+    let mut items = Vec::with_capacity(count);
+    for _ in 0..count {
+        let idx = rng.random_range(0..pool.len());
+        items.push(pool[idx]);
+    }
+
+    CampItemDrops { items }
 }
 
 fn mob_patrol(

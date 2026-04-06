@@ -4,6 +4,7 @@ use bevy::prelude::*;
 
 use crate::components::*;
 use crate::ground::WaterPlane;
+use crate::tree_occlusion_material::TreeOcclusionMaterial;
 
 /// System set for all culling systems. Fog-of-war ordering depends on this
 /// so that fog can override visibility after culling has finished.
@@ -265,7 +266,7 @@ fn hide_nearby_trees(
 fn update_tree_alpha_for_distance(
     zoom_level: Res<CameraZoomLevel>,
     leaf_mats: Res<TreeLeafMaterials>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut materials: ResMut<Assets<TreeOcclusionMaterial>>,
 ) {
     if !zoom_level.is_changed() {
         return;
@@ -277,7 +278,7 @@ fn update_tree_alpha_for_distance(
     };
     for handle in &leaf_mats.0 {
         if let Some(mat) = materials.get_mut(handle) {
-            mat.alpha_mode = AlphaMode::Mask(cutoff);
+            mat.base.alpha_mode = AlphaMode::Mask(cutoff);
         }
     }
 }

@@ -4,10 +4,15 @@ use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::audio::{PlaySfx, SfxKind};
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
+use crate::camera::InternalRenderTarget;
 use crate::components::*;
 use crate::fog::FogTweakSettings;
 use crate::ground::{is_in_mountain_border, BorderSettings, HeightMap};
 use crate::theme::{self, Theme};
+use crate::tree_occlusion_material::{
+    TreeOcclusionExtension, TreeOcclusionMaterial, TreeOcclusionMaterialCache,
+    TreeOcclusionUniform, TREE_OCCLUSION_MAX_UNITS,
+};
 use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
@@ -20,6 +25,9 @@ impl Plugin for ResourcesPlugin {
             .init_resource::<TreeLeafMaterials>()
             .init_resource::<CarriedResourceTotals>()
             .init_resource::<PendingCarriedDrains>()
+            .init_resource::<GrassDebugSettings>()
+            .init_resource::<GrassRebuildState>()
+            .init_resource::<GrassRenderSettings>()
             .add_systems(
                 Startup,
                 (create_resource_node_materials, create_carry_visual_assets),
@@ -64,6 +72,12 @@ impl Plugin for ResourcesPlugin {
             )
             .add_systems(
                 Update,
+                update_tree_occlusion_uniform
+                    .in_set(GameFlowSet::Presentation)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
                 fix_tree_alpha_mode
                     .in_set(GameFlowSet::Presentation)
                     .run_if(in_state(AppState::InGame)),
@@ -83,7 +97,7 @@ impl Plugin for ResourcesPlugin {
             )
             .add_systems(
                 Update,
-                spawn_dense_grass
+                rebuild_dense_grass
                     .in_set(GameFlowSet::Presentation)
                     .run_if(in_state(AppState::InGame))
                     .run_if(resource_exists::<GrassInstanceAssets>),
@@ -1079,6 +1093,7 @@ struct SourceMeshData {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
+    colors: Vec<[f32; 4]>,
     indices: Vec<u32>,
 }
 
@@ -1118,6 +1133,16 @@ impl SourceMeshData {
                 }
             })
             .unwrap_or_default();
+        let colors: Vec<[f32; 4]> = mesh
+            .attribute(Mesh::ATTRIBUTE_COLOR)
+            .and_then(|attr| {
+                if let bevy::mesh::VertexAttributeValues::Float32x4(v) = attr {
+                    Some(v.clone())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
         let indices: Vec<u32> = mesh
             .indices()
             .map(|idx| match idx {
@@ -1129,14 +1154,17 @@ impl SourceMeshData {
             positions,
             normals,
             uvs,
+            colors,
             indices,
         })
     }
 }
 
-/// Merge multiple instances of a source mesh into a single combined mesh.
-/// Each instance has (world_position, uniform_scale, y_rotation_radians).
-fn merge_instances_into_mesh(src: &SourceMeshData, instances: &[(Vec3, f32, f32)]) -> Mesh {
+fn merge_grass_instances_into_mesh(
+    src: &SourceMeshData,
+    instances: &[(Vec3, f32, f32)],
+    _lean_strength: f32,
+) -> Mesh {
     let verts_per = src.positions.len();
     let indices_per = src.indices.len();
     let total_verts = verts_per * instances.len();
@@ -1144,31 +1172,26 @@ fn merge_instances_into_mesh(src: &SourceMeshData, instances: &[(Vec3, f32, f32)
 
     let mut positions = Vec::with_capacity(total_verts);
     let mut normals = Vec::with_capacity(total_verts);
-    let mut uvs = Vec::with_capacity(total_indices);
+    let mut uvs = Vec::with_capacity(total_verts);
+    let mut colors = Vec::with_capacity(total_verts);
     let mut indices = Vec::with_capacity(total_indices);
 
     for (i, (pos, scale, y_rot)) in instances.iter().enumerate() {
-        let rot = Quat::from_rotation_y(*y_rot);
         let base_idx = (i * verts_per) as u32;
 
+        // All vertices store the blade base position — shader reconstructs geometry
         for vi in 0..verts_per {
-            let sp = Vec3::from(src.positions[vi]) * *scale;
-            let transformed = rot * sp + *pos;
-            positions.push([transformed.x, transformed.y, transformed.z]);
-
-            if vi < src.normals.len() {
-                let sn = Vec3::from(src.normals[vi]);
-                let tn = rot * sn;
-                normals.push([tn.x, tn.y, tn.z]);
-            } else {
-                normals.push([0.0, 1.0, 0.0]);
-            }
+            positions.push([pos.x, pos.y, pos.z]);
+            normals.push([0.0, 1.0, 0.0]);
 
             if vi < src.uvs.len() {
                 uvs.push(src.uvs[vi]);
             } else {
                 uvs.push([0.0, 0.0]);
             }
+
+            // Pack per-blade data: [y_rot, scale, 0, 0]
+            colors.push([*y_rot, *scale, 0.0, 0.0]);
         }
 
         for &idx in &src.indices {
@@ -1180,26 +1203,161 @@ fn merge_instances_into_mesh(src: &SourceMeshData, instances: &[(Vec3, f32, f32)
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
     mesh.insert_indices(bevy::mesh::Indices::U32(indices));
     mesh
 }
 
+fn strip_world_space_triangles_in_radius(mesh: &mut Mesh, cx: f32, cz: f32, radius_sq: f32) -> bool {
+    let positions: Vec<[f32; 3]> = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
+        Some(bevy::mesh::VertexAttributeValues::Float32x3(v)) => v.clone(),
+        _ => return false,
+    };
+
+    let old_indices: Vec<u32> = match mesh.indices() {
+        Some(bevy::mesh::Indices::U32(v)) => v.clone(),
+        _ => return false,
+    };
+
+    if old_indices.len() % 3 != 0 {
+        return false;
+    }
+
+    let mut new_indices = Vec::with_capacity(old_indices.len());
+    for tri in old_indices.chunks_exact(3) {
+        let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+        if i0 >= positions.len() || i1 >= positions.len() || i2 >= positions.len() {
+            new_indices.extend_from_slice(tri);
+            continue;
+        }
+        let tx = (positions[i0][0] + positions[i1][0] + positions[i2][0]) / 3.0;
+        let tz = (positions[i0][2] + positions[i1][2] + positions[i2][2]) / 3.0;
+        let dx = tx - cx;
+        let dz = tz - cz;
+        if dx * dx + dz * dz > radius_sq {
+            new_indices.extend_from_slice(tri);
+        }
+    }
+
+    if new_indices.is_empty() {
+        return true;
+    }
+
+    mesh.insert_indices(bevy::mesh::Indices::U32(new_indices));
+    false
+}
+
 // ── Dense Grass ──
 
-fn spawn_dense_grass(
+fn grass_biome_weight(biome: Biome, settings: &GrassDebugSettings) -> f32 {
+    match biome {
+        Biome::Grassland => settings.grassland_weight,
+        Biome::Wetland => settings.wetland_weight,
+        Biome::Forest => settings.forest_weight,
+        _ => 0.0,
+    }
+}
+
+fn terrain_slope_factor(height_map: &HeightMap, x: f32, z: f32) -> f32 {
+    let eps = (height_map.step * 1.25).clamp(1.0, 2.5);
+    let h_l = height_map.sample(x - eps, z);
+    let h_r = height_map.sample(x + eps, z);
+    let h_d = height_map.sample(x, z - eps);
+    let h_u = height_map.sample(x, z + eps);
+    let normal = Vec3::new(h_l - h_r, 2.0 * eps, h_d - h_u).normalize_or_zero();
+    ((normal.y - 0.72) / 0.28).clamp(0.0, 1.0)
+}
+
+fn shoreline_grass_factor(biome_map: &BiomeMap, x: f32, z: f32) -> f32 {
+    let near_water = [
+        biome_map.get_biome(x + 3.5, z),
+        biome_map.get_biome(x - 3.5, z),
+        biome_map.get_biome(x, z + 3.5),
+        biome_map.get_biome(x, z - 3.5),
+    ]
+    .into_iter()
+    .any(|biome| matches!(biome, Biome::Water | Biome::Beach));
+
+    if near_water { 0.3 } else { 1.0 }
+}
+
+fn sample_grass_density(
+    biome_map: &BiomeMap,
+    height_map: &HeightMap,
+    macro_noise: &Fbm<Perlin>,
+    micro_noise: &Fbm<Perlin>,
+    settings: &GrassDebugSettings,
+    x: f32,
+    z: f32,
+) -> f32 {
+    let biome = biome_map.get_biome(x, z);
+    let biome_weight = grass_biome_weight(biome, settings);
+    if biome_weight <= 0.0 {
+        return 0.0;
+    }
+
+    let macro_patch =
+        (macro_noise.get([x as f64 * 0.018, z as f64 * 0.018]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
+    let micro_patch = (micro_noise.get([x as f64 * 0.075 + 83.0, z as f64 * 0.075 - 41.0]) as f32
+        * 0.5
+        + 0.5)
+        .clamp(0.0, 1.0);
+    let patchiness = (macro_patch * 0.75 + micro_patch * 0.25).clamp(0.0, 1.0);
+    let slope = terrain_slope_factor(height_map, x, z);
+    let shoreline = shoreline_grass_factor(biome_map, x, z);
+
+    biome_weight * patchiness * slope * shoreline
+}
+
+fn sample_grass_offset(
+    offset_noise: &Fbm<Perlin>,
+    x: f32,
+    z: f32,
+    jitter: f32,
+) -> (f32, f32) {
+    let ox = offset_noise.get([x as f64 * 0.23 + 17.0, z as f64 * 0.23 - 23.0]) as f32;
+    let oz = offset_noise.get([x as f64 * 0.23 - 51.0, z as f64 * 0.23 + 71.0]) as f32;
+    (ox.clamp(-1.0, 1.0) * jitter, oz.clamp(-1.0, 1.0) * jitter)
+}
+
+fn sample_grass_rotation(rotation_noise: &Fbm<Perlin>, x: f32, z: f32) -> f32 {
+    let n = (rotation_noise.get([x as f64 * 0.17 - 11.0, z as f64 * 0.17 + 29.0]) as f32
+        * 0.5
+        + 0.5)
+        .clamp(0.0, 1.0);
+    n * std::f32::consts::TAU
+}
+
+fn rebuild_dense_grass(
     mut commands: Commands,
     grass_assets: Res<GrassInstanceAssets>,
     biome_map: Res<BiomeMap>,
     height_map: Res<HeightMap>,
     config: Res<GameSetupConfig>,
     map_seed: Res<MapSeed>,
+    grass_settings: Res<GrassDebugSettings>,
+    mut grass_rebuild: ResMut<GrassRebuildState>,
+    buildings: Query<(&Transform, &BuildingFootprint), With<Building>>,
+    grass_chunks: Query<Entity, With<GrassChunk>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut has_run: Local<bool>,
 ) {
-    if *has_run {
+    if !grass_rebuild.dirty {
         return;
     }
-    *has_run = true;
+
+    for entity in &grass_chunks {
+        commands.entity(entity).despawn();
+    }
+
+    let mut chunk_map = GrassChunkMap::default();
+    grass_rebuild.chunk_count = 0;
+    grass_rebuild.instance_count = 0;
+
+    if !grass_settings.enabled {
+        commands.insert_resource(chunk_map);
+        grass_rebuild.dirty = false;
+        return;
+    }
 
     let Some(source_mesh) = meshes.get(&grass_assets.mesh) else {
         return;
@@ -1210,12 +1368,30 @@ fn spawn_dense_grass(
     };
 
     let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(5000));
-    let grass_noise = Fbm::<Perlin>::new((map_seed.0 >> 8) as u32).set_octaves(3);
-    let spacing = 3.0;
+    let macro_noise = Fbm::<Perlin>::new((map_seed.0 >> 8) as u32).set_octaves(3);
+    let micro_noise = Fbm::<Perlin>::new((map_seed.0 >> 28) as u32 ^ 0x5F37_59DF).set_octaves(2);
+    let offset_noise =
+        Fbm::<Perlin>::new((map_seed.0 >> 40) as u32 ^ 0x27D4_EB2D).set_octaves(2);
+    let rotation_noise =
+        Fbm::<Perlin>::new((map_seed.0 >> 18) as u32 ^ 0x85EB_CA6B).set_octaves(2);
+    let spacing = grass_settings.spacing;
     let half = height_map.half_map;
     let border = BorderSettings::from_map_size(height_map.map_size);
     let spawn_positions = config.spawn_positions(map_seed.0);
     let spawn_clear_radius = 30.0_f32;
+    let row_step = spacing * grass_settings.row_step_factor;
+    let jitter = grass_settings.jitter.min(spacing * 0.5);
+    let building_clear_areas: Vec<(f32, f32, f32, f32)> = buildings
+        .iter()
+        .map(|(transform, footprint)| {
+            (
+                transform.translation.x,
+                transform.translation.z,
+                footprint.0 + 2.0,
+                (footprint.0 + 2.0).powi(2),
+            )
+        })
+        .collect();
 
     // Collect grass instances into chunk buckets
     let inv_chunk = 1.0 / GRASS_CHUNK_SIZE;
@@ -1223,31 +1399,55 @@ fn spawn_dense_grass(
         std::collections::HashMap::new();
 
     let mut count = 0u32;
-    let mut x = -half + 1.5;
-    while x < half - 1.5 {
-        let mut z = -half + 1.5;
-        while z < half - 1.5 {
-            let biome = biome_map.get_biome(x, z);
-            if biome != Biome::Forest {
-                z += spacing;
+    let mut row_index = 0_i32;
+    let mut z = -half + row_step * 0.5;
+    while z < half - row_step * 0.5 {
+        let row_shift = if row_index.rem_euclid(2) == 0 {
+            0.0
+        } else {
+            spacing * 0.5
+        };
+        let mut x = -half + spacing * 0.5 + row_shift;
+        while x < half - spacing * 0.5 {
+            let base_density = sample_grass_density(
+                &biome_map,
+                &height_map,
+                &macro_noise,
+                &micro_noise,
+                &grass_settings,
+                x,
+                z,
+            );
+            if base_density < grass_settings.density_threshold {
+                x += spacing;
                 continue;
             }
 
-            let noise_val = grass_noise.get([x as f64 * 0.08, z as f64 * 0.08]) as f32;
-            if noise_val < -0.1 {
-                z += spacing;
-                continue;
-            }
-
-            let jx = x + rng.random_range(-1.5_f32..1.5);
-            let jz = z + rng.random_range(-1.5_f32..1.5);
+            let (off_x, off_z) = sample_grass_offset(&offset_noise, x, z, jitter);
+            let jx = x + off_x;
+            let jz = z + off_z;
             if is_in_mountain_border(jx, jz, half, border) {
-                z += spacing;
+                x += spacing;
                 continue;
             }
 
-            if biome_map.get_biome(jx, jz) != Biome::Forest {
-                z += spacing;
+            let density = sample_grass_density(
+                &biome_map,
+                &height_map,
+                &macro_noise,
+                &micro_noise,
+                &grass_settings,
+                jx,
+                jz,
+            );
+            if density < grass_settings.density_threshold {
+                x += spacing;
+                continue;
+            }
+
+            let biome = biome_map.get_biome(jx, jz);
+            if grass_biome_weight(biome, &grass_settings) <= 0.0 {
+                x += spacing;
                 continue;
             }
 
@@ -1257,13 +1457,26 @@ fn spawn_dense_grass(
                 (dx * dx + dz * dz).sqrt() < spawn_clear_radius
             });
             if too_close {
-                z += spacing;
+                x += spacing;
+                continue;
+            }
+
+            let inside_building_clear_area = building_clear_areas
+                .iter()
+                .any(|(bx, bz, _clear_radius, clear_r2)| {
+                    let dx = jx - *bx;
+                    let dz = jz - *bz;
+                    dx * dx + dz * dz < *clear_r2
+                });
+            if inside_building_clear_area {
+                x += spacing;
                 continue;
             }
 
             let y = terrain_translation(&height_map, jx, jz, 0.0).y;
-            let scale = rng.random_range(0.5_f32..1.2);
-            let y_rot = rng.random_range(0.0..std::f32::consts::TAU);
+            let scale = rng.random_range(grass_settings.scale_min..=grass_settings.scale_max)
+                * (0.88 + density * 0.16);
+            let y_rot = sample_grass_rotation(&rotation_noise, jx, jz);
 
             let cx = (jx * inv_chunk).floor() as i32;
             let cz = (jz * inv_chunk).floor() as i32;
@@ -1273,17 +1486,35 @@ fn spawn_dense_grass(
                 .push((Vec3::new(jx, y, jz), scale, y_rot));
             count += 1;
 
-            z += spacing;
+            x += spacing;
         }
-        x += spacing;
+        row_index += 1;
+        z += row_step;
     }
 
     // Build merged meshes per chunk using shared helper
-    let mut chunk_map = GrassChunkMap::default();
     let chunk_count = chunk_instances.len();
 
     for ((cx, cz), instances) in chunk_instances {
-        let mesh = merge_instances_into_mesh(&src, &instances);
+        let mut mesh = merge_grass_instances_into_mesh(&src, &instances, grass_settings.lean_strength);
+        let chunk_center_x = (cx as f32 + 0.5) * GRASS_CHUNK_SIZE;
+        let chunk_center_z = (cz as f32 + 0.5) * GRASS_CHUNK_SIZE;
+        let mut stripped_empty = false;
+        for (bx, bz, clear_radius, clear_r2) in &building_clear_areas {
+            let half_extent = GRASS_CHUNK_SIZE * 0.5 + *clear_radius;
+            if (chunk_center_x - *bx).abs() > half_extent || (chunk_center_z - *bz).abs() > half_extent
+            {
+                continue;
+            }
+            if strip_world_space_triangles_in_radius(&mut mesh, *bx, *bz, *clear_r2) {
+                stripped_empty = true;
+                break;
+            }
+        }
+        if stripped_empty {
+            continue;
+        }
+
         let entity = commands
             .spawn((
                 GameWorld,
@@ -1302,7 +1533,11 @@ fn spawn_dense_grass(
         chunk_map.0.insert((cx, cz), entity);
     }
 
+    let rebuilt_chunk_count = chunk_map.0.len();
     commands.insert_resource(chunk_map);
+    grass_rebuild.chunk_count = rebuilt_chunk_count;
+    grass_rebuild.instance_count = count;
+    grass_rebuild.dirty = false;
     info!(
         "Spawned {} grass instances merged into {} chunks",
         count, chunk_count
@@ -2889,6 +3124,61 @@ fn grow_trees_system(
 /// subsequent frames.
 const MAX_TREE_ALPHA_FIXES_PER_FRAME: usize = 8;
 
+fn update_tree_occlusion_uniform(
+    active_player: Res<ActivePlayer>,
+    render_target: Res<InternalRenderTarget>,
+    camera_q: Query<(&Camera, &GlobalTransform), With<CullingSourceCamera>>,
+    selected_units: Query<&Transform, (With<Unit>, With<Selected>, Without<Building>)>,
+    player_units: Query<(&Transform, &Faction), (With<Unit>, Without<Building>)>,
+    mut uniform: ResMut<TreeOcclusionUniform>,
+    tree_mat_cache: Res<TreeOcclusionMaterialCache>,
+    mut tree_materials: ResMut<Assets<TreeOcclusionMaterial>>,
+) {
+    let Ok((camera, cam_gt)) = camera_q.single() else {
+        return;
+    };
+    let cam_pos = cam_gt.translation();
+    let mut masks = [Vec4::ZERO; TREE_OCCLUSION_MAX_UNITS];
+
+    let mut picked: Vec<Vec3> = selected_units.iter().map(|tf| tf.translation).collect();
+    if picked.is_empty() {
+        let mut player_positions: Vec<Vec3> = player_units
+            .iter()
+            .filter_map(|(tf, faction)| (*faction == active_player.0).then_some(tf.translation))
+            .collect();
+
+        player_positions.sort_by(|a, b| {
+            a.distance_squared(cam_pos)
+                .total_cmp(&b.distance_squared(cam_pos))
+        });
+
+        picked = player_positions;
+    }
+
+    let viewport_size = render_target.size.as_vec2();
+    let mask_radius = viewport_size.y * 0.11;
+    let feather = viewport_size.y * 0.05;
+
+    let mut active_units = 0u32;
+    for pos in picked.into_iter().take(TREE_OCCLUSION_MAX_UNITS) {
+        let unit_pos = pos + Vec3::Y * 1.2;
+        let Ok(screen_pos) = camera.world_to_viewport(cam_gt, unit_pos) else {
+            continue;
+        };
+        masks[active_units as usize] = Vec4::new(screen_pos.x, screen_pos.y, mask_radius, feather);
+        active_units += 1;
+    }
+
+    uniform.0.screen_masks = masks;
+    uniform.0.active_units = active_units;
+
+    for handle in tree_mat_cache.handles.values() {
+        if let Some(material) = tree_materials.get_mut(handle) {
+            material.extension.settings = uniform.0.clone();
+        }
+    }
+}
+
 fn fix_tree_alpha_mode(
     mut commands: Commands,
     trees: Query<
@@ -2901,7 +3191,10 @@ fn fix_tree_alpha_mode(
     children_q: Query<&Children>,
     mesh_mat_q: Query<&MeshMaterial3d<StandardMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut tree_materials: ResMut<Assets<TreeOcclusionMaterial>>,
     mut leaf_mats: ResMut<TreeLeafMaterials>,
+    mut tree_mat_cache: ResMut<TreeOcclusionMaterialCache>,
+    tree_occlusion_uniform: Res<TreeOcclusionUniform>,
 ) {
     let mut processed = 0;
     for tree_entity in &trees {
@@ -2913,7 +3206,11 @@ fn fix_tree_alpha_mode(
             &children_q,
             &mesh_mat_q,
             &mut materials,
+            &mut tree_materials,
             &mut leaf_mats.0,
+            &mut tree_mat_cache,
+            &tree_occlusion_uniform.0,
+            &mut commands,
         );
         // Only mark as fixed when child meshes have actually been processed.
         // Scene loading is async — children may not exist yet on the first frame.
@@ -2929,7 +3226,11 @@ fn fix_alpha_recursive(
     children_q: &Query<&Children>,
     mesh_mat_q: &Query<&MeshMaterial3d<StandardMaterial>>,
     materials: &mut Assets<StandardMaterial>,
-    leaf_mats: &mut Vec<Handle<StandardMaterial>>,
+    tree_materials: &mut Assets<TreeOcclusionMaterial>,
+    leaf_mats: &mut Vec<Handle<TreeOcclusionMaterial>>,
+    tree_mat_cache: &mut TreeOcclusionMaterialCache,
+    tree_occlusion_uniform: &crate::tree_occlusion_material::TreeOcclusionSettings,
+    commands: &mut Commands,
 ) -> u32 {
     let mut count = 0;
     if let Ok(mat_handle) = mesh_mat_q.get(entity) {
@@ -2939,18 +3240,45 @@ fn fix_alpha_recursive(
                 mat.alpha_mode = AlphaMode::Mask(0.6);
             }
             mat.double_sided = true;
-            // Collect leaf material handles (those with alpha-tested textures)
-            if mat.base_color_texture.is_some() {
-                let handle = mat_handle.0.clone();
-                if !leaf_mats.iter().any(|h| h == &handle) {
-                    leaf_mats.push(handle);
-                }
+
+            let extended_handle = tree_mat_cache
+                .handles
+                .entry(mat_handle.id())
+                .or_insert_with(|| {
+                    tree_materials.add(TreeOcclusionMaterial {
+                        base: mat.clone(),
+                        extension: TreeOcclusionExtension {
+                            settings: tree_occlusion_uniform.clone(),
+                        },
+                    })
+                })
+                .clone();
+
+            commands
+                .entity(entity)
+                .remove::<MeshMaterial3d<StandardMaterial>>()
+                .insert(MeshMaterial3d(extended_handle.clone()));
+
+            if mat.base_color_texture.is_some()
+                && !leaf_mats.iter().any(|h| h == &extended_handle)
+            {
+                leaf_mats.push(extended_handle);
             }
         }
     }
     if let Ok(children) = children_q.get(entity) {
         for child in children.iter() {
-            count += fix_alpha_recursive(child, children_q, mesh_mat_q, materials, leaf_mats);
+            count += fix_alpha_recursive(
+                child,
+                children_q,
+                mesh_mat_q,
+                materials,
+                tree_materials,
+                leaf_mats,
+                tree_mat_cache,
+                tree_occlusion_uniform,
+                commands,
+            );
         }
     }
     count
@@ -3449,7 +3777,12 @@ fn auto_assign_workers_system(
 
         let needed = slots - assigned.workers.len();
         for (worker_entity, _) in candidates.into_iter().take(needed) {
-            assign_worker_to_processor(&mut commands, worker_entity, building_entity);
+            assign_worker_to_processor(
+                &mut commands,
+                worker_entity,
+                building_entity,
+                TaskSource::Auto,
+            );
             assigned.workers.push(worker_entity);
         }
     }
@@ -3457,14 +3790,19 @@ fn auto_assign_workers_system(
 
 // ── Worker assignment helpers ──
 
-pub fn assign_worker_to_processor(commands: &mut Commands, worker: Entity, building: Entity) {
+pub fn assign_worker_to_processor(
+    commands: &mut Commands,
+    worker: Entity,
+    building: Entity,
+    source: TaskSource,
+) {
     commands
         .entity(worker)
         .insert(UnitState::AssignedGathering {
             building,
             phase: AssignedPhase::SeekingNode,
         })
-        .insert(TaskSource::Manual)
+        .insert(source)
         .insert(BuildingAssignment(building))
         .remove::<MoveTarget>()
         .remove::<AttackTarget>();
@@ -3475,7 +3813,9 @@ pub fn unassign_worker_from_processor(commands: &mut Commands, worker: Entity) {
         .entity(worker)
         .insert(UnitState::Idle)
         .insert(TaskSource::Auto)
-        .remove::<BuildingAssignment>();
+        .remove::<BuildingAssignment>()
+        .remove::<MoveTarget>()
+        .remove::<AttackTarget>();
 }
 
 // processor_worker_loop_system removed — merged into processor_worker_visual_system

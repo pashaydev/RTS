@@ -20,24 +20,6 @@ fn tone_color(theme: &Theme, tone: UiTone) -> Color {
     }
 }
 
-#[allow(dead_code)]
-fn tone_border(tone: UiTone) -> Color {
-    match tone {
-        UiTone::Neutral => Color::srgba(0.35, 0.48, 0.65, 0.16),
-        UiTone::Accent => Color::srgba(0.58, 0.80, 1.0, 0.22),
-        UiTone::Destructive => Color::srgba(1.0, 0.58, 0.58, 0.22),
-    }
-}
-
-#[allow(dead_code)]
-fn tone_shadow(tone: UiTone, alpha: f32) -> Color {
-    match tone {
-        UiTone::Neutral => Color::srgba(0.0, 0.0, 0.0, alpha),
-        UiTone::Accent => Color::srgba(0.29, 0.62, 1.0, alpha),
-        UiTone::Destructive => Color::srgba(0.55, 0.18, 0.18, alpha),
-    }
-}
-
 pub fn filled_button_chrome(theme: &Theme, tone: UiTone) -> UiButtonChrome {
     let bg = tone_color(theme, tone);
     (
@@ -58,12 +40,6 @@ pub fn ghost_button_chrome(_theme: &Theme, tone: UiTone) -> UiButtonChrome {
         BackgroundColor(Color::NONE),
         BorderColor::all(Color::NONE),
     )
-}
-
-/// Shadow color for a button tone at the given opacity (used on hover/press).
-#[allow(dead_code)]
-pub fn tone_hover_shadow(tone: UiTone) -> Color {
-    tone_shadow(tone, if tone == UiTone::Neutral { 0.25 } else { 0.35 })
 }
 
 pub fn button_node(width: f32, height: f32) -> Node {

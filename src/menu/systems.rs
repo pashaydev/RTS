@@ -266,17 +266,23 @@ pub(crate) fn handle_menu_buttons(
     mut next_state: ResMut<NextState<AppState>>,
     mut page: ResMut<MenuPage>,
     mut config: ResMut<GameSetupConfig>,
-    graphics: Res<GraphicsSettings>,
+    mut graphics: ResMut<GraphicsSettings>,
+    mut audio_settings: ResMut<crate::audio::AudioSettings>,
     mut theme: ResMut<crate::theme::Theme>,
     mut exit: MessageWriter<AppExit>,
     mut commands: Commands,
     mut windows: Query<&mut Window>,
     host_state: Option<Res<HostNetState>>,
     client_state: Option<Res<ClientNetState>>,
-    db: Res<GameDatabase>,
-    profile: Res<ActiveProfile>,
-    mut widget_registry: ResMut<crate::ui::core::framework::WidgetRegistry>,
+    db_and_profile: (Res<GameDatabase>, Res<ActiveProfile>),
+    options_state: (
+        ResMut<crate::ui::core::framework::WidgetRegistry>,
+        Option<Res<super::OptionsSnapshot>>,
+        ResMut<super::ConfirmPopupState>,
+    ),
 ) {
+    let (db, profile) = db_and_profile;
+    let (mut widget_registry, snapshot, mut popup_state) = options_state;
     for event in click_events.read() {
         let Ok(btn) = buttons.get(event.entity) else {
             continue;
@@ -305,7 +311,34 @@ pub(crate) fn handle_menu_buttons(
                 if let Ok(mut window) = windows.single_mut() {
                     super::options::apply_graphics_settings(&graphics, &mut window);
                 }
+                // Update snapshot so Save button hides
+                commands.insert_resource(super::OptionsSnapshot {
+                    graphics: graphics.clone(),
+                    audio: audio_settings.clone(),
+                });
+            }
+            MenuAction::SaveAndLeave => {
+                theme.set_mode(graphics.theme_mode);
+                if let Ok(mut window) = windows.single_mut() {
+                    super::options::apply_graphics_settings(&graphics, &mut window);
+                }
+                popup_state.active = false;
+                commands.remove_resource::<super::OptionsSnapshot>();
                 *page = MenuPage::Title;
+            }
+            MenuAction::DiscardSettings => {
+                // Revert settings to snapshot
+                if let Some(ref snap) = snapshot {
+                    *graphics = snap.graphics.clone();
+                    *audio_settings = snap.audio.clone();
+                    theme.set_mode(snap.graphics.theme_mode);
+                }
+                popup_state.active = false;
+                commands.remove_resource::<super::OptionsSnapshot>();
+                *page = MenuPage::Title;
+            }
+            MenuAction::CancelPopup => {
+                popup_state.active = false;
             }
             MenuAction::Multiplayer => {
                 *page = MenuPage::Multiplayer;
@@ -864,13 +897,23 @@ pub(crate) fn update_selector_visuals(
             *bg = BackgroundColor(new_bg);
         }
 
-        commands
-            .entity(entity)
-            .insert(BorderColor::all(if should_be_selected {
-                Color::srgba(0.29, 0.62, 1.0, 0.3)
-            } else {
-                Color::NONE
-            }));
+        if should_be_selected {
+            commands.entity(entity).insert((
+                BorderColor::all(Color::srgba(0.29, 0.62, 1.0, 0.4)),
+                BoxShadow::new(
+                    Color::srgba(0.29, 0.62, 1.0, 0.25),
+                    Val::Px(0.0),
+                    Val::Px(0.0),
+                    Val::Px(0.0),
+                    Val::Px(4.0),
+                ),
+            ));
+        } else {
+            commands
+                .entity(entity)
+                .insert(BorderColor::all(Color::NONE));
+            commands.entity(entity).remove::<BoxShadow>();
+        }
 
         if let Some(children) = children {
             for child in children.iter() {
@@ -959,14 +1002,34 @@ pub(crate) fn menu_keyboard_nav(
     mut page: ResMut<MenuPage>,
     host_state: Option<Res<HostNetState>>,
     client_state: Option<Res<ClientNetState>>,
+    snapshot: Option<Res<super::OptionsSnapshot>>,
+    graphics: Res<GraphicsSettings>,
+    audio_settings: Res<crate::audio::AudioSettings>,
+    mut popup_state: ResMut<super::ConfirmPopupState>,
 ) {
     // Don't navigate if a text input is focused
     if text_focus.iter().next().is_some() {
         return;
     }
 
+    // Block all keyboard nav while popup is active
+    if popup_state.active {
+        return;
+    }
+
     // Escape → go back
     if keyboard.just_pressed(KeyCode::Escape) {
+        // On Options page, check for unsaved changes before leaving
+        if matches!(*page, MenuPage::Options) {
+            if let Some(ref snap) = snapshot {
+                let dirty = *graphics != snap.graphics || *audio_settings != snap.audio;
+                if dirty {
+                    popup_state.active = true;
+                    return;
+                }
+            }
+        }
+
         let new_page = match *page {
             MenuPage::NewGame | MenuPage::Options | MenuPage::Multiplayer => Some(MenuPage::Title),
             MenuPage::HostLobby => {
@@ -1046,6 +1109,10 @@ pub(crate) fn menu_selector_keyboard_nav(
     mut audio_settings: ResMut<crate::audio::AudioSettings>,
     menu_btns: Query<&MenuButton>,
     text_focus: Query<&TextInputFocused>,
+    mut nav: ResMut<MenuNavFocus>,
+    focusables: Query<(Entity, &NavFocusable)>,
+    focused_all: Query<Entity, With<NavFocused>>,
+    mut commands: Commands,
 ) {
     if text_focus.iter().next().is_some() {
         return;
@@ -1058,6 +1125,29 @@ pub(crate) fn menu_selector_keyboard_nav(
 
     if !left && !right && !confirm {
         return;
+    }
+
+    // Enter on a selector row → advance to next focusable row (confirm & move on)
+    if confirm && !left && !right {
+        for (entity, _) in &focused {
+            if menu_btns.get(entity).is_ok() {
+                continue; // Action buttons handled by menu_keyboard_nav
+            }
+            // This is a selector row — advance focus to next item
+            let mut items: Vec<(Entity, usize)> =
+                focusables.iter().map(|(e, nf)| (e, nf.0)).collect();
+            items.sort_by_key(|&(_, order)| order);
+            let count = items.len();
+            if count > 0 {
+                nav.index = (nav.index + 1) % count;
+                for e in &focused_all {
+                    commands.entity(e).remove::<NavFocused>();
+                }
+                let (next_entity, _) = items[nav.index];
+                commands.entity(next_entity).insert(NavFocused);
+            }
+            return;
+        }
     }
 
     for (entity, children) in &focused {
@@ -1133,7 +1223,7 @@ pub(crate) fn menu_selector_keyboard_nav(
             } else {
                 current - 1
             }
-        } else if right || confirm {
+        } else if right {
             (current + 1) % child_selectors.len()
         } else {
             continue;
@@ -1153,6 +1243,10 @@ pub(crate) fn menu_nav_focus_visuals(
     focused: Query<Entity, Added<NavFocused>>,
     all_focusable: Query<(Entity, Option<&MenuButton>), With<NavFocusable>>,
     nav_focused_q: Query<(Entity, Option<&MenuButton>), With<NavFocused>>,
+    children_q: Query<&Children>,
+    value_bgs: Query<Entity, With<ArrowSelectorValueBg>>,
+    mut bg_colors: Query<&mut BackgroundColor>,
+    mut border_colors_q: Query<&mut BorderColor>,
     mut commands: Commands,
     theme: Res<Theme>,
 ) {
@@ -1161,7 +1255,6 @@ pub(crate) fn menu_nav_focus_visuals(
     }
 
     // Style newly focused items — only add focus ring (border + shadow).
-    // Text colors are managed by update_selector_visuals / spawn, not focus state.
     for entity in &focused {
         commands.entity(entity).insert((
             BorderColor::all(theme.colors.accent),
@@ -1173,6 +1266,20 @@ pub(crate) fn menu_nav_focus_visuals(
                 Val::Px(10.0),
             ),
         ));
+
+        // Highlight ArrowSelectorValueBg children when row is focused
+        if let Ok(children) = children_q.get(entity) {
+            for child in children.iter() {
+                if value_bgs.get(child).is_ok() {
+                    if let Ok(mut bg) = bg_colors.get_mut(child) {
+                        bg.0 = Color::srgba(0.22, 0.50, 0.95, 0.25);
+                    }
+                    if let Ok(mut bc) = border_colors_q.get_mut(child) {
+                        *bc = BorderColor::all(Color::srgba(0.29, 0.62, 1.0, 0.5));
+                    }
+                }
+            }
+        }
     }
 
     // Reset unfocused items
@@ -1184,25 +1291,40 @@ pub(crate) fn menu_nav_focus_visuals(
             .entity(entity)
             .insert(BorderColor::all(Color::NONE));
         commands.entity(entity).remove::<BoxShadow>();
+
+        // Reset ArrowSelectorValueBg to default
+        if let Ok(children) = children_q.get(entity) {
+            for child in children.iter() {
+                if value_bgs.get(child).is_ok() {
+                    if let Ok(mut bg) = bg_colors.get_mut(child) {
+                        bg.0 = Color::srgba(0.18, 0.40, 0.85, 0.15);
+                    }
+                    if let Ok(mut bc) = border_colors_q.get_mut(child) {
+                        *bc = BorderColor::all(Color::srgba(0.29, 0.62, 1.0, 0.3));
+                    }
+                }
+            }
+        }
     }
 }
 
 /// Scrolls the menu panel to keep the keyboard-focused item visible.
+///
+/// Triggers on `Added<NavFocused>` so it runs the frame the marker actually appears
+/// (commands that insert `NavFocused` are deferred, so `nav.is_changed()` would fire
+/// one frame too early — before layout is available).
 pub(crate) fn scroll_to_focused(
-    nav: Res<MenuNavFocus>,
-    focusables: Query<&NavFocusable>,
-    mut panels: Query<(&mut ScrollPosition, &ComputedNode), With<ScrollablePanel>>,
+    focused_q: Query<(&ComputedNode, &GlobalTransform), Added<NavFocused>>,
+    mut panels: Query<
+        (&mut ScrollPosition, &ComputedNode, &GlobalTransform),
+        With<ScrollablePanel>,
+    >,
 ) {
-    if !nav.is_changed() {
+    let Ok((focused_node, focused_gt)) = focused_q.single() else {
         return;
-    }
+    };
 
-    let count = focusables.iter().count();
-    if count <= 1 {
-        return;
-    }
-
-    for (mut scroll_pos, panel_node) in &mut panels {
+    for (mut scroll_pos, panel_node, panel_gt) in &mut panels {
         let scale_inv = panel_node.inverse_scale_factor();
         let panel_height = panel_node.size().y * scale_inv;
         let content_height = panel_node.content_size().y * scale_inv;
@@ -1211,18 +1333,24 @@ pub(crate) fn scroll_to_focused(
             continue;
         }
 
-        // Estimate each item's position proportionally within the content
-        let item_height = content_height / count as f32;
-        let item_top = nav.index as f32 * item_height;
-        let item_bottom = item_top + item_height;
+        // GlobalTransform gives us screen-space positions. Compute focused item's
+        // offset relative to the panel's top edge, then convert to content-space
+        // by adding the current scroll offset.
+        let panel_top_y = panel_gt.translation().y;
+        let item_top_y = focused_gt.translation().y;
+        let item_height = focused_node.size().y * scale_inv;
+
+        let rel_top = item_top_y - panel_top_y;
+        let item_content_top = rel_top + scroll_pos.y;
+        let item_content_bottom = item_content_top + item_height;
 
         let visible_top = scroll_pos.y;
         let visible_bottom = scroll_pos.y + panel_height;
 
-        if item_top < visible_top {
-            scroll_pos.y = (item_top - 10.0).max(0.0);
-        } else if item_bottom > visible_bottom {
-            scroll_pos.y = (item_bottom - panel_height + 10.0).min(max_scroll);
+        if item_content_top < visible_top {
+            scroll_pos.y = (item_content_top - 10.0).max(0.0);
+        } else if item_content_bottom > visible_bottom {
+            scroll_pos.y = (item_content_bottom - panel_height + 10.0).min(max_scroll);
         }
     }
 }
@@ -1360,4 +1488,216 @@ pub(crate) fn sync_range_slider_visuals(
             }
         }
     }
+}
+
+// ── Options Dirty-State Tracking ──
+
+/// Captures a snapshot of current settings when entering the Options page.
+pub(crate) fn capture_options_snapshot(
+    page: Res<MenuPage>,
+    graphics: Res<GraphicsSettings>,
+    audio_settings: Res<crate::audio::AudioSettings>,
+    mut commands: Commands,
+    snapshot: Option<Res<super::OptionsSnapshot>>,
+) {
+    if !page.is_changed() {
+        return;
+    }
+    if matches!(*page, MenuPage::Options) {
+        // Only capture if we don't already have a snapshot (fresh entry)
+        if snapshot.is_none() {
+            commands.insert_resource(super::OptionsSnapshot {
+                graphics: graphics.clone(),
+                audio: audio_settings.clone(),
+            });
+        }
+    } else {
+        // Leaving Options page — clean up snapshot
+        if snapshot.is_some() {
+            commands.remove_resource::<super::OptionsSnapshot>();
+        }
+    }
+}
+
+/// Toggles Save button visibility based on whether settings have changed from snapshot.
+pub(crate) fn toggle_save_button_visibility(
+    page: Res<MenuPage>,
+    graphics: Res<GraphicsSettings>,
+    audio_settings: Res<crate::audio::AudioSettings>,
+    snapshot: Option<Res<super::OptionsSnapshot>>,
+    mut save_btns: Query<&mut Visibility, With<super::SaveSettingsButton>>,
+) {
+    if !matches!(*page, MenuPage::Options) {
+        return;
+    }
+    let dirty = if let Some(ref snap) = snapshot {
+        *graphics != snap.graphics || *audio_settings != snap.audio
+    } else {
+        false
+    };
+    for mut vis in &mut save_btns {
+        *vis = if dirty {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+}
+
+/// Spawns/despawns the unsaved-changes confirmation popup.
+pub(crate) fn manage_unsaved_changes_popup(
+    popup_state: Res<super::ConfirmPopupState>,
+    existing_popup: Query<Entity, With<super::UnsavedChangesPopup>>,
+    mut commands: Commands,
+    theme: Res<Theme>,
+    fonts: Res<UiFonts>,
+) {
+    if !popup_state.is_changed() {
+        return;
+    }
+
+    if popup_state.active {
+        // Don't spawn twice
+        if !existing_popup.is_empty() {
+            return;
+        }
+        spawn_unsaved_changes_popup(&mut commands, &theme, &fonts);
+    } else {
+        // Despawn popup
+        for entity in &existing_popup {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+fn spawn_unsaved_changes_popup(commands: &mut Commands, theme: &Theme, fonts: &UiFonts) {
+    use crate::ui::core::components as ui_components;
+    use crate::ui::core::fonts;
+
+    commands
+        .spawn((
+            super::UnsavedChangesPopup,
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+            GlobalZIndex(100),
+        ))
+        .with_children(|overlay| {
+            overlay
+                .spawn((
+                    Node {
+                        width: Val::Px(400.0),
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Center,
+                        padding: UiRect::all(Val::Px(24.0)),
+                        row_gap: Val::Px(16.0),
+                        border: UiRect::all(Val::Px(2.0)),
+                        border_radius: BorderRadius::all(Val::Px(12.0)),
+                        ..default()
+                    },
+                    BackgroundColor(theme.colors.bg_surface),
+                    BorderColor::all(theme.colors.accent),
+                    BoxShadow::new(
+                        Color::srgba(0.0, 0.0, 0.0, 0.5),
+                        Val::Px(0.0),
+                        Val::Px(4.0),
+                        Val::Px(0.0),
+                        Val::Px(20.0),
+                    ),
+                ))
+                .with_children(|card| {
+                    // Title
+                    card.spawn((
+                        Text::new("Unsaved Changes"),
+                        fonts::heading(fonts, theme.typography.heading),
+                        TextColor(Color::WHITE),
+                    ));
+
+                    // Description
+                    card.spawn((
+                        Text::new("You have unsaved changes.\nSave before leaving?"),
+                        TextFont {
+                            font: fonts.body.clone(),
+                            font_size: theme.typography.body,
+                            ..default()
+                        },
+                        TextColor(theme.colors.text_secondary),
+                        TextLayout::new_with_justify(Justify::Center),
+                    ));
+
+                    // Buttons row
+                    card.spawn(Node {
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
+                        justify_content: JustifyContent::Center,
+                        column_gap: Val::Px(8.0),
+                        margin: UiRect::top(Val::Px(8.0)),
+                        ..default()
+                    })
+                    .with_children(|row| {
+                        // Save & Leave
+                        row.spawn((
+                            MenuButton(MenuAction::SaveAndLeave),
+                            Button,
+                            ui_components::button_node(120.0, 40.0),
+                            ui_components::filled_button_chrome(
+                                theme,
+                                ui_components::UiTone::Accent,
+                            ),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new("SAVE"),
+                                fonts::heading(fonts, theme.typography.small),
+                                TextColor(Color::WHITE),
+                                Pickable::IGNORE,
+                            ));
+                        });
+
+                        // Discard
+                        row.spawn((
+                            MenuButton(MenuAction::DiscardSettings),
+                            Button,
+                            ui_components::button_node(120.0, 40.0),
+                            ui_components::filled_button_chrome(
+                                theme,
+                                ui_components::UiTone::Destructive,
+                            ),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new("DISCARD"),
+                                fonts::heading(fonts, theme.typography.small),
+                                TextColor(Color::WHITE),
+                                Pickable::IGNORE,
+                            ));
+                        });
+
+                        // Cancel
+                        row.spawn((
+                            MenuButton(MenuAction::CancelPopup),
+                            Button,
+                            ui_components::button_node(120.0, 40.0),
+                            ui_components::ghost_button_chrome(
+                                theme,
+                                ui_components::UiTone::Neutral,
+                            ),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
+                                Text::new("CANCEL"),
+                                fonts::heading(fonts, theme.typography.small),
+                                TextColor(theme.colors.text_secondary),
+                                Pickable::IGNORE,
+                            ));
+                        });
+                    });
+                });
+        });
 }

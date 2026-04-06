@@ -5,8 +5,12 @@ use std::hash::{Hash, Hasher};
 
 use crate::blueprints::EntityKind;
 use crate::components::{
-    AnimState, AttentionIconAssets, DecoGltfHandles, DecorationInstanceAssets, GrassGltfHandle,
-    GrassInstanceAssets, IconAssets, ModelAssets, TeamColor,
+    AnimState, AppState, AttentionIconAssets, DecoGltfHandles, DecorationInstanceAssets,
+    GrassInstanceAssets, GrassRenderSettings, IconAssets, ModelAssets, TeamColor,
+};
+use crate::grass_material::GrassMaterial;
+use crate::tree_occlusion_material::{
+    TreeOcclusionMaterial, TreeOcclusionMaterialCache, TreeOcclusionUniform,
 };
 
 pub struct ModelAssetsPlugin;
@@ -93,16 +97,21 @@ impl Plugin for ModelAssetsPlugin {
         app.insert_resource(team_colors);
         app.init_resource::<TeamColorMaterialCache>();
 
-        // Load grass GLTF for dense instanced grass
-        let grass_gltf: Handle<bevy::gltf::Gltf> =
-            asset_server.load(format!("{BASE_PATH}/Grass_2_D_Color1.gltf"));
-        app.insert_resource(GrassGltfHandle(grass_gltf));
-
-        app.add_systems(Startup, (load_model_assets, load_animation_assets))
+        app.init_resource::<TreeOcclusionMaterialCache>()
+            .init_resource::<TreeOcclusionUniform>()
+            .add_plugins((
+                bevy::pbr::MaterialPlugin::<GrassMaterial>::default(),
+                bevy::pbr::MaterialPlugin::<TreeOcclusionMaterial>::default(),
+            ))
+            .add_systems(Startup, (load_model_assets, load_animation_assets))
+            .add_systems(Startup, create_grass_instance_assets)
+            .add_systems(
+                Update,
+                update_grass_time.run_if(in_state(AppState::InGame)),
+            )
             .add_systems(
                 Update,
                 (
-                    extract_grass_instance_assets,
                     extract_decoration_instance_assets,
                     extract_ttp_animations,
                     apply_team_color_textures,
@@ -146,6 +155,70 @@ fn load_gltf_handles_from(
 
 const NEW_TREE_PATH: &str = "trees_compressed";
 const NEW_TREE_SCALE: f32 = 0.4;
+
+fn create_grass_instance_assets(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<GrassMaterial>>,
+) {
+    let mesh = meshes.add(build_low_poly_grass_mesh());
+    let material = materials.add(GrassMaterial {
+        settings: crate::grass_material::GrassSettings::default(),
+    });
+    commands.insert_resource(GrassInstanceAssets { mesh, material });
+}
+
+fn update_grass_time(
+    time: Res<Time>,
+    grass_assets: Option<Res<GrassInstanceAssets>>,
+    render_settings: Res<GrassRenderSettings>,
+    mut materials: ResMut<Assets<GrassMaterial>>,
+) {
+    if let Some(assets) = grass_assets {
+        if let Some(mat) = materials.get_mut(&assets.material) {
+            mat.settings.time = time.elapsed_secs();
+            mat.settings.base_color = render_settings.base_color;
+            mat.settings.tip_color = render_settings.tip_color;
+            mat.settings.wind_strength = render_settings.wind_strength;
+            mat.settings.wind_speed = render_settings.wind_speed;
+            mat.settings.wind_direction = render_settings.wind_direction;
+            mat.settings.random_lean = render_settings.random_lean;
+            mat.settings.blade_width = render_settings.blade_width;
+            mat.settings.blade_height = render_settings.blade_height;
+            mat.settings.width_thicken = render_settings.width_thicken;
+            mat.settings.normal_up_bias = render_settings.normal_up_bias;
+            mat.settings.normal_blend_start = render_settings.normal_blend_start;
+            mat.settings.normal_blend_end = render_settings.normal_blend_end;
+        }
+    }
+}
+
+fn build_low_poly_grass_mesh() -> Mesh {
+    use bevy::mesh::Indices;
+
+    // Single triangle blade — shader reconstructs full geometry from UVs + per-blade data
+    // V0: bottom-left, V1: bottom-right, V2: tip
+    let positions = vec![
+        [-0.03_f32, 0.0, 0.0], // bottom-left (root)
+        [0.03, 0.0, 0.0],      // bottom-right (root)
+        [0.0, 0.5, 0.0],       // tip
+    ];
+    let normals = vec![[0.0_f32, 1.0, 0.0]; 3]; // placeholder — shader computes real normals
+    let uvs = vec![
+        [0.0_f32, 0.0], // left root
+        [1.0, 0.0],     // right root
+        [0.5, 1.0],     // center tip
+    ];
+    let indices = vec![0_u32, 2, 1];
+
+    let mut mesh = Mesh::new(bevy::mesh::PrimitiveTopology::TriangleList, default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    // No ATTRIBUTE_COLOR — merge function packs per-blade data into colors instead
+    mesh.insert_indices(Indices::U32(indices));
+    mesh
+}
 
 fn load_model_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     let trees = load_scenes_from(
@@ -974,42 +1047,6 @@ fn load_team_color_textures(asset_server: &AssetServer) -> TeamColorTextures {
         unit_textures,
         building_textures,
     }
-}
-
-/// Waits for the grass GLTF to load, then extracts mesh + material handles
-/// and inserts `GrassInstanceAssets`. Removes itself after running once.
-fn extract_grass_instance_assets(
-    mut commands: Commands,
-    grass_handle: Option<Res<GrassGltfHandle>>,
-    gltf_assets: Res<Assets<bevy::gltf::Gltf>>,
-    gltf_meshes: Res<Assets<bevy::gltf::GltfMesh>>,
-    existing: Option<Res<GrassInstanceAssets>>,
-) {
-    // Already extracted
-    if existing.is_some() {
-        return;
-    }
-    let Some(handle) = grass_handle else { return };
-    let Some(gltf) = gltf_assets.get(&handle.0) else {
-        return;
-    };
-    let Some(gltf_mesh_handle) = gltf.meshes.first() else {
-        warn!("Grass GLTF has no meshes");
-        return;
-    };
-    let Some(gltf_mesh) = gltf_meshes.get(gltf_mesh_handle) else {
-        return;
-    };
-    let Some(primitive) = gltf_mesh.primitives.first() else {
-        warn!("Grass GLTF mesh has no primitives");
-        return;
-    };
-
-    commands.insert_resource(GrassInstanceAssets {
-        mesh: primitive.mesh.clone(),
-        material: primitive.material.clone().unwrap_or_default(),
-    });
-    info!("Extracted grass instance assets for dense rendering");
 }
 
 /// Extracts mesh + material from decoration GLTF handles for chunk instancing.

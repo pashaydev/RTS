@@ -1,6 +1,7 @@
 pub mod components;
 pub mod messages;
 pub mod registry;
+pub mod vfx;
 
 use bevy::math::primitives::Rectangle;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -9,7 +10,11 @@ use bevy::render::alpha::AlphaMode;
 use std::f32::consts::PI;
 
 use crate::blueprints::EntityKind;
-use crate::components::{AppState, Faction, GameFlowSet, Hovered, PickRadius, RtsCamera, Unit};
+use crate::combat::{apply_manual_move_intent, clear_combat_intent};
+use crate::components::{
+    AllyNotifications, AllyNotifyKind, AppState, AttackTarget, Faction, GameFlowSet, Hovered,
+    MoveTarget, PickRadius, RtsCamera, TaskSource, Unit, UnitState,
+};
 use crate::selection::SelectionSet;
 
 pub use components::*;
@@ -68,6 +73,9 @@ struct PickupVisualAssets {
     icon_quad: Handle<Mesh>,
     stem_quad: Handle<Mesh>,
     ring_mesh: Handle<Mesh>,
+    orb_mesh: Handle<Mesh>,
+    halo_ring_mesh: Handle<Mesh>,
+    aura_ring_mesh: Handle<Mesh>,
 }
 
 pub struct ItemsPlugin;
@@ -83,17 +91,30 @@ impl Plugin for ItemsPlugin {
             .add_message::<InventoryChanged>()
             .add_message::<ItemPickupCollected>()
             .add_message::<ItemPickupFailed>()
-            .add_systems(Startup, (register_item_definitions, setup_pickup_visual_assets))
+            .add_message::<vfx::ItemVfxTrigger>()
+            .add_systems(
+                Startup,
+                (
+                    register_item_definitions,
+                    setup_pickup_visual_assets,
+                    vfx::setup_item_vfx_assets,
+                ),
+            )
             .add_systems(
                 Update,
                 (
                     ensure_unit_inventories,
                     refresh_item_runtime_state,
+                    vfx::sync_item_vfx,
+                    vfx::update_item_vfx_conditions,
+                    vfx::spawn_triggered_item_vfx,
                     spawn_pickup_entities,
+                    resolve_pending_item_pickups,
                     collect_item_pickups,
                     drop_inventory_items,
                     tick_pickup_collect_vfx,
                     despawn_expired_pickups,
+                    notify_pickup_failures,
                 )
                     .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),
@@ -104,6 +125,9 @@ impl Plugin for ItemsPlugin {
                     animate_pickup_bob,
                     face_pickup_billboards,
                     animate_pickup_visuals,
+                    vfx::animate_persistent_item_vfx,
+                    vfx::animate_item_vfx_flashes,
+                    vfx::animate_item_vfx_trails,
                 )
                     .after(SelectionSet)
                     .in_set(GameFlowSet::Presentation)
@@ -140,6 +164,9 @@ fn setup_pickup_visual_assets(mut commands: Commands, mut meshes: ResMut<Assets<
         icon_quad: meshes.add(Rectangle::new(0.85, 0.85)),
         stem_quad: meshes.add(Rectangle::new(0.16, 1.65)),
         ring_mesh: meshes.add(Torus::new(0.56, 0.06)),
+        orb_mesh: meshes.add(Sphere::new(0.16)),
+        halo_ring_mesh: meshes.add(Torus::new(0.42, 0.035)),
+        aura_ring_mesh: meshes.add(Torus::new(1.18, 0.045)),
     });
 }
 
@@ -328,6 +355,8 @@ fn spawn_pickup_entities(
     }
 }
 
+
+
 fn pickup_failure_for_unit(
     pickup: &ItemPickup,
     pickup_tf: &Transform,
@@ -339,7 +368,12 @@ fn pickup_failure_for_unit(
     if inventory.capacity == 0 {
         return Some(ItemPickupFailureReason::NoInventorySlots);
     }
-    if unit_tf.translation.distance(pickup_tf.translation) > radius.0 + 1.25 {
+    // Use XZ distance only — the pickup floats above ground so 3D distance
+    // would unfairly penalize ground-level units.
+    let dx = unit_tf.translation.x - pickup_tf.translation.x;
+    let dz = unit_tf.translation.z - pickup_tf.translation.z;
+    let xz_dist = (dx * dx + dz * dz).sqrt();
+    if xz_dist > radius.0 + 1.25 {
         return Some(ItemPickupFailureReason::TooFar);
     }
     if inventory.items.len() >= inventory.capacity as usize {
@@ -375,6 +409,7 @@ struct PickupCandidate {
     entity: Entity,
     distance_sq: f32,
     failure: Option<ItemPickupFailureReason>,
+    can_pick_if_close: bool,
 }
 
 fn best_unit_for_pickup(candidates: &[PickupCandidate]) -> Result<Entity, ItemPickupFailureReason> {
@@ -397,6 +432,70 @@ fn best_unit_for_pickup(candidates: &[PickupCandidate]) -> Result<Entity, ItemPi
         .unwrap_or(ItemPickupFailureReason::NoSelectedUnits))
 }
 
+fn best_unit_to_approach(candidates: &[PickupCandidate]) -> Option<Entity> {
+    candidates
+        .iter()
+        .filter(|candidate| {
+            candidate.can_pick_if_close
+                && candidate.failure == Some(ItemPickupFailureReason::TooFar)
+        })
+        .min_by(|a, b| a.distance_sq.total_cmp(&b.distance_sq))
+        .map(|candidate| candidate.entity)
+}
+
+fn can_pickup_if_close(
+    pickup: &ItemPickup,
+    kind: EntityKind,
+    inventory: &UnitInventory,
+) -> bool {
+    if inventory.capacity == 0 {
+        return false;
+    }
+    if inventory.items.len() >= inventory.capacity as usize {
+        return false;
+    }
+    if inventory
+        .items
+        .iter()
+        .any(|existing| existing.category() == pickup.item.category())
+    {
+        return false;
+    }
+
+    match pickup.item.category() {
+        ItemCategory::Bow => matches!(kind, EntityKind::Archer | EntityKind::Scout),
+        ItemCategory::Staff => matches!(kind, EntityKind::Mage | EntityKind::Priest),
+        ItemCategory::Sword => matches!(
+            kind,
+            EntityKind::Soldier | EntityKind::Tank | EntityKind::Knight | EntityKind::Cavalry
+        ),
+        ItemCategory::Armor | ItemCategory::Helmet => kind != EntityKind::Worker,
+        ItemCategory::Ring => true,
+    }
+}
+
+fn collect_pickup_for_unit(
+    commands: &mut Commands,
+    changed: &mut MessageWriter<InventoryChanged>,
+    collected: &mut MessageWriter<ItemPickupCollected>,
+    unit: Entity,
+    pickup_entity: Entity,
+    item: ItemKind,
+    inventory: &mut UnitInventory,
+) {
+    inventory.items.push(item);
+    changed.write(InventoryChanged { unit });
+    collected.write(ItemPickupCollected {
+        pickup: pickup_entity,
+        collector: unit,
+        item,
+    });
+    commands.entity(unit).remove::<PendingItemPickup>();
+    commands.entity(pickup_entity).insert(PickupCollectVfx {
+        timer: Timer::from_seconds(0.18, TimerMode::Once),
+    });
+}
+
 fn collect_item_pickups(
     mut commands: Commands,
     mut requests: MessageReader<RequestPickupItem>,
@@ -404,7 +503,17 @@ fn collect_item_pickups(
     mut collected: MessageWriter<ItemPickupCollected>,
     mut failed: MessageWriter<ItemPickupFailed>,
     pickups: Query<(&ItemPickup, &Transform, &PickRadius)>,
-    mut units: Query<(&Transform, &EntityKind, &mut UnitInventory), With<Unit>>,
+    mut units: Query<
+        (
+            Entity,
+            &Transform,
+            &EntityKind,
+            &mut UnitInventory,
+            &mut UnitState,
+            &mut TaskSource,
+        ),
+        With<Unit>,
+    >,
 ) {
     for msg in requests.read() {
         let Ok((pickup, pickup_tf, radius)) = pickups.get(msg.pickup) else {
@@ -413,45 +522,158 @@ fn collect_item_pickups(
 
         let mut candidates = Vec::with_capacity(msg.pickers.len());
         for &picker in &msg.pickers {
-            let Ok((unit_tf, kind, inventory)) = units.get(picker) else {
+            let Ok((_, unit_tf, kind, inventory, _, _)) = units.get_mut(picker) else {
                 continue;
             };
+            let dx = unit_tf.translation.x - pickup_tf.translation.x;
+            let dz = unit_tf.translation.z - pickup_tf.translation.z;
             candidates.push(PickupCandidate {
                 entity: picker,
-                distance_sq: unit_tf.translation.distance_squared(pickup_tf.translation),
+                distance_sq: dx * dx + dz * dz,
                 failure: pickup_failure_for_unit(
                     pickup,
                     pickup_tf,
                     radius,
                     unit_tf,
                     *kind,
-                    inventory,
+                    &inventory,
                 ),
+                can_pick_if_close: can_pickup_if_close(pickup, *kind, &inventory),
             });
         }
 
-        let Ok(best_picker) = best_unit_for_pickup(&candidates) else {
-            failed.write(ItemPickupFailed {
-                pickup: msg.pickup,
-                item: pickup.item,
-                reason: best_unit_for_pickup(&candidates).unwrap_err(),
-            });
+        match best_unit_for_pickup(&candidates) {
+            Ok(best_picker) => {
+                let Ok((_, _, _, mut inventory, _, _)) = units.get_mut(best_picker) else {
+                    continue;
+                };
+                collect_pickup_for_unit(
+                    &mut commands,
+                    &mut changed,
+                    &mut collected,
+                    best_picker,
+                    msg.pickup,
+                    pickup.item,
+                    &mut inventory,
+                );
+            }
+            Err(reason) => {
+                if let Some(best_picker) = best_unit_to_approach(&candidates) {
+                    let Ok((unit, _, _, _, mut state, mut source)) = units.get_mut(best_picker)
+                    else {
+                        continue;
+                    };
+                    // Project to ground level so pathfinding works correctly
+                    let ground_target = Vec3::new(
+                        pickup_tf.translation.x,
+                        0.0,
+                        pickup_tf.translation.z,
+                    );
+                    clear_combat_intent(&mut commands, unit, 0.0);
+                    apply_manual_move_intent(
+                        &mut commands,
+                        unit,
+                        ground_target,
+                        0.0,
+                    );
+                    commands.entity(unit).insert((
+                        PendingItemPickup { pickup: msg.pickup },
+                        MoveTarget(ground_target),
+                        UnitState::Moving(ground_target),
+                    ));
+                    commands.entity(unit).remove::<AttackTarget>();
+                    *state = UnitState::Moving(ground_target);
+                    *source = TaskSource::Manual;
+                    continue;
+                }
+
+                failed.write(ItemPickupFailed {
+                    pickup: msg.pickup,
+                    item: pickup.item,
+                    reason,
+                });
+            }
+        }
+    }
+}
+
+fn resolve_pending_item_pickups(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut changed: MessageWriter<InventoryChanged>,
+    mut collected: MessageWriter<ItemPickupCollected>,
+    mut failed: MessageWriter<ItemPickupFailed>,
+    pickups: Query<(&ItemPickup, &Transform, &PickRadius)>,
+    mut units: Query<
+        (
+            Entity,
+            &Transform,
+            &EntityKind,
+            &mut UnitInventory,
+            &mut UnitState,
+            &mut TaskSource,
+            Option<&MoveTarget>,
+            &PendingItemPickup,
+        ),
+        With<Unit>,
+    >,
+) {
+    for (unit, unit_tf, kind, mut inventory, mut state, mut source, move_target, pending) in
+        &mut units
+    {
+        let Ok((pickup, pickup_tf, radius)) = pickups.get(pending.pickup) else {
+            commands.entity(unit).remove::<PendingItemPickup>();
             continue;
         };
 
-        let Ok((_, _, mut inventory)) = units.get_mut(best_picker) else {
-            continue;
-        };
-        inventory.items.push(pickup.item);
-        changed.write(InventoryChanged { unit: best_picker });
-        collected.write(ItemPickupCollected {
-            pickup: msg.pickup,
-            collector: best_picker,
-            item: pickup.item,
-        });
-        commands.entity(msg.pickup).insert(PickupCollectVfx {
-            timer: Timer::from_seconds(0.18, TimerMode::Once),
-        });
+        match pickup_failure_for_unit(pickup, pickup_tf, radius, unit_tf, *kind, &inventory) {
+            None => {
+                collect_pickup_for_unit(
+                    &mut commands,
+                    &mut changed,
+                    &mut collected,
+                    unit,
+                    pending.pickup,
+                    pickup.item,
+                    &mut inventory,
+                );
+                commands.entity(unit).remove::<MoveTarget>();
+                *state = UnitState::Idle;
+                *source = TaskSource::Auto;
+            }
+            Some(ItemPickupFailureReason::TooFar) => {
+                let ground_target = Vec3::new(
+                    pickup_tf.translation.x,
+                    0.0,
+                    pickup_tf.translation.z,
+                );
+                if move_target.map_or(true, |target| {
+                    let dx = target.0.x - ground_target.x;
+                    let dz = target.0.z - ground_target.z;
+                    dx * dx + dz * dz > 0.25
+                }) {
+                    clear_combat_intent(&mut commands, unit, time.elapsed_secs_f64());
+                    apply_manual_move_intent(
+                        &mut commands,
+                        unit,
+                        ground_target,
+                        time.elapsed_secs_f64(),
+                    );
+                    commands.entity(unit).insert(MoveTarget(ground_target));
+                    commands.entity(unit).remove::<AttackTarget>();
+                    *state = UnitState::Moving(ground_target);
+                    *source = TaskSource::Manual;
+                }
+            }
+            Some(reason) => {
+                failed.write(ItemPickupFailed {
+                    pickup: pending.pickup,
+                    item: pickup.item,
+                    reason,
+                });
+                commands.entity(unit).remove::<PendingItemPickup>();
+            }
+        }
     }
 }
 
@@ -495,21 +717,30 @@ fn animate_pickup_bob(
     }
 }
 
+
 fn face_pickup_billboards(
     camera_q: Query<&GlobalTransform, With<RtsCamera>>,
     pickup_roots: Query<&GlobalTransform, With<ItemPickup>>,
-    mut billboards: Query<(&ChildOf, &mut Transform), Or<(With<PickupBillboard>, With<PickupBackdrop>)>>,
+    mut billboards: Query<
+        (&ChildOf, &mut Transform, Has<PickupStem>),
+        Or<(With<PickupBillboard>, With<PickupBackdrop>, With<PickupStem>)>,
+    >,
 ) {
     let Ok(camera_tf) = camera_q.single() else {
         return;
     };
-    for (parent, mut transform) in &mut billboards {
+    for (parent, mut transform, is_stem) in &mut billboards {
         let Ok(root_tf) = pickup_roots.get(parent.parent()) else {
             continue;
         };
-        let to_camera: Vec3 = (camera_tf.translation() - root_tf.translation()).into();
+        let to_camera = camera_tf.translation() - root_tf.translation();
         let yaw = to_camera.x.atan2(to_camera.z);
-        transform.rotation = Quat::from_rotation_y(yaw);
+        if is_stem {
+            // Stem is a vertical quad — keep it upright but face the camera
+            transform.rotation = Quat::from_rotation_y(yaw);
+        } else {
+            transform.rotation = Quat::from_rotation_y(yaw);
+        }
     }
 }
 
@@ -572,5 +803,22 @@ fn drop_inventory_items(
             lifetime_secs: 45.0,
         });
         changed.write(InventoryChanged { unit: msg.unit });
+    }
+}
+
+fn notify_pickup_failures(
+    time: Res<Time>,
+    mut notifications: ResMut<AllyNotifications>,
+    mut failures: MessageReader<ItemPickupFailed>,
+    pickups: Query<&Transform, With<ItemPickup>>,
+) {
+    for failure in failures.read() {
+        let world_pos = pickups.get(failure.pickup).ok().map(|tf| tf.translation);
+        notifications.push(
+            AllyNotifyKind::ItemPickupFail,
+            failure.reason.label().to_string(),
+            world_pos,
+            time.elapsed_secs(),
+        );
     }
 }

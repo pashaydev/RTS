@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use super::core::fonts::UiFonts;
-use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::constants::*;
+use super::core::framework::WidgetId;
 use super::core::hud::MainHudRoot;
 use crate::blueprints::BlueprintRegistry;
 use crate::components::*;
@@ -21,26 +21,7 @@ impl Plugin for TechTreeWidgetPlugin {
     }
 }
 
-fn spawn_tech_tree_widget(
-    mut commands: Commands,
-    registry: Res<WidgetRegistry>,
-    fonts: Res<UiFonts>,
-    theme: Res<Theme>,
-    root_q: Query<Entity, Added<MainHudRoot>>,
-) {
-    let Ok(hud_root) = root_q.single() else {
-        return;
-    };
-    spawn_widget_frame(
-        &mut commands,
-        hud_root,
-        WidgetId::TechTree,
-        registry.slots.get(&WidgetId::TechTree).unwrap(),
-        registry.is_visible(WidgetId::TechTree),
-        &fonts,
-        &theme,
-    );
-}
+widget_spawn_system!(spawn_tech_tree_widget, WidgetId::TechTree);
 
 #[derive(Component)]
 pub struct TechTreeContent;
@@ -137,7 +118,7 @@ pub fn update_tech_tree(
                 row_gap: Val::Px(2.0),
                 padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
                 margin: UiRect::left(Val::Px(indent)),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
+                border_radius: RADIUS_SM,
                 ..default()
             })
             .id();
@@ -149,7 +130,7 @@ pub fn update_tech_tree(
                 Node {
                     width: Val::Px(6.0),
                     height: Val::Px(6.0),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    border_radius: RADIUS_SM,
                     ..default()
                 },
                 BackgroundColor(border_color),
@@ -247,7 +228,7 @@ pub fn update_tech_tree(
                 Node {
                     width: Val::Px(6.0),
                     height: Val::Px(6.0),
-                    border_radius: BorderRadius::all(Val::Px(3.0)),
+                    border_radius: RADIUS_SM,
                     ..default()
                 },
                 BackgroundColor(color),

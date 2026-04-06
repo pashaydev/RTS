@@ -28,7 +28,7 @@ pub(crate) fn spawn_title_page(
     .iter()
     .enumerate()
     {
-        let btn = spawn_styled_button_nav(
+        let btn = spawn_styled_button(
             commands,
             label,
             MenuButton(*action),
@@ -103,7 +103,7 @@ pub(crate) fn spawn_new_game_page(
         TeamMode::Teams => 1,
         TeamMode::Custom => 2,
     };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Teams:",
@@ -121,7 +121,7 @@ pub(crate) fn spawn_new_game_page(
         MapSize::Medium => 1,
         MapSize::Large => 2,
     };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Map Size:",
@@ -137,7 +137,7 @@ pub(crate) fn spawn_new_game_page(
         ResourceDensity::Normal => 1,
         ResourceDensity::Dense => 2,
     };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Resources:",
@@ -153,7 +153,7 @@ pub(crate) fn spawn_new_game_page(
         .position(|&(v, _)| (v - config.day_cycle_secs).abs() < 1.0)
         .unwrap_or(1);
     let day_labels: Vec<&str> = DAY_CYCLE_OPTIONS.iter().map(|&(_, l)| l).collect();
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Day Cycle:",
@@ -169,7 +169,7 @@ pub(crate) fn spawn_new_game_page(
         .position(|&(v, _)| (v - config.starting_resources_mult).abs() < 0.01)
         .unwrap_or(1);
     let start_labels: Vec<&str> = STARTING_RES_OPTIONS.iter().map(|&(_, l)| l).collect();
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Start Res:",
@@ -677,7 +677,7 @@ pub(crate) fn spawn_load_game_page(
     }
 
     // Back button
-    let back_btn = spawn_styled_button_nav(
+    let back_btn = spawn_styled_button(
         commands,
         "BACK",
         MenuButton(MenuAction::Back),

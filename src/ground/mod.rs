@@ -16,7 +16,8 @@ use crate::water_material::WaterMaterial;
 pub use border::spawn_mountain_border;
 #[allow(unused_imports)]
 pub use data::{
-    edge_distance_to_square, foundation_radii, is_in_mountain_border, BorderSettings, HeightMap,
+    edge_distance_to_square, foundation_radii, is_in_mountain_border, playable_half_map,
+    BorderSettings, HeightMap,
     TerrainShapeSyncState, TerrainShapeUpdateQueue, TerrainSurfaceDirtyArea,
     TerrainSurfaceDirtyQueue, WATER_LEVEL,
 };

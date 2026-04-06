@@ -213,8 +213,29 @@ impl Plugin for EntityLabelPlugin {
                     .in_set(GameFlowSet::Input)
                     .after(SelectionSet)
                     .run_if(in_state(AppState::InGame)),
-            );
+            )
+            .add_systems(OnExit(AppState::InGame), cleanup_entity_labels);
     }
+}
+
+fn cleanup_entity_labels(
+    mut commands: Commands,
+    labels: Query<Entity, With<EntityLabel>>,
+    leader_lines: Query<Entity, With<LeaderLine>>,
+    mut layout_cache: ResMut<LabelLayoutCache>,
+    mut cluster_state: ResMut<ClusterState>,
+) {
+    for entity in &labels {
+        commands.entity(entity).try_despawn();
+    }
+
+    for entity in &leader_lines {
+        commands.entity(entity).try_despawn();
+    }
+
+    layout_cache.entries.clear();
+    cluster_state.clusters.clear();
+    cluster_state.next_id = 1;
 }
 
 // ══════════════════════════════════════════════════════════════════════

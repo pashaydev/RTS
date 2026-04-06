@@ -8,7 +8,7 @@ use crate::components::{AppState, RtsCamera};
 
 // ── Settings (persisted) ──
 
-#[derive(Resource, Clone, Serialize, Deserialize)]
+#[derive(Resource, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AudioSettings {
     pub music_volume: f32, // 0.0 – 1.0 UI slider value
     pub sfx_volume: f32,   // 0.0 – 1.0 UI slider value

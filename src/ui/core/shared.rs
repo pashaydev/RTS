@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use super::constants::*;
 use crate::components::*;
 use crate::theme::Theme;
 
@@ -27,12 +28,7 @@ pub fn spawn_hp_bar(
 
     let bg = commands
         .spawn((
-            Node {
-                width: Val::Px(width),
-                height: Val::Px(6.0),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
-                ..default()
-            },
+            progress_track(Val::Px(width), 6.0),
             BackgroundColor(theme.colors.hp_bar_bg),
         ))
         .id();
@@ -41,12 +37,7 @@ pub fn spawn_hp_bar(
     let fill = commands
         .spawn((
             HpBarFill(tracked_entity),
-            Node {
-                width: Val::Percent(pct),
-                height: Val::Percent(100.0),
-                border_radius: BorderRadius::all(Val::Px(3.0)),
-                ..default()
-            },
+            progress_fill(pct),
             BackgroundColor(bar_color),
             BoxShadow::new(
                 bar_color.with_alpha(0.4),
@@ -70,27 +61,15 @@ pub fn format_cost(cost: &crate::blueprints::ResourceCost) -> String {
 
 /// Base node for widget content to keep internals visually integrated with the outer widget tile.
 pub fn widget_content_stack() -> Node {
-    Node {
-        width: Val::Percent(100.0),
-        min_width: Val::Px(0.0),
-        flex_direction: FlexDirection::Column,
-        align_items: AlignItems::Stretch,
-        row_gap: Val::Px(6.0),
-        padding: UiRect::all(Val::Px(4.0)),
-        ..default()
-    }
+    let mut n = flex_col(GAP_LG);
+    n.min_width = Val::Px(0.0);
+    n.padding = PAD_SM;
+    n
 }
 
 /// Utility row for dense inline controls and chips.
-pub fn widget_wrap_row(column_gap: f32, row_gap: f32) -> Node {
-    Node {
-        width: Val::Percent(100.0),
-        min_width: Val::Px(0.0),
-        flex_direction: FlexDirection::Row,
-        flex_wrap: FlexWrap::Wrap,
-        column_gap: Val::Px(column_gap),
-        row_gap: Val::Px(row_gap),
-        align_items: AlignItems::Center,
-        ..default()
-    }
+pub fn widget_wrap_row(col_gap: f32, row_gap: f32) -> Node {
+    let mut n = flex_wrap(Val::Px(col_gap), Val::Px(row_gap));
+    n.min_width = Val::Px(0.0);
+    n
 }

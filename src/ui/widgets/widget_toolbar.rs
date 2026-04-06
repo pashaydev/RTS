@@ -1,6 +1,7 @@
 use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
 
+use super::core::constants::*;
 use super::core::framework::{WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
 use super::core::interactions::UiClickEvent;
@@ -72,8 +73,8 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts, t
                 flex_direction: FlexDirection::Row,
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(2.0),
-                padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+                padding: PAD_COMPACT,
+                border_radius: RADIUS_LG,
                 ..default()
             },
             BackgroundColor(Color::srgba(0.07, 0.07, 0.07, 0.85)),
@@ -111,8 +112,8 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts, t
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
                     column_gap: Val::Px(3.0),
-                    padding: UiRect::axes(Val::Px(6.0), Val::Px(3.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    padding: PAD_COMPACT,
+                    border_radius: RADIUS_MD,
                     ..default()
                 },
                 BackgroundColor(Color::NONE),

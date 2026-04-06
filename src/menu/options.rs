@@ -192,6 +192,7 @@ pub(crate) fn spawn_options_page(
         &["Dark", "Light"],
         theme_idx,
         SelectorField::ThemeMode,
+        None,
         theme,
     );
 
@@ -200,7 +201,7 @@ pub(crate) fn spawn_options_page(
     spawn_animated_section_divider(commands, container, "GRAPHICS", fonts, theme);
 
     let fs_idx = if graphics.fullscreen { 0 } else { 1 };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Fullscreen:",
@@ -244,7 +245,7 @@ pub(crate) fn spawn_options_page(
     );
 
     let vsync_idx = if graphics.vsync { 0 } else { 1 };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "VSync:",
@@ -260,7 +261,7 @@ pub(crate) fn spawn_options_page(
         ShadowQuality::Low => 1,
         ShadowQuality::High => 2,
     };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Shadows:",
@@ -272,7 +273,7 @@ pub(crate) fn spawn_options_page(
     );
 
     let lights_idx = if graphics.entity_lights { 0 } else { 1 };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Lights:",
@@ -287,7 +288,7 @@ pub(crate) fn spawn_options_page(
         AntiAliasingMode::Off => 0,
         AntiAliasingMode::Smaa => 1,
     };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Anti-Aliasing:",
@@ -304,7 +305,7 @@ pub(crate) fn spawn_options_page(
         EffectQuality::Medium => 2,
         EffectQuality::High => 3,
     };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Bloom:",
@@ -320,7 +321,7 @@ pub(crate) fn spawn_options_page(
         .iter()
         .position(|&(v, _)| (v - graphics.brightness).abs() < 0.01)
         .unwrap_or(2);
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Brightness:",
@@ -332,7 +333,7 @@ pub(crate) fn spawn_options_page(
     );
 
     let auto_exposure_idx = if graphics.auto_exposure { 0 } else { 1 };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Auto Exposure:",
@@ -349,7 +350,7 @@ pub(crate) fn spawn_options_page(
         EffectQuality::Medium => 2,
         EffectQuality::High => 3,
     };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Depth of Field:",
@@ -366,7 +367,7 @@ pub(crate) fn spawn_options_page(
         EffectQuality::Medium => 2,
         EffectQuality::High => 3,
     };
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "Chromatic Aberration:",
@@ -382,7 +383,7 @@ pub(crate) fn spawn_options_page(
         .iter()
         .position(|&(v, _)| (v - graphics.ui_scale).abs() < 0.01)
         .unwrap_or(2);
-    spawn_selector_row_nav(
+    spawn_selector_row(
         commands,
         container,
         "UI Scale:",
@@ -421,7 +422,7 @@ pub(crate) fn spawn_options_page(
 
     spawn_animated_section_divider(commands, container, "GAMEPLAY", fonts, theme);
 
-    let reset_btn = spawn_styled_button_nav(
+    let reset_btn = spawn_styled_button(
         commands,
         "RESET WIDGET LAYOUT",
         MenuButton(MenuAction::ResetWidgetLayout),
@@ -432,18 +433,18 @@ pub(crate) fn spawn_options_page(
     );
     commands.entity(container).add_child(reset_btn);
 
-    // ── Apply Button ──
+    // ── Save Button (hidden until settings change) ──
 
-    let apply_btn = spawn_styled_button_nav(
+    let save_btn = spawn_styled_button(
         commands,
-        "APPLY",
-        MenuButton(MenuAction::ApplySettings),
+        "SAVE",
+        (MenuButton(MenuAction::ApplySettings), super::SaveSettingsButton),
         true,
         fonts,
         Some(15),
         theme,
     );
-    commands.entity(container).add_child(apply_btn);
+    commands.entity(container).add_child(save_btn);
 }
 
 // ── Apply Settings ──

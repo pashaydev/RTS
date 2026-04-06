@@ -62,6 +62,9 @@ pub(crate) enum MenuAction {
     LoadSave(i64),
     DeleteSave(i64),
     ResetWidgetLayout,
+    SaveAndLeave,
+    DiscardSettings,
+    CancelPopup,
 }
 
 #[allow(dead_code)]
@@ -163,6 +166,27 @@ pub(crate) struct LobbyPingText;
 #[derive(Resource)]
 pub(crate) struct MenuDirty;
 
+/// Snapshot of settings when the Options page was opened, for dirty-state comparison.
+#[derive(Resource)]
+pub(crate) struct OptionsSnapshot {
+    pub graphics: GraphicsSettings,
+    pub audio: crate::audio::AudioSettings,
+}
+
+/// Whether the confirm-popup overlay is currently shown on the Options page.
+#[derive(Resource, Default)]
+pub(crate) struct ConfirmPopupState {
+    pub active: bool,
+}
+
+/// Marker for the "SAVE" button on the Options page (visibility toggled by dirty state).
+#[derive(Component)]
+pub(crate) struct SaveSettingsButton;
+
+/// Marker for the unsaved-changes popup overlay.
+#[derive(Component)]
+pub(crate) struct UnsavedChangesPopup;
+
 /// Timer for lobby ping polling.
 #[derive(Resource)]
 pub(crate) struct LobbyPingTimer(pub Timer);
@@ -232,6 +256,7 @@ impl Plugin for MenuPlugin {
         app.init_resource::<MenuPage>()
             .init_resource::<MenuNavFocus>()
             .init_resource::<helpers::SliderDragState>()
+            .init_resource::<ConfirmPopupState>()
             .init_resource::<crate::components::AvailableResolutions>()
             .configure_sets(
                 Update,
@@ -264,9 +289,15 @@ impl Plugin for MenuPlugin {
             .add_systems(OnEnter(AppState::MainMenu), systems::spawn_menu)
             .add_systems(
                 Update,
+                systems::handle_menu_buttons.in_set(MenuSet::Input),
+            )
+            .add_systems(
+                Update,
+                systems::handle_selector_clicks.in_set(MenuSet::Input),
+            )
+            .add_systems(
+                Update,
                 (
-                    systems::handle_menu_buttons,
-                    systems::handle_selector_clicks,
                     systems::volume_slider_system,
                     systems::menu_keyboard_nav,
                     systems::menu_selector_keyboard_nav,
@@ -310,6 +341,15 @@ impl Plugin for MenuPlugin {
                     multiplayer::copy_session_code_system,
                 )
                     .in_set(MenuSet::Networking),
+            )
+            .add_systems(
+                Update,
+                (
+                    systems::capture_options_snapshot,
+                    systems::toggle_save_button_visibility,
+                    systems::manage_unsaved_changes_popup,
+                )
+                    .in_set(MenuSet::Visuals),
             )
             .add_systems(
                 Update,

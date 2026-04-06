@@ -11,6 +11,14 @@ use crate::components::*;
 use crate::multiplayer::{ClientNetState, NetRole};
 use crate::net_bridge::EntityNetMap;
 use crate::theme::{self, Theme};
+use super::core::constants::*;
+
+/// Mark the UI as having been clicked this frame (prevents clicks falling through to the game world).
+#[inline]
+fn mark_click(ui_clicked: &mut UiClickedThisFrame, ui_press: &mut UiPressActive) {
+    ui_clicked.0 = 2;
+    ui_press.0 = true;
+}
 
 #[derive(SystemParam)]
 pub(crate) struct OnlineInputParams<'w> {
@@ -375,7 +383,7 @@ pub fn handle_demolish_button(
                         align_items: AlignItems::Center,
                         row_gap: Val::Px(4.0),
                         padding: UiRect::all(Val::Px(8.0)),
-                        border_radius: BorderRadius::all(Val::Px(6.0)),
+                        border_radius: RADIUS_LG,
                         ..default()
                     },
                     BackgroundColor(theme.colors.bg_panel),
@@ -410,7 +418,7 @@ pub fn handle_demolish_button(
                                 ConfirmDemolishButton,
                                 Node {
                                     padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
-                                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                                    border_radius: RADIUS_MD,
                                     ..default()
                                 },
                                 BackgroundColor(theme.colors.destructive),
@@ -432,7 +440,7 @@ pub fn handle_demolish_button(
                                 CancelDemolishButton,
                                 Node {
                                     padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
-                                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                                    border_radius: RADIUS_MD,
                                     ..default()
                                 },
                                 BackgroundColor(theme.colors.btn_primary),
@@ -594,8 +602,7 @@ pub fn handle_rally_point_button(
 ) {
     for interaction in &interactions {
         if *interaction == Interaction::Pressed {
-            ui_clicked.0 = 2;
-            ui_press.0 = true;
+            mark_click(&mut ui_clicked, &mut ui_press);
             rally_mode.0 = !rally_mode.0;
         }
     }
@@ -729,6 +736,7 @@ pub fn handle_assign_worker_button(
                     &mut commands,
                     worker_entity,
                     building_entity,
+                    TaskSource::Manual,
                 );
 
                 // Teleport worker inside the fence for sawmills
@@ -1087,32 +1095,16 @@ pub fn update_upgrade_progress_display(
 
 // ── Unit command button handlers ──
 
-pub fn handle_attack_move_button(
-    interactions: Query<&Interaction, (Changed<Interaction>, With<AttackMoveButton>)>,
+pub fn handle_command_mode_buttons(
+    interactions: Query<(&Interaction, &CommandModeButton), Changed<Interaction>>,
     mut cmd_mode: ResMut<CommandMode>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
-    for interaction in &interactions {
+    for (interaction, btn) in &interactions {
         if *interaction == Interaction::Pressed {
-            ui_clicked.0 = 2;
-            ui_press.0 = true;
-            *cmd_mode = CommandMode::AttackMove;
-        }
-    }
-}
-
-pub fn handle_patrol_button(
-    interactions: Query<&Interaction, (Changed<Interaction>, With<PatrolButton>)>,
-    mut cmd_mode: ResMut<CommandMode>,
-    mut ui_clicked: ResMut<UiClickedThisFrame>,
-    mut ui_press: ResMut<UiPressActive>,
-) {
-    for interaction in &interactions {
-        if *interaction == Interaction::Pressed {
-            ui_clicked.0 = 2;
-            ui_press.0 = true;
-            *cmd_mode = CommandMode::Patrol;
+            mark_click(&mut ui_clicked, &mut ui_press);
+            *cmd_mode = btn.0;
         }
     }
 }
@@ -1162,7 +1154,7 @@ pub fn handle_hold_position_button(
 pub fn handle_stop_button(
     interactions: Query<&Interaction, (Changed<Interaction>, With<StopButton>)>,
     mut commands: Commands,
-    selected_units: Query<(Entity, &Faction), (With<Unit>, With<Selected>)>,
+    selected_units: Query<(Entity, &Faction, &EntityKind), (With<Unit>, With<Selected>)>,
     active_player: Res<ActivePlayer>,
     mut cmd_mode: ResMut<CommandMode>,
     time: Res<Time>,
@@ -1176,17 +1168,21 @@ pub fn handle_stop_button(
         ui_clicked.0 = 2;
         ui_press.0 = true;
         *cmd_mode = CommandMode::Normal;
-        for (entity, faction) in &selected_units {
+        for (entity, faction, kind) in &selected_units {
             if *faction != active_player.0 {
                 continue;
             }
             clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
-            commands
-                .entity(entity)
-                .remove::<MoveTarget>()
-                .remove::<AttackTarget>()
-                .insert(UnitState::Idle)
-                .insert(TaskSource::Auto);
+            if *kind == EntityKind::Worker {
+                crate::resources::unassign_worker_from_processor(&mut commands, entity);
+            } else {
+                commands
+                    .entity(entity)
+                    .remove::<MoveTarget>()
+                    .remove::<AttackTarget>()
+                    .insert(UnitState::Idle)
+                    .insert(TaskSource::Auto);
+            }
             commands
                 .entity(entity)
                 .entry::<TaskQueue>()
@@ -1271,8 +1267,7 @@ pub fn handle_formation_button(
 ) {
     for interaction in &interactions {
         if *interaction == Interaction::Pressed {
-            ui_clicked.0 = 2;
-            ui_press.0 = true;
+            mark_click(&mut ui_clicked, &mut ui_press);
             formation.formation = formation.formation.cycle();
         }
     }

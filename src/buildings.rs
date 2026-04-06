@@ -14,8 +14,8 @@ use crate::blueprints::{
 use crate::camera;
 use crate::components::*;
 use crate::ground::{
-    apply_terrain_shape_op, foundation_radii, sync_ground_mesh_partial, BorderSettings, HeightMap,
-    TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
+    apply_terrain_shape_op, foundation_radii, playable_half_map, sync_ground_mesh_partial,
+    HeightMap, TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
 };
 use crate::model_assets::{BuildingConstructionAssets, BuildingModelAssets, UnitModelAssets};
 #[cfg(not(target_arch = "wasm32"))]
@@ -952,8 +952,7 @@ fn sync_obstacle_grid(
         grid.cells.insert((gx, gz));
     }
     // Compute playable boundary from border hill settings
-    let border = BorderSettings::from_map_size(height_map.map_size);
-    grid.playable_half = height_map.half_map - border.thickness - border.transition;
+    grid.playable_half = playable_half_map(height_map.map_size);
 }
 
 fn sync_environment_to_terrain_changes(
@@ -3584,6 +3583,70 @@ fn tower_auto_attack(
 
 // ── Training ──
 
+fn is_valid_trained_unit_spawn(
+    pos: Vec3,
+    source_building: Entity,
+    source_pos: Vec3,
+    source_footprint: f32,
+    nav_grid: Option<&crate::pathfinding::NavGrid>,
+    buildings: &Query<(Entity, &Transform, &BuildingFootprint, &BuildingState), With<Building>>,
+) -> bool {
+    if pos.distance(source_pos) < source_footprint + 1.2 {
+        return false;
+    }
+
+    if nav_grid.is_some_and(|grid| !grid.is_world_passable(pos.x, pos.z)) {
+        return false;
+    }
+
+    for (building_entity, tf, footprint, state) in buildings {
+        if building_entity == source_building {
+            continue;
+        }
+        if *state != BuildingState::Complete && *state != BuildingState::UnderConstruction {
+            continue;
+        }
+        if tf.translation.distance(pos) < footprint.0 + 1.2 {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn find_trained_unit_spawn_position(
+    source_building: Entity,
+    source_pos: Vec3,
+    source_footprint: f32,
+    spawn_index: u32,
+    nav_grid: Option<&crate::pathfinding::NavGrid>,
+    buildings: &Query<(Entity, &Transform, &BuildingFootprint, &BuildingState), With<Building>>,
+) -> Vec3 {
+    let base_angle = std::f32::consts::TAU * (spawn_index as f32 * 0.618034);
+    let base_radius = source_footprint + 1.8;
+
+    for ring in 0..8 {
+        let radius = base_radius + ring as f32 * 1.2;
+        let samples = 10 + ring * 4;
+        for step in 0..samples {
+            let angle = base_angle + std::f32::consts::TAU * (step as f32 / samples as f32);
+            let pos = source_pos + Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
+            if is_valid_trained_unit_spawn(
+                pos,
+                source_building,
+                source_pos,
+                source_footprint,
+                nav_grid,
+                buildings,
+            ) {
+                return pos;
+            }
+        }
+    }
+
+    source_pos + Vec3::new(base_radius, 0.0, 0.0)
+}
+
 fn training_queue_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -3592,11 +3655,15 @@ fn training_queue_system(
     cache: Res<EntityVisualCache>,
     unit_models: Option<Res<UnitModelAssets>>,
     height_map: Res<HeightMap>,
+    nav_grid: Option<Res<crate::pathfinding::NavGrid>>,
     unit_factions: Query<&Faction, With<Unit>>,
     cap_buildings: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
+    building_footprints: Query<(Entity, &Transform, &BuildingFootprint, &BuildingState), With<Building>>,
     mut buildings: Query<
         (
+            Entity,
             &Transform,
+            &BuildingFootprint,
             &EntityKind,
             &mut TrainingQueue,
             Option<&RallyPoint>,
@@ -3629,7 +3696,16 @@ fn training_queue_system(
             unit_capacity_bonus_for_building(*kind, level.0);
     }
 
-    for (transform, building_kind, mut queue, rally_point, building_faction, building_level) in
+    for (
+        building_entity,
+        transform,
+        building_footprint,
+        building_kind,
+        mut queue,
+        rally_point,
+        building_faction,
+        building_level,
+    ) in
         &mut buildings
     {
         if queue.queue.is_empty() {
@@ -3674,10 +3750,14 @@ fn training_queue_system(
                 // Scatter spawn positions around the building to avoid stacking
                 let spawn_index = queue.total_trained;
                 queue.total_trained = queue.total_trained.wrapping_add(1);
-                let angle = std::f32::consts::TAU * (spawn_index as f32 * 0.618034); // golden angle
-                let radius = 3.5;
-                let offset = Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius);
-                let spawn_pos = transform.translation + offset;
+                let spawn_pos = find_trained_unit_spawn_position(
+                    building_entity,
+                    transform.translation,
+                    building_footprint.0,
+                    spawn_index,
+                    nav_grid.as_deref(),
+                    &building_footprints,
+                );
 
                 let unit_entity = spawn_from_blueprint_with_faction(
                     &mut commands,
