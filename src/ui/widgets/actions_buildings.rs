@@ -4,8 +4,8 @@ use super::actions_widget::BuildGridButton;
 use super::core::constants::*;
 use super::core::shared::{format_cost, widget_content_stack, widget_wrap_row};
 use crate::blueprints::{BlueprintRegistry, EntityKind};
-use crate::components::*;
-use crate::theme::{self, Theme};
+use crate::types::*;
+use crate::ui::theme::{self, Theme};
 
 pub(super) fn spawn_building_action_bar(
     commands: &mut Commands,
@@ -1555,7 +1555,7 @@ pub(super) fn spawn_building_grid(
     player_res: &PlayerResources,
     layout_bucket: u8,
     theme: &Theme,
-    current_age: crate::ages::Age,
+    current_age: crate::simulation::ages::Age,
 ) {
     let building_kinds = registry.building_kinds();
     let available: Vec<EntityKind> = building_kinds
@@ -1566,7 +1566,7 @@ pub(super) fn spawn_building_grid(
                 return false;
             }
             // Filter by age requirement
-            let required_age = crate::ages::required_age_for_building(*kind);
+            let required_age = crate::simulation::ages::required_age_for_building(*kind);
             if current_age < required_age {
                 return false;
             }

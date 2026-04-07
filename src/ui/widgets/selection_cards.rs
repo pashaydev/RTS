@@ -9,11 +9,11 @@ use super::selection_widget::{
     DropInventoryItemButton, InventorySlotButton, SelectionInventoryUiState,
 };
 use crate::blueprints::EntityKind;
-use crate::components::*;
-use crate::items::{
+use crate::types::*;
+use crate::simulation::items::{
     inferred_inventory_capacity, ItemAssets, ItemKind, ItemRuntimeState, UnitInventory,
 };
-use crate::theme::Theme;
+use crate::ui::theme::Theme;
 
 pub(super) fn spawn_friendly_detail_card(
     commands: &mut Commands,
@@ -170,9 +170,9 @@ pub(super) fn spawn_friendly_detail_card(
     // Stance indicator
     if let Some(stance) = stance {
         let (stance_text, stance_color) = match stance {
-            UnitStance::Passive => ("Passive", crate::theme::STANCE_PASSIVE),
-            UnitStance::Defensive => ("Defensive", crate::theme::STANCE_DEFENSIVE),
-            UnitStance::Aggressive => ("Aggressive", crate::theme::STANCE_AGGRESSIVE),
+            UnitStance::Passive => ("Passive", crate::ui::theme::STANCE_PASSIVE),
+            UnitStance::Defensive => ("Defensive", crate::ui::theme::STANCE_DEFENSIVE),
+            UnitStance::Aggressive => ("Aggressive", crate::ui::theme::STANCE_AGGRESSIVE),
         };
         let stance_label = commands
             .spawn((
@@ -1040,7 +1040,7 @@ pub(super) fn spawn_unit_mini_card(
                         font_size: 7.0,
                         ..default()
                     },
-                    TextColor(crate::theme::BG_RECESSED),
+                    TextColor(crate::ui::theme::BG_RECESSED),
                     Node {
                         padding: UiRect::axes(Val::Px(2.0), Val::Px(0.0)),
                         // border_radius: RADIUS_SM,

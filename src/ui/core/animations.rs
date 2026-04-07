@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use crate::components::*;
-use crate::theme::Theme;
+use crate::types::*;
+use crate::ui::theme::Theme;
 
 // ── Easing Functions ──
 

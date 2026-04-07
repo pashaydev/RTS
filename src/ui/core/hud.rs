@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::components::*;
-use crate::theme::{self, Theme};
+use crate::types::*;
+use crate::ui::theme::{self, Theme};
 
 /// Root UI container that holds all widgets
 #[derive(Component)]
@@ -235,7 +235,7 @@ pub fn update_placement_hint(
 
 pub fn update_ui_scale(
     graphics: Res<GraphicsSettings>,
-    snapshot: Option<Res<crate::menu::OptionsSnapshot>>,
+    snapshot: Option<Res<crate::ui::menu::OptionsSnapshot>>,
     mut ui_scale: ResMut<UiScale>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {

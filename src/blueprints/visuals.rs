@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;
 
 use crate::blueprints::types::*;
-use crate::components::{FloorPieceKind, WALL_CELL_SIZE};
+use crate::types::{FloorPieceKind, WALL_CELL_SIZE};
 
 fn build_floor_piece_mesh(kind: FloorPieceKind) -> Mesh {
     let half = WALL_CELL_SIZE * 0.5; // 1.5

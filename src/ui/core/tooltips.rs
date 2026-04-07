@@ -1,8 +1,8 @@
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 
-use crate::components::*;
-use crate::theme::{self, Theme};
+use crate::types::*;
+use crate::ui::theme::{self, Theme};
 
 pub fn show_action_tooltips(
     mut commands: Commands,

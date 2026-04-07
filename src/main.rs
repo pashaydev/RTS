@@ -1,50 +1,10 @@
-mod abilities;
-mod ages;
-mod ai;
-mod animation;
-mod attention;
-mod audio;
 mod blueprints;
-mod buildings;
-mod camera;
-mod combat;
-mod components;
-mod culling;
-mod database;
-mod debug;
-mod entity_labels;
-mod fog;
-mod fog_material;
-mod grass_material;
-mod ground;
-mod hover_material;
-mod items;
-mod lighting;
-mod logging;
-mod menu;
-mod minimap;
-mod mobs;
-mod model_assets;
-mod multiplayer;
-mod net_bridge;
-mod orders;
-mod pathfinding;
-mod pathvis;
-mod pause_menu;
-mod procedural_mobs;
-mod resources;
-mod save_load;
-mod selection;
-mod spatial;
-mod terrain_material;
-mod tree_occlusion_material;
-mod theme;
+mod infrastructure;
+mod presentation;
+mod simulation;
+mod types;
 mod ui;
-mod unit_ai;
-mod units;
-mod vfx;
-mod victory;
-mod water_material;
+mod world;
 
 use bevy::ecs::error;
 use bevy::log::LogPlugin;
@@ -53,7 +13,7 @@ use bevy::window::PresentMode;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::OutlinePlugin;
 
-use components::{AppState, GameFlowSet, GameSetupConfig};
+use types::{AppState, GameFlowSet, GameSetupConfig};
 
 fn main() {
     #[cfg(target_arch = "wasm32")]
@@ -79,12 +39,12 @@ fn main() {
         .map(|d| d.join("assets").to_string_lossy().into_owned())
         .unwrap_or_else(|| "assets".to_string());
 
-    logging::configure_session_logging(
+    infrastructure::logging::configure_session_logging(
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
     );
 
     // Open database early so settings (graphics, audio) are loaded before window creation.
-    let (db, profile, graphics, audio_settings) = database::init_early();
+    let (db, profile, graphics, audio_settings) = infrastructure::database::init_early();
 
     // On WASM, use the browser viewport size so hover coordinates match from the start.
     // The DB-stored resolution is a desktop value that causes a mismatch until a resize event.
@@ -114,7 +74,7 @@ fn main() {
             {
                 let plugins = DefaultPlugins
                     .set(LogPlugin {
-                        custom_layer: logging::make_tracing_layer,
+                        custom_layer: infrastructure::logging::make_tracing_layer,
                         ..default()
                     })
                     .set(WindowPlugin {
@@ -190,56 +150,17 @@ fn main() {
                 .chain(),
         )
         .insert_resource(GameSetupConfig::default())
-        .insert_resource(theme::Theme::from_mode(graphics.theme_mode))
+        .insert_resource(ui::theme::Theme::from_mode(graphics.theme_mode))
         .insert_resource(graphics)
         .insert_resource(db)
         .insert_resource(profile)
         .insert_resource(audio_settings)
-        .add_plugins(logging::SessionLogPlugin)
-        .add_plugins(database::DatabasePlugin)
-        .add_plugins(menu::MenuPlugin)
+        .add_plugins(infrastructure::InfraPlugins)
         .add_plugins(blueprints::BlueprintPlugin)
-        .add_plugins((
-            debug::DebugPlugin,
-            model_assets::ModelAssetsPlugin,
-            ground::GroundPlugin,
-            camera::CameraPlugin,
-            lighting::LightingPlugin,
-            units::UnitsPlugin,
-            selection::SelectionPlugin,
-            ui::UiPlugin,
-            resources::ResourcesPlugin,
-            buildings::BuildingsPlugin,
-            pathvis::PathVisPlugin,
-            vfx::VfxPlugin,
-            mobs::MobsPlugin,
-            items::ItemsPlugin,
-        ))
-        .add_plugins((
-            combat::CombatPlugin,
-            fog::FogPlugin,
-        ))
-        .add_plugins(combat::CombatIntentsPlugin)
-        .add_plugins(combat::CombatBudgetPlugin)
-        .add_plugins(combat::CombatSlotsPlugin)
-        .add_plugins(abilities::AbilitiesPlugin)
-        .add_plugins(spatial::SpatialPlugin)
-        .add_plugins(pathfinding::PathfindingPlugin)
-        .add_plugins(culling::CullingPlugin)
-        .add_plugins(animation::AnimationPlugin)
-        .add_plugins(procedural_mobs::ProceduralMobsPlugin)
-        .add_plugins(minimap::MinimapPlugin)
-        .add_plugins(attention::AttentionPlugin)
-        .add_plugins(ai::AiPlugin)
-        .add_plugins(unit_ai::UnitAiPlugin)
-        .add_plugins(pause_menu::PauseMenuPlugin)
-        .add_plugins(save_load::SaveLoadPlugin)
-        .add_plugins(net_bridge::NetBridgePlugin)
-        .add_plugins(multiplayer::MultiplayerPlugin)
-        .add_plugins(victory::VictoryPlugin)
-        .add_plugins(ages::AgesPlugin)
-        .add_plugins(audio::GameAudioPlugin)
-        .add_plugins(entity_labels::EntityLabelPlugin)
+        .add_plugins(world::WorldPlugins)
+        .add_plugins(simulation::SimulationPlugins)
+        .add_plugins(presentation::PresentationPlugins)
+        .add_plugins(ui::UiPlugin)
         .run();
 }
 

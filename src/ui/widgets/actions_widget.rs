@@ -4,8 +4,8 @@ use super::core::framework::WidgetId;
 use super::core::hud::MainHudRoot;
 use super::core::shared::widget_content_stack;
 use crate::blueprints::{BlueprintRegistry, EntityKind};
-use crate::components::*;
-use crate::theme::Theme;
+use crate::types::*;
+use crate::ui::theme::Theme;
 
 use super::buttons;
 
@@ -211,7 +211,7 @@ pub fn update_action_bar(
     ),
     ui_state: (Res<IconAssets>, Res<RallyPointMode>),
     formation: Res<ActiveFormation>,
-    faction_ages: Res<crate::ages::FactionAges>,
+    faction_ages: Res<crate::simulation::ages::FactionAges>,
 ) {
     let (all_completed, base_state, active_player, all_resources) = player_state;
     let current_age = faction_ages.get_age(&active_player.0);

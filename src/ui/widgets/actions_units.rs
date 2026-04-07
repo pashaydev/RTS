@@ -3,8 +3,8 @@ use bevy::prelude::*;
 use super::core::constants::*;
 use super::core::shared::{widget_content_stack, widget_wrap_row};
 use crate::blueprints::EntityKind;
-use crate::components::*;
-use crate::theme::Theme;
+use crate::types::*;
+use crate::ui::theme::Theme;
 
 pub(super) fn spawn_units_action_bar(
     commands: &mut Commands,
@@ -91,7 +91,7 @@ pub(super) fn spawn_units_action_bar(
                                     // border_radius: RADIUS_SM,
                                     ..default()
                                 },
-                                BackgroundColor(crate::theme::BG_RECESSED.with_alpha(0.8)),
+                                BackgroundColor(crate::ui::theme::BG_RECESSED.with_alpha(0.8)),
                             ))
                             .id();
                         commands.entity(container).add_child(bar_bg);
@@ -105,7 +105,7 @@ pub(super) fn spawn_units_action_bar(
                                     // border_radius: RADIUS_SM,
                                     ..default()
                                 },
-                                BackgroundColor(crate::theme::PRESTIGE),
+                                BackgroundColor(crate::ui::theme::PRESTIGE),
                             ))
                             .id();
                         commands.entity(bar_bg).add_child(fill);
@@ -387,7 +387,7 @@ pub(super) fn spawn_units_action_bar(
                                 font_size: theme.typography.body,
                                 ..default()
                             },
-                            TextColor(crate::theme::TEXT_SECONDARY),
+                            TextColor(crate::ui::theme::TEXT_SECONDARY),
                         ));
                     })
                     .id();

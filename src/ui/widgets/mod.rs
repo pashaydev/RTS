@@ -5,7 +5,7 @@ macro_rules! widget_spawn_system {
             mut commands: Commands,
             registry: Res<super::core::framework::WidgetRegistry>,
             fonts: Res<super::core::fonts::UiFonts>,
-            theme: Res<$crate::theme::Theme>,
+            theme: Res<$crate::ui::theme::Theme>,
             root_q: Query<Entity, Added<super::core::hud::MainHudRoot>>,
         ) {
             let Ok(hud_root) = root_q.single() else { return; };
@@ -22,7 +22,7 @@ macro_rules! widget_spawn_system {
             mut commands: Commands,
             registry: Res<super::core::framework::WidgetRegistry>,
             fonts: Res<super::core::fonts::UiFonts>,
-            theme: Res<$crate::theme::Theme>,
+            theme: Res<$crate::ui::theme::Theme>,
             root_q: Query<Entity, Added<super::core::hud::MainHudRoot>>,
         ) {
             let Ok(hud_root) = root_q.single() else { return; };
@@ -60,7 +60,7 @@ pub use super::core::framework as widget_framework;
 
 use bevy::prelude::*;
 
-use crate::components::AppState;
+use crate::types::AppState;
 
 use core::fonts::UiFonts;
 use core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
@@ -106,7 +106,7 @@ fn spawn_external_widget_frames(
     mut commands: Commands,
     registry: Res<WidgetRegistry>,
     fonts: Res<UiFonts>,
-    theme: Res<crate::theme::Theme>,
+    theme: Res<crate::ui::theme::Theme>,
     root_q: Query<Entity, Added<MainHudRoot>>,
 ) {
     let Ok(hud_root) = root_q.single() else {
@@ -124,7 +124,7 @@ fn spawn_external_widget_frames(
     );
     commands
         .entity(minimap_content)
-        .insert(crate::minimap::MinimapWidgetContent);
+        .insert(crate::presentation::minimap::MinimapWidgetContent);
 
     let debug_content = spawn_widget_frame(
         &mut commands,
@@ -135,5 +135,5 @@ fn spawn_external_widget_frames(
         &fonts,
         &theme,
     );
-    crate::debug::spawn_debug_content(&mut commands, debug_content);
+    crate::infrastructure::debug::spawn_debug_content(&mut commands, debug_content);
 }

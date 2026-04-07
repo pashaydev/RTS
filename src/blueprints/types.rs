@@ -3,7 +3,7 @@ use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::components::*;
+use crate::types::*;
 
 // ── EntityKind — unified type enum ──
 

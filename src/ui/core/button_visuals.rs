@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
-use crate::components::*;
-use crate::menu::helpers::SelectedOption;
-use crate::theme::Theme;
+use crate::types::*;
+use crate::ui::menu::helpers::SelectedOption;
+use crate::ui::theme::Theme;
 
 use super::interactions::{UiInteractPhase, UiInteractState};
 

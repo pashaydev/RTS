@@ -7,9 +7,9 @@ use super::core::constants::*;
 use super::core::framework::WidgetId;
 use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
-use crate::combat::clear_combat_intent;
-use crate::components::*;
-use crate::theme::Theme;
+use crate::simulation::combat::clear_combat_intent;
+use crate::types::*;
+use crate::ui::theme::Theme;
 
 pub struct ProductionQueueWidgetPlugin;
 
@@ -596,7 +596,7 @@ fn spawn_command_line(
                     // border_radius: RADIUS_MD,
                     ..default()
                 },
-                BackgroundColor(crate::theme::DESTRUCTIVE.with_alpha(0.12)),
+                BackgroundColor(crate::ui::theme::DESTRUCTIVE.with_alpha(0.12)),
             ))
             .with_children(|button| {
                 button.spawn((

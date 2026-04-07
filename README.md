@@ -116,19 +116,59 @@ For full multiplayer details (transport, replication, VPN setup, limits, debug t
 
 ## Architecture
 
-The codebase is organized as Bevy plugins around runtime domains, with a separate shared protocol crate for networked state and messages.
+The codebase is organized into six domain-driven PluginGroups, plus shared types and a separate protocol crate for networked state and messages.
 
-### Runtime Areas
-
-- `menu`, `pause_menu`, `theme`: shell flow, skirmish setup, options, and in-session overlays
-- `multiplayer`: Matchbox WebRTC transport, lobby state, host/client systems, built-in HTTP file server, debug tap
-- `game_state`: shared protocol crate for serialized messages, MessagePack codec, and replicated gameplay data
-- `net_bridge`: stable network IDs and ECS/network mapping
-- `components`, `blueprints`, `orders`, `selection`, `spatial`: shared gameplay state, entity typing, commands, and world queries
-- `units`, `buildings`, `resources`, `combat`, `abilities`, `unit_ai`, `mobs`, `procedural_mobs`, `items`, `ai`, `ages`, `victory`, `pathfinding`: simulation and faction behavior
-- `ground`, `lighting`, `fog`, `fog_material`, `hover_material`, `terrain_material`, `water_material`, `camera`, `minimap`, `pathvis`, `attention`, `animation`, `vfx`, `culling`, `model_assets`, `entity_labels`, `audio`: rendering, asset loading, audio, feedback, and performance
-- `ui`: HUD widgets, widgets framework, notifications, and action surfaces
-- `debug`, `save_load`, `logging`, `database`: local tooling, tweak flows, persistence, session logging, and restoration
+```
+src/
+├── types/            Shared game types (app state, economy, combat, units, buildings, AI, UI, rendering)
+├── blueprints/       Entity definitions, spawn logic, visual cache
+├── world/            WorldPlugins — terrain, environment, spatial indexing
+│   ├── ground/         Procedural terrain generation, biomes, borders, water
+│   ├── fog.rs          Fog of war
+│   ├── lighting.rs     Day/night cycle, ambient light
+│   ├── culling.rs      Frustum and distance culling
+│   ├── spatial.rs      Spatial hash grid for queries
+│   └── pathfinding.rs  A* navigation
+├── simulation/       SimulationPlugins — core gameplay logic
+│   ├── units.rs        Unit spawning, movement, stances
+│   ├── buildings/      Construction, training, upgrades, placement, walls
+│   ├── combat/         Damage, intents, budget, engagement slots
+│   ├── resources/      Gathering, processing, worker assignment, trees
+│   ├── selection/      Click/box selection, unit commands
+│   ├── ai/             AI strategy, economy, military, tactics
+│   ├── items/          Loot, equipment, VFX
+│   ├── abilities.rs    Active abilities
+│   ├── orders.rs       Command queue
+│   ├── unit_ai.rs      Per-unit decision making
+│   ├── mobs.rs         Neutral creatures
+│   ├── ages.rs         Age/tech progression
+│   └── victory.rs      Win/loss conditions, match recording
+├── presentation/     PresentationPlugins — rendering, VFX, assets
+│   ├── camera.rs       Camera controls and zoom
+│   ├── animation.rs    Skeletal and procedural animation
+│   ├── vfx.rs          Particle effects, projectiles
+│   ├── model_assets.rs Model loading and caching
+│   ├── minimap.rs      Minimap rendering
+│   ├── pathvis.rs      Path visualization
+│   ├── procedural_mobs.rs  Procedural mob meshes
+│   ├── entity_labels.rs    Floating health bars, names
+│   └── materials/      Custom shader materials (fog, grass, terrain, water, hover, tree occlusion)
+├── infrastructure/   InfraPlugins — persistence, networking, debug
+│   ├── database.rs     SQLite profiles, match history, ELO, settings
+│   ├── save_load.rs    Game save/restore
+│   ├── multiplayer/    WebRTC transport, host/client systems, replication, debug tap
+│   ├── net_bridge.rs   Network ID assignment and ECS/network mapping
+│   ├── logging.rs      Session logging
+│   ├── audio.rs        Sound effects and music
+│   └── debug/          Debug overlay, tweaks, inspector
+├── ui/               UiPlugin — HUD, menus, theming
+│   ├── theme.rs        Color palettes, dark/light modes
+│   ├── core/           Shared UI framework, fonts, text input, tooltips, animations
+│   ├── widgets/        In-game HUD widgets (resources, selection, actions, minimap, etc.)
+│   ├── menu/           Main menu, new game, options, multiplayer lobby, pause menu
+│   └── attention.rs    Screen-edge alerts
+└── game_state/       Shared protocol crate (MessagePack codec, replicated data)
+```
 
 ## Tech Stack
 

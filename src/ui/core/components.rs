@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use crate::components::{ButtonAnimState, ButtonStyle};
-use crate::theme::{self, Theme};
+use crate::types::{ButtonAnimState, ButtonStyle};
+use crate::ui::theme::{self, Theme};
 
 pub type UiButtonChrome = (ButtonAnimState, ButtonStyle, BackgroundColor, BorderColor);
 

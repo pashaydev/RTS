@@ -5,9 +5,9 @@ use rand::Rng;
 
 use crate::blueprints::types::*;
 use crate::blueprints::EntityVisualCache;
-use crate::components::*;
-use crate::ground::HeightMap;
-use crate::model_assets::{BuildingModelAssets, UnitModelAssets};
+use crate::types::*;
+use crate::world::ground::HeightMap;
+use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
 
 pub fn spawn_from_blueprint(
     commands: &mut Commands,
@@ -69,9 +69,9 @@ pub fn spawn_from_blueprint_with_faction(
         bp.building.as_ref().map(|b| b.half_height).unwrap_or(0.0)
     };
     let ground_y = if kind.category() == EntityCategory::Building
-        && crate::buildings::uses_terrain_foundation(kind)
+        && crate::simulation::buildings::uses_terrain_foundation(kind)
     {
-        let footprint = crate::buildings::footprint_for_kind(kind);
+        let footprint = crate::simulation::buildings::footprint_for_kind(kind);
         height_map.foundation_target_height_shaped(pos.x, pos.z, footprint)
     } else {
         height_map.sample(pos.x, pos.z)
@@ -205,8 +205,8 @@ pub fn spawn_from_blueprint_with_faction(
             }
         }
         EntityCategory::Building => {
-            let footprint = crate::buildings::footprint_for_kind(kind);
-            let bld_height = crate::buildings::building_height_for_kind(kind);
+            let footprint = crate::simulation::buildings::footprint_for_kind(kind);
+            let bld_height = crate::simulation::buildings::building_height_for_kind(kind);
             entity_cmds.insert((
                 Building,
                 BuildingLevel(1),

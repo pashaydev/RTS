@@ -2,8 +2,8 @@ use bevy::prelude::*;
 
 use super::core::constants::*;
 use super::core::hud::MainHudRoot;
-use crate::components::*;
-use crate::theme::{self, Theme};
+use crate::types::*;
+use crate::ui::theme::{self, Theme};
 
 pub struct NotificationsWidgetPlugin;
 

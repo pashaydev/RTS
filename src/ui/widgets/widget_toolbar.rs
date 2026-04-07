@@ -5,8 +5,8 @@ use super::core::constants::*;
 use super::core::framework::{WidgetId, WidgetRegistry};
 use super::core::hud::MainHudRoot;
 use super::core::interactions::UiClickEvent;
-use crate::components::AppState;
-use crate::theme::{self, Theme};
+use crate::types::AppState;
+use crate::ui::theme::{self, Theme};
 use crate::ui::fonts::{self, UiFonts};
 
 pub struct WidgetToolbarPlugin;

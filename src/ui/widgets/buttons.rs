@@ -4,13 +4,13 @@ use bevy_matchbox::prelude::*;
 use game_state::message::{ClientMessage, InputCommand, PlayerInput};
 
 use crate::blueprints::{BlueprintRegistry, EntityKind};
-use crate::buildings;
-use crate::camera;
-use crate::combat::{apply_manual_hold_intent, clear_combat_intent};
-use crate::components::*;
-use crate::multiplayer::{ClientNetState, NetRole};
-use crate::net_bridge::EntityNetMap;
-use crate::theme::{self, Theme};
+use crate::simulation::buildings;
+use crate::presentation::camera;
+use crate::simulation::combat::{apply_manual_hold_intent, clear_combat_intent};
+use crate::types::*;
+use crate::infrastructure::multiplayer::{ClientNetState, NetRole};
+use crate::infrastructure::net_bridge::EntityNetMap;
+use crate::ui::theme::{self, Theme};
 use super::core::constants::*;
 
 /// Mark the UI as having been clicked this frame (prevents clicks falling through to the game world).
@@ -63,7 +63,7 @@ fn send_online_input_to_host(
             commands,
         },
     };
-    crate::multiplayer::matchbox_transport::send_to_host(socket, &msg);
+    crate::infrastructure::multiplayer::matchbox_transport::send_to_host(socket, &msg);
 }
 
 // ── Build button handler ──
@@ -693,7 +693,7 @@ pub fn handle_assign_worker_button(
     >,
     assigned_workers_q: Query<&AssignedWorkers>,
     active_player: Res<ActivePlayer>,
-    height_map: Res<crate::ground::HeightMap>,
+    height_map: Res<crate::world::ground::HeightMap>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -715,7 +715,7 @@ pub fn handle_assign_worker_button(
 
             // Compute yard center for sawmills so workers can be placed inside the fence
             let yard_center = if sawmill_yard.is_some() {
-                Some(building_tf.translation + crate::buildings::SAWMILL_YARD_OFFSET)
+                Some(building_tf.translation + crate::simulation::buildings::SAWMILL_YARD_OFFSET)
             } else {
                 None
             };
@@ -732,7 +732,7 @@ pub fn handle_assign_worker_button(
                 if assigned >= slots_available {
                     break;
                 }
-                crate::resources::assign_worker_to_processor(
+                crate::simulation::resources::assign_worker_to_processor(
                     &mut commands,
                     worker_entity,
                     building_entity,
@@ -742,7 +742,7 @@ pub fn handle_assign_worker_button(
                 // Teleport worker inside the fence for sawmills
                 if let Some(center) = yard_center {
                     let slot_idx = current_count + assigned;
-                    let slot_offset = crate::buildings::SAWMILL_TREE_SLOTS
+                    let slot_offset = crate::simulation::buildings::SAWMILL_TREE_SLOTS
                         .get(slot_idx)
                         .copied()
                         .unwrap_or(Vec3::ZERO);
@@ -789,7 +789,7 @@ pub fn handle_unassign_worker_button(
             if let Ok(aw) = assigned_workers_q.get(building_entity) {
                 let workers_to_unassign: Vec<Entity> = aw.workers.clone();
                 for worker_entity in workers_to_unassign {
-                    crate::resources::unassign_worker_from_processor(&mut commands, worker_entity);
+                    crate::simulation::resources::unassign_worker_from_processor(&mut commands, worker_entity);
                 }
                 // Clear the building's assigned workers list
                 commands
@@ -818,7 +818,7 @@ pub fn handle_unassign_specific_worker_button(
         ui_press.0 = true;
 
         let worker = btn.0;
-        crate::resources::unassign_worker_from_processor(&mut commands, worker);
+        crate::simulation::resources::unassign_worker_from_processor(&mut commands, worker);
 
         // Remove from all buildings' AssignedWorkers
         for mut aw in &mut assigned_workers_q {
@@ -847,7 +847,7 @@ pub fn handle_unassign_one_worker_button(
         for building_entity in &selected_buildings {
             if let Ok(mut aw) = assigned_workers_q.get_mut(building_entity) {
                 if let Some(worker_entity) = aw.workers.pop() {
-                    crate::resources::unassign_worker_from_processor(&mut commands, worker_entity);
+                    crate::simulation::resources::unassign_worker_from_processor(&mut commands, worker_entity);
                 }
             }
         }
@@ -1141,7 +1141,7 @@ pub fn handle_hold_position_button(
                 .insert(TaskSource::Manual);
             if let Ok(mut queue) = task_queues.get_mut(entity) {
                 queue.clear_queued();
-                crate::orders::set_current_task(
+                crate::simulation::orders::set_current_task(
                     &mut queue,
                     &mut next_task_id,
                     QueuedTask::HoldPosition,
@@ -1175,7 +1175,7 @@ pub fn handle_stop_button(
             clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
             let grace = ManualIdleSince(time.elapsed_secs_f64());
             if *kind == EntityKind::Worker {
-                crate::resources::unassign_worker_from_processor(&mut commands, entity);
+                crate::simulation::resources::unassign_worker_from_processor(&mut commands, entity);
                 commands.entity(entity).insert(grace);
             } else {
                 commands

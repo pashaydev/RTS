@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
 use super::constants::*;
-use crate::components::*;
-use crate::theme::Theme;
+use crate::types::*;
+use crate::ui::theme::Theme;
 
 pub fn hp_color(theme: &Theme, current: f32, max: f32) -> Color {
     let pct = (current / max).clamp(0.0, 1.0);

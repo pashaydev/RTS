@@ -67,12 +67,16 @@ flowchart TB
 
 ### Current module split
 
+All multiplayer modules live under `src/infrastructure/multiplayer/`:
+
 - `transport`: Matchbox send/receive path, peer tracking, LAN discovery, and HTTP hosting helpers.
 - `server::input`: host-side command validation/execution and disconnect handling.
 - `server::replication`: host-side snapshot building and broadcast systems.
 - `client::receive`: drains inbox and stages server messages into pending resources.
 - `client::apply`: mutates ECS from staged baseline/delta data.
 - `client::interpolation`: visual smoothing only.
+
+The multiplayer menu UI lives under `src/ui/menu/multiplayer/`.
 
 ---
 
@@ -693,19 +697,19 @@ ELO is updated after each recorded match. For single-player, opponent rating is 
 
 | File | Purpose |
 |------|---------|
-| `src/multiplayer/mod.rs` | Plugin wiring, shared resources, run conditions, NetStats, SessionTokens |
-| `src/multiplayer/transport/` | Transport directory: `mod.rs` (LAN discovery UDP :7877, HTTP file server :7880, IP detection, legacy helpers), `discovery.rs`, `ip.rs`, `tcp.rs`, `wire.rs` |
-| `src/multiplayer/server/input.rs` | Server-side input/command handling re-exports |
-| `src/multiplayer/server/replication.rs` | Server-side replication/broadcast re-exports |
-| `src/multiplayer/host_systems.rs` | Host command execution, snapshot building, delta sync, neutral baseline/delta emission, reconnect grace |
-| `src/multiplayer/client/receive.rs` | Client receive/staging re-exports |
-| `src/multiplayer/client/apply.rs` | Client apply-system re-exports |
-| `src/multiplayer/client/interpolation.rs` | Client interpolation re-exports |
-| `src/multiplayer/client_systems.rs` | Staged client receive/apply implementation, interpolation, neutral world apply |
-| `src/multiplayer/debug_tap.rs` | HTTP debug server, TX/RX event recording |
-| `src/net_bridge.rs` | NetworkId assignment (entities + neutral objects), EntityNetMap |
-| `src/menu/multiplayer/` | Multiplayer menu directory: `mod.rs` (re-exports), `networking.rs` (start_hosting, connect_to_host_system), `lobby.rs` (lobby UI, update_lobby_ui), `pages.rs` (menu pages), `config.rs` (config serialization) |
-| `src/database.rs` | SQLite persistence — player profiles, match history, ELO, settings, presets. `ActiveProfile` is player identity source of truth |
-| `src/victory.rs` | Victory/defeat checks, `record_match_system` (records match + player names + ELO on game over) |
+| `src/infrastructure/multiplayer/mod.rs` | Plugin wiring, shared resources, run conditions, NetStats, SessionTokens |
+| `src/infrastructure/multiplayer/transport/` | Transport directory: `mod.rs` (LAN discovery UDP :7877, HTTP file server :7880, IP detection, legacy helpers), `discovery.rs`, `ip.rs`, `tcp.rs`, `wire.rs` |
+| `src/infrastructure/multiplayer/server/input.rs` | Server-side input/command handling re-exports |
+| `src/infrastructure/multiplayer/server/replication.rs` | Server-side replication/broadcast re-exports |
+| `src/infrastructure/multiplayer/host_systems.rs` | Host command execution, snapshot building, delta sync, neutral baseline/delta emission, reconnect grace |
+| `src/infrastructure/multiplayer/client/receive.rs` | Client receive/staging re-exports |
+| `src/infrastructure/multiplayer/client/apply.rs` | Client apply-system re-exports |
+| `src/infrastructure/multiplayer/client/interpolation.rs` | Client interpolation re-exports |
+| `src/infrastructure/multiplayer/client_systems.rs` | Staged client receive/apply implementation, interpolation, neutral world apply |
+| `src/infrastructure/multiplayer/debug_tap.rs` | HTTP debug server, TX/RX event recording |
+| `src/infrastructure/net_bridge.rs` | NetworkId assignment (entities + neutral objects), EntityNetMap |
+| `src/ui/menu/multiplayer/` | Multiplayer menu directory: `mod.rs` (re-exports), `networking.rs` (start_hosting, connect_to_host_system), `lobby.rs` (lobby UI, update_lobby_ui), `pages.rs` (menu pages), `config.rs` (config serialization) |
+| `src/infrastructure/database.rs` | SQLite persistence — player profiles, match history, ELO, settings, presets. `ActiveProfile` is player identity source of truth |
+| `src/simulation/victory.rs` | Victory/defeat checks, `record_match_system` (records match + player names + ELO on game over) |
 | `game_state/src/message.rs` | All network message types + ServerFrame |
 | `game_state/src/codec.rs` | MessagePack encode/decode helpers |

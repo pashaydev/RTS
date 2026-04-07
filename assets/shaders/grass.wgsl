@@ -1,4 +1,20 @@
-#import bevy_pbr::forward_io::{Vertex, VertexOutput}
+#import bevy_pbr::{
+    pbr_fragment::pbr_input_from_standard_material,
+    pbr_functions::alpha_discard,
+}
+
+#ifdef PREPASS_PIPELINE
+#import bevy_pbr::{
+    prepass_io::{Vertex, VertexOutput, FragmentOutput},
+    pbr_deferred_functions::deferred_output,
+}
+#else
+#import bevy_pbr::{
+    forward_io::{Vertex, VertexOutput, FragmentOutput},
+    pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
+}
+#endif
+
 #import bevy_pbr::mesh_functions::{
     get_world_from_local,
     mesh_position_local_to_world,
@@ -26,7 +42,7 @@ struct GrassSettings {
     _pad2: f32,
 };
 
-@group(3) @binding(0) var<uniform> settings: GrassSettings;
+@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> settings: GrassSettings;
 
 // ── Hash helper for per-blade randomness ──
 
@@ -62,6 +78,11 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 #else
     let height_pct = 0.0;
     let width_pct = 0.5;
+#endif
+
+    // Pass height_pct to fragment via UV_B channel (avoids conflict with PBR vertex colors)
+#ifdef VERTEX_UVS_B
+    out.uv_b = vec2<f32>(height_pct, 0.0);
 #endif
 
     // Per-blade randomness from world XZ hash
@@ -134,8 +155,11 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     let blend = smoothstep(settings.normal_blend_start, settings.normal_blend_end, dist);
     out.world_normal = normalize(mix(biased_normal, vec3<f32>(0.0, 1.0, 0.0), blend));
 
-    // Pass height_pct to fragment via color channel
-    out.color = vec4<f32>(height_pct, 0.0, 0.0, 1.0);
+    // Neutral vertex color so PBR base_color multiplication is 1:1
+    out.color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
+
+    // Pass instance_index through for PBR pipeline
+    out.instance_index = vertex.instance_index;
 
     return out;
 }
@@ -143,8 +167,12 @@ fn vertex(vertex: Vertex) -> VertexOutput {
 // ── Fragment shader ──
 
 @fragment
-fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
-    let height_pct = in.color.x;
+fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
+#ifdef VERTEX_UVS_B
+    let height_pct = in.uv_b.x;
+#else
+    let height_pct = 0.0;
+#endif
 
     // Base-to-tip gradient
     let grass_color = mix(
@@ -156,17 +184,21 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Root darkening
     let root_darken = mix(0.4, 1.0, smoothstep(0.0, 0.25, height_pct));
 
-    // Simple directional diffuse + hemisphere ambient
-    let normal = normalize(in.world_normal);
-    let light_dir = normalize(vec3<f32>(0.4, 0.8, 0.3));
-    let ndotl = max(dot(normal, light_dir), 0.0);
-    let diffuse = 0.3 + ndotl * 0.7;
+    let color = grass_color * root_darken;
 
-    let sky_factor = normal.y * 0.5 + 0.5;
-    let ambient = mix(0.5, 1.0, sky_factor);
+    // Hook into Bevy PBR pipeline for proper scene lighting
+    var pbr_input = pbr_input_from_standard_material(in, is_front);
+    pbr_input.material.base_color = vec4<f32>(color, 1.0);
+    pbr_input.N = normalize(in.world_normal);
+    pbr_input.world_normal = normalize(in.world_normal);
 
-    let lighting = diffuse * 0.6 + ambient * 0.4;
+#ifdef PREPASS_PIPELINE
+    let out = deferred_output(in, pbr_input);
+#else
+    var out: FragmentOutput;
+    out.color = apply_pbr_lighting(pbr_input);
+    out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+#endif
 
-    let final_color = grass_color * root_darken * lighting;
-    return vec4<f32>(final_color, 1.0);
+    return out;
 }

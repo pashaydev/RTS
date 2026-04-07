@@ -1,8 +1,8 @@
 use bevy::ecs::message::MessageWriter;
 use bevy::prelude::*;
 
-use crate::audio::{PlaySfx, SfxKind};
-use crate::components::TextInputField;
+use crate::infrastructure::audio::{PlaySfx, SfxKind};
+use crate::types::TextInputField;
 
 use super::framework::{WidgetDragHandle, WidgetResizeHandle};
 

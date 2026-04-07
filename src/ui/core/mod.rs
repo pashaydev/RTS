@@ -12,9 +12,9 @@ pub mod tooltips;
 
 use bevy::prelude::*;
 
-use crate::components::*;
-use crate::database::GameDatabase;
-use crate::selection::SelectionSet;
+use crate::types::*;
+use crate::infrastructure::database::GameDatabase;
+use crate::simulation::selection::SelectionSet;
 
 pub struct UiCorePlugin;
 

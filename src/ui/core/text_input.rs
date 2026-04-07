@@ -10,8 +10,8 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
-use crate::components::*;
-use crate::theme::{self, Theme};
+use crate::types::*;
+use crate::ui::theme::{self, Theme};
 
 use super::interactions::UiClickEvent;
 
@@ -122,12 +122,12 @@ pub fn text_input_system(
         &mut TextInputField,
         &Interaction,
         Option<&TextInputFocused>,
-        Option<&crate::menu::SessionCodeInput>,
+        Option<&crate::ui::menu::SessionCodeInput>,
     )>,
     mut commands: Commands,
     mut config: ResMut<GameSetupConfig>,
-    mut profile: ResMut<crate::database::ActiveProfile>,
-    db: Res<crate::database::GameDatabase>,
+    mut profile: ResMut<crate::infrastructure::database::ActiveProfile>,
+    db: Res<crate::infrastructure::database::GameDatabase>,
     mut keyboard_events: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     theme: Res<Theme>,

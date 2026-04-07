@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use super::fonts::{self, UiFonts};
 use super::interactions::{UiClickEvent, UiInteractPhase, UiInteractState};
-use crate::components::AppState;
-use crate::theme::{self, Theme};
+use crate::types::AppState;
+use crate::ui::theme::{self, Theme};
 
 /// Set to true when a widget consumed scroll events this frame.
 /// Camera zoom should skip when this is true.

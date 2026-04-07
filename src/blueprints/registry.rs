@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use crate::blueprints::types::*;
-use crate::components::*;
+use crate::types::*;
 
 pub fn build_registry() -> BlueprintRegistry {
     let mut blueprints = HashMap::new();

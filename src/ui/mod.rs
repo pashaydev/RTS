@@ -1,4 +1,7 @@
+pub mod attention;
 pub mod core;
+pub mod menu;
+pub mod theme;
 pub mod widgets;
 
 // Compatibility re-exports keep existing `crate::ui::*` paths working
@@ -25,5 +28,7 @@ impl PluginGroup for UiPlugin {
         PluginGroupBuilder::start::<Self>()
             .add(core::UiCorePlugin)
             .add(widgets::WidgetsPlugin)
+            .add(attention::AttentionPlugin)
+            .add(menu::MenuPlugin)
     }
 }

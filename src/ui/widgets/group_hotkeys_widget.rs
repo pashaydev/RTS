@@ -4,8 +4,8 @@ use super::core::constants::*;
 use super::core::framework::WidgetId;
 use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
-use crate::components::*;
-use crate::theme::{self, Theme};
+use crate::types::*;
+use crate::ui::theme::{self, Theme};
 
 pub struct GroupHotkeysWidgetPlugin;
 

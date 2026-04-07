@@ -5,8 +5,8 @@ use std::collections::HashSet;
 
 use super::core::constants::*;
 use super::core::hud::MainHudRoot;
-use crate::components::*;
-use crate::theme;
+use crate::types::*;
+use crate::ui::theme;
 
 pub struct HintsWidgetPlugin;
 

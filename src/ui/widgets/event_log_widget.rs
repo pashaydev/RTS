@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 use super::core::constants::*;
 use super::core::framework::WidgetId;
 use super::core::hud::MainHudRoot;
-use crate::components::{ActivePlayer, AppState, Faction, RtsCamera, TeamConfig};
-use crate::theme::{self, Theme};
+use crate::types::{ActivePlayer, AppState, Faction, RtsCamera, TeamConfig};
+use crate::ui::theme::{self, Theme};
 
 pub struct EventLogWidgetPlugin;
 

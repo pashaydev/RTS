@@ -12,12 +12,12 @@ use super::selection_cards::{
     spawn_multi_inventory_summary, spawn_unit_mini_card,
 };
 use crate::blueprints::EntityKind;
-use crate::components::*;
-use crate::items::{
+use crate::types::*;
+use crate::simulation::items::{
     InventoryChanged, ItemAssets, ItemPickupCollected,
     ItemPickupFailed, ItemRuntimeState, RequestDropItem, UnitInventory,
 };
-use crate::theme::Theme;
+use crate::ui::theme::Theme;
 
 pub struct SelectionWidgetPlugin;
 
@@ -813,9 +813,9 @@ fn rebuild_selection_panel(
             })
             .unwrap_or("Neutral");
         let relationship_color = if relationship == "Allied" {
-            crate::theme::SUCCESS
+            crate::ui::theme::SUCCESS
         } else {
-            crate::theme::DESTRUCTIVE
+            crate::ui::theme::DESTRUCTIVE
         };
 
         if let Ok((kind, health, dmg, rng, spd, aggro, is_boss)) = mob_query.get(inspected_entity) {
@@ -1079,7 +1079,7 @@ fn label_visibility_presentation(
         (
             theme.colors.accent,
             "On (L)",
-            crate::theme::TEXT_PRIMARY,
+            crate::ui::theme::TEXT_PRIMARY,
             "Ambient labels are visible for units on screen.",
         )
     } else {
