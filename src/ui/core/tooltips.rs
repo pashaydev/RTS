@@ -2,7 +2,7 @@ use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 
 use crate::components::*;
-use crate::theme::Theme;
+use crate::theme::{self, Theme};
 
 pub fn show_action_tooltips(
     mut commands: Commands,
@@ -42,15 +42,15 @@ pub fn show_action_tooltips(
                             flex_direction: FlexDirection::Column,
                             padding: UiRect::all(Val::Px(6.0)),
                             row_gap: Val::Px(1.0),
-                            border_radius: BorderRadius::all(Val::Px(5.0)),
+                            // border_radius: BorderRadius::all(Val::Px(5.0)),
                             border: UiRect::all(Val::Px(1.0)),
                             width: Val::Px(176.0),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(0.05, 0.05, 0.07, 0.96)),
-                        BorderColor::all(Color::srgba(0.25, 0.25, 0.30, 0.6)),
+                        BackgroundColor(theme::TOOLTIP_BG),
+                        BorderColor::all(theme::TOOLTIP_BORDER),
                         BoxShadow::new(
-                            Color::srgba(0.0, 0.0, 0.0, 0.6),
+                            theme::OVERLAY,
                             Val::Px(0.0),
                             Val::Px(2.0),
                             Val::Px(0.0),
@@ -159,7 +159,7 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str, theme: &Them
                     margin: UiRect::axes(Val::Px(0.0), Val::Px(1.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.30, 0.30, 0.35, 0.4)),
+                BackgroundColor(theme::SEPARATOR),
             ));
             continue;
         }
@@ -183,14 +183,14 @@ fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str, theme: &Them
                     margin: UiRect::axes(Val::Px(0.0), Val::Px(1.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.30, 0.30, 0.35, 0.4)),
+                BackgroundColor(theme::SEPARATOR),
             ));
-            (Color::srgba(0.45, 0.65, 1.0, 0.7), theme.typography.tiny)
+            (theme::HIGHLIGHT.with_alpha(0.7), theme.typography.tiny)
         } else if line.starts_with("Build time:") || line.starts_with("Train:") {
             (theme.colors.text_secondary, theme.typography.caption)
         } else {
             (
-                Color::srgba(0.65, 0.65, 0.65, 0.9),
+                theme::TEXT_DISABLED.with_alpha(0.9),
                 theme.typography.caption,
             )
         };

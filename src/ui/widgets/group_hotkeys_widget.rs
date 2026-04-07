@@ -65,18 +65,8 @@ impl ControlGroups {
     }
 }
 
-// Group-specific colors for badges (visually distinct, saturated but not harsh)
-const GROUP_COLORS: [Color; 9] = [
-    Color::srgb(0.29, 0.62, 1.00), // 1 - blue
-    Color::srgb(0.30, 0.80, 0.40), // 2 - green
-    Color::srgb(1.00, 0.65, 0.15), // 3 - orange
-    Color::srgb(0.80, 0.35, 0.85), // 4 - purple
-    Color::srgb(0.90, 0.35, 0.35), // 5 - red
-    Color::srgb(0.20, 0.80, 0.80), // 6 - cyan
-    Color::srgb(0.95, 0.85, 0.30), // 7 - yellow
-    Color::srgb(0.60, 0.45, 0.30), // 8 - brown
-    Color::srgb(0.70, 0.70, 0.75), // 9 - silver
-];
+// Group-specific colors for badges — sourced from the theme palette.
+const GROUP_COLORS: [Color; 9] = theme::GROUP_COLORS;
 
 pub fn group_color(index: usize) -> Color {
     GROUP_COLORS[index.min(8)]
@@ -186,13 +176,13 @@ pub fn update_group_hotkeys_widget(
         } else if is_empty && has_selection {
             // Empty slot while units are selected — assignable
             (
-                Color::srgba(0.12, 0.12, 0.12, 0.3),
-                Color::srgba(0.4, 0.4, 0.4, 0.3),
+                theme::BG_SURFACE.with_alpha(0.3),
+                theme::TEXT_DISABLED.with_alpha(0.3),
             )
         } else if is_empty {
-            (Color::srgba(0.15, 0.15, 0.15, 0.3), Color::NONE)
+            (theme::BG_ELEVATED.with_alpha(0.3), Color::NONE)
         } else {
-            (Color::srgba(0.2, 0.2, 0.25, 0.6), Color::NONE)
+            (theme::BG_ELEVATED.with_alpha(0.6), Color::NONE)
         };
 
         let slot = commands
@@ -204,7 +194,7 @@ pub fn update_group_hotkeys_widget(
                     align_items: AlignItems::Center,
                     padding: PAD_SM,
                     border: BORDER_1,
-                    border_radius: RADIUS_LG,
+                    // border_radius: RADIUS_LG,
                     min_width: Val::Px(40.0),
                     min_height: Val::Px(40.0),
                     flex_direction: FlexDirection::Column,
@@ -248,7 +238,7 @@ pub fn update_group_hotkeys_widget(
                         font_size: theme.typography.body,
                         ..default()
                     },
-                    TextColor(Color::srgba(0.5, 0.5, 0.5, 0.5)),
+                    TextColor(theme::TEXT_DISABLED.with_alpha(0.5)),
                 ))
                 .id();
             commands.entity(slot).add_child(plus);
@@ -349,7 +339,7 @@ pub fn update_group_hotkeys_widget(
                     font_size: theme.typography.tiny,
                     ..default()
                 },
-                TextColor(Color::srgba(0.45, 0.45, 0.50, 0.7)),
+                TextColor(theme::TEXT_DISABLED.with_alpha(0.7)),
                 Node {
                     margin: UiRect::top(Val::Px(1.0)),
                     ..default()
@@ -374,10 +364,10 @@ fn group_slot_interaction_system(
     group_state: Res<ControlGroupState>,
     unit_kinds: Query<&EntityKind, With<Unit>>,
 ) {
-    let hovered_bg = Color::srgb(0.24, 0.24, 0.34);
-    let pressed_bg = Color::srgb(0.30, 0.62, 0.46);
-    let border_hovered = Color::srgba(1.0, 1.0, 1.0, 0.25);
-    let border_pressed = Color::srgba(0.35, 0.85, 0.55, 0.7);
+    let hovered_bg = theme::BG_ELEVATED;
+    let pressed_bg = theme::SUCCESS;
+    let border_hovered = theme::TEXT_PRIMARY.with_alpha(0.25);
+    let border_pressed = theme::SUCCESS.with_alpha(0.7);
 
     for (interaction, mut bg, mut border, slot) in &mut interactions {
         let i = slot.0;
@@ -394,9 +384,9 @@ fn group_slot_interaction_system(
         let (base_bg, base_border) = if is_active && !is_empty {
             (Color::srgba(0.15, 0.25, 0.45, 0.8), group_color(i))
         } else if is_empty {
-            (Color::srgba(0.15, 0.15, 0.15, 0.3), Color::NONE)
+            (theme::BG_ELEVATED.with_alpha(0.3), Color::NONE)
         } else {
-            (Color::srgba(0.2, 0.2, 0.25, 0.6), Color::NONE)
+            (theme::BG_ELEVATED.with_alpha(0.6), Color::NONE)
         };
 
         match *interaction {

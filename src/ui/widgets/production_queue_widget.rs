@@ -458,7 +458,7 @@ fn spawn_focus_row(
                 row_gap: Val::Px(4.0),
                 padding: UiRect::all(Val::Px(6.0)),
                 margin: UiRect::top(Val::Px(4.0)),
-                border_radius: RADIUS_LG,
+                // border_radius: RADIUS_LG,
                 ..default()
             },
             BackgroundColor(theme.colors.bg_surface),
@@ -593,10 +593,10 @@ fn spawn_command_line(
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
-                    border_radius: RADIUS_MD,
+                    // border_radius: RADIUS_MD,
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.75, 0.22, 0.22, 0.12)),
+                BackgroundColor(crate::theme::DESTRUCTIVE.with_alpha(0.12)),
             ))
             .with_children(|button| {
                 button.spawn((
@@ -688,7 +688,7 @@ fn spawn_building_queue_card(
                 Node {
                     width: Val::Px(72.0),
                     height: Val::Px(5.0),
-                    border_radius: RADIUS_SM,
+                    // border_radius: RADIUS_SM,
                     ..default()
                 },
                 BackgroundColor(theme.colors.hp_bar_bg),
@@ -704,7 +704,7 @@ fn spawn_building_queue_card(
                                 .map_or(0.0, |timer| timer.fraction() * 100.0),
                         ),
                         height: Val::Percent(100.0),
-                        border_radius: RADIUS_SM,
+                        // border_radius: RADIUS_SM,
                         ..default()
                     },
                     BackgroundColor(theme.colors.accent),
@@ -748,7 +748,7 @@ fn spawn_building_queue_card(
                         align_items: AlignItems::Center,
                         column_gap: Val::Px(4.0),
                         padding: UiRect::axes(Val::Px(5.0), Val::Px(3.0)),
-                        border_radius: RADIUS_MD,
+                        // border_radius: RADIUS_MD,
                         ..default()
                     },
                     BackgroundColor(theme.colors.bg_panel),

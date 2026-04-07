@@ -88,10 +88,10 @@ pub(super) fn spawn_units_action_bar(
                                     width: Val::Percent(100.0),
                                     max_width: Val::Px(220.0),
                                     height: Val::Px(6.0),
-                                    border_radius: RADIUS_SM,
+                                    // border_radius: RADIUS_SM,
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgba(0.2, 0.2, 0.2, 0.8)),
+                                BackgroundColor(crate::theme::BG_RECESSED.with_alpha(0.8)),
                             ))
                             .id();
                         commands.entity(container).add_child(bar_bg);
@@ -102,10 +102,10 @@ pub(super) fn spawn_units_action_bar(
                                 Node {
                                     width: Val::Percent(fill_frac * 100.0),
                                     height: Val::Percent(100.0),
-                                    border_radius: RADIUS_SM,
+                                    // border_radius: RADIUS_SM,
                                     ..default()
                                 },
-                                BackgroundColor(Color::srgb(0.8, 0.65, 0.2)),
+                                BackgroundColor(crate::theme::PRESTIGE),
                             ))
                             .id();
                         commands.entity(bar_bg).add_child(fill);
@@ -199,7 +199,7 @@ pub(super) fn spawn_units_action_bar(
                 min_width: cmd_min_width,
                 flex_grow: if layout_bucket == 0 { 1.0 } else { 0.0 },
                 padding: PAD_BUTTON,
-                border_radius: RADIUS_MD,
+                // border_radius: RADIUS_MD,
                 ..default()
             },
             BackgroundColor(Color::NONE),
@@ -256,7 +256,7 @@ pub(super) fn spawn_units_action_bar(
                     margin: UiRect::top(Val::Px(6.0)),
                     align_self: AlignSelf::FlexStart,
                     padding: PAD_BUTTON,
-                    border_radius: RADIUS_MD,
+                    // border_radius: RADIUS_MD,
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
@@ -291,7 +291,7 @@ pub(super) fn spawn_units_action_bar(
                     margin: UiRect::top(Val::Px(6.0)),
                     align_self: AlignSelf::FlexStart,
                     padding: PAD_BUTTON,
-                    border_radius: RADIUS_MD,
+                    // border_radius: RADIUS_MD,
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
@@ -375,7 +375,7 @@ pub(super) fn spawn_units_action_bar(
                             min_width: cmd_min_width,
                             flex_grow: if layout_bucket == 0 { 1.0 } else { 0.0 },
                             padding: PAD_BUTTON,
-                            border_radius: RADIUS_MD,
+                            // border_radius: RADIUS_MD,
                             ..default()
                         },
                         BackgroundColor(Color::NONE),
@@ -387,7 +387,7 @@ pub(super) fn spawn_units_action_bar(
                                 font_size: theme.typography.body,
                                 ..default()
                             },
-                            TextColor(Color::srgb(0.4, 0.8, 1.0)),
+                            TextColor(crate::theme::TEXT_SECONDARY),
                         ));
                     })
                     .id();
@@ -410,7 +410,7 @@ pub(super) fn spawn_units_action_bar(
                     margin: UiRect::top(Val::Px(6.0)),
                     align_self: AlignSelf::FlexStart,
                     padding: PAD_BUTTON,
-                    border_radius: RADIUS_MD,
+                    // border_radius: RADIUS_MD,
                     ..default()
                 },
                 BackgroundColor(Color::NONE),

@@ -464,7 +464,7 @@ fn update_worker_overlays(
                     align_items: AlignItems::Center,
                     column_gap: Val::Px(OVERLAY_GAP),
                     padding: UiRect::all(Val::Px(OVERLAY_BG_PADDING)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    // border_radius: BorderRadius::all(Val::Px(4.0)),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
@@ -483,7 +483,7 @@ fn update_worker_overlays(
                             width: Val::Px(OVERLAY_ICON_SIZE),
                             height: Val::Px(OVERLAY_ICON_SIZE),
                             border: UiRect::all(Val::Px(1.5)),
-                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            // border_radius: BorderRadius::all(Val::Px(3.0)),
                             ..default()
                         },
                         ImageNode::new(icons.entity_icon(EntityKind::Worker)),
@@ -500,7 +500,7 @@ fn update_worker_overlays(
                             width: Val::Px(OVERLAY_ICON_SIZE),
                             height: Val::Px(OVERLAY_ICON_SIZE),
                             border: UiRect::all(Val::Px(1.0)),
-                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            // border_radius: BorderRadius::all(Val::Px(3.0)),
                             ..default()
                         },
                         BorderColor::all(Color::srgba(0.4, 0.4, 0.4, 0.4)),

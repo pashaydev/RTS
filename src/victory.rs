@@ -456,7 +456,7 @@ fn victory_ui_spawn_system(
                     Button,
                     Node {
                         padding: UiRect::axes(Val::Px(32.0), Val::Px(12.0)),
-                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        // border_radius: BorderRadius::all(Val::Px(8.0)),
                         ..default()
                     },
                     BackgroundColor(Color::srgba(0.3, 0.3, 0.3, 0.9)),

@@ -313,7 +313,8 @@ fn steer_avoidance(
         }
 
         // ── Building repulsion ── (avoid walking through buildings)
-        if is_moving {
+        // Always active — idle units inside a footprint must also be pushed out.
+        {
             let nearby_buildings = spatial_grid.query_radius(my_pos, 8.0);
             for (b_entity, b_pos) in &nearby_buildings {
                 if *b_entity == entity {
@@ -347,12 +348,20 @@ fn steer_avoidance(
                 sep_vec
             };
 
+            // If the unit is already inside a blocked cell, relax NavGrid checks
+            // so avoidance can push it out rather than keeping it trapped.
+            let current_blocked = nav_grid
+                .as_ref()
+                .is_some_and(|grid| !grid.is_world_passable(my_pos.x, my_pos.z));
+
             let is_blocked = |pos: Vec3| -> bool {
-                if nav_grid
-                    .as_ref()
-                    .is_some_and(|grid| !grid.is_world_passable(pos.x, pos.z))
-                {
-                    return true;
+                if !current_blocked {
+                    if nav_grid
+                        .as_ref()
+                        .is_some_and(|grid| !grid.is_world_passable(pos.x, pos.z))
+                    {
+                        return true;
+                    }
                 }
 
                 let nearby_walls = wall_grid.query_radius(pos, 3.0);
@@ -364,7 +373,7 @@ fn steer_avoidance(
                     return true;
                 }
 
-                if nav_grid.is_none() {
+                if !current_blocked && nav_grid.is_none() {
                     for (building_entity, building_tf, footprint) in &buildings {
                         if my_target_building == Some(building_entity) {
                             continue;
@@ -420,6 +429,7 @@ fn move_units(
             Has<NavPending>,
             Option<&StatusEffects>,
             Option<&mut MovementSmoothing>,
+            Option<&UnitState>,
         ),
         Or<(With<Unit>, With<Mob>)>,
     >,
@@ -439,6 +449,7 @@ fn move_units(
         is_pending,
         opt_status,
         opt_smoothing,
+        opt_unit_state,
     ) in &mut query
     {
         // Client: only move local player's units; remote units are positioned by state sync
@@ -482,19 +493,32 @@ fn move_units(
         };
 
         if distance < arrival_dist {
+            // Skip arrival spread for workers heading to a building (deposit/build/gather)
+            // — they need precise positioning for the deposit check to succeed.
+            let skip_spread = opt_unit_state.is_some_and(|s| {
+                matches!(
+                    s,
+                    UnitState::ReturningToDeposit { .. }
+                        | UnitState::MovingToBuild(_)
+                        | UnitState::AssignedGathering { .. }
+                )
+            });
+
             // Advance waypoint or finish
             if let Some(mut nav) = nav_path {
                 nav.current_index += 1;
                 if nav.current_index >= nav.waypoints.len() {
-                    // Path complete — reset smoothing speed and add arrival spread
+                    // Path complete — reset smoothing speed
                     if let Some(mut smoothing) = opt_smoothing {
                         smoothing.current_speed = 0.0;
                     }
-                    // Random offset to prevent units stacking on exact same point
-                    let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 2.0;
-                    let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 2.0;
-                    transform.translation.x += spread_x;
-                    transform.translation.z += spread_z;
+                    if !skip_spread {
+                        // Random offset to prevent units stacking on exact same point
+                        let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 3.5;
+                        let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 3.5;
+                        transform.translation.x += spread_x;
+                        transform.translation.z += spread_z;
+                    }
                     commands
                         .entity(entity)
                         .remove::<MoveTarget>()
@@ -505,10 +529,12 @@ fn move_units(
                 if let Some(mut smoothing) = opt_smoothing {
                     smoothing.current_speed = 0.0;
                 }
-                let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 2.0;
-                let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 2.0;
-                transform.translation.x += spread_x;
-                transform.translation.z += spread_z;
+                if !skip_spread {
+                    let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 3.5;
+                    let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 3.5;
+                    transform.translation.x += spread_x;
+                    transform.translation.z += spread_z;
+                }
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()

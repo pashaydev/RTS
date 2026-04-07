@@ -462,6 +462,8 @@ pub fn spawn_from_blueprint_with_faction(
             radius: bp.mob_ai.as_ref().unwrap().patrol_radius,
             patrol_target: None,
             chase_elapsed: 0.0,
+            idle_until: 0.0,
+            patrol_started: 0.0,
         });
     }
 

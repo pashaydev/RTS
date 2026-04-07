@@ -56,7 +56,7 @@ impl LogLevel {
 
     pub fn color(self, theme: &Theme) -> Color {
         match self {
-            LogLevel::Info => Color::srgb(0.4, 0.75, 1.0),
+            LogLevel::Info => theme::LOG_INFO,
             LogLevel::Warning => theme.colors.warning,
             LogLevel::Error => theme.colors.hp_low(),
         }
@@ -85,11 +85,11 @@ impl EventCategory {
             EventCategory::Construction => theme.colors.accent,
             EventCategory::Training => theme.colors.success,
             EventCategory::Alert => theme.colors.warning,
-            EventCategory::Resource => Color::srgb(0.4, 0.75, 1.0),
-            EventCategory::Upgrade => Color::srgb(0.9, 0.7, 0.2),
-            EventCategory::Demolish => Color::srgb(0.8, 0.3, 0.3),
-            EventCategory::Network => Color::srgb(0.2, 0.8, 0.6),
-            EventCategory::Sync => Color::srgb(0.6, 0.5, 0.9),
+            EventCategory::Resource => theme::LOG_RESOURCE,
+            EventCategory::Upgrade => theme::LOG_UPGRADE,
+            EventCategory::Demolish => theme::LOG_DEMOLISH,
+            EventCategory::Network => theme::LOG_NETWORK,
+            EventCategory::Sync => theme::LOG_SYNC,
         }
     }
 
@@ -306,7 +306,7 @@ pub fn update_event_log(
         let bg = if active {
             level.color(&theme).with_alpha(0.25)
         } else {
-            Color::srgba(0.2, 0.2, 0.2, 0.3)
+            theme::BG_RECESSED.with_alpha(0.3)
         };
         let text_col = if active {
             level.color(&theme)
@@ -320,7 +320,7 @@ pub fn update_event_log(
                 Button,
                 Node {
                     padding: UiRect::axes(Val::Px(5.0), Val::Px(1.0)),
-                    border_radius: RADIUS_LG,
+                    // border_radius: RADIUS_LG,
                     ..default()
                 },
                 BackgroundColor(bg),
@@ -415,7 +415,7 @@ pub fn update_event_log(
                     flex_wrap: FlexWrap::Wrap,
                     column_gap: Val::Px(3.0),
                     padding: UiRect::axes(Val::Px(2.0), Val::Px(1.0)),
-                    border_radius: RADIUS_XS,
+                    // border_radius: RADIUS_XS,
                     ..default()
                 },
                 BackgroundColor(Color::NONE),

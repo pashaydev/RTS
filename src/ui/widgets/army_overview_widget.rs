@@ -220,7 +220,7 @@ fn update_army_overview(
                     column_gap: Val::Px(2.0),
                     padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
                     border: BORDER_1,
-                    border_radius: RADIUS_MD,
+                    // border_radius: RADIUS_MD,
                     ..default()
                 },
                 BackgroundColor(theme.colors.bg_surface),
@@ -300,10 +300,10 @@ fn update_army_overview(
                     width: Val::Percent(100.0),
                     padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
                     margin: UiRect::top(Val::Px(2.0)),
-                    border_radius: RADIUS_XS,
+                    // border_radius: RADIUS_XS,
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.8, 0.6, 0.1, 0.25)),
+                BackgroundColor(theme::PRESTIGE.with_alpha(0.25)),
             ))
             .with_children(|parent| {
                 parent.spawn((

@@ -74,10 +74,10 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts, t
                 align_items: AlignItems::Center,
                 column_gap: Val::Px(2.0),
                 padding: PAD_COMPACT,
-                border_radius: RADIUS_LG,
+                // border_radius: RADIUS_LG,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.07, 0.07, 0.07, 0.85)),
+            BackgroundColor(theme::BG_PANEL.with_alpha(0.85)),
             BoxShadow::new(
                 Color::srgba(0.0, 0.0, 0.0, 0.4),
                 Val::Px(0.0),
@@ -113,7 +113,7 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts, t
                     align_items: AlignItems::Center,
                     column_gap: Val::Px(3.0),
                     padding: PAD_COMPACT,
-                    border_radius: RADIUS_MD,
+                    // border_radius: RADIUS_MD,
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
@@ -162,7 +162,7 @@ pub fn update_toolbar_visuals(
     }
     for (btn, mut bg) in &mut buttons {
         if registry.is_visible(btn.0) {
-            *bg = BackgroundColor(Color::srgba(0.29, 0.62, 1.0, 0.15));
+            *bg = BackgroundColor(theme::HIGHLIGHT_SUBTLE);
         } else {
             *bg = BackgroundColor(Color::NONE);
         }

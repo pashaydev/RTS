@@ -129,6 +129,7 @@ impl Plugin for PathfindingPlugin {
                 invalidate_stale_paths,
                 cleanup_orphan_paths,
                 refresh_nav_grid,
+                detect_stuck_units,
                 queue_path_requests,
                 process_path_requests,
             )
@@ -145,8 +146,8 @@ impl Plugin for PathfindingPlugin {
 /// When MoveTarget changes destination, clear the old NavPath so A* re-runs.
 fn invalidate_stale_paths(
     mut commands: Commands,
-    pathed: Query<(Entity, &MoveTarget, &NavPath), With<Unit>>,
-    pending: Query<(Entity, &MoveTarget), (With<Unit>, With<NavPending>, Without<NavPath>)>,
+    pathed: Query<(Entity, &MoveTarget, &NavPath), Or<(With<Unit>, With<Mob>)>>,
+    pending: Query<(Entity, &MoveTarget), (Or<(With<Unit>, With<Mob>)>, With<NavPending>, Without<NavPath>)>,
     mut queue: ResMut<PathRequestQueue>,
 ) {
     for (entity, target, nav) in &pathed {
@@ -174,11 +175,12 @@ fn invalidate_stale_paths(
     }
 }
 
-/// Clean up NavPath/NavPending on entities that lost their MoveTarget.
+/// Clean up NavPath/NavPending/StuckTimer on entities that lost their MoveTarget.
 fn cleanup_orphan_paths(
     mut commands: Commands,
     pathed: Query<Entity, (With<NavPath>, Without<MoveTarget>)>,
     pending: Query<Entity, (With<NavPending>, Without<MoveTarget>)>,
+    stuck: Query<Entity, (With<StuckTimer>, Without<MoveTarget>)>,
     mut queue: ResMut<PathRequestQueue>,
 ) {
     for entity in &pathed {
@@ -187,6 +189,82 @@ fn cleanup_orphan_paths(
     for entity in &pending {
         commands.entity(entity).remove::<NavPending>();
         queue.requests.retain(|r| r.entity != entity);
+    }
+    for entity in &stuck {
+        commands.entity(entity).remove::<StuckTimer>();
+    }
+}
+
+/// Detect units that are stuck (not making progress toward their waypoint)
+/// and force a repath by clearing their NavPath.
+fn detect_stuck_units(
+    mut commands: Commands,
+    time: Res<Time>,
+    nav_grid: Option<Res<NavGrid>>,
+    mut units: Query<
+        (Entity, &mut Transform, Option<&mut StuckTimer>),
+        (Or<(With<Unit>, With<Mob>)>, With<MoveTarget>, With<NavPath>),
+    >,
+) {
+    let dt = time.delta_secs();
+    let stuck_threshold = 1.5; // seconds before triggering repath
+    let movement_epsilon = 0.3; // minimum distance per check to count as "moving"
+    let max_repaths_before_teleport: u8 = 3; // teleport after this many failed repaths
+
+    for (entity, mut tf, stuck_timer) in &mut units {
+        if let Some(mut timer) = stuck_timer {
+            let moved = Vec2::new(
+                tf.translation.x - timer.last_position.x,
+                tf.translation.z - timer.last_position.z,
+            )
+            .length();
+
+            if moved < movement_epsilon {
+                timer.stuck_secs += dt;
+            } else {
+                timer.stuck_secs = 0.0;
+                timer.repath_count = 0;
+                timer.last_position = tf.translation;
+            }
+
+            if timer.stuck_secs > stuck_threshold {
+                timer.repath_count += 1;
+                timer.stuck_secs = 0.0;
+
+                if timer.repath_count >= max_repaths_before_teleport {
+                    // Teleport to nearest passable cell
+                    if let Some(ref grid) = nav_grid {
+                        let (gx, gz) = grid.world_to_grid(tf.translation.x, tf.translation.z);
+                        if let Some(idx) = find_nearest_passable(grid, gx, gz) {
+                            let nx = idx % grid.grid_size;
+                            let nz = idx / grid.grid_size;
+                            let (wx, wz) = grid.grid_to_world(nx, nz);
+                            info!(
+                                "Teleporting stuck unit {:?} from ({:.1}, {:.1}) to ({:.1}, {:.1})",
+                                entity, tf.translation.x, tf.translation.z, wx, wz
+                            );
+                            tf.translation.x = wx;
+                            tf.translation.z = wz;
+                        }
+                    }
+                    timer.repath_count = 0;
+                    timer.last_position = tf.translation;
+                }
+
+                // Force repath by clearing the current path
+                commands
+                    .entity(entity)
+                    .remove::<NavPath>()
+                    .remove::<NavPending>();
+                timer.last_position = tf.translation;
+            }
+        } else {
+            commands.entity(entity).insert(StuckTimer {
+                last_position: tf.translation,
+                stuck_secs: 0.0,
+                repath_count: 0,
+            });
+        }
     }
 }
 
@@ -371,7 +449,7 @@ fn queue_path_requests(
     new_movers: Query<
         (Entity, &Transform, &MoveTarget),
         (
-            With<Unit>,
+            Or<(With<Unit>, With<Mob>)>,
             Without<NavPath>,
             Without<NavDirect>,
             Without<NavPending>,

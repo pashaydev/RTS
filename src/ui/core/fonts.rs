@@ -8,6 +8,8 @@ pub struct UiFonts {
     pub body_emphasis: Handle<Font>,
     pub edit_icon: Handle<Image>,
     pub close_icon: Handle<Image>,
+    pub sliders_icon: Handle<Image>,
+    pub terminal_icon: Handle<Image>,
 }
 
 impl FromWorld for UiFonts {
@@ -19,6 +21,8 @@ impl FromWorld for UiFonts {
             body_emphasis: asset_server.load("fonts/Rajdhani-SemiBold.ttf"),
             edit_icon: asset_server.load("icons/edit_pencil.png"),
             close_icon: asset_server.load("icons/close_cross.png"),
+            sliders_icon: asset_server.load("icons/sliders.png"),
+            terminal_icon: asset_server.load("icons/terminal.png"),
         }
     }
 }

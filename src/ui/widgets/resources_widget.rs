@@ -217,7 +217,7 @@ fn spawn_resource_row(
                 Node {
                     width: Val::Px(6.0),
                     height: Val::Px(6.0),
-                    border_radius: RADIUS_SM,
+                    // border_radius: RADIUS_SM,
                     ..default()
                 },
                 BackgroundColor(color),

@@ -619,7 +619,7 @@ fn rebuild_selection_panel(
                         Node {
                             padding: PAD_BUTTON,
                             border: BORDER_1,
-                            border_radius: RADIUS_MD,
+                            // border_radius: RADIUS_MD,
                             ..default()
                         },
                         BorderColor::all(if is_active {
@@ -813,9 +813,9 @@ fn rebuild_selection_panel(
             })
             .unwrap_or("Neutral");
         let relationship_color = if relationship == "Allied" {
-            Color::srgb(0.3, 0.8, 0.3)
+            crate::theme::SUCCESS
         } else {
-            Color::srgb(1.0, 0.3, 0.3)
+            crate::theme::DESTRUCTIVE
         };
 
         if let Ok((kind, health, dmg, rng, spd, aggro, is_boss)) = mob_query.get(inspected_entity) {
@@ -1051,7 +1051,7 @@ fn spawn_inventory_warning(
                 padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
                 margin: UiRect::bottom(Val::Px(6.0)),
                 border: BORDER_1,
-                border_radius: RADIUS_XL,
+                // border_radius: RADIUS_XL,
                 ..default()
             },
             BackgroundColor(theme.colors.warning.with_alpha(0.12)),
@@ -1079,7 +1079,7 @@ fn label_visibility_presentation(
         (
             theme.colors.accent,
             "On (L)",
-            Color::WHITE,
+            crate::theme::TEXT_PRIMARY,
             "Ambient labels are visible for units on screen.",
         )
     } else {

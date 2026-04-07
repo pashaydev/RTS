@@ -894,6 +894,7 @@ impl Plugin for BuildingsPlugin {
                     build_site_preparation_system,
                     pending_build_cleanup_system,
                     construction_progress_system,
+                    eject_units_from_buildings,
                     wall_auto_tile_system,
                     floor_auto_tile_system,
                     tower_auto_attack,
@@ -3381,6 +3382,50 @@ fn construction_progress_system(
                 Some(transform.translation),
                 Some(*faction),
             );
+        }
+    }
+}
+
+// ── Unit ejection from newly placed buildings ──
+
+/// When a building entity is first added, teleport any overlapping units to the
+/// nearest valid position outside its footprint so they don't get trapped.
+fn eject_units_from_buildings(
+    mut commands: Commands,
+    new_buildings: Query<
+        (Entity, &Transform, &BuildingFootprint),
+        (With<Building>, Added<Building>),
+    >,
+    nav_grid: Option<Res<crate::pathfinding::NavGrid>>,
+    all_buildings: Query<
+        (Entity, &Transform, &BuildingFootprint, &BuildingState),
+        With<Building>,
+    >,
+    mut units: Query<
+        (Entity, &mut Transform),
+        (Or<(With<Unit>, With<Mob>)>, Without<Building>),
+    >,
+) {
+    for (building_entity, building_tf, footprint) in &new_buildings {
+        let building_pos = building_tf.translation;
+        let eject_radius = footprint.0 + 1.0;
+
+        for (unit_entity, mut unit_tf) in &mut units {
+            let diff = unit_tf.translation - building_pos;
+            let flat_dist = Vec2::new(diff.x, diff.z).length();
+            if flat_dist < eject_radius {
+                let safe_pos = find_trained_unit_spawn_position(
+                    building_entity,
+                    building_pos,
+                    footprint.0,
+                    unit_entity.to_bits() as u32,
+                    nav_grid.as_deref(),
+                    &all_buildings,
+                );
+                unit_tf.translation.x = safe_pos.x;
+                unit_tf.translation.z = safe_pos.z;
+                commands.entity(unit_entity).insert(MoveTarget(safe_pos));
+            }
         }
     }
 }

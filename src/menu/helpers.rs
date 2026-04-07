@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 
 use crate::components::*;
-use crate::theme::Theme;
+use crate::theme::{Theme, TEXT_PRIMARY, BG_ELEVATED, BG_SURFACE, HIGHLIGHT, HIGHLIGHT_SUBTLE};
 use crate::ui::core::components as ui_components;
 use crate::ui::core::fonts::{self, UiFonts};
 use crate::ui::core::text_input::{spawn_text_input_children, ScrollablePanel};
@@ -70,7 +70,8 @@ pub fn spawn_menu_panel(commands: &mut Commands, _theme: &Theme) -> Entity {
             Interaction::None,
             ScrollPosition::default(),
             Node {
-                width: Val::Px(560.0),
+                width: Val::Percent(96.0),
+                max_width: Val::Px(1160.0),
                 max_height: Val::Percent(90.0),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
@@ -116,7 +117,7 @@ pub fn spawn_styled_button(
         parent.spawn((
             Text::new(label),
             fonts::heading(fonts, theme.typography.button),
-            TextColor(Color::WHITE),
+            TextColor(TEXT_PRIMARY),
             Pickable::IGNORE,
         ));
     });
@@ -163,10 +164,10 @@ pub fn spawn_controls_hint(
                             Node {
                                 padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
                                 border: UiRect::all(Val::Px(1.0)),
-                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                // border_radius: BorderRadius::all(Val::Px(3.0)),
                                 ..default()
                             },
-                            BackgroundColor(Color::srgba(0.15, 0.15, 0.15, 0.9)),
+                            BackgroundColor(BG_ELEVATED.with_alpha(0.9)),
                             BorderColor::all(theme.colors.text_disabled),
                         ))
                         .with_children(|badge| {
@@ -235,7 +236,7 @@ pub fn spawn_page_header<B: Bundle>(
             parent.spawn((
                 Text::new(title),
                 fonts::heading(fonts, theme.typography.heading),
-                TextColor(Color::WHITE),
+                TextColor(TEXT_PRIMARY),
             ));
         })
         .id();
@@ -337,7 +338,7 @@ pub fn spawn_selector_row(
             for (i, &opt) in options.iter().enumerate() {
                 let is_selected = i == selected;
                 let text_color = if is_selected {
-                    Color::WHITE
+                    Color::srgb(0.10, 0.16, 0.18)
                 } else {
                     theme.colors.text_secondary
                 };
@@ -458,11 +459,11 @@ pub fn spawn_arrow_selector(
                         align_items: AlignItems::Center,
                         padding: UiRect::axes(Val::Px(8.0), Val::Px(4.0)),
                         border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        // border_radius: BorderRadius::all(Val::Px(4.0)),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.18, 0.40, 0.85, 0.15)),
-                    BorderColor::all(Color::srgba(0.29, 0.62, 1.0, 0.3)),
+                    BackgroundColor(HIGHLIGHT_SUBTLE),
+                    BorderColor::all(HIGHLIGHT),
                     Pickable::IGNORE,
                 ))
                 .with_children(|val_bg| {
@@ -473,7 +474,7 @@ pub fn spawn_arrow_selector(
                             font_size: theme.typography.medium,
                             ..default()
                         },
-                        TextColor(Color::WHITE),
+                        TextColor(TEXT_PRIMARY),
                         Pickable::IGNORE,
                     ));
                 });
@@ -593,11 +594,11 @@ pub fn spawn_range_slider(
                         width: Val::Px(260.0),
                         height: Val::Px(20.0),
                         border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        // border_radius: BorderRadius::all(Val::Px(4.0)),
                         overflow: Overflow::clip(),
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.10, 0.10, 0.10, 0.94)),
+                    BackgroundColor(BG_SURFACE.with_alpha(0.94)),
                     BorderColor::all(theme.colors.separator),
                 ))
                 .with_children(|track| {
@@ -607,7 +608,7 @@ pub fn spawn_range_slider(
                         Node {
                             width: Val::Percent(pct),
                             height: Val::Percent(100.0),
-                            border_radius: BorderRadius::all(Val::Px(3.0)),
+                            // border_radius: BorderRadius::all(Val::Px(3.0)),
                             ..default()
                         },
                         BackgroundColor(theme.colors.accent),
@@ -623,7 +624,7 @@ pub fn spawn_range_slider(
                     font_size: theme.typography.medium,
                     ..default()
                 },
-                TextColor(Color::WHITE),
+                TextColor(TEXT_PRIMARY),
                 Node {
                     width: Val::Px(110.0),
                     margin: UiRect::left(Val::Px(8.0)),
@@ -725,3 +726,6 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str, theme: 
         })
         .id()
 }
+
+// ── Title Treatment ──
+

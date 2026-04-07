@@ -1,8 +1,12 @@
 pub(crate) mod helpers;
+pub(crate) mod input;
 mod multiplayer;
+pub(crate) mod new_game;
 pub(crate) mod options;
+mod navigation;
 mod pages;
 mod systems;
+mod title;
 
 use bevy::prelude::*;
 
@@ -37,6 +41,9 @@ pub(crate) struct MenuCamera;
 
 #[derive(Component)]
 pub(crate) struct MenuContentRoot;
+
+#[derive(Component)]
+pub(crate) struct MenuStatusBar;
 
 #[derive(Component)]
 pub(crate) struct MenuButton(pub(crate) MenuAction);
@@ -289,19 +296,19 @@ impl Plugin for MenuPlugin {
             .add_systems(OnEnter(AppState::MainMenu), systems::spawn_menu)
             .add_systems(
                 Update,
-                systems::handle_menu_buttons.in_set(MenuSet::Input),
+                input::handle_menu_buttons.in_set(MenuSet::Input),
             )
             .add_systems(
                 Update,
-                systems::handle_selector_clicks.in_set(MenuSet::Input),
+                input::handle_selector_clicks.in_set(MenuSet::Input),
             )
             .add_systems(
                 Update,
                 (
-                    systems::volume_slider_system,
-                    systems::menu_keyboard_nav,
-                    systems::menu_selector_keyboard_nav,
-                    systems::reset_nav_focus_on_page_change,
+                    options::volume_slider_system,
+                    navigation::menu_keyboard_nav,
+                    navigation::menu_selector_keyboard_nav,
+                    navigation::reset_nav_focus_on_page_change,
                 )
                     .in_set(MenuSet::Input),
             )
@@ -325,7 +332,7 @@ impl Plugin for MenuPlugin {
                 Update,
                 (
                     multiplayer::update_lobby_ui,
-                    systems::sync_range_slider_visuals,
+                    options::sync_range_slider_visuals,
                     options::toggle_resolution_row_visibility,
                     options::sync_resolution_arrow_selector,
                 )
@@ -345,9 +352,9 @@ impl Plugin for MenuPlugin {
             .add_systems(
                 Update,
                 (
-                    systems::capture_options_snapshot,
-                    systems::toggle_save_button_visibility,
-                    systems::manage_unsaved_changes_popup,
+                    options::capture_options_snapshot,
+                    options::toggle_save_button_visibility,
+                    options::manage_unsaved_changes_popup,
                 )
                     .in_set(MenuSet::Visuals),
             )
@@ -366,8 +373,8 @@ impl Plugin for MenuPlugin {
                     multiplayer::countdown_system,
                     multiplayer::kick_player_system,
                     multiplayer::lobby_ping_system,
-                    systems::menu_nav_focus_visuals,
-                    systems::scroll_to_focused,
+                    navigation::menu_nav_focus_visuals,
+                    navigation::scroll_to_focused,
                 )
                     .in_set(MenuSet::Visuals),
             );

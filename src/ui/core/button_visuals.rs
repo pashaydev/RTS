@@ -69,11 +69,16 @@ pub fn animated_button_chrome_system(
             &ButtonStyle,
             Option<&mut BorderColor>,
             Option<&mut BoxShadow>,
+            Has<SelectedOption>,
         ),
         With<ButtonAnimState>,
     >,
 ) {
-    for (state, style, border_color, shadow) in &mut query {
+    for (state, style, border_color, shadow, is_selected) in &mut query {
+        // Selected buttons have their border/shadow managed by update_selector_visuals.
+        if is_selected {
+            continue;
+        }
         if let Some(mut border) = border_color {
             *border = BorderColor::all(match state.phase {
                 UiInteractPhase::Pressed => match style {
@@ -86,11 +91,15 @@ pub fn animated_button_chrome_system(
                     ButtonStyle::Destructive => {
                         Color::srgba(1.0, 0.52, 0.52, 0.42 + 0.30 * state.hold_progress)
                     }
+                    ButtonStyle::Accent => {
+                        Color::srgba(0.91, 0.76, 0.46, 0.25 + 0.15 * state.hold_progress)
+                    }
                 },
                 UiInteractPhase::Hovered => match style {
                     ButtonStyle::Filled => Color::srgba(0.55, 0.74, 0.95, 0.28),
                     ButtonStyle::Ghost => Color::srgba(0.42, 0.70, 1.0, 0.24),
                     ButtonStyle::Destructive => Color::srgba(0.95, 0.45, 0.45, 0.24),
+                    ButtonStyle::Accent => Color::srgba(0.91, 0.76, 0.46, 0.14),
                 },
                 UiInteractPhase::Idle | UiInteractPhase::Disabled => match style {
                     ButtonStyle::Filled => {
@@ -102,6 +111,9 @@ pub fn animated_button_chrome_system(
                         .with_alpha(0.10 + 0.12 * state.click_flash),
                     ButtonStyle::Destructive => {
                         Color::srgba(0.85, 0.32, 0.32, 0.10 + 0.12 * state.click_flash)
+                    }
+                    ButtonStyle::Accent => {
+                        Color::srgba(0.91, 0.76, 0.46, 0.08 + 0.06 * state.click_flash)
                     }
                 },
             });
@@ -125,6 +137,7 @@ pub fn animated_button_chrome_system(
             let tint = match style {
                 ButtonStyle::Filled | ButtonStyle::Ghost => theme.colors.accent.with_alpha(alpha),
                 ButtonStyle::Destructive => Color::srgba(0.85, 0.32, 0.32, alpha),
+                ButtonStyle::Accent => theme.colors.prestige.with_alpha(alpha * 0.35),
             };
             *shadow = BoxShadow::new(tint, Val::Px(0.0), Val::Px(y), Val::Px(0.0), Val::Px(blur));
         }
@@ -165,6 +178,9 @@ pub fn animated_button_hover_system(
                         ButtonStyle::Destructive => {
                             anim.bg_target = [0.80, 0.27, 0.27, 0.10];
                         }
+                        ButtonStyle::Accent => {
+                            anim.bg_target = [0.12, 0.12, 0.14, 0.85];
+                        }
                     }
                 }
             }
@@ -189,6 +205,14 @@ pub fn animated_button_hover_system(
                             anim.bg_target =
                                 [0.80, 0.27, 0.27, lerp(0.18, 0.28, state.hold_progress)];
                         }
+                        ButtonStyle::Accent => {
+                            anim.bg_target = [
+                                lerp(0.10, 0.14, state.hold_progress),
+                                lerp(0.10, 0.13, state.hold_progress),
+                                lerp(0.12, 0.16, state.hold_progress),
+                                0.90,
+                            ];
+                        }
                     }
                 }
             }
@@ -203,6 +227,9 @@ pub fn animated_button_hover_system(
                         }
                         ButtonStyle::Ghost | ButtonStyle::Destructive => {
                             anim.bg_target = [0.0, 0.0, 0.0, 0.0];
+                        }
+                        ButtonStyle::Accent => {
+                            anim.bg_target = [0.08, 0.08, 0.09, 0.75];
                         }
                     }
                 }

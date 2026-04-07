@@ -69,6 +69,22 @@ pub struct ColorPalette {
 
     // Grid overlay
     pub grid_line: Color,
+
+    // Focus / highlight (selection indicators, nav focus, active states)
+    pub highlight: Color,
+    pub highlight_subtle: Color,
+
+    // Overlays / scrims
+    pub overlay: Color,
+
+    // Tooltip
+    pub tooltip_bg: Color,
+    pub tooltip_border: Color,
+
+    // Stance colors
+    pub stance_passive: Color,
+    pub stance_defensive: Color,
+    pub stance_aggressive: Color,
 }
 
 impl ColorPalette {
@@ -124,6 +140,22 @@ impl ColorPalette {
 
             // Grid: Tactical overlay
             grid_line: Color::srgba(0.67, 0.80, 0.80, 0.08),
+
+            // Focus / highlight
+            highlight: Color::srgba(0.67, 0.80, 0.80, 0.4),
+            highlight_subtle: Color::srgba(0.67, 0.80, 0.80, 0.15),
+
+            // Overlays
+            overlay: Color::srgba(0.0, 0.0, 0.0, 0.6),
+
+            // Tooltip
+            tooltip_bg: Color::srgba(0.05, 0.05, 0.07, 0.96),
+            tooltip_border: Color::srgba(0.25, 0.25, 0.30, 0.6),
+
+            // Stances
+            stance_passive: Color::srgb(0.5, 0.5, 0.8),
+            stance_defensive: Color::srgb(0.3, 0.7, 0.3),
+            stance_aggressive: Color::srgb(0.9, 0.3, 0.2),
         }
     }
 
@@ -179,6 +211,22 @@ impl ColorPalette {
 
             // Grid
             grid_line: Color::srgba(0.25, 0.45, 0.45, 0.1),
+
+            // Focus / highlight
+            highlight: Color::srgba(0.25, 0.45, 0.45, 0.3),
+            highlight_subtle: Color::srgba(0.25, 0.45, 0.45, 0.12),
+
+            // Overlays
+            overlay: Color::srgba(0.0, 0.0, 0.0, 0.5),
+
+            // Tooltip
+            tooltip_bg: Color::srgba(0.92, 0.90, 0.86, 0.96),
+            tooltip_border: Color::srgba(0.65, 0.62, 0.58, 0.6),
+
+            // Stances
+            stance_passive: Color::srgb(0.4, 0.4, 0.65),
+            stance_defensive: Color::srgb(0.25, 0.55, 0.25),
+            stance_aggressive: Color::srgb(0.75, 0.25, 0.18),
         }
     }
 
@@ -302,6 +350,45 @@ pub const PANEL_ACCENT_CONSTRUCTION: Color = Color::srgba(0.91, 0.76, 0.46, 0.4)
 
 pub const GRID_LINE: Color = Color::srgba(0.67, 0.80, 0.80, 0.08);
 
+pub const HIGHLIGHT: Color = Color::srgba(0.67, 0.80, 0.80, 0.4);
+pub const HIGHLIGHT_SUBTLE: Color = Color::srgba(0.67, 0.80, 0.80, 0.15);
+
+pub const OVERLAY: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
+
+pub const TOOLTIP_BG: Color = Color::srgba(0.05, 0.05, 0.07, 0.96);
+pub const TOOLTIP_BORDER: Color = Color::srgba(0.25, 0.25, 0.30, 0.6);
+
+pub const STANCE_PASSIVE: Color = Color::srgb(0.5, 0.5, 0.8);
+pub const STANCE_DEFENSIVE: Color = Color::srgb(0.3, 0.7, 0.3);
+pub const STANCE_AGGRESSIVE: Color = Color::srgb(0.9, 0.3, 0.2);
+
+// Team tier colors
+pub const TEAM_COLOR_1: Color = Color::srgb(0.9, 0.75, 0.2);   // Gold
+pub const TEAM_COLOR_2: Color = Color::srgb(0.2, 0.75, 0.85);  // Cyan
+pub const TEAM_COLOR_3: Color = Color::srgb(0.85, 0.3, 0.65);  // Pink
+pub const TEAM_COLOR_4: Color = Color::srgb(0.95, 0.5, 0.15);  // Orange
+pub const TEAM_COLORS: [Color; 4] = [TEAM_COLOR_1, TEAM_COLOR_2, TEAM_COLOR_3, TEAM_COLOR_4];
+
+// Event log level colors
+pub const LOG_INFO: Color = Color::srgb(0.4, 0.75, 1.0);
+pub const LOG_RESOURCE: Color = Color::srgb(0.4, 0.75, 1.0);
+pub const LOG_UPGRADE: Color = Color::srgb(0.9, 0.7, 0.2);
+pub const LOG_DEMOLISH: Color = Color::srgb(0.8, 0.3, 0.3);
+pub const LOG_NETWORK: Color = Color::srgb(0.2, 0.8, 0.6);
+pub const LOG_SYNC: Color = Color::srgb(0.6, 0.5, 0.9);
+
+// Group hotkey slot colors
+pub const GROUP_COLORS: [Color; 9] = [
+    Color::srgb(0.29, 0.62, 1.00), // #1 Blue
+    Color::srgb(0.30, 0.80, 0.40), // #2 Green
+    Color::srgb(1.00, 0.65, 0.15), // #3 Orange
+    Color::srgb(0.80, 0.35, 0.85), // #4 Purple
+    Color::srgb(0.90, 0.35, 0.35), // #5 Red
+    Color::srgb(0.20, 0.80, 0.80), // #6 Cyan
+    Color::srgb(0.95, 0.85, 0.30), // #7 Yellow
+    Color::srgb(0.60, 0.45, 0.30), // #8 Brown
+    Color::srgb(0.70, 0.70, 0.75), // #9 Silver
+];
 
 // Font sizes
 pub const FONT_DISPLAY: f32 = 48.0;

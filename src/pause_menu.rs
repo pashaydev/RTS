@@ -392,7 +392,7 @@ fn spawn_overlay_button(
             align_items: AlignItems::Center,
             margin: UiRect::vertical(Val::Px(4.0)),
             border: UiRect::all(Val::Px(2.0)),
-            border_radius: BorderRadius::all(Val::Px(8.0)),
+            // border_radius: BorderRadius::all(Val::Px(8.0)),
             ..default()
         },
         BackgroundColor(bg),
@@ -1165,7 +1165,7 @@ fn spawn_pause_controls_hint(
                             Node {
                                 padding: UiRect::axes(Val::Px(6.0), Val::Px(2.0)),
                                 border: UiRect::all(Val::Px(1.0)),
-                                border_radius: BorderRadius::all(Val::Px(3.0)),
+                                // border_radius: BorderRadius::all(Val::Px(3.0)),
                                 ..default()
                             },
                             BackgroundColor(Color::srgba(0.15, 0.15, 0.15, 0.9)),

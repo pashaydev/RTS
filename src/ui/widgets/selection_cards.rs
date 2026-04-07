@@ -48,7 +48,7 @@ pub(super) fn spawn_friendly_detail_card(
                     bottom: Val::Px(8.0),
                 },
                 column_gap: Val::Px(10.0),
-                border_radius: RADIUS_XS,
+                // border_radius: RADIUS_XS,
                 ..default()
             },
             BorderColor::all(theme.colors.panel_accent_friendly),
@@ -63,7 +63,7 @@ pub(super) fn spawn_friendly_detail_card(
                 height: Val::Px(52.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                border_radius: RADIUS_LG,
+                // border_radius: RADIUS_LG,
                 ..default()
             },
             BackgroundColor(theme.colors.icon_frame_bg),
@@ -170,9 +170,9 @@ pub(super) fn spawn_friendly_detail_card(
     // Stance indicator
     if let Some(stance) = stance {
         let (stance_text, stance_color) = match stance {
-            UnitStance::Passive => ("Passive", Color::srgb(0.5, 0.5, 0.8)),
-            UnitStance::Defensive => ("Defensive", Color::srgb(0.3, 0.7, 0.3)),
-            UnitStance::Aggressive => ("Aggressive", Color::srgb(0.9, 0.3, 0.2)),
+            UnitStance::Passive => ("Passive", crate::theme::STANCE_PASSIVE),
+            UnitStance::Defensive => ("Defensive", crate::theme::STANCE_DEFENSIVE),
+            UnitStance::Aggressive => ("Aggressive", crate::theme::STANCE_AGGRESSIVE),
         };
         let stance_label = commands
             .spawn((
@@ -319,7 +319,7 @@ pub(super) fn spawn_single_inventory_section(
                     align_items: AlignItems::FlexStart,
                     flex_direction: FlexDirection::Column,
                     border: BORDER_1,
-                    border_radius: RADIUS_LG,
+                    // border_radius: RADIUS_LG,
                     padding: PAD_MD,
                     ..default()
                 },
@@ -390,7 +390,7 @@ pub(super) fn spawn_single_inventory_section(
             row_gap: Val::Px(6.0),
             padding: PAD_LG,
             border: BORDER_1,
-            border_radius: RADIUS_LG,
+            // border_radius: RADIUS_LG,
             ..default()
         })
         .insert(BorderColor::all(theme.colors.border_subtle))
@@ -580,7 +580,7 @@ pub(super) fn spawn_multi_inventory_summary(
             margin: UiRect::bottom(Val::Px(8.0)),
             padding: PAD_LG,
             border: BORDER_1,
-            border_radius: RADIUS_LG,
+            // border_radius: RADIUS_LG,
             ..default()
         })
         .insert(BorderColor::all(theme.colors.border_subtle))
@@ -637,7 +637,7 @@ pub(super) fn spawn_multi_inventory_summary(
                     column_gap: Val::Px(6.0),
                     padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
                     border: BORDER_1,
-                    border_radius: BorderRadius::all(Val::Px(999.0)),
+                    // border_radius: BorderRadius::all(Val::Px(999.0)),
                     ..default()
                 },
                 BorderColor::all(theme.colors.border_subtle),
@@ -696,7 +696,7 @@ pub(super) fn spawn_building_detail_card(
                     bottom: Val::Px(8.0),
                 },
                 column_gap: Val::Px(10.0),
-                border_radius: RADIUS_XS,
+                // border_radius: RADIUS_XS,
                 ..default()
             },
             BorderColor::all(accent_color),
@@ -711,7 +711,7 @@ pub(super) fn spawn_building_detail_card(
                 height: Val::Px(52.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                border_radius: RADIUS_LG,
+                // border_radius: RADIUS_LG,
                 ..default()
             },
             BackgroundColor(theme.colors.icon_frame_bg),
@@ -797,7 +797,7 @@ pub(super) fn spawn_enemy_detail_card(
                     right: Val::Px(1.0),
                     bottom: Val::Px(1.0),
                 },
-                border_radius: RADIUS_LG,
+                // border_radius: RADIUS_LG,
                 ..default()
             },
             BorderColor::all(theme.colors.panel_accent_enemy),
@@ -812,7 +812,7 @@ pub(super) fn spawn_enemy_detail_card(
                 height: Val::Px(52.0),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
-                border_radius: RADIUS_LG,
+                // border_radius: RADIUS_LG,
                 ..default()
             },
             BackgroundColor(theme.colors.icon_frame_bg),
@@ -884,7 +884,6 @@ pub(super) fn spawn_enemy_detail_card(
     let stat_data = [
         ("DMG", format!("{:.0}", damage.0), theme.colors.stat_dmg),
         ("RNG", format!("{:.1}", range.0), theme.colors.stat_rng),
-        ("AGR", format!("{:.0}", aggro.0), theme.colors.warning),
         ("SPD", format!("{:.1}", speed.0), theme.colors.stat_spd),
     ];
     for (label, value, color) in &stat_data {
@@ -931,7 +930,7 @@ pub(super) fn spawn_unit_mini_card(
                 min_width: Val::Px(56.0),
                 flex_grow: 1.0,
                 border: BORDER_1,
-                border_radius: BorderRadius::all(Val::Px(5.0)),
+                // border_radius: BorderRadius::all(Val::Px(5.0)),
                 position_type: PositionType::Relative,
                 ..default()
             },
@@ -1009,7 +1008,7 @@ pub(super) fn spawn_unit_mini_card(
                     Node {
                         width: Val::Px(8.0),
                         height: Val::Px(8.0),
-                        border_radius: RADIUS_XS,
+                        // border_radius: RADIUS_XS,
                         ..default()
                     },
                     BackgroundColor(tone),
@@ -1041,10 +1040,10 @@ pub(super) fn spawn_unit_mini_card(
                         font_size: 7.0,
                         ..default()
                     },
-                    TextColor(Color::srgb(0.0, 0.0, 0.0)),
+                    TextColor(crate::theme::BG_RECESSED),
                     Node {
                         padding: UiRect::axes(Val::Px(2.0), Val::Px(0.0)),
-                        border_radius: RADIUS_SM,
+                        // border_radius: RADIUS_SM,
                         ..default()
                     },
                     BackgroundColor(group_color(gi)),

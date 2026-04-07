@@ -642,6 +642,8 @@ fn spawn_mob_camps(
                     radius: patrol_radius,
                     patrol_target: None,
                     chase_elapsed: 0.0,
+                    idle_until: 0.0,
+                    patrol_started: 0.0,
                 },
                 Health {
                     current: member_combat.hp * member.hp_mult,
@@ -736,28 +738,25 @@ fn camp_item_drops_for_kind(rng: &mut StdRng, kind: EntityKind) -> CampItemDrops
 }
 
 fn mob_patrol(
+    mut commands: Commands,
     time: Res<Time>,
-    registry: Res<BlueprintRegistry>,
-    height_map: Res<HeightMap>,
-    spatial_grid: Res<crate::spatial::SpatialHashGrid>,
     mut mobs: Query<
         (
             Entity,
-            &mut Transform,
+            &Transform,
             &mut PatrolState,
-            &UnitSpeed,
-            &EntityKind,
-            &mut Health,
             Option<&CombatIntent>,
             Option<&CombatTargetLock>,
+            Option<&MoveTarget>,
         ),
         With<Mob>,
     >,
 ) {
-    const SEPARATION_RADIUS: f32 = 2.5;
-    const SEPARATION_STRENGTH: f32 = 6.0;
+    let now = time.elapsed_secs_f64();
+    const PATROL_STUCK_SECS: f64 = 6.0;
 
-    for (entity, mut tf, mut patrol, speed, kind, _health, intent, lock) in &mut mobs {
+    for (entity, tf, mut patrol, intent, lock, move_target) in &mut mobs {
+        // Skip mobs that are actively fighting
         if matches!(
             intent,
             Some(CombatIntent::Attack(_, _) | CombatIntent::AttackMove(_, _))
@@ -765,91 +764,75 @@ fn mob_patrol(
         {
             continue;
         }
-        let y_off = registry
-            .get(*kind)
-            .movement
-            .as_ref()
-            .map(|m| m.y_offset)
-            .unwrap_or(0.8);
-
-        // Compute separation force from nearby entities
-        let mut sep = Vec3::ZERO;
-        let nearby = spatial_grid.query_radius(tf.translation, SEPARATION_RADIUS);
-        for (other_entity, other_pos) in &nearby {
-            if *other_entity == entity {
-                continue;
-            }
-            let diff = Vec3::new(
-                tf.translation.x - other_pos.x,
-                0.0,
-                tf.translation.z - other_pos.z,
-            );
-            let d = diff.length();
-            if d < 0.01 {
-                let bits = entity.to_bits();
-                let angle = (bits % 360) as f32 * std::f32::consts::TAU / 360.0;
-                sep += Vec3::new(angle.cos(), 0.0, angle.sin()) * SEPARATION_STRENGTH;
-            } else if d < SEPARATION_RADIUS {
-                let weight = (1.0 - d / SEPARATION_RADIUS).powi(2);
-                sep += diff.normalize() * SEPARATION_STRENGTH * weight;
-            }
-        }
-        let sep_step = sep * time.delta_secs();
 
         match patrol.state {
             PatrolStateKind::Idle => {
-                // Apply separation even when idle
-                if sep_step.length() > 0.01 {
-                    tf.translation += sep_step;
-                    tf.translation.y =
-                        height_map.sample(tf.translation.x, tf.translation.z) + y_off;
+                // Remove leftover MoveTarget from previous patrol/return
+                if move_target.is_some() {
+                    commands.entity(entity).remove::<MoveTarget>();
                 }
 
-                let angle = time.elapsed_secs() * 1.7 + tf.translation.x * 0.1;
-                let r = patrol.radius * (0.3 + (angle.sin() * 0.5 + 0.5) * 0.7);
+                // Wait until idle timer expires before picking a new patrol point
+                if now < patrol.idle_until {
+                    continue;
+                }
+
+                // Pick a unique patrol target per mob using entity bits for randomness
+                let bits = entity.to_bits();
+                let seed = bits.wrapping_mul(2654435761) as f32; // hash spread
+                let angle = seed % std::f32::consts::TAU
+                    + (now as f32) * 0.3; // slow drift over time
+                let r = patrol.radius * (0.3 + ((seed * 0.7).sin() * 0.5 + 0.5) * 0.7);
                 let target = Vec3::new(
                     patrol.center.x + angle.cos() * r,
                     0.0,
                     patrol.center.z + angle.sin() * r,
                 );
+
                 patrol.patrol_target = Some(target);
+                patrol.patrol_started = now;
                 patrol.state = PatrolStateKind::Patrolling;
+
+                // Insert MoveTarget so the pathfinding system handles movement
+                commands.entity(entity).insert(MoveTarget(target));
             }
             PatrolStateKind::Patrolling => {
                 if let Some(target) = patrol.patrol_target {
-                    let dir = Vec3::new(
+                    let dist = Vec2::new(
                         target.x - tf.translation.x,
-                        0.0,
                         target.z - tf.translation.z,
-                    );
-                    let dist = dir.length();
-                    if dist < 1.0 {
+                    )
+                    .length();
+
+                    // Reached target or stuck too long → go idle
+                    if dist < 2.5 || (now - patrol.patrol_started) > PATROL_STUCK_SECS {
                         patrol.state = PatrolStateKind::Idle;
                         patrol.patrol_target = None;
-                    } else {
-                        let step = dir.normalize() * speed.0 * 0.5 * time.delta_secs() + sep_step;
-                        tf.translation += step;
-                        tf.translation.y =
-                            height_map.sample(tf.translation.x, tf.translation.z) + y_off;
+                        // Randomized idle duration: 2-5 seconds per mob
+                        let idle_extra = (entity.to_bits() % 3000) as f64 / 1000.0;
+                        patrol.idle_until = now + 2.0 + idle_extra;
+                        commands.entity(entity).remove::<MoveTarget>();
+                    } else if move_target.is_none() {
+                        // MoveTarget was consumed (path completed or cleared) — re-insert
+                        commands.entity(entity).insert(MoveTarget(target));
                     }
                 }
             }
             PatrolStateKind::Returning => {
-                let dir = Vec3::new(
+                let dist = Vec2::new(
                     patrol.center.x - tf.translation.x,
-                    0.0,
                     patrol.center.z - tf.translation.z,
-                );
-                let dist = dir.length();
-                if dist < 2.0 {
-                    // Reaching home only resets patrol state; don't erase combat progress.
+                )
+                .length();
+                if dist < 3.0 {
                     patrol.state = PatrolStateKind::Idle;
-                } else {
-                    // Move faster when returning (1.5x speed)
-                    let step = dir.normalize() * speed.0 * 1.5 * time.delta_secs() + sep_step;
-                    tf.translation += step;
-                    tf.translation.y =
-                        height_map.sample(tf.translation.x, tf.translation.z) + y_off;
+                    patrol.idle_until = now + 1.0;
+                    commands.entity(entity).remove::<MoveTarget>();
+                } else if move_target.is_none() {
+                    // Insert MoveTarget toward camp center so pathfinding handles return
+                    commands
+                        .entity(entity)
+                        .insert(MoveTarget(patrol.center));
                 }
             }
             _ => {}

@@ -98,7 +98,7 @@ pub fn update_ally_notifications(
         }
 
         let color = notif.kind.color();
-        let bg_color = Color::srgba(0.1, 0.1, 0.15, 0.9);
+        let bg_color = theme::BG_PANEL.with_alpha(0.9);
 
         commands.entity(container).with_children(|parent| {
             parent
@@ -109,7 +109,7 @@ pub fn update_ally_notifications(
                     },
                     Node {
                         padding: UiRect::axes(Val::Px(16.0), Val::Px(8.0)),
-                        border_radius: RADIUS_LG,
+                        // border_radius: RADIUS_LG,
                         margin: UiRect::left(Val::Px(-150.0)),
                         min_width: Val::Px(200.0),
                         justify_content: JustifyContent::Center,

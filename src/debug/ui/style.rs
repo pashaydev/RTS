@@ -51,7 +51,7 @@ pub(crate) fn debug_card_node() -> Node {
         width: Val::Percent(100.0),
         padding: UiRect::all(Val::Px(6.0)),
         border: UiRect::all(Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(4.0)),
+        // border_radius: BorderRadius::all(Val::Px(4.0)),
         ..default()
     }
 }
@@ -65,7 +65,7 @@ pub(crate) fn debug_row_node() -> Node {
         width: Val::Percent(100.0),
         padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
         border: UiRect::all(Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(4.0)),
+        // border_radius: BorderRadius::all(Val::Px(4.0)),
         ..default()
     }
 }
@@ -73,7 +73,7 @@ pub(crate) fn debug_row_node() -> Node {
 pub(crate) fn debug_pill_node() -> Node {
     Node {
         padding: UiRect::axes(Val::Px(6.0), Val::Px(1.0)),
-        border_radius: BorderRadius::all(Val::Px(999.0)),
+        // border_radius: BorderRadius::all(Val::Px(999.0)),
         border: UiRect::all(Val::Px(1.0)),
         ..default()
     }

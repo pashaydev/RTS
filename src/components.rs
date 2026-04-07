@@ -591,6 +591,11 @@ pub enum TaskSource {
     Auto,
 }
 
+/// Grace period marker: unit was manually placed here by the player.
+/// AI auto-assignment is suppressed for a few seconds after arrival.
+#[derive(Component)]
+pub struct ManualIdleSince(pub f64);
+
 /// Authoritative combat command source.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum IntentSource {
@@ -1420,15 +1425,15 @@ impl Default for GrassDebugSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            spacing: 0.58,
+            spacing: 0.1,
             row_step_factor: 0.86,
-            jitter: 0.58 * 0.38,
-            density_threshold: 0.22,
+            jitter: 0.22,
+            density_threshold: 0.51,
             grassland_weight: 1.0,
             wetland_weight: 0.45,
             forest_weight: 0.18,
-            scale_min: 0.80,
-            scale_max: 1.25,
+            scale_min: 1.5,
+            scale_max: 3.1,
             lean_strength: 1.0,
         }
     }
@@ -2365,6 +2370,10 @@ pub struct PatrolState {
     pub patrol_target: Option<Vec3>,
     /// How long (seconds) this mob has been chasing a target.
     pub chase_elapsed: f32,
+    /// Timestamp (elapsed_secs_f64) when the mob should leave idle and start patrolling.
+    pub idle_until: f64,
+    /// Timestamp when the current patrol began (for stuck detection).
+    pub patrol_started: f64,
 }
 
 // ── Fog of War ──
@@ -3930,6 +3939,8 @@ pub enum ButtonStyle {
     Ghost,
     /// Destructive ghost (demolish)
     Destructive,
+    /// Accent style — dark bg with gold left accent (menu buttons)
+    Accent,
 }
 
 /// Marks an action bar child for fade-out removal.
@@ -4287,6 +4298,17 @@ impl Default for MovementSmoothing {
             speed_variation: 1.0,
         }
     }
+}
+
+/// Tracks how long a moving unit has been stuck in place.
+/// When `stuck_secs` exceeds a threshold, the path is cleared to trigger a repath.
+#[derive(Component)]
+pub struct StuckTimer {
+    pub last_position: Vec3,
+    pub stuck_secs: f32,
+    /// How many times we've repathed without making progress — used to
+    /// detect units stuck in impassable terrain and trigger a teleport.
+    pub repath_count: u8,
 }
 
 // ── Idle Behavior ──

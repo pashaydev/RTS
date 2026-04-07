@@ -170,7 +170,7 @@ fn decision_priority_system(
             Option<&CombatIntent>,
             Option<&CombatTargetLock>,
             Option<&mut CombatThinkTimer>,
-            Option<&TacticalRole>,
+            (Option<&TacticalRole>, Option<&ManualIdleSince>),
         ),
         With<Unit>,
     >,
@@ -228,7 +228,7 @@ fn decision_priority_system(
             combat_intent,
             target_lock,
             opt_think_timer,
-            opt_tactical_role,
+            (opt_tactical_role, manual_idle_since),
         ),
     ) in units.iter_mut().enumerate()
     {
@@ -244,10 +244,11 @@ fn decision_priority_system(
             continue;
         }
 
-        // Skip units with manual orders or queued tasks
+        // Skip units with manual orders, queued tasks, or in manual-idle grace period
         if *source == TaskSource::Manual
             || task_queue.current.is_some()
             || !task_queue.queue.is_empty()
+            || manual_idle_since.is_some_and(|s| now - s.0 < 5.0)
         {
             continue;
         }
@@ -811,10 +812,16 @@ pub fn unit_state_executor_system(
             UnitState::Moving(pos) => {
                 // Check if arrived (MoveTarget removed by move_units system on arrival)
                 if move_target.is_none() {
+                    let was_manual = *source == TaskSource::Manual;
                     *state = UnitState::Idle;
                     *source = TaskSource::Auto;
                     task_queue.current = None;
-                    if matches!(*source, TaskSource::Auto) {
+                    if was_manual {
+                        // Grace period: prevent AI from immediately reassigning
+                        commands
+                            .entity(entity)
+                            .insert(ManualIdleSince(time.elapsed_secs_f64()));
+                    } else {
                         reset_combat_state(&mut commands, entity);
                     }
                 } else {

@@ -118,7 +118,7 @@ pub fn update_tech_tree(
                 row_gap: Val::Px(2.0),
                 padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
                 margin: UiRect::left(Val::Px(indent)),
-                border_radius: RADIUS_SM,
+                // border_radius: RADIUS_SM,
                 ..default()
             })
             .id();
@@ -130,7 +130,7 @@ pub fn update_tech_tree(
                 Node {
                     width: Val::Px(6.0),
                     height: Val::Px(6.0),
-                    border_radius: RADIUS_SM,
+                    // border_radius: RADIUS_SM,
                     ..default()
                 },
                 BackgroundColor(border_color),
@@ -228,7 +228,7 @@ pub fn update_tech_tree(
                 Node {
                     width: Val::Px(6.0),
                     height: Val::Px(6.0),
-                    border_radius: RADIUS_SM,
+                    // border_radius: RADIUS_SM,
                     ..default()
                 },
                 BackgroundColor(color),

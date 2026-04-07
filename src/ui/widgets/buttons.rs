@@ -383,7 +383,7 @@ pub fn handle_demolish_button(
                         align_items: AlignItems::Center,
                         row_gap: Val::Px(4.0),
                         padding: UiRect::all(Val::Px(8.0)),
-                        border_radius: RADIUS_LG,
+                        // border_radius: RADIUS_LG,
                         ..default()
                     },
                     BackgroundColor(theme.colors.bg_panel),
@@ -418,7 +418,7 @@ pub fn handle_demolish_button(
                                 ConfirmDemolishButton,
                                 Node {
                                     padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
-                                    border_radius: RADIUS_MD,
+                                    // border_radius: RADIUS_MD,
                                     ..default()
                                 },
                                 BackgroundColor(theme.colors.destructive),
@@ -440,7 +440,7 @@ pub fn handle_demolish_button(
                                 CancelDemolishButton,
                                 Node {
                                     padding: UiRect::axes(Val::Px(12.0), Val::Px(4.0)),
-                                    border_radius: RADIUS_MD,
+                                    // border_radius: RADIUS_MD,
                                     ..default()
                                 },
                                 BackgroundColor(theme.colors.btn_primary),
@@ -1067,7 +1067,7 @@ pub fn update_construction_progress_display(
     for (mut text, mut color) in &mut worker_texts {
         if builder_count == 0 {
             **text = "Waiting for workers...".to_string();
-            *color = TextColor(Color::srgb(0.9, 0.5, 0.3));
+            *color = TextColor(theme::PRESTIGE);
         } else {
             let pct = (progress.timer.fraction() * 100.0) as u32;
             **text = format!(
@@ -1076,7 +1076,7 @@ pub fn update_construction_progress_display(
                 builder_count,
                 if builder_count == 1 { "" } else { "s" }
             );
-            *color = TextColor(Color::srgb(0.6, 0.8, 0.5));
+            *color = TextColor(theme::SUCCESS);
         }
     }
 }
@@ -1173,15 +1173,18 @@ pub fn handle_stop_button(
                 continue;
             }
             clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
+            let grace = ManualIdleSince(time.elapsed_secs_f64());
             if *kind == EntityKind::Worker {
                 crate::resources::unassign_worker_from_processor(&mut commands, entity);
+                commands.entity(entity).insert(grace);
             } else {
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
                     .remove::<AttackTarget>()
                     .insert(UnitState::Idle)
-                    .insert(TaskSource::Auto);
+                    .insert(TaskSource::Auto)
+                    .insert(grace);
             }
             commands
                 .entity(entity)

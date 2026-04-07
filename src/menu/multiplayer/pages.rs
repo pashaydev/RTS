@@ -3,11 +3,11 @@ use bevy::prelude::*;
 use super::super::helpers::*;
 use crate::components::*;
 use crate::multiplayer::{LobbyState, LobbyStatus, NetRole};
-use crate::theme::Theme;
+use crate::theme::{Theme, TEXT_PRIMARY, SUCCESS, TEAM_COLORS};
 use crate::ui::core::components as ui_components;
 use crate::ui::fonts::{self, UiFonts};
 
-use super::super::pages;
+use super::super::new_game;
 use super::super::*;
 
 // ── Multiplayer Page ──
@@ -169,7 +169,7 @@ pub(crate) fn spawn_host_lobby_page(
                 font_size: theme.typography.medium,
                 ..default()
             },
-            TextColor(Color::srgb(0.4, 0.9, 0.4)),
+            TextColor(SUCCESS),
             Node {
                 margin: UiRect::bottom(Val::Px(4.0)),
                 ..default()
@@ -198,7 +198,7 @@ pub(crate) fn spawn_host_lobby_page(
                     format!("{} ({})", ip, name)
                 };
                 let color = if *is_vpn {
-                    Color::srgb(0.4, 0.9, 0.4)
+                    SUCCESS
                 } else {
                     theme.colors.text_secondary
                 };
@@ -230,7 +230,7 @@ pub(crate) fn spawn_host_lobby_page(
     commands.entity(container).add_child(slots_wrap);
 
     for i in 0..4 {
-        pages::spawn_slot_card(commands, slots_wrap, i, config, true, theme);
+        new_game::spawn_slot_card(commands, slots_wrap, i, config, true, theme);
     }
 
     // ── World Settings ──
@@ -340,7 +340,7 @@ pub(crate) fn spawn_host_lobby_page(
             parent.spawn((
                 Text::new("START GAME"),
                 fonts::heading(fonts, theme.typography.button),
-                TextColor(Color::WHITE),
+                TextColor(TEXT_PRIMARY),
                 Pickable::IGNORE,
             ));
         })
@@ -416,7 +416,7 @@ pub(crate) fn spawn_join_lobby_page(
                 padding: UiRect::axes(Val::Px(16.0), Val::Px(10.0)),
                 margin: UiRect::vertical(Val::Px(6.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(6.0)),
+                // border_radius: BorderRadius::all(Val::Px(6.0)),
                 ..default()
             },
             BackgroundColor(banner_bg),
@@ -428,7 +428,7 @@ pub(crate) fn spawn_join_lobby_page(
                 Node {
                     width: Val::Px(10.0),
                     height: Val::Px(10.0),
-                    border_radius: BorderRadius::all(Val::Px(5.0)),
+                    // border_radius: BorderRadius::all(Val::Px(5.0)),
                     ..default()
                 },
                 BackgroundColor(banner_dot_color),
@@ -653,7 +653,7 @@ pub(crate) fn spawn_join_lobby_page(
                 parent.spawn((
                     Text::new("DISCONNECT"),
                     fonts::heading(fonts, theme.typography.button),
-                    TextColor(Color::WHITE),
+                    TextColor(TEXT_PRIMARY),
                     Pickable::IGNORE,
                 ));
             })
@@ -797,16 +797,10 @@ fn spawn_client_slot_card(
         format!("Player {}", slot_index + 1)
     };
 
-    let team_colors = [
-        Color::srgb(0.9, 0.75, 0.2),
-        Color::srgb(0.2, 0.75, 0.85),
-        Color::srgb(0.85, 0.3, 0.65),
-        Color::srgb(0.95, 0.5, 0.15),
-    ];
-    let team_color = team_colors
+    let team_color = TEAM_COLORS
         .get(team as usize)
         .copied()
-        .unwrap_or(team_colors[0]);
+        .unwrap_or(TEAM_COLORS[0]);
 
     let border_color = if is_me {
         theme.colors.accent
@@ -881,7 +875,7 @@ fn spawn_client_slot_card(
                             font_size: 10.0,
                             ..default()
                         },
-                        TextColor(Color::WHITE),
+                        TextColor(TEXT_PRIMARY),
                         Pickable::IGNORE,
                     ));
                 });

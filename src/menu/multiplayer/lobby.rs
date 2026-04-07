@@ -10,7 +10,7 @@ use crate::multiplayer::{
     matchbox_transport::{self, MatchboxInbox, PeerMap},
     ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole,
 };
-use crate::theme::Theme;
+use crate::theme::{Theme, SUCCESS};
 use crate::ui::core::text_input::{clipboard_read, clipboard_write};
 
 use super::super::*;
@@ -83,7 +83,7 @@ pub(crate) fn update_lobby_ui(
                         format!("{} ({})", ip, iface_name)
                     };
                     let color = if *is_vpn {
-                        Color::srgb(0.4, 0.9, 0.4)
+                        SUCCESS
                     } else {
                         theme.colors.text_secondary
                     };

@@ -11,13 +11,13 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
 use crate::components::*;
-use crate::theme::Theme;
+use crate::theme::{self, Theme};
 
 use super::interactions::UiClickEvent;
 
 // ── Constants ──
 
-const SELECTION_COLOR: Color = Color::srgba(0.29, 0.62, 1.0, 0.85);
+const SELECTION_COLOR: Color = theme::HIGHLIGHT;
 
 // ── Scroll ──
 
@@ -505,30 +505,30 @@ pub fn animate_text_input_chrome(
         let is_pressed = *interaction == Interaction::Pressed;
 
         *bg = BackgroundColor(if is_pressed {
-            Color::srgba(0.16, 0.18, 0.22, 0.98)
+            theme::BG_ELEVATED.with_alpha(0.98)
         } else if is_focused {
-            Color::srgba(0.14, 0.16, 0.20, 0.96)
+            theme::BG_ELEVATED.with_alpha(0.96)
         } else if is_hovered {
-            Color::srgba(0.13, 0.14, 0.17, 0.94)
+            theme::BG_SURFACE.with_alpha(0.94)
         } else {
             theme.colors.input_bg
         });
 
         *border = BorderColor::all(if is_pressed || is_focused {
-            Color::srgba(0.42, 0.72, 1.0, 0.85)
+            theme::HIGHLIGHT.with_alpha(0.85)
         } else if is_hovered {
-            Color::srgba(0.35, 0.50, 0.72, 0.55)
+            theme::HIGHLIGHT_SUBTLE.with_alpha(0.55)
         } else {
             theme.colors.input_border
         });
 
         commands.entity(entity).insert(BoxShadow::new(
             if is_pressed || is_focused {
-                Color::srgba(0.29, 0.62, 1.0, 0.28)
+                theme::HIGHLIGHT.with_alpha(0.28)
             } else if is_hovered {
-                Color::srgba(0.29, 0.62, 1.0, 0.16)
+                theme::HIGHLIGHT_SUBTLE.with_alpha(0.16)
             } else {
-                Color::srgba(0.0, 0.0, 0.0, 0.16)
+                theme::OVERLAY.with_alpha(0.16)
             },
             Val::Px(0.0),
             Val::Px(2.0),

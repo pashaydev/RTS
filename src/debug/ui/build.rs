@@ -41,7 +41,7 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
             Node {
                 padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
+                // border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
             },
             BackgroundColor(debug_control_surface()),
@@ -62,7 +62,7 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
             Node {
                 padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
+                // border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
             },
             BackgroundColor(debug_control_surface()),
@@ -83,7 +83,7 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
             Node {
                 padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
+                // border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
             },
             BackgroundColor(debug_control_surface()),
@@ -123,7 +123,7 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
             Node {
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
+                // border_radius: BorderRadius::all(Val::Px(4.0)),
                 flex_grow: 1.0,
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
@@ -155,7 +155,7 @@ pub fn spawn_debug_content(commands: &mut Commands, parent: Entity) {
             Node {
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(3.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
+                // border_radius: BorderRadius::all(Val::Px(4.0)),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
@@ -352,7 +352,7 @@ fn spawn_folder_header(
                 padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
                 margin: UiRect::top(Val::Px(4.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
+                // border_radius: BorderRadius::all(Val::Px(4.0)),
                 width: Val::Percent(100.0),
                 justify_content: JustifyContent::FlexStart,
                 align_items: AlignItems::Center,
@@ -437,7 +437,7 @@ fn spawn_slider_row(
                     width: Val::Percent(100.0),
                     height: Val::Px(12.0),
                     border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(999.0)),
+                    // border_radius: BorderRadius::all(Val::Px(999.0)),
                     overflow: Overflow::clip(),
                     align_items: AlignItems::Center,
                     ..default()
@@ -454,7 +454,7 @@ fn spawn_slider_row(
                     Node {
                         width: Val::Percent(pct),
                         height: Val::Percent(100.0),
-                        border_radius: BorderRadius::all(Val::Px(999.0)),
+                        // border_radius: BorderRadius::all(Val::Px(999.0)),
                         ..default()
                     },
                     BackgroundColor(debug_slider_fill()),
@@ -472,7 +472,7 @@ fn spawn_slider_row(
                         height: Val::Px(12.0),
                         margin: UiRect::left(Val::Px(-6.0)),
                         border: UiRect::all(Val::Px(1.0)),
-                        border_radius: BorderRadius::all(Val::Px(999.0)),
+                        // border_radius: BorderRadius::all(Val::Px(999.0)),
                         ..default()
                     },
                     BackgroundColor(debug_text_primary()),
@@ -523,7 +523,7 @@ fn spawn_toggle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(999.0)),
+                    // border_radius: BorderRadius::all(Val::Px(999.0)),
                     ..default()
                 },
                 BackgroundColor(bg),
@@ -593,7 +593,7 @@ fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: 
                 width: Val::Percent(100.0),
                 padding: UiRect::axes(Val::Px(6.0), Val::Px(5.0)),
                 border: UiRect::all(Val::Px(1.0)),
-                border_radius: BorderRadius::all(Val::Px(4.0)),
+                // border_radius: BorderRadius::all(Val::Px(4.0)),
                 ..default()
             },
             BackgroundColor(debug_control_surface()),
@@ -618,7 +618,7 @@ fn spawn_color_preview(parent: &mut ChildSpawnerCommands, folder: &str, prefix: 
                     width: Val::Px(88.0),
                     height: Val::Px(18.0),
                     border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(999.0)),
+                    // border_radius: BorderRadius::all(Val::Px(999.0)),
                     ..default()
                 },
                 BackgroundColor(Color::srgb(0.5, 0.5, 0.5)),
@@ -661,7 +661,7 @@ fn spawn_cycle_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str,
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(999.0)),
+                    // border_radius: BorderRadius::all(Val::Px(999.0)),
                     ..default()
                 },
                 BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.04)),
@@ -705,7 +705,7 @@ fn spawn_button_row(parent: &mut ChildSpawnerCommands, folder: &str, label: &str
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     border: UiRect::all(Val::Px(1.0)),
-                    border_radius: BorderRadius::all(Val::Px(4.0)),
+                    // border_radius: BorderRadius::all(Val::Px(4.0)),
                     ..default()
                 },
                 BackgroundColor(debug_control_surface()),

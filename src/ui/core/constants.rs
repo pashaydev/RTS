@@ -37,12 +37,12 @@ pub const PAD_COMPACT: UiRect = UiRect {
 
 // ── Border radius ──
 
-pub const RADIUS_XS: BorderRadius = BorderRadius::all(Val::Px(2.0));
-pub const RADIUS_SM: BorderRadius = BorderRadius::all(Val::Px(3.0));
-pub const RADIUS_MD: BorderRadius = BorderRadius::all(Val::Px(4.0));
-pub const RADIUS_LG: BorderRadius = BorderRadius::all(Val::Px(6.0));
-pub const RADIUS_XL: BorderRadius = BorderRadius::all(Val::Px(8.0));
-pub const RADIUS_2XL: BorderRadius = BorderRadius::all(Val::Px(10.0));
+pub const RADIUS_XS: BorderRadius = BorderRadius::all(Val::Px(0.0));
+pub const RADIUS_SM: BorderRadius = BorderRadius::all(Val::Px(0.0));
+pub const RADIUS_MD: BorderRadius = BorderRadius::all(Val::Px(0.0));
+pub const RADIUS_LG: BorderRadius = BorderRadius::all(Val::Px(0.0));
+pub const RADIUS_XL: BorderRadius = BorderRadius::all(Val::Px(0.0));
+pub const RADIUS_2XL: BorderRadius = BorderRadius::all(Val::Px(0.0));
 
 // ── Border widths ──
 
@@ -91,7 +91,7 @@ pub fn progress_track(width: Val, height: f32) -> Node {
     Node {
         width,
         height: Val::Px(height),
-        border_radius: RADIUS_SM,
+        // border_radius: RADIUS_SM,
         ..default()
     }
 }
@@ -101,7 +101,7 @@ pub fn progress_fill(pct: f32) -> Node {
     Node {
         width: Val::Percent(pct),
         height: Val::Percent(100.0),
-        border_radius: RADIUS_SM,
+        // border_radius: RADIUS_SM,
         ..default()
     }
 }

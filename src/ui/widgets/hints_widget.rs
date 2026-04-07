@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use super::core::constants::*;
 use super::core::hud::MainHudRoot;
 use crate::components::*;
+use crate::theme;
 
 pub struct HintsWidgetPlugin;
 
@@ -87,10 +88,10 @@ pub fn hints_system(
                         width: Val::Percent(50.0),
                         padding: UiRect::all(Val::Px(10.0)),
                         justify_content: JustifyContent::Center,
-                        border_radius: RADIUS_MD,
+                        // border_radius: RADIUS_MD,
                         ..default()
                     },
-                    BackgroundColor(Color::srgba(0.1, 0.15, 0.25, 0.85)),
+                    BackgroundColor(theme::BG_PANEL.with_alpha(0.85)),
                     GlobalZIndex(50),
                 ))
                 .with_children(|parent| {
@@ -100,7 +101,7 @@ pub fn hints_system(
                             font_size: 16.0,
                             ..default()
                         },
-                        TextColor(Color::srgb(0.9, 0.9, 0.5)),
+                        TextColor(theme::PRESTIGE),
                     ));
                 })
                 .id();

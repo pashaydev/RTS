@@ -5,7 +5,7 @@ use super::core::constants::*;
 use super::core::shared::{format_cost, widget_content_stack, widget_wrap_row};
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::components::*;
-use crate::theme::Theme;
+use crate::theme::{self, Theme};
 
 pub(super) fn spawn_building_action_bar(
     commands: &mut Commands,
@@ -66,7 +66,7 @@ pub(super) fn spawn_building_action_bar(
         .spawn((
             Node {
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(2.0)),
-                border_radius: RADIUS_XL,
+                // border_radius: RADIUS_XL,
                 ..default()
             },
             BackgroundColor(theme.colors.bg_elevated),
@@ -114,7 +114,7 @@ pub(super) fn spawn_building_action_bar(
                     flex_grow: 1.0,
                     max_width: Val::Px(240.0),
                     height: Val::Px(4.0),
-                    border_radius: RADIUS_XS,
+                    // border_radius: RADIUS_XS,
                     ..default()
                 },
                 BackgroundColor(theme.colors.hp_bar_bg),
@@ -125,7 +125,7 @@ pub(super) fn spawn_building_action_bar(
                     Node {
                         width: Val::Percent(hp_fraction * 100.0),
                         height: Val::Percent(100.0),
-                        border_radius: RADIUS_XS,
+                        // border_radius: RADIUS_XS,
                         ..default()
                     },
                     BackgroundColor(hp_color),
@@ -275,7 +275,7 @@ pub(super) fn spawn_building_action_bar(
                             Node {
                                 width: Val::Px(20.0),
                                 height: Val::Px(20.0),
-                                border_radius: RADIUS_MD,
+                                // border_radius: RADIUS_MD,
                                 border: BORDER_1,
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
@@ -292,7 +292,7 @@ pub(super) fn spawn_building_action_bar(
                                     font_size: 10.0,
                                     ..default()
                                 },
-                                TextColor(Color::WHITE),
+                                TextColor(theme::TEXT_PRIMARY),
                             ));
                         })
                         .id();
@@ -304,12 +304,12 @@ pub(super) fn spawn_building_action_bar(
                             Node {
                                 width: Val::Px(20.0),
                                 height: Val::Px(20.0),
-                                border_radius: RADIUS_MD,
+                                // border_radius: RADIUS_MD,
                                 border: BORDER_1,
                                 ..default()
                             },
                             BorderColor::all(theme.colors.accent.with_alpha(0.3)),
-                            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.2)),
+                            BackgroundColor(theme::BG_RECESSED.with_alpha(0.2)),
                         ))
                         .id();
                     commands.entity(slot_row).add_child(slot);
@@ -340,7 +340,7 @@ pub(super) fn spawn_building_action_bar(
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
                             border: BORDER_1,
-                            border_radius: RADIUS_MD,
+                            // border_radius: RADIUS_MD,
                             ..default()
                         },
                         BorderColor::all(theme.colors.destructive.with_alpha(0.3)),
@@ -392,7 +392,7 @@ pub(super) fn spawn_building_action_bar(
                             justify_content: JustifyContent::Center,
                             align_items: AlignItems::Center,
                             border: BORDER_1,
-                            border_radius: RADIUS_MD,
+                            // border_radius: RADIUS_MD,
                             ..default()
                         },
                         BorderColor::all(theme.colors.accent.with_alpha(0.3)),
@@ -429,7 +429,7 @@ pub(super) fn spawn_building_action_bar(
                     Node {
                         padding: PAD_COMPACT,
                         border: BORDER_1,
-                        border_radius: RADIUS_MD,
+                        // border_radius: RADIUS_MD,
                         margin: UiRect::left(Val::Px(8.0)),
                         ..default()
                     },
@@ -461,7 +461,7 @@ pub(super) fn spawn_building_action_bar(
                         Node {
                             padding: PAD_COMPACT,
                             border: BORDER_1,
-                            border_radius: RADIUS_MD,
+                            // border_radius: RADIUS_MD,
                             margin: UiRect::left(Val::Px(4.0)),
                             ..default()
                         },
@@ -512,7 +512,7 @@ pub(super) fn spawn_building_action_bar(
                     Node {
                         padding: PAD_COMPACT,
                         border: BORDER_1,
-                        border_radius: RADIUS_MD,
+                        // border_radius: RADIUS_MD,
                         margin: UiRect::top(Val::Px(4.0)),
                         ..default()
                     },
@@ -604,7 +604,7 @@ pub(super) fn spawn_building_action_bar(
                             row_gap: Val::Px(2.0),
                             padding: PAD_SM,
                             border: UiRect::left(Val::Px(if is_active { 3.0 } else { 0.0 })),
-                            border_radius: RADIUS_XS,
+                            // border_radius: RADIUS_XS,
                             ..default()
                         },
                         BorderColor::all(if is_active {
@@ -715,11 +715,11 @@ pub(super) fn spawn_building_action_bar(
                             Node {
                                 width: Val::Percent(80.0),
                                 height: Val::Px(6.0),
-                                border_radius: RADIUS_SM,
+                                // border_radius: RADIUS_SM,
                                 overflow: Overflow::clip(),
                                 ..default()
                             },
-                            BackgroundColor(Color::srgba(0.1, 0.1, 0.1, 0.8)),
+                            BackgroundColor(theme::BG_RECESSED.with_alpha(0.8)),
                         ))
                         .id();
                     commands.entity(bar_row).add_child(bar_bg);
@@ -730,7 +730,7 @@ pub(super) fn spawn_building_action_bar(
                             Node {
                                 width: Val::Percent(pct * 100.0),
                                 height: Val::Percent(100.0),
-                                border_radius: RADIUS_SM,
+                                // border_radius: RADIUS_SM,
                                 ..default()
                             },
                             BackgroundColor(theme.colors.accent),
@@ -830,7 +830,7 @@ pub(super) fn spawn_building_action_bar(
                             align_items: AlignItems::Center,
                             row_gap: Val::Px(2.0),
                             padding: PAD_BUTTON,
-                            border_radius: RADIUS_MD,
+                            // border_radius: RADIUS_MD,
                             ..default()
                         })
                         .insert(BackgroundColor(theme.colors.bg_surface))
@@ -871,7 +871,7 @@ pub(super) fn spawn_building_action_bar(
                                         width: Val::Percent(100.0),
                                         max_width: Val::Px(160.0),
                                         height: Val::Px(6.0),
-                                        border_radius: RADIUS_SM,
+                                        // border_radius: RADIUS_SM,
                                         ..default()
                                     })
                                     .insert(BackgroundColor(theme.colors.hp_bar_bg))
@@ -881,7 +881,7 @@ pub(super) fn spawn_building_action_bar(
                                             Node {
                                                 width: Val::Percent(fraction * 100.0),
                                                 height: Val::Percent(100.0),
-                                                border_radius: RADIUS_SM,
+                                                // border_radius: RADIUS_SM,
                                                 ..default()
                                             },
                                             BackgroundColor(theme.colors.accent),
@@ -927,7 +927,7 @@ pub(super) fn spawn_building_action_bar(
                                 min_width: Val::Px(120.0),
                                 padding: PAD_BUTTON,
                                 border: BORDER_1,
-                                border_radius: RADIUS_MD,
+                                // border_radius: RADIUS_MD,
                                 ..default()
                             },
                             BackgroundColor(Color::NONE),
@@ -963,11 +963,11 @@ pub(super) fn spawn_building_action_bar(
                         min_width: Val::Px(72.0),
                         padding: PAD_BUTTON,
                         border: BORDER_1,
-                        border_radius: RADIUS_MD,
+                        // border_radius: RADIUS_MD,
                         ..default()
                     },
                     BackgroundColor(Color::NONE),
-                    BorderColor::all(Color::srgba(0.33, 0.33, 0.33, 0.4)),
+                    BorderColor::all(theme::SEPARATOR),
                 ))
                 .with_children(|pill| {
                     pill.spawn((
@@ -1004,7 +1004,7 @@ pub(super) fn spawn_building_action_bar(
                 theme.colors.text_secondary
             };
             let rally_bg = if is_rally_active {
-                Color::srgba(0.29, 0.62, 1.0, 0.1)
+                theme::HIGHLIGHT_SUBTLE
             } else {
                 Color::NONE
             };
@@ -1013,7 +1013,7 @@ pub(super) fn spawn_building_action_bar(
                     Button,
                     RallyPointButton,
                     ButtonAnimState::new(if is_rally_active {
-                        [0.29, 0.62, 1.0, 0.1]
+                        theme::HIGHLIGHT_SUBTLE.to_srgba().to_f32_array()
                     } else {
                         [0.0, 0.0, 0.0, 0.0]
                     }),
@@ -1026,7 +1026,7 @@ pub(super) fn spawn_building_action_bar(
                         min_width: Val::Px(108.0),
                         padding: PAD_BUTTON,
                         border: BORDER_1,
-                        border_radius: RADIUS_MD,
+                        // border_radius: RADIUS_MD,
                         ..default()
                     },
                     BackgroundColor(rally_bg),
@@ -1051,9 +1051,9 @@ pub(super) fn spawn_building_action_bar(
     if kind.uses_tower_auto_attack() {
         let is_enabled = auto_attack.map_or(true, |a| a.0);
         let toggle_bg = if is_enabled {
-            Color::srgba(0.30, 0.69, 0.31, 0.15)
+            theme::SUCCESS.with_alpha(0.15)
         } else {
-            Color::srgba(0.80, 0.27, 0.27, 0.15)
+            theme::DESTRUCTIVE.with_alpha(0.15)
         };
         let toggle_text = if is_enabled {
             "Auto-Attack: ON"
@@ -1071,7 +1071,7 @@ pub(super) fn spawn_building_action_bar(
                 ToggleAutoAttackButton,
                 Node {
                     padding: UiRect::axes(Val::Px(10.0), Val::Px(3.0)),
-                    border_radius: RADIUS_2XL,
+                    // border_radius: RADIUS_2XL,
                     margin: UiRect::top(Val::Px(2.0)),
                     align_self: AlignSelf::FlexStart,
                     ..default()
@@ -1133,7 +1133,7 @@ pub(super) fn spawn_building_action_bar(
             },
             Node {
                 padding: PAD_COMPACT,
-                border_radius: RADIUS_SM,
+                // border_radius: RADIUS_SM,
                 ..default()
             },
             BackgroundColor(Color::NONE),
@@ -1207,7 +1207,7 @@ pub(super) fn spawn_training_queue_ui(
                     align_items: AlignItems::Center,
                     min_width: Val::Px(icon_size + 10.0),
                     padding: UiRect::all(Val::Px(3.0)),
-                    border_radius: RADIUS_MD,
+                    // border_radius: RADIUS_MD,
                     ..default()
                 },
                 BackgroundColor(theme.colors.bg_surface),
@@ -1234,7 +1234,7 @@ pub(super) fn spawn_training_queue_ui(
                         width: Val::Px(icon_size),
                         height: Val::Px(6.0),
                         margin: UiRect::top(Val::Px(2.0)),
-                        border_radius: RADIUS_SM,
+                        // border_radius: RADIUS_SM,
                         ..default()
                     })
                     .insert(BackgroundColor(theme.colors.hp_bar_bg))
@@ -1245,12 +1245,12 @@ pub(super) fn spawn_training_queue_ui(
                             Node {
                                 width: Val::Percent(fraction * 100.0),
                                 height: Val::Percent(100.0),
-                                border_radius: RADIUS_SM,
+                                // border_radius: RADIUS_SM,
                                 ..default()
                             },
                             BackgroundColor(theme.colors.accent),
                             BoxShadow::new(
-                                Color::srgba(0.29, 0.62, 1.0, 0.4),
+                                theme::HIGHLIGHT,
                                 Val::Px(0.0),
                                 Val::Px(0.0),
                                 Val::Px(0.0),
@@ -1270,7 +1270,7 @@ pub(super) fn spawn_training_queue_ui(
                         },
                         ..default()
                     },
-                    TextColor(Color::srgba(0.80, 0.27, 0.27, 0.4)),
+                    TextColor(theme::DESTRUCTIVE.with_alpha(0.4)),
                     Node {
                         margin: UiRect::top(Val::Px(1.0)),
                         ..default()
@@ -1320,7 +1320,7 @@ pub(super) fn spawn_construction_action_bar(
                     width: Val::Percent(100.0),
                     max_width: Val::Px(280.0),
                     height: Val::Px(8.0),
-                    border_radius: RADIUS_SM,
+                    // border_radius: RADIUS_SM,
                     ..default()
                 },
                 BackgroundColor(theme.colors.hp_bar_bg),
@@ -1331,7 +1331,7 @@ pub(super) fn spawn_construction_action_bar(
                     Node {
                         width: Val::Percent(fraction * 100.0),
                         height: Val::Percent(100.0),
-                        border_radius: RADIUS_SM,
+                        // border_radius: RADIUS_SM,
                         ..default()
                     },
                     BackgroundColor(theme.colors.warning),
@@ -1360,7 +1360,7 @@ pub(super) fn spawn_construction_action_bar(
                     font_size: theme.typography.body,
                     ..default()
                 },
-                TextColor(Color::srgb(0.6, 0.7, 0.9)),
+                TextColor(theme::TEXT_SECONDARY),
             ))
             .id();
         commands.entity(container).add_child(worker_text);
@@ -1374,7 +1374,7 @@ pub(super) fn spawn_construction_action_bar(
             ButtonStyle::Destructive,
             Node {
                 padding: PAD_BUTTON,
-                border_radius: RADIUS_MD,
+                // border_radius: RADIUS_MD,
                 ..default()
             },
             BackgroundColor(Color::NONE),
@@ -1477,18 +1477,18 @@ pub(super) fn spawn_found_base_panel(
                 row_gap: Val::Px(6.0),
                 padding: UiRect::all(Val::Px(10.0)),
                 border: BORDER_1,
-                border_radius: RADIUS_XL,
+                // border_radius: RADIUS_XL,
                 ..default()
             },
             BackgroundColor(if can_afford {
                 theme.colors.bg_surface
             } else {
-                Color::srgba(0.08, 0.08, 0.08, 0.7)
+                theme::BG_PANEL.with_alpha(0.7)
             }),
             BorderColor::all(if can_afford {
-                Color::srgba(0.25, 0.25, 0.30, 0.4)
+                theme::TOOLTIP_BORDER
             } else {
-                Color::srgba(0.80, 0.27, 0.27, 0.25)
+                theme::DESTRUCTIVE.with_alpha(0.25)
             }),
         ))
         .with_children(|btn| {
@@ -1695,9 +1695,9 @@ pub(super) fn spawn_building_grid(
             tooltip_lines.push("Click to place".to_string());
 
             let border_color = if can_afford {
-                Color::srgba(0.25, 0.25, 0.30, 0.4)
+                theme::TOOLTIP_BORDER
             } else {
-                Color::srgba(0.80, 0.27, 0.27, 0.25)
+                theme::DESTRUCTIVE.with_alpha(0.25)
             };
             let name_color = if can_afford {
                 theme.colors.text_primary
@@ -1736,13 +1736,13 @@ pub(super) fn spawn_building_grid(
                         padding: PAD_SM,
                         row_gap: Val::Px(2.0),
                         border: BORDER_1,
-                        border_radius: RADIUS_LG,
+                        // border_radius: RADIUS_LG,
                         ..default()
                     },
                     BackgroundColor(if can_afford {
                         theme.colors.bg_surface
                     } else {
-                        Color::srgba(0.08, 0.08, 0.08, 0.7)
+                        theme::BG_PANEL.with_alpha(0.7)
                     }),
                     BorderColor::all(border_color),
                 ))
@@ -1831,9 +1831,9 @@ pub(super) fn spawn_train_button(
     }
 
     let border_color = if can_train {
-        Color::srgba(0.25, 0.25, 0.30, 0.4)
+        theme::TOOLTIP_BORDER
     } else {
-        Color::srgba(0.80, 0.27, 0.27, 0.25)
+        theme::DESTRUCTIVE.with_alpha(0.25)
     };
     let name_color = if can_train {
         theme.colors.text_primary
@@ -1866,13 +1866,13 @@ pub(super) fn spawn_train_button(
                 padding: UiRect::axes(Val::Px(12.0), Val::Px(6.0)),
                 row_gap: Val::Px(3.0),
                 border: BORDER_1,
-                border_radius: RADIUS_LG,
+                // border_radius: RADIUS_LG,
                 ..default()
             },
             BackgroundColor(if can_train {
                 theme.colors.btn_primary
             } else {
-                Color::srgba(0.08, 0.08, 0.08, 0.7)
+                theme::BG_PANEL.with_alpha(0.7)
             }),
             BorderColor::all(border_color),
         ))
@@ -1891,7 +1891,7 @@ pub(super) fn spawn_train_button(
                     }),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
-                    border_radius: RADIUS_MD,
+                    // border_radius: RADIUS_MD,
                     ..default()
                 },
                 BackgroundColor(theme.colors.icon_frame_bg),

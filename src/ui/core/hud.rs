@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::components::*;
-use crate::theme::Theme;
+use crate::theme::{self, Theme};
 
 /// Root UI container that holds all widgets
 #[derive(Component)]
@@ -104,12 +104,12 @@ pub fn spawn_hud_roots(
                 top: Val::Px(0.0),
                 max_width: Val::Px(420.0),
                 padding: UiRect::axes(Val::Px(6.0), Val::Px(4.0)),
-                border_radius: BorderRadius::all(Val::Px(5.0)),
+                // border_radius: BorderRadius::all(Val::Px(5.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.05, 0.05, 0.07, 0.9)),
-            BorderColor::all(Color::srgba(0.25, 0.25, 0.30, 0.5)),
+            BackgroundColor(theme::TOOLTIP_BG.with_alpha(0.9)),
+            BorderColor::all(theme::TOOLTIP_BORDER.with_alpha(0.5)),
             GlobalZIndex(90),
             Visibility::Hidden,
             Pickable::IGNORE,
@@ -235,6 +235,7 @@ pub fn update_placement_hint(
 
 pub fn update_ui_scale(
     graphics: Res<GraphicsSettings>,
+    snapshot: Option<Res<crate::menu::OptionsSnapshot>>,
     mut ui_scale: ResMut<UiScale>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -242,7 +243,9 @@ pub fn update_ui_scale(
     let logical_height = window.physical_height() as f32 / window.scale_factor();
     let base_height = 720.0_f32;
     let auto = logical_height / base_height;
-    let new_scale = auto * graphics.ui_scale;
+    // Use snapshot value while editing options, current value otherwise
+    let scale_value = snapshot.map(|s| s.graphics.ui_scale).unwrap_or(graphics.ui_scale);
+    let new_scale = auto * scale_value;
     if (ui_scale.0 - new_scale).abs() > 0.001 {
         ui_scale.0 = new_scale;
     }

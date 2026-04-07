@@ -1,21 +1,15 @@
-use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
-use bevy::ui::RelativeCursorPosition;
 use rand::Rng;
 
 use super::helpers::*;
 use crate::components::*;
-use crate::ui::core::text_input::ScrollablePanel;
 use crate::database::{ActiveProfile, GameDatabase};
-use crate::theme::Theme;
-use crate::ui::core::interactions::UiClickEvent;
+use crate::theme::{Theme, TEXT_PRIMARY, BG_ELEVATED, HIGHLIGHT, HIGHLIGHT_SUBTLE, TEAM_COLORS};
 use crate::ui::fonts::UiFonts;
 
 use super::multiplayer;
-#[cfg(not(target_arch = "wasm32"))]
-use super::multiplayer::start_hosting;
 use super::*;
-use crate::multiplayer::{ClientNetState, HostNetState, LobbyState, NetRole};
+use crate::multiplayer::{ClientNetState, LobbyState, NetRole};
 
 // ── Spawn / Cleanup ──
 
@@ -99,6 +93,7 @@ pub(crate) fn spawn_menu(
     dispatch_page(
         &mut commands,
         content,
+        root,
         &page,
         &config,
         &graphics,
@@ -117,6 +112,7 @@ pub(crate) fn spawn_menu(
 fn dispatch_page(
     commands: &mut Commands,
     container: Entity,
+    root: Entity,
     page: &MenuPage,
     config: &GameSetupConfig,
     graphics: &GraphicsSettings,
@@ -131,8 +127,8 @@ fn dispatch_page(
     profile: &ActiveProfile,
 ) {
     match *page {
-        MenuPage::Title => pages::spawn_title_page(commands, container, fonts, theme),
-        MenuPage::NewGame => pages::spawn_new_game_page(commands, container, config, fonts, theme),
+        MenuPage::Title => super::title::spawn_title_page(commands, container, root, fonts, theme),
+        MenuPage::NewGame => super::new_game::spawn_new_game_page(commands, container, config, fonts, theme),
         MenuPage::Options => {
             pages::spawn_options_page(commands, container, graphics, audio_settings, resolutions, fonts, theme)
         }
@@ -160,6 +156,8 @@ fn dispatch_page(
 pub(crate) fn refresh_menu_page(
     mut commands: Commands,
     content_roots: Query<(Entity, Option<&Children>), With<MenuContentRoot>>,
+    menu_roots: Query<Entity, With<MenuRoot>>,
+    status_bars: Query<Entity, With<MenuStatusBar>>,
     page: Res<MenuPage>,
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
@@ -182,15 +180,25 @@ pub(crate) fn refresh_menu_page(
         return;
     };
 
+    // Despawn old status bars (they live under MenuRoot, not MenuContentRoot)
+    for bar in status_bars.iter() {
+        commands.entity(bar).try_despawn();
+    }
+
     if let Some(children) = children {
         for child in children.iter() {
             commands.entity(child).try_despawn();
         }
     }
 
+    let Ok(root) = menu_roots.single() else {
+        return;
+    };
+
     dispatch_page(
         &mut commands,
         content_root,
+        root,
         &page,
         &config,
         &graphics,
@@ -211,6 +219,8 @@ pub(crate) fn rebuild_dirty_menu(
     dirty: Option<Res<MenuDirty>>,
     mut commands: Commands,
     content_roots: Query<(Entity, Option<&Children>), With<MenuContentRoot>>,
+    menu_roots: Query<Entity, With<MenuRoot>>,
+    status_bars: Query<Entity, With<MenuStatusBar>>,
     page: Res<MenuPage>,
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
@@ -221,9 +231,10 @@ pub(crate) fn rebuild_dirty_menu(
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
     theme: Res<Theme>,
-    db: Res<GameDatabase>,
-    profile: Res<ActiveProfile>,
+    db_and_profile: (Res<GameDatabase>, Res<ActiveProfile>),
 ) {
+    let (db, profile) = db_and_profile;
+
     if dirty.is_none() {
         return;
     }
@@ -233,15 +244,25 @@ pub(crate) fn rebuild_dirty_menu(
         return;
     };
 
+    // Despawn old status bars
+    for bar in status_bars.iter() {
+        commands.entity(bar).try_despawn();
+    }
+
     if let Some(children) = children {
         for child in children.iter() {
             commands.entity(child).try_despawn();
         }
     }
 
+    let Ok(root) = menu_roots.single() else {
+        return;
+    };
+
     dispatch_page(
         &mut commands,
         content_root,
+        root,
         &page,
         &config,
         &graphics,
@@ -260,379 +281,12 @@ pub(crate) fn rebuild_dirty_menu(
 
 // ��─ Menu Button Handler ──
 
-pub(crate) fn handle_menu_buttons(
-    mut click_events: MessageReader<UiClickEvent>,
-    buttons: Query<&MenuButton>,
-    mut next_state: ResMut<NextState<AppState>>,
-    mut page: ResMut<MenuPage>,
-    mut config: ResMut<GameSetupConfig>,
-    mut graphics: ResMut<GraphicsSettings>,
-    mut audio_settings: ResMut<crate::audio::AudioSettings>,
-    mut theme: ResMut<crate::theme::Theme>,
-    mut exit: MessageWriter<AppExit>,
-    mut commands: Commands,
-    mut windows: Query<&mut Window>,
-    host_state: Option<Res<HostNetState>>,
-    client_state: Option<Res<ClientNetState>>,
-    db_and_profile: (Res<GameDatabase>, Res<ActiveProfile>),
-    options_state: (
-        ResMut<crate::ui::core::framework::WidgetRegistry>,
-        Option<Res<super::OptionsSnapshot>>,
-        ResMut<super::ConfirmPopupState>,
-    ),
-) {
-    let (db, profile) = db_and_profile;
-    let (mut widget_registry, snapshot, mut popup_state) = options_state;
-    for event in click_events.read() {
-        let Ok(btn) = buttons.get(event.entity) else {
-            continue;
-        };
-        match btn.0 {
-            MenuAction::NewGame => {
-                *page = MenuPage::NewGame;
-            }
-            MenuAction::LoadGame => {
-                *page = MenuPage::LoadGame;
-            }
-            MenuAction::Options => {
-                *page = MenuPage::Options;
-            }
-            MenuAction::Quit => {
-                exit.write(AppExit::Success);
-            }
-            MenuAction::Back => {
-                *page = MenuPage::Title;
-            }
-            MenuAction::StartGame => {
-                next_state.set(AppState::InGame);
-            }
-            MenuAction::ApplySettings => {
-                theme.set_mode(graphics.theme_mode);
-                if let Ok(mut window) = windows.single_mut() {
-                    super::options::apply_graphics_settings(&graphics, &mut window);
-                }
-                // Update snapshot so Save button hides
-                commands.insert_resource(super::OptionsSnapshot {
-                    graphics: graphics.clone(),
-                    audio: audio_settings.clone(),
-                });
-            }
-            MenuAction::SaveAndLeave => {
-                theme.set_mode(graphics.theme_mode);
-                if let Ok(mut window) = windows.single_mut() {
-                    super::options::apply_graphics_settings(&graphics, &mut window);
-                }
-                popup_state.active = false;
-                commands.remove_resource::<super::OptionsSnapshot>();
-                *page = MenuPage::Title;
-            }
-            MenuAction::DiscardSettings => {
-                // Revert settings to snapshot
-                if let Some(ref snap) = snapshot {
-                    *graphics = snap.graphics.clone();
-                    *audio_settings = snap.audio.clone();
-                    theme.set_mode(snap.graphics.theme_mode);
-                }
-                popup_state.active = false;
-                commands.remove_resource::<super::OptionsSnapshot>();
-                *page = MenuPage::Title;
-            }
-            MenuAction::CancelPopup => {
-                popup_state.active = false;
-            }
-            MenuAction::Multiplayer => {
-                *page = MenuPage::Multiplayer;
-            }
-            MenuAction::HostGame => {
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    multiplayer::prepare_multiplayer_host_config(&mut config);
-                    start_hosting(&mut commands, &config);
-                    *page = MenuPage::HostLobby;
-                }
-            }
-            MenuAction::JoinGame => {
-                *page = MenuPage::JoinLobby;
-            }
-            MenuAction::ConnectToHost => {
-                // Handled by connect_to_host_system
-            }
-            MenuAction::RefreshLanHosts => {
-                // Handled by refresh_lan_hosts_system
-            }
-            MenuAction::StartMultiplayer => {
-                commands.insert_resource(super::CountdownState {
-                    timer: Timer::from_seconds(3.0, TimerMode::Once),
-                    current_digit: 3,
-                    broadcast_sent: false,
-                });
-            }
-            MenuAction::BackToMultiplayer => {
-                *page = MenuPage::Multiplayer;
-            }
-            MenuAction::CancelHost => {
-                #[cfg(not(target_arch = "wasm32"))]
-                multiplayer::stop_hosting(&mut commands, &host_state);
-                *page = MenuPage::Multiplayer;
-            }
-            MenuAction::Disconnect => {
-                multiplayer::stop_client(&mut commands, &client_state);
-                *page = MenuPage::JoinLobby;
-            }
-            MenuAction::LoadSave(save_id) => {
-                if let Some(blob) = db.load_save(save_id) {
-                    match rmp_serde::from_slice::<crate::save_load::SaveData>(&blob) {
-                        Ok(save_data) => {
-                            info!("Loading save id={save_id}");
-                            crate::save_load::restore_config_from_save(&mut config, &save_data);
-                            commands.insert_resource(crate::save_load::PendingLoad { save_data });
-                            next_state.set(AppState::InGame);
-                        }
-                        Err(e) => {
-                            error!("Failed to deserialize save: {e}");
-                        }
-                    }
-                }
-            }
-            MenuAction::DeleteSave(save_id) => {
-                db.delete_save(save_id);
-                // Refresh the page
-                commands.insert_resource(MenuDirty);
-            }
-            MenuAction::ResetWidgetLayout => {
-                *widget_registry = crate::ui::core::framework::WidgetRegistry::default();
-                info!("Widget layout reset to defaults");
-            }
-        }
-    }
-}
-
 pub(crate) fn apply_window_settings_on_menu_enter(
     graphics: Res<GraphicsSettings>,
     mut windows: Query<&mut Window>,
 ) {
     if let Ok(mut window) = windows.single_mut() {
         super::options::apply_graphics_settings(&graphics, &mut window);
-    }
-}
-
-/// Rebuild only the slot cards inside their wrapper, avoiding a full page rebuild
-/// (which would replay panel fade-in / section-divider animations).
-fn rebuild_slot_cards(
-    commands: &mut Commands,
-    slots_q: &Query<(Entity, &Children), With<SlotCardsContainer>>,
-    config: &GameSetupConfig,
-    is_multiplayer: bool,
-    theme: &Theme,
-) {
-    if let Ok((container, children)) = slots_q.single() {
-        for child in children.iter() {
-            commands.entity(child).try_despawn();
-        }
-        for i in 0..4 {
-            pages::spawn_slot_card(commands, container, i, config, is_multiplayer, theme);
-        }
-    }
-}
-
-// ── Selector Clicks ──
-
-pub(crate) fn handle_selector_clicks(
-    interactions: Query<(&Interaction, &MenuSelector), Changed<Interaction>>,
-    mut click_events: MessageReader<UiClickEvent>,
-    all_selectors: Query<&MenuSelector>,
-    mut config: ResMut<GameSetupConfig>,
-    mut graphics: ResMut<GraphicsSettings>,
-    resolutions: Res<AvailableResolutions>,
-    mut lobby: Option<ResMut<LobbyState>>,
-    host_state: Option<Res<HostNetState>>,
-    page: Res<MenuPage>,
-    mut commands: Commands,
-    slots_container: Query<(Entity, &Children), With<SlotCardsContainer>>,
-    theme: Res<Theme>,
-) {
-    // Collect selectors to process from both mouse interactions and keyboard events
-    let mut to_process: Vec<MenuSelector> = Vec::new();
-
-    for (interaction, selector) in &interactions {
-        if *interaction == Interaction::Pressed {
-            to_process.push(*selector);
-        }
-    }
-    for event in click_events.read() {
-        if let Ok(selector) = all_selectors.get(event.entity) {
-            to_process.push(*selector);
-        }
-    }
-
-    for selector in &to_process {
-        // Ignore resolution changes while fullscreen is active
-        if selector.field == SelectorField::Resolution && graphics.fullscreen {
-            continue;
-        }
-        match selector.field {
-            SelectorField::SlotType(slot_idx) => {
-                if slot_idx < 4 {
-                    let new_occupant = if *page == MenuPage::HostLobby {
-                        match selector.index {
-                            0 => SlotOccupant::Human,
-                            1 => SlotOccupant::Open,
-                            2 => SlotOccupant::Ai(AiDifficulty::Medium),
-                            _ => SlotOccupant::Closed,
-                        }
-                    } else {
-                        match selector.index {
-                            0 => SlotOccupant::Human,
-                            1 => SlotOccupant::Ai(AiDifficulty::Medium),
-                            _ => SlotOccupant::Closed,
-                        }
-                    };
-
-                    // If setting to Human in single-player, move the previous human to AI
-                    if matches!(new_occupant, SlotOccupant::Human) && *page == MenuPage::NewGame {
-                        let old_local = config.local_player_slot;
-                        if old_local != slot_idx {
-                            config.slots[old_local] = SlotOccupant::Ai(AiDifficulty::Medium);
-                        }
-                        config.local_player_slot = slot_idx;
-                    }
-                    // Preserve existing difficulty if switching to AI and slot was already AI
-                    let occupant = if matches!(new_occupant, SlotOccupant::Ai(_)) {
-                        if let SlotOccupant::Ai(d) = config.slots[slot_idx] {
-                            SlotOccupant::Ai(d)
-                        } else {
-                            new_occupant
-                        }
-                    } else {
-                        new_occupant
-                    };
-                    config.slots[slot_idx] = occupant;
-
-                    // For multiplayer: update lobby and broadcast
-                    if let Some(ref mut lobby) = lobby {
-                        #[cfg(not(target_arch = "wasm32"))]
-                        if let Some(ref host) = host_state {
-                            multiplayer::broadcast_lobby_update(lobby, host, &config);
-                            commands.insert_resource(multiplayer::PendingLobbyBroadcast);
-                        }
-                    }
-
-                    // Rebuild only the slot cards (difficulty row may appear/disappear)
-                    rebuild_slot_cards(
-                        &mut commands,
-                        &slots_container,
-                        &config,
-                        *page == MenuPage::HostLobby,
-                        &theme,
-                    );
-                }
-            }
-            SelectorField::SlotDifficulty(slot_idx) => {
-                if slot_idx < 4 {
-                    if matches!(config.slots[slot_idx], SlotOccupant::Ai(_)) {
-                        config.slots[slot_idx] = SlotOccupant::Ai(match selector.index {
-                            0 => AiDifficulty::Easy,
-                            1 => AiDifficulty::Medium,
-                            _ => AiDifficulty::Hard,
-                        });
-                        #[cfg(not(target_arch = "wasm32"))]
-                        if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
-                            multiplayer::broadcast_lobby_update(lobby, host, &config);
-                            commands.insert_resource(multiplayer::PendingLobbyBroadcast);
-                        }
-                    }
-                }
-            }
-            SelectorField::SlotTeam(slot_idx) => {
-                if slot_idx < 4 && selector.index < 4 {
-                    config.player_teams[slot_idx] = selector.index as u8;
-                    config.team_mode = TeamMode::Custom;
-                    #[cfg(not(target_arch = "wasm32"))]
-                    if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
-                        multiplayer::broadcast_lobby_update(lobby, host, &config);
-                        commands.insert_resource(multiplayer::PendingLobbyBroadcast);
-                    }
-                    // Visuals handled by update_selector_visuals — no rebuild needed
-                }
-            }
-            SelectorField::TeamMode => {
-                config.team_mode = match selector.index {
-                    0 => {
-                        config.player_teams = [0, 1, 2, 3];
-                        TeamMode::FFA
-                    }
-                    1 => {
-                        config.player_teams = [0, 0, 1, 1];
-                        TeamMode::Teams
-                    }
-                    _ => TeamMode::Custom,
-                };
-                #[cfg(not(target_arch = "wasm32"))]
-                if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
-                    multiplayer::broadcast_lobby_update(lobby, host, &config);
-                    commands.insert_resource(multiplayer::PendingLobbyBroadcast);
-                }
-                // Visuals handled by update_selector_visuals — no rebuild needed
-            }
-            SelectorField::MapSize => {
-                config.map_size = match selector.index {
-                    0 => MapSize::Small,
-                    1 => MapSize::Medium,
-                    _ => MapSize::Large,
-                };
-            }
-            SelectorField::ResourceDensity => {
-                config.resource_density = match selector.index {
-                    0 => ResourceDensity::Sparse,
-                    1 => ResourceDensity::Normal,
-                    _ => ResourceDensity::Dense,
-                };
-            }
-            SelectorField::DayCycle => {
-                if selector.index < DAY_CYCLE_OPTIONS.len() {
-                    config.day_cycle_secs = DAY_CYCLE_OPTIONS[selector.index].0;
-                }
-            }
-            SelectorField::StartingRes => {
-                if selector.index < STARTING_RES_OPTIONS.len() {
-                    config.starting_resources_mult = STARTING_RES_OPTIONS[selector.index].0;
-                }
-            }
-            SelectorField::Resolution
-            | SelectorField::Fullscreen
-            | SelectorField::Vsync
-            | SelectorField::Shadows
-            | SelectorField::EntityLights
-            | SelectorField::AntiAliasing
-            | SelectorField::Bloom
-            | SelectorField::Brightness
-            | SelectorField::AutoExposure
-            | SelectorField::DepthOfField
-            | SelectorField::ChromaticAberration
-            | SelectorField::UiScale
-            | SelectorField::ThemeMode => {
-                super::options::apply_selector_change(
-                    &selector.field,
-                    selector.index,
-                    &mut graphics,
-                    &resolutions,
-                );
-            }
-            SelectorField::MusicVolume | SelectorField::SfxVolume => {
-                // Handled by volume_slider_system.
-            }
-            SelectorField::MapSeed => {
-                // Handled by randomize_seed_system
-            }
-            SelectorField::PreferredFaction => {
-                let preferred = if selector.index == 0 {
-                    None
-                } else {
-                    Some((selector.index - 1) as u8)
-                };
-                commands.insert_resource(super::PreferredFaction(preferred));
-            }
-        }
     }
 }
 
@@ -811,26 +465,20 @@ pub(crate) fn update_selector_visuals(
 
         // Team buttons use custom colors per team
         if let SelectorField::SlotTeam(_) = selector.field {
-            let team_colors = [
-                Color::srgb(0.9, 0.75, 0.2),
-                Color::srgb(0.2, 0.75, 0.85),
-                Color::srgb(0.85, 0.3, 0.65),
-                Color::srgb(0.95, 0.5, 0.15),
-            ];
-            let color = team_colors
+            let color = TEAM_COLORS
                 .get(selector.index)
                 .copied()
-                .unwrap_or(team_colors[0]);
+                .unwrap_or(TEAM_COLORS[0]);
             let new_bg = if should_be_selected {
                 color
             } else {
-                Color::srgba(0.15, 0.15, 0.15, 0.8)
+                BG_ELEVATED.with_alpha(0.8)
             };
             *bg = BackgroundColor(new_bg);
             commands
                 .entity(entity)
                 .insert(BorderColor::all(if should_be_selected {
-                    Color::WHITE
+                    TEXT_PRIMARY
                 } else {
                     Color::NONE
                 }));
@@ -850,7 +498,7 @@ pub(crate) fn update_selector_visuals(
                 for child in children.iter() {
                     if let Ok(mut tc) = text_colors.get_mut(child) {
                         tc.0 = if should_be_selected {
-                            Color::WHITE
+                            TEXT_PRIMARY
                         } else {
                             color
                         };
@@ -871,7 +519,7 @@ pub(crate) fn update_selector_visuals(
             theme.colors.btn_primary
         };
         let text_col = if should_be_selected {
-            Color::WHITE
+            Color::srgb(0.10, 0.16, 0.18)
         } else {
             theme.colors.text_secondary
         };
@@ -889,8 +537,14 @@ pub(crate) fn update_selector_visuals(
                     // Snap immediately on selection change for responsive feel.
                     anim.bg_current = bg_arr;
                 }
+            } else if selection_changed {
+                // Newly deselected: immediately reset bg so the accent doesn't
+                // linger for a frame while deferred SelectedOption removal is pending.
+                let bg_arr = new_bg.to_srgba().to_f32_array();
+                anim.bg_target = bg_arr;
+                anim.bg_current = bg_arr;
             }
-            // Unselected: don't touch bg_target — let animated_button_hover_system
+            // Steady unselected: don't touch bg_target — let animated_button_hover_system
             // handle idle/hover/pressed states naturally.
         } else {
             // No ButtonAnimState — write BackgroundColor directly (fallback).
@@ -899,9 +553,9 @@ pub(crate) fn update_selector_visuals(
 
         if should_be_selected {
             commands.entity(entity).insert((
-                BorderColor::all(Color::srgba(0.29, 0.62, 1.0, 0.4)),
+                BorderColor::all(HIGHLIGHT),
                 BoxShadow::new(
-                    Color::srgba(0.29, 0.62, 1.0, 0.25),
+                    HIGHLIGHT_SUBTLE,
                     Val::Px(0.0),
                     Val::Px(0.0),
                     Val::Px(0.0),
@@ -988,716 +642,3 @@ pub(crate) fn random_name_system(
     }
 }
 
-// ── Menu Keyboard Navigation ──
-
-pub(crate) fn menu_keyboard_nav(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    mut nav: ResMut<MenuNavFocus>,
-    mut click_events: MessageWriter<UiClickEvent>,
-    focusables: Query<(Entity, &NavFocusable)>,
-    mut commands: Commands,
-    focused_q: Query<Entity, With<NavFocused>>,
-    text_focus: Query<&TextInputFocused>,
-    menu_btns: Query<&MenuButton>,
-    mut page: ResMut<MenuPage>,
-    host_state: Option<Res<HostNetState>>,
-    client_state: Option<Res<ClientNetState>>,
-    snapshot: Option<Res<super::OptionsSnapshot>>,
-    graphics: Res<GraphicsSettings>,
-    audio_settings: Res<crate::audio::AudioSettings>,
-    mut popup_state: ResMut<super::ConfirmPopupState>,
-) {
-    // Don't navigate if a text input is focused
-    if text_focus.iter().next().is_some() {
-        return;
-    }
-
-    // Block all keyboard nav while popup is active
-    if popup_state.active {
-        return;
-    }
-
-    // Escape → go back
-    if keyboard.just_pressed(KeyCode::Escape) {
-        // On Options page, check for unsaved changes before leaving
-        if matches!(*page, MenuPage::Options) {
-            if let Some(ref snap) = snapshot {
-                let dirty = *graphics != snap.graphics || *audio_settings != snap.audio;
-                if dirty {
-                    popup_state.active = true;
-                    return;
-                }
-            }
-        }
-
-        let new_page = match *page {
-            MenuPage::NewGame | MenuPage::Options | MenuPage::Multiplayer => Some(MenuPage::Title),
-            MenuPage::HostLobby => {
-                #[cfg(not(target_arch = "wasm32"))]
-                multiplayer::stop_hosting(&mut commands, &host_state);
-                Some(MenuPage::Multiplayer)
-            }
-            MenuPage::JoinLobby => {
-                multiplayer::stop_client(&mut commands, &client_state);
-                Some(MenuPage::Multiplayer)
-            }
-            _ => None,
-        };
-        if let Some(p) = new_page {
-            *page = p;
-            return;
-        }
-    }
-
-    let mut items: Vec<(Entity, usize)> = focusables.iter().map(|(e, nf)| (e, nf.0)).collect();
-    if items.is_empty() {
-        return;
-    }
-    items.sort_by_key(|&(_, order)| order);
-    let count = items.len();
-
-    let up = keyboard.just_pressed(KeyCode::ArrowUp) || keyboard.just_pressed(KeyCode::KeyW);
-    let down = keyboard.just_pressed(KeyCode::ArrowDown) || keyboard.just_pressed(KeyCode::KeyS);
-    let confirm =
-        keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter);
-
-    if up {
-        nav.index = if nav.index == 0 {
-            count - 1
-        } else {
-            nav.index - 1
-        };
-    }
-    if down {
-        nav.index = (nav.index + 1) % count;
-    }
-
-    // Clamp in case buttons changed
-    nav.index = nav.index.min(count - 1);
-
-    // Update NavFocused marker
-    if up || down {
-        for e in &focused_q {
-            commands.entity(e).remove::<NavFocused>();
-        }
-        let (entity, _) = items[nav.index];
-        commands.entity(entity).insert(NavFocused);
-    }
-
-    // Ensure focus marker exists even without input (first frame)
-    if focused_q.is_empty() {
-        let (entity, _) = items[nav.index];
-        commands.entity(entity).insert(NavFocused);
-    }
-
-    // Enter on an action button (MenuButton) → emit click
-    if confirm {
-        let (entity, _) = items[nav.index];
-        if menu_btns.get(entity).is_ok() {
-            click_events.write(UiClickEvent { entity });
-        }
-    }
-}
-
-/// Handles Left/Right (A/D) to change the selected option within a focused selector row.
-pub(crate) fn menu_selector_keyboard_nav(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    focused: Query<(Entity, &Children), With<NavFocused>>,
-    selectors: Query<(Entity, &MenuSelector, Option<&SelectedOption>)>,
-    sliders: Query<&RangeSlider>,
-    mut click_events: MessageWriter<UiClickEvent>,
-    mut audio_settings: ResMut<crate::audio::AudioSettings>,
-    menu_btns: Query<&MenuButton>,
-    text_focus: Query<&TextInputFocused>,
-    mut nav: ResMut<MenuNavFocus>,
-    focusables: Query<(Entity, &NavFocusable)>,
-    focused_all: Query<Entity, With<NavFocused>>,
-    mut commands: Commands,
-) {
-    if text_focus.iter().next().is_some() {
-        return;
-    }
-
-    let left = keyboard.just_pressed(KeyCode::ArrowLeft) || keyboard.just_pressed(KeyCode::KeyA);
-    let right = keyboard.just_pressed(KeyCode::ArrowRight) || keyboard.just_pressed(KeyCode::KeyD);
-    let confirm =
-        keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::NumpadEnter);
-
-    if !left && !right && !confirm {
-        return;
-    }
-
-    // Enter on a selector row → advance to next focusable row (confirm & move on)
-    if confirm && !left && !right {
-        for (entity, _) in &focused {
-            if menu_btns.get(entity).is_ok() {
-                continue; // Action buttons handled by menu_keyboard_nav
-            }
-            // This is a selector row — advance focus to next item
-            let mut items: Vec<(Entity, usize)> =
-                focusables.iter().map(|(e, nf)| (e, nf.0)).collect();
-            items.sort_by_key(|&(_, order)| order);
-            let count = items.len();
-            if count > 0 {
-                nav.index = (nav.index + 1) % count;
-                for e in &focused_all {
-                    commands.entity(e).remove::<NavFocused>();
-                }
-                let (next_entity, _) = items[nav.index];
-                commands.entity(next_entity).insert(NavFocused);
-            }
-            return;
-        }
-    }
-
-    for (entity, children) in &focused {
-        // Skip action buttons — those are handled by menu_keyboard_nav
-        if menu_btns.get(entity).is_ok() {
-            continue;
-        }
-
-        // Collect selector children of this row (in spawn/visual order)
-        let mut child_selectors: Vec<(Entity, usize, bool)> = Vec::new();
-        for child in children.iter() {
-            if let Ok((e, sel, selected)) = selectors.get(child) {
-                child_selectors.push((e, sel.index, selected.is_some()));
-            }
-        }
-
-        if child_selectors.is_empty() {
-            let mut handled_slider = false;
-            for child in children.iter() {
-                let Ok(slider) = sliders.get(child) else {
-                    continue;
-                };
-
-                match slider.field {
-                    SelectorField::MusicVolume => {
-                        let delta = if left { -0.01 } else { 0.01 };
-                        audio_settings.music_volume =
-                            (audio_settings.music_volume + delta).clamp(0.0, 1.0);
-                        handled_slider = true;
-                    }
-                    SelectorField::SfxVolume => {
-                        let delta = if left { -0.01 } else { 0.01 };
-                        audio_settings.sfx_volume =
-                            (audio_settings.sfx_volume + delta).clamp(0.0, 1.0);
-                        handled_slider = true;
-                    }
-                    _ => {}
-                }
-            }
-
-            if handled_slider {
-                continue;
-            }
-
-            continue;
-        }
-
-        // Arrow selector pattern: no child has SelectedOption (e.g. Resolution < value >).
-        // Use spawn order (not sorted by index) so left=first button, right=second button.
-        let is_arrow_selector = child_selectors.iter().all(|&(_, _, sel)| !sel);
-        if is_arrow_selector && child_selectors.len() >= 2 {
-            if left || right {
-                let target = if left { 0 } else { 1 };
-                let (target_entity, _, _) = child_selectors[target];
-                click_events.write(UiClickEvent {
-                    entity: target_entity,
-                });
-            }
-            continue;
-        }
-
-        // For regular option-button selectors, sort by index for left-right navigation
-        child_selectors.sort_by_key(|&(_, idx, _)| idx);
-
-        let current = child_selectors
-            .iter()
-            .position(|&(_, _, sel)| sel)
-            .unwrap_or(0);
-
-        let new = if left {
-            if current == 0 {
-                child_selectors.len() - 1
-            } else {
-                current - 1
-            }
-        } else if right {
-            (current + 1) % child_selectors.len()
-        } else {
-            continue;
-        };
-
-        if new != current {
-            let (target_entity, _, _) = child_selectors[new];
-            click_events.write(UiClickEvent {
-                entity: target_entity,
-            });
-        }
-    }
-}
-
-/// Applies visual highlight to the keyboard-focused item (button or selector row).
-pub(crate) fn menu_nav_focus_visuals(
-    focused: Query<Entity, Added<NavFocused>>,
-    all_focusable: Query<(Entity, Option<&MenuButton>), With<NavFocusable>>,
-    nav_focused_q: Query<(Entity, Option<&MenuButton>), With<NavFocused>>,
-    children_q: Query<&Children>,
-    value_bgs: Query<Entity, With<ArrowSelectorValueBg>>,
-    mut bg_colors: Query<&mut BackgroundColor>,
-    mut border_colors_q: Query<&mut BorderColor>,
-    mut commands: Commands,
-    theme: Res<Theme>,
-) {
-    if focused.is_empty() {
-        return;
-    }
-
-    // Style newly focused items — only add focus ring (border + shadow).
-    for entity in &focused {
-        commands.entity(entity).insert((
-            BorderColor::all(theme.colors.accent),
-            BoxShadow::new(
-                Color::srgba(0.29, 0.62, 1.0, 0.4),
-                Val::Px(0.0),
-                Val::Px(0.0),
-                Val::Px(0.0),
-                Val::Px(10.0),
-            ),
-        ));
-
-        // Highlight ArrowSelectorValueBg children when row is focused
-        if let Ok(children) = children_q.get(entity) {
-            for child in children.iter() {
-                if value_bgs.get(child).is_ok() {
-                    if let Ok(mut bg) = bg_colors.get_mut(child) {
-                        bg.0 = Color::srgba(0.22, 0.50, 0.95, 0.25);
-                    }
-                    if let Ok(mut bc) = border_colors_q.get_mut(child) {
-                        *bc = BorderColor::all(Color::srgba(0.29, 0.62, 1.0, 0.5));
-                    }
-                }
-            }
-        }
-    }
-
-    // Reset unfocused items
-    for (entity, _) in &all_focusable {
-        if nav_focused_q.iter().any(|(e, _)| e == entity) {
-            continue;
-        }
-        commands
-            .entity(entity)
-            .insert(BorderColor::all(Color::NONE));
-        commands.entity(entity).remove::<BoxShadow>();
-
-        // Reset ArrowSelectorValueBg to default
-        if let Ok(children) = children_q.get(entity) {
-            for child in children.iter() {
-                if value_bgs.get(child).is_ok() {
-                    if let Ok(mut bg) = bg_colors.get_mut(child) {
-                        bg.0 = Color::srgba(0.18, 0.40, 0.85, 0.15);
-                    }
-                    if let Ok(mut bc) = border_colors_q.get_mut(child) {
-                        *bc = BorderColor::all(Color::srgba(0.29, 0.62, 1.0, 0.3));
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Scrolls the menu panel to keep the keyboard-focused item visible.
-///
-/// Triggers on `Added<NavFocused>` so it runs the frame the marker actually appears
-/// (commands that insert `NavFocused` are deferred, so `nav.is_changed()` would fire
-/// one frame too early — before layout is available).
-pub(crate) fn scroll_to_focused(
-    focused_q: Query<(&ComputedNode, &GlobalTransform), Added<NavFocused>>,
-    mut panels: Query<
-        (&mut ScrollPosition, &ComputedNode, &GlobalTransform),
-        With<ScrollablePanel>,
-    >,
-) {
-    let Ok((focused_node, focused_gt)) = focused_q.single() else {
-        return;
-    };
-
-    for (mut scroll_pos, panel_node, panel_gt) in &mut panels {
-        let scale_inv = panel_node.inverse_scale_factor();
-        let panel_height = panel_node.size().y * scale_inv;
-        let content_height = panel_node.content_size().y * scale_inv;
-        let max_scroll = (content_height - panel_height).max(0.0);
-        if max_scroll < 1.0 {
-            continue;
-        }
-
-        // GlobalTransform gives us screen-space positions. Compute focused item's
-        // offset relative to the panel's top edge, then convert to content-space
-        // by adding the current scroll offset.
-        let panel_top_y = panel_gt.translation().y;
-        let item_top_y = focused_gt.translation().y;
-        let item_height = focused_node.size().y * scale_inv;
-
-        let rel_top = item_top_y - panel_top_y;
-        let item_content_top = rel_top + scroll_pos.y;
-        let item_content_bottom = item_content_top + item_height;
-
-        let visible_top = scroll_pos.y;
-        let visible_bottom = scroll_pos.y + panel_height;
-
-        if item_content_top < visible_top {
-            scroll_pos.y = (item_content_top - 10.0).max(0.0);
-        } else if item_content_bottom > visible_bottom {
-            scroll_pos.y = (item_content_bottom - panel_height + 10.0).min(max_scroll);
-        }
-    }
-}
-
-/// Resets nav focus index when the menu page changes.
-pub(crate) fn reset_nav_focus_on_page_change(
-    page: Res<MenuPage>,
-    mut nav: ResMut<MenuNavFocus>,
-    focused_q: Query<Entity, With<NavFocused>>,
-    mut commands: Commands,
-) {
-    if page.is_changed() {
-        nav.index = 0;
-        for e in &focused_q {
-            commands.entity(e).remove::<NavFocused>();
-        }
-    }
-}
-
-// ── Volume Slider Interaction ──
-
-/// Handles click and drag on volume slider tracks.
-///
-/// Uses `RelativeCursorPosition` to map cursor to 0.0–1.0 within the track.
-pub(crate) fn volume_slider_system(
-    mouse: Res<ButtonInput<MouseButton>>,
-    sliders: Query<(Entity, &RangeSlider, &Interaction, &RelativeCursorPosition)>,
-    mut fills: Query<(&ChildOf, &mut Node), With<RangeSliderFill>>,
-    mut labels: Query<(&RangeSliderLabel, &mut Text)>,
-    mut audio_settings: ResMut<crate::audio::AudioSettings>,
-    mut drag: ResMut<SliderDragState>,
-) {
-    // On release, stop dragging.
-    if mouse.just_released(MouseButton::Left) {
-        if drag.active.is_some() {
-            drag.active = None;
-        }
-        return;
-    }
-
-    // Determine which slider is active.
-    let active_slider = if let Some(active) = drag.active {
-        if mouse.pressed(MouseButton::Left) {
-            Some(active)
-        } else {
-            None
-        }
-    } else if mouse.just_pressed(MouseButton::Left) {
-        sliders
-            .iter()
-            .find(|(_, _, interaction, _)| **interaction == Interaction::Pressed)
-            .map(|(entity, _, _, _)| entity)
-    } else {
-        None
-    };
-
-    let Some(slider_entity) = active_slider else {
-        return;
-    };
-    drag.active = Some(slider_entity);
-
-    let Ok((_, slider, _, rel_cursor)) = sliders.get(slider_entity) else {
-        return;
-    };
-
-    // RelativeCursorPosition: (0,0) = center, (-0.5,-0.5) = top-left, (0.5,0.5) = bottom-right.
-    // Convert to 0.0–1.0 range: add 0.5 to the x component.
-    let Some(normalized) = rel_cursor.normalized else {
-        return;
-    };
-    let t = (normalized.x + 0.5).clamp(0.0, 1.0);
-
-    let (pct, value_label) = match slider.field {
-        SelectorField::MusicVolume => {
-            let value = (t * 100.0).round() / 100.0;
-            audio_settings.music_volume = value;
-            let pct = value * 100.0;
-            (pct, format!("{pct:.0}%"))
-        }
-        SelectorField::SfxVolume => {
-            let value = (t * 100.0).round() / 100.0;
-            audio_settings.sfx_volume = value;
-            let pct = value * 100.0;
-            (pct, format!("{pct:.0}%"))
-        }
-        _ => return,
-    };
-
-    // Update fill bar width and label.
-    for (parent, mut node) in fills.iter_mut() {
-        if parent.parent() == slider_entity {
-            node.width = Val::Percent(pct);
-        }
-    }
-    let field = slider.field;
-    for (lbl, mut text) in labels.iter_mut() {
-        if lbl.0 == field {
-            **text = value_label.clone();
-        }
-    }
-}
-
-pub(crate) fn sync_range_slider_visuals(
-    audio_settings: Res<crate::audio::AudioSettings>,
-    sliders: Query<(Entity, &RangeSlider)>,
-    mut fills: Query<(&ChildOf, &mut Node), With<RangeSliderFill>>,
-    mut labels: Query<(&RangeSliderLabel, &mut Text)>,
-) {
-    if !audio_settings.is_changed() {
-        return;
-    }
-
-    for (slider_entity, slider) in &sliders {
-        let (pct, value_label) = match slider.field {
-            SelectorField::MusicVolume => {
-                let pct = (audio_settings.music_volume * 100.0).round();
-                (pct, format!("{pct:.0}%"))
-            }
-            SelectorField::SfxVolume => {
-                let pct = (audio_settings.sfx_volume * 100.0).round();
-                (pct, format!("{pct:.0}%"))
-            }
-            _ => continue,
-        };
-
-        for (parent, mut node) in fills.iter_mut() {
-            if parent.parent() == slider_entity {
-                node.width = Val::Percent(pct);
-            }
-        }
-
-        for (label, mut text) in labels.iter_mut() {
-            if label.0 == slider.field {
-                **text = value_label.clone();
-            }
-        }
-    }
-}
-
-// ── Options Dirty-State Tracking ──
-
-/// Captures a snapshot of current settings when entering the Options page.
-pub(crate) fn capture_options_snapshot(
-    page: Res<MenuPage>,
-    graphics: Res<GraphicsSettings>,
-    audio_settings: Res<crate::audio::AudioSettings>,
-    mut commands: Commands,
-    snapshot: Option<Res<super::OptionsSnapshot>>,
-) {
-    if !page.is_changed() {
-        return;
-    }
-    if matches!(*page, MenuPage::Options) {
-        // Only capture if we don't already have a snapshot (fresh entry)
-        if snapshot.is_none() {
-            commands.insert_resource(super::OptionsSnapshot {
-                graphics: graphics.clone(),
-                audio: audio_settings.clone(),
-            });
-        }
-    } else {
-        // Leaving Options page — clean up snapshot
-        if snapshot.is_some() {
-            commands.remove_resource::<super::OptionsSnapshot>();
-        }
-    }
-}
-
-/// Toggles Save button visibility based on whether settings have changed from snapshot.
-pub(crate) fn toggle_save_button_visibility(
-    page: Res<MenuPage>,
-    graphics: Res<GraphicsSettings>,
-    audio_settings: Res<crate::audio::AudioSettings>,
-    snapshot: Option<Res<super::OptionsSnapshot>>,
-    mut save_btns: Query<&mut Visibility, With<super::SaveSettingsButton>>,
-) {
-    if !matches!(*page, MenuPage::Options) {
-        return;
-    }
-    let dirty = if let Some(ref snap) = snapshot {
-        *graphics != snap.graphics || *audio_settings != snap.audio
-    } else {
-        false
-    };
-    for mut vis in &mut save_btns {
-        *vis = if dirty {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-    }
-}
-
-/// Spawns/despawns the unsaved-changes confirmation popup.
-pub(crate) fn manage_unsaved_changes_popup(
-    popup_state: Res<super::ConfirmPopupState>,
-    existing_popup: Query<Entity, With<super::UnsavedChangesPopup>>,
-    mut commands: Commands,
-    theme: Res<Theme>,
-    fonts: Res<UiFonts>,
-) {
-    if !popup_state.is_changed() {
-        return;
-    }
-
-    if popup_state.active {
-        // Don't spawn twice
-        if !existing_popup.is_empty() {
-            return;
-        }
-        spawn_unsaved_changes_popup(&mut commands, &theme, &fonts);
-    } else {
-        // Despawn popup
-        for entity in &existing_popup {
-            commands.entity(entity).try_despawn();
-        }
-    }
-}
-
-fn spawn_unsaved_changes_popup(commands: &mut Commands, theme: &Theme, fonts: &UiFonts) {
-    use crate::ui::core::components as ui_components;
-    use crate::ui::core::fonts;
-
-    commands
-        .spawn((
-            super::UnsavedChangesPopup,
-            Node {
-                position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
-            GlobalZIndex(100),
-        ))
-        .with_children(|overlay| {
-            overlay
-                .spawn((
-                    Node {
-                        width: Val::Px(400.0),
-                        flex_direction: FlexDirection::Column,
-                        align_items: AlignItems::Center,
-                        padding: UiRect::all(Val::Px(24.0)),
-                        row_gap: Val::Px(16.0),
-                        border: UiRect::all(Val::Px(2.0)),
-                        border_radius: BorderRadius::all(Val::Px(12.0)),
-                        ..default()
-                    },
-                    BackgroundColor(theme.colors.bg_surface),
-                    BorderColor::all(theme.colors.accent),
-                    BoxShadow::new(
-                        Color::srgba(0.0, 0.0, 0.0, 0.5),
-                        Val::Px(0.0),
-                        Val::Px(4.0),
-                        Val::Px(0.0),
-                        Val::Px(20.0),
-                    ),
-                ))
-                .with_children(|card| {
-                    // Title
-                    card.spawn((
-                        Text::new("Unsaved Changes"),
-                        fonts::heading(fonts, theme.typography.heading),
-                        TextColor(Color::WHITE),
-                    ));
-
-                    // Description
-                    card.spawn((
-                        Text::new("You have unsaved changes.\nSave before leaving?"),
-                        TextFont {
-                            font: fonts.body.clone(),
-                            font_size: theme.typography.body,
-                            ..default()
-                        },
-                        TextColor(theme.colors.text_secondary),
-                        TextLayout::new_with_justify(Justify::Center),
-                    ));
-
-                    // Buttons row
-                    card.spawn(Node {
-                        width: Val::Percent(100.0),
-                        flex_direction: FlexDirection::Row,
-                        justify_content: JustifyContent::Center,
-                        column_gap: Val::Px(8.0),
-                        margin: UiRect::top(Val::Px(8.0)),
-                        ..default()
-                    })
-                    .with_children(|row| {
-                        // Save & Leave
-                        row.spawn((
-                            MenuButton(MenuAction::SaveAndLeave),
-                            Button,
-                            ui_components::button_node(120.0, 40.0),
-                            ui_components::filled_button_chrome(
-                                theme,
-                                ui_components::UiTone::Accent,
-                            ),
-                        ))
-                        .with_children(|btn| {
-                            btn.spawn((
-                                Text::new("SAVE"),
-                                fonts::heading(fonts, theme.typography.small),
-                                TextColor(Color::WHITE),
-                                Pickable::IGNORE,
-                            ));
-                        });
-
-                        // Discard
-                        row.spawn((
-                            MenuButton(MenuAction::DiscardSettings),
-                            Button,
-                            ui_components::button_node(120.0, 40.0),
-                            ui_components::filled_button_chrome(
-                                theme,
-                                ui_components::UiTone::Destructive,
-                            ),
-                        ))
-                        .with_children(|btn| {
-                            btn.spawn((
-                                Text::new("DISCARD"),
-                                fonts::heading(fonts, theme.typography.small),
-                                TextColor(Color::WHITE),
-                                Pickable::IGNORE,
-                            ));
-                        });
-
-                        // Cancel
-                        row.spawn((
-                            MenuButton(MenuAction::CancelPopup),
-                            Button,
-                            ui_components::button_node(120.0, 40.0),
-                            ui_components::ghost_button_chrome(
-                                theme,
-                                ui_components::UiTone::Neutral,
-                            ),
-                        ))
-                        .with_children(|btn| {
-                            btn.spawn((
-                                Text::new("CANCEL"),
-                                fonts::heading(fonts, theme.typography.small),
-                                TextColor(theme.colors.text_secondary),
-                                Pickable::IGNORE,
-                            ));
-                        });
-                    });
-                });
-        });
-}

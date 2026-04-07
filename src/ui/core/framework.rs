@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use super::fonts::{self, UiFonts};
 use super::interactions::{UiClickEvent, UiInteractPhase, UiInteractState};
 use crate::components::AppState;
-use crate::theme::Theme;
+use crate::theme::{self, Theme};
 
 /// Set to true when a widget consumed scroll events this frame.
 /// Camera zoom should skip when this is true.
@@ -310,7 +310,7 @@ pub fn spawn_widget_frame(
                 min_height: Val::Px(20.0),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.05, 0.05, 0.05, 0.6)),
+            BackgroundColor(theme::BG_RECESSED.with_alpha(0.6)),
         ))
         .with_children(|bar| {
             // Title text
@@ -338,7 +338,7 @@ pub fn spawn_widget_frame(
                         height: Val::Px(16.0),
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
-                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                        // border_radius: BorderRadius::all(Val::Px(3.0)),
                         ..default()
                     },
                     BackgroundColor(Color::NONE),
@@ -364,7 +364,7 @@ pub fn spawn_widget_frame(
                         height: Val::Px(16.0),
                         justify_content: JustifyContent::Center,
                         align_items: AlignItems::Center,
-                        border_radius: BorderRadius::all(Val::Px(3.0)),
+                        // border_radius: BorderRadius::all(Val::Px(3.0)),
                         ..default()
                     },
                     BackgroundColor(Color::NONE),
@@ -723,7 +723,7 @@ pub fn spawn_grid_overlay(
         return;
     }
 
-    let grid_color = Color::srgba(1.0, 1.0, 1.0, 0.12);
+    let grid_color = theme::GRID_LINE;
 
     commands
         .spawn((

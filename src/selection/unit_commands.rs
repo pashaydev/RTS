@@ -482,7 +482,8 @@ pub(crate) fn handle_right_click_move(
                                     .remove::<AttackTarget>()
                                     .insert(MoveTarget(gt.translation()))
                                     .insert(UnitState::Moving(gt.translation()))
-                                    .insert(TaskSource::Manual);
+                                    .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                             }
                         }
                     }
@@ -508,7 +509,8 @@ pub(crate) fn handle_right_click_move(
                                 .remove::<AttackTarget>()
                                 .remove::<MoveTarget>()
                                 .insert(UnitState::MovingToBuild(target_entity))
-                                .insert(TaskSource::Manual);
+                                .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                             set_current_task(
                                 &mut task_queues,
                                 &mut next_task_id,
@@ -528,7 +530,8 @@ pub(crate) fn handle_right_click_move(
                             .remove::<AttackTarget>()
                             .insert(MoveTarget(pos))
                             .insert(UnitState::Moving(pos))
-                            .insert(TaskSource::Manual);
+                            .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                     }
                 }
             }
@@ -554,7 +557,8 @@ pub(crate) fn handle_right_click_move(
                                     .remove::<AttackTarget>()
                                     .insert(MoveTarget(gt.translation()))
                                     .insert(UnitState::Gathering(target_entity))
-                                    .insert(TaskSource::Manual);
+                                    .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                                 set_current_task(
                                     &mut task_queues,
                                     &mut next_task_id,
@@ -575,7 +579,8 @@ pub(crate) fn handle_right_click_move(
                             .remove::<AttackTarget>()
                             .insert(MoveTarget(gt.translation()))
                             .insert(UnitState::Moving(gt.translation()))
-                            .insert(TaskSource::Manual);
+                            .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                     }
                 }
             }
@@ -617,7 +622,8 @@ pub(crate) fn handle_right_click_move(
                                 .remove::<AttackTarget>()
                                 .insert(MoveTarget(dest))
                                 .insert(UnitState::Moving(dest))
-                                .insert(TaskSource::Manual);
+                                .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                             set_current_task(
                                 &mut task_queues,
                                 &mut next_task_id,
@@ -662,7 +668,8 @@ pub(crate) fn handle_right_click_move(
                                 .remove::<AttackTarget>()
                                 .remove::<MoveTarget>()
                                 .insert(UnitState::MovingToBuild(site_entity))
-                                .insert(TaskSource::Manual);
+                                .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                             set_current_task(
                                 &mut task_queues,
                                 &mut next_task_id,
@@ -682,7 +689,8 @@ pub(crate) fn handle_right_click_move(
                             .remove::<AttackTarget>()
                             .insert(MoveTarget(point))
                             .insert(UnitState::Moving(point))
-                            .insert(TaskSource::Manual);
+                            .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                     }
                 }
             } else {
@@ -709,7 +717,8 @@ pub(crate) fn handle_right_click_move(
                             .remove::<AttackTarget>()
                             .insert(MoveTarget(point))
                             .insert(UnitState::Moving(point))
-                            .insert(TaskSource::Manual);
+                            .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                         set_current_task(
                             &mut task_queues,
                             &mut next_task_id,
@@ -752,7 +761,8 @@ pub(crate) fn handle_right_click_move(
                                 .remove::<AttackTarget>()
                                 .insert(MoveTarget(dest))
                                 .insert(UnitState::Moving(dest))
-                                .insert(TaskSource::Manual);
+                                .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                             set_current_task(
                                 &mut task_queues,
                                 &mut next_task_id,
@@ -835,7 +845,8 @@ pub(crate) fn handle_unit_command_hotkeys(
                     .remove::<MoveTarget>()
                     .remove::<AttackTarget>()
                     .insert(UnitState::HoldPosition)
-                    .insert(TaskSource::Manual);
+                    .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                 set_current_task(
                     &mut task_queues,
                     &mut next_task_id,
@@ -853,15 +864,18 @@ pub(crate) fn handle_unit_command_hotkeys(
                     continue;
                 }
                 clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
+                let grace = ManualIdleSince(time.elapsed_secs_f64());
                 if *kind == EntityKind::Worker {
                     crate::resources::unassign_worker_from_processor(&mut commands, entity);
+                    commands.entity(entity).insert(grace);
                 } else {
                     commands
                         .entity(entity)
                         .remove::<MoveTarget>()
                         .remove::<AttackTarget>()
                         .insert(UnitState::Idle)
-                        .insert(TaskSource::Auto);
+                        .insert(TaskSource::Auto)
+                        .insert(grace);
                 }
                 clear_task_queue(&mut task_queues, entity);
             }
@@ -1015,7 +1029,8 @@ pub(crate) fn handle_unit_command_hotkeys(
                         .remove::<AttackTarget>()
                         .insert(MoveTarget(dest))
                         .insert(UnitState::AttackMoving(dest))
-                        .insert(TaskSource::Manual);
+                        .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                     set_current_task(
                         &mut task_queues,
                         &mut next_task_id,
@@ -1044,7 +1059,8 @@ pub(crate) fn handle_unit_command_hotkeys(
                             target: point,
                             origin: point,
                         })
-                        .insert(TaskSource::Manual);
+                        .insert(TaskSource::Manual)
+                                .remove::<ManualIdleSince>();
                     set_current_task(
                         &mut task_queues,
                         &mut next_task_id,
