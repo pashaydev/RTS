@@ -299,6 +299,51 @@ impl ObstacleGrid {
         }
         false
     }
+
+    pub fn is_oriented_rect_blocked(
+        &self,
+        center: Vec3,
+        half_x: f32,
+        half_z: f32,
+        rotation_y: f32,
+    ) -> bool {
+        let corners = [
+            Vec2::new(-half_x, -half_z),
+            Vec2::new(half_x, -half_z),
+            Vec2::new(half_x, half_z),
+            Vec2::new(-half_x, half_z),
+        ];
+        for corner in corners {
+            let rotated = Quat::from_rotation_y(rotation_y) * Vec3::new(corner.x, 0.0, corner.y);
+            let world = center + rotated;
+            if self.is_in_border(world.x, world.z) {
+                return true;
+            }
+        }
+
+        let search_radius = half_x.hypot(half_z);
+        let cells_needed = (search_radius / WALL_CELL_SIZE).ceil() as i32 + 1;
+        let (cx, cz) = WallGrid::world_to_grid(center);
+        let inv = Quat::from_rotation_y(-rotation_y);
+
+        for dx in -cells_needed..=cells_needed {
+            for dz in -cells_needed..=cells_needed {
+                let gx = cx + dx;
+                let gz = cz + dz;
+                if !self.cells.contains(&(gx, gz)) {
+                    continue;
+                }
+                let cell_world = WallGrid::grid_to_world(gx, gz);
+                let local =
+                    inv * Vec3::new(cell_world.x - center.x, 0.0, cell_world.z - center.z);
+                if local.x.abs() < half_x && local.z.abs() < half_z {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
 }
 
 // ── Building upgrades & interactions ──

@@ -7,6 +7,18 @@ use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::types::*;
 use crate::world::ground::{playable_half_map, HeightMap, TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue};
 
+use super::{
+    rotate_local_xz, rotation_y_from_quat, sawmill_tree_slot_world, sawmill_yard_corners,
+};
+
+#[derive(Component)]
+pub(crate) struct SawmillFencePiece {
+    owner: Entity,
+    local_anchor: Vec3,
+    local_rotation_y: f32,
+    y_offset: f32,
+}
+
 // ── Obstacle grid sync ──
 
 pub(super) fn sync_obstacle_grid(
@@ -457,10 +469,7 @@ pub(super) fn update_storage_piles(
 
 // ── Sawmill Tree Yard ──
 
-// Yard center is placed east of the sawmill, outside the 3.0 footprint
 pub const SAWMILL_YARD_OFFSET: Vec3 = Vec3::new(5.5, 0.0, 0.0);
-const SAWMILL_YARD_HALF_X: f32 = 2.0;
-const SAWMILL_YARD_HALF_Z: f32 = 2.0;
 const SAWMILL_MINI_TREE_SCALE: f32 = 0.06;
 
 fn sawmill_yard_max_trees(level: u8) -> u8 {
@@ -509,23 +518,21 @@ pub(super) fn sawmill_yard_system(
             continue;
         }
 
-        let center = transform.translation + SAWMILL_YARD_OFFSET;
+        let rotation_y = rotation_y_from_quat(transform.rotation);
         let mut fence_entities = Vec::new();
-
-        // Fence corner positions (local to yard center)
-        let corners = [
-            Vec3::new(-SAWMILL_YARD_HALF_X, 0.0, -SAWMILL_YARD_HALF_Z),
-            Vec3::new(SAWMILL_YARD_HALF_X, 0.0, -SAWMILL_YARD_HALF_Z),
-            Vec3::new(SAWMILL_YARD_HALF_X, 0.0, SAWMILL_YARD_HALF_Z),
-            Vec3::new(-SAWMILL_YARD_HALF_X, 0.0, SAWMILL_YARD_HALF_Z),
-        ];
+        let corners = sawmill_yard_corners(transform.translation, rotation_y);
 
         let post_mesh = meshes.add(Cylinder::new(0.05, 0.8));
+        let rail_meshes = [
+            meshes.add(Cuboid::new(4.0, 0.06, 0.06)),
+            meshes.add(Cuboid::new(4.0, 0.06, 0.06)),
+            meshes.add(Cuboid::new(4.0, 0.06, 0.06)),
+            meshes.add(Cuboid::new(4.0, 0.06, 0.06)),
+        ];
 
-        // Spawn fence posts at corners
-        for local_pos in corners.iter() {
-            let world_pos = center + *local_pos;
+        for world_pos in corners.iter() {
             let ground_y = height_map.sample(world_pos.x, world_pos.z);
+            let local_anchor = rotate_local_xz(*world_pos - transform.translation, -rotation_y);
             let post = commands
                 .spawn((
                     Mesh3d(post_mesh.clone()),
@@ -538,43 +545,49 @@ pub(super) fn sawmill_yard_system(
                     NotShadowCaster,
                     NotShadowReceiver,
                     GameWorld,
+                    SawmillFencePiece {
+                        owner: entity,
+                        local_anchor,
+                        local_rotation_y: 0.0,
+                        y_offset: 0.4,
+                    },
                 ))
                 .id();
             fence_entities.push(post);
         }
 
-        // Spawn fence rails between consecutive corners
-        let rail_height_offsets = [0.25, 0.55]; // two horizontal rails
+        let rail_height_offsets = [0.25, 0.55];
         for i in 0..4 {
             let a = corners[i];
             let b = corners[(i + 1) % 4];
             let mid = (a + b) * 0.5;
             let span = (b - a).length();
-            let world_mid = center + mid;
-            let ground_y = height_map.sample(world_mid.x, world_mid.z);
-
-            // Determine rotation: rails along X or Z
-            let angle = if (b.z - a.z).abs() > (b.x - a.x).abs() {
-                std::f32::consts::FRAC_PI_2
-            } else {
-                0.0
-            };
+            let ground_y = height_map.sample(mid.x, mid.z);
+            let local_anchor = rotate_local_xz(mid - transform.translation, -rotation_y);
+            let local_dir = rotate_local_xz(b - a, -rotation_y);
+            let local_angle = local_dir.z.atan2(local_dir.x);
 
             for &h in &rail_height_offsets {
-                let rail_mesh = meshes.add(Cuboid::new(span, 0.06, 0.06));
                 let rail = commands
                     .spawn((
-                        Mesh3d(rail_mesh),
+                        Mesh3d(rail_meshes[i].clone()),
                         MeshMaterial3d(fence_mat.clone()),
                         Transform::from_translation(Vec3::new(
-                            world_mid.x,
+                            mid.x,
                             ground_y + h,
-                            world_mid.z,
+                            mid.z,
                         ))
-                        .with_rotation(Quat::from_rotation_y(angle)),
+                        .with_rotation(Quat::from_rotation_y(rotation_y + local_angle))
+                        .with_scale(Vec3::new(span / 4.0, 1.0, 1.0)),
                         NotShadowCaster,
                         NotShadowReceiver,
                         GameWorld,
+                        SawmillFencePiece {
+                            owner: entity,
+                            local_anchor,
+                            local_rotation_y: local_angle,
+                            y_offset: h,
+                        },
                     ))
                     .id();
                 fence_entities.push(rail);
@@ -588,7 +601,8 @@ pub(super) fn sawmill_yard_system(
             &mut commands,
             &height_map,
             model_assets.as_deref(),
-            center,
+            transform.translation,
+            rotation_y,
             0,
             max_trees,
             &mut tree_entities,
@@ -616,12 +630,13 @@ pub(super) fn sawmill_yard_system(
             continue;
         }
 
-        let center = transform.translation + SAWMILL_YARD_OFFSET;
+        let rotation_y = rotation_y_from_quat(transform.rotation);
         spawn_mini_trees(
             &mut commands,
             &height_map,
             model_assets.as_deref(),
-            center,
+            transform.translation,
+            rotation_y,
             yard.current_tree_count,
             new_max,
             &mut yard.tree_entities,
@@ -637,7 +652,8 @@ fn spawn_mini_trees(
     commands: &mut Commands,
     height_map: &HeightMap,
     model_assets: Option<&ModelAssets>,
-    yard_center: Vec3,
+    building_pos: Vec3,
+    rotation_y: f32,
     from_slot: u8,
     to_slot: u8,
     tree_entities: &mut Vec<Entity>,
@@ -649,8 +665,7 @@ fn spawn_mini_trees(
     }
 
     for slot_idx in from_slot..to_slot.min(SAWMILL_TREE_SLOTS.len() as u8) {
-        let local = SAWMILL_TREE_SLOTS[slot_idx as usize];
-        let world_pos = yard_center + local;
+        let world_pos = sawmill_tree_slot_world(building_pos, rotation_y, slot_idx as usize);
         let ground_y = height_map.sample(world_pos.x, world_pos.z);
 
         // Pick a random tree variant based on slot index for determinism
@@ -662,7 +677,7 @@ fn spawn_mini_trees(
             .spawn((
                 SceneRoot(scene),
                 Transform::from_translation(Vec3::new(world_pos.x, ground_y, world_pos.z))
-                    .with_rotation(Quat::from_rotation_y(y_rotation))
+                    .with_rotation(Quat::from_rotation_y(rotation_y + y_rotation))
                     .with_scale(Vec3::splat(SAWMILL_MINI_TREE_SCALE)),
                 NotShadowCaster,
                 GameWorld,
@@ -674,6 +689,23 @@ fn spawn_mini_trees(
             ))
             .id();
         tree_entities.push(tree);
+    }
+}
+
+pub(super) fn sync_sawmill_fence_pieces(
+    height_map: Res<HeightMap>,
+    sawmills: Query<&Transform, (With<Building>, With<SawmillYard>, Without<SawmillFencePiece>)>,
+    mut fence_pieces: Query<(&SawmillFencePiece, &mut Transform), Without<Building>>,
+) {
+    for (piece, mut transform) in &mut fence_pieces {
+        let Ok(owner_tf) = sawmills.get(piece.owner) else {
+            continue;
+        };
+        let rotation_y = rotation_y_from_quat(owner_tf.rotation);
+        let world_anchor = owner_tf.translation + rotate_local_xz(piece.local_anchor, rotation_y);
+        let ground_y = height_map.sample(world_anchor.x, world_anchor.z);
+        transform.translation = Vec3::new(world_anchor.x, ground_y + piece.y_offset, world_anchor.z);
+        transform.rotation = Quat::from_rotation_y(rotation_y + piece.local_rotation_y);
     }
 }
 

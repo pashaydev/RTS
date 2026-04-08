@@ -21,9 +21,11 @@ use game_state::message::TerrainShapeOp;
 
 use super::{
     auto_tile_piece, biome_requirement_text, blocks_construction_overlap,
-    cleanup_worker_assignment, find_best_worker_for_build, footprint_for_kind,
-    has_available_worker_for_build, is_biome_valid_for, piece_kind_to_entity_kind,
-    spawn_floor_grid_cells, spawn_wall_grid_cells, uses_terrain_foundation,
+    building_area_blocked_by_obstacles, building_blocks_area, cleanup_worker_assignment,
+    find_best_worker_for_build, footprint_for_kind, has_available_worker_for_build,
+    is_biome_valid_for, piece_kind_to_entity_kind, rotate_local_xz, rotation_y_from_quat,
+    sawmill_preview_plane_size, sawmill_yard_corners, spawn_floor_grid_cells,
+    spawn_wall_grid_cells, uses_terrain_foundation,
 };
 
 #[derive(SystemParam)]
@@ -137,6 +139,56 @@ pub(crate) fn create_ghost_materials(
             ..default()
         }),
     });
+}
+
+#[derive(Component)]
+pub(crate) struct GhostSawmillFencePiece {
+    local_anchor: Vec3,
+    local_rotation_y: f32,
+    y_offset: f32,
+}
+
+fn spawn_sawmill_fence_preview(ghost_cmds: &mut EntityCommands, meshes: &mut Assets<Mesh>) {
+    let corners = sawmill_yard_corners(Vec3::ZERO, 0.0);
+    let post_mesh = meshes.add(Cylinder::new(0.05, 0.8));
+
+    for corner in corners {
+        ghost_cmds.with_child((
+            Mesh3d(post_mesh.clone()),
+            Transform::from_translation(corner),
+            GhostSawmillFencePiece {
+                local_anchor: corner,
+                local_rotation_y: 0.0,
+                y_offset: 0.4,
+            },
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+    }
+
+    for i in 0..4 {
+        let a = corners[i];
+        let b = corners[(i + 1) % 4];
+        let local_mid = (a + b) * 0.5;
+        let span = (b - a).length();
+        let local_angle = (b.z - a.z).atan2(b.x - a.x);
+        let rail_mesh = meshes.add(Cuboid::new(span, 0.06, 0.06));
+
+        for &y_offset in &[0.25, 0.55] {
+            ghost_cmds.with_child((
+                Mesh3d(rail_mesh.clone()),
+                Transform::from_translation(Vec3::new(local_mid.x, y_offset, local_mid.z))
+                    .with_rotation(Quat::from_rotation_y(local_angle)),
+                GhostSawmillFencePiece {
+                    local_anchor: local_mid,
+                    local_rotation_y: local_angle,
+                    y_offset,
+                },
+                NotShadowCaster,
+                NotShadowReceiver,
+            ));
+        }
+    }
 }
 
 // ── Placement preview ──
@@ -333,22 +385,36 @@ pub(crate) fn update_placement_preview(
         Query<&Window, With<PrimaryWindow>>,
         Res<GraphicsSettings>,
     ),
-    mut ghosts: Query<&mut Transform, With<GhostBuilding>>,
-    mut ghost_valid_q: Query<&mut GhostValid, With<GhostBuilding>>,
-    existing_buildings: Query<
-        (&Transform, &BuildingFootprint, &EntityKind),
-        (With<Building>, Without<GhostBuilding>),
-    >,
-    worker_context: (
-        Res<ActivePlayer>,
+    mut transform_sets: ParamSet<(
+        Query<'_, '_, &mut Transform, (With<GhostBuilding>, Without<Building>)>,
         Query<
-            (Entity, &Transform, &UnitState, &Faction, &EntityKind),
-            (With<Unit>, Without<GhostBuilding>),
+            '_,
+            '_,
+            (&GhostSawmillFencePiece, &mut Transform),
+            (Without<GhostBuilding>, Without<Building>),
         >,
-    ),
+        Query<
+            '_,
+            '_,
+            (&'static Transform, &'static BuildingFootprint, &'static EntityKind),
+            (With<Building>, Without<GhostBuilding>),
+        >,
+        Query<
+            '_,
+            '_,
+            (Entity, &'static Transform, &'static UnitState, &'static Faction, &'static EntityKind),
+            (
+                With<Unit>,
+                Without<GhostBuilding>,
+                Without<Building>,
+                Without<GhostSawmillFencePiece>,
+            ),
+        >,
+    )>,
+    mut ghost_valid_q: Query<&mut GhostValid, With<GhostBuilding>>,
+    active_player: Res<ActivePlayer>,
     environment: (Option<Res<BiomeMap>>, Res<HeightMap>, Res<ObstacleGrid>),
 ) {
-    let (active_player, workers) = worker_context;
     let (biome_map, height_map, obstacle_grid) = environment;
     let (camera_q, windows, graphics) = viewport;
     let Some(kind) = placement_kind(placement.mode) else {
@@ -400,6 +466,9 @@ pub(crate) fn update_placement_preview(
                     ));
                 }
             }
+            if kind == EntityKind::Sawmill {
+                spawn_sawmill_fence_preview(&mut ghost_cmds, &mut meshes);
+            }
             ghost_cmds.id()
         } else {
             // Non-GLTF: use cache mesh with ghost material directly
@@ -421,7 +490,11 @@ pub(crate) fn update_placement_preview(
 
     // Spawn grid plane if it doesn't exist
     if placement.grid_plane_entity.is_none() {
-        let grid_size = new_footprint * 2.5;
+        let grid_size = if kind == EntityKind::Sawmill {
+            sawmill_preview_plane_size()
+        } else {
+            new_footprint * 2.5
+        };
         // Number of grid cells across the plane (UV tiling)
         let uv_tiles = (grid_size / 2.0).max(2.0);
         let plane_mesh = meshes.add(build_grid_plane_mesh(grid_size, uv_tiles, &height_map));
@@ -438,25 +511,49 @@ pub(crate) fn update_placement_preview(
         placement.grid_plane_entity = Some(grid_entity);
     }
 
-    let Some(ghost_entity) = placement.preview_entity else {
-        return;
-    };
-    let Ok(mut ghost_tf) = ghosts.get_mut(ghost_entity) else {
-        return;
-    };
-
     let ground_y = if uses_terrain_foundation(kind) {
         height_map.foundation_target_height_shaped(world_pos.x, world_pos.z, new_footprint)
     } else {
         height_map.sample(world_pos.x, world_pos.z)
     };
     let y = ground_y + half_h;
-    ghost_tf.translation = Vec3::new(world_pos.x, y, world_pos.z);
-    ghost_tf.rotation = Quat::from_rotation_y(placement.rotation_y);
+    let ghost_translation = Vec3::new(world_pos.x, y, world_pos.z);
+    let ghost_rotation = Quat::from_rotation_y(placement.rotation_y);
+
+    let Some(ghost_entity) = placement.preview_entity else {
+        return;
+    };
+    {
+        let mut ghosts = transform_sets.p0();
+        let Ok(mut ghost_tf) = ghosts.get_mut(ghost_entity) else {
+            return;
+        };
+        ghost_tf.translation = ghost_translation;
+        ghost_tf.rotation = ghost_rotation;
+    }
+
+    if kind == EntityKind::Sawmill {
+        let mut fence_preview = transform_sets.p1();
+        for (piece, mut transform) in &mut fence_preview {
+            let world_anchor =
+                ghost_translation + rotate_local_xz(piece.local_anchor, placement.rotation_y);
+            let ground_y = height_map.sample(world_anchor.x, world_anchor.z);
+            transform.translation = Vec3::new(
+                piece.local_anchor.x,
+                ground_y + piece.y_offset - ghost_translation.y,
+                piece.local_anchor.z,
+            );
+            transform.rotation = Quat::from_rotation_y(piece.local_rotation_y);
+        }
+    }
 
     // Update grid plane position & mesh to align with terrain
     if let Some(grid_entity) = placement.grid_plane_entity {
-        let grid_size = new_footprint * 2.5;
+        let grid_size = if kind == EntityKind::Sawmill {
+            sawmill_preview_plane_size()
+        } else {
+            new_footprint * 2.5
+        };
         let uv_tiles = (grid_size / 2.0).max(2.0);
         let new_mesh = meshes.add(build_grid_plane_mesh_at(
             world_pos.x,
@@ -497,20 +594,35 @@ pub(crate) fn update_placement_preview(
         }
     }
 
-    for (building_tf, existing_footprint, existing_kind) in &existing_buildings {
-        if !blocks_construction_overlap(*existing_kind) {
-            continue;
-        }
-        let min_dist = existing_footprint.0 + new_footprint;
-        let dx = building_tf.translation.x - ghost_tf.translation.x;
-        let dz = building_tf.translation.z - ghost_tf.translation.z;
-        if (dx * dx + dz * dz).sqrt() < min_dist {
-            valid = false;
-            break;
+    {
+        let existing_buildings = transform_sets.p2();
+        for (building_tf, existing_footprint, existing_kind) in &existing_buildings {
+            if !blocks_construction_overlap(*existing_kind) {
+                continue;
+            }
+            if building_blocks_area(
+                kind,
+                ghost_translation,
+                placement.rotation_y,
+                new_footprint,
+                *existing_kind,
+                building_tf.translation,
+                rotation_y_from_quat(building_tf.rotation),
+                existing_footprint.0,
+            ) {
+                valid = false;
+                break;
+            }
         }
     }
 
-    if obstacle_grid.is_footprint_blocked(Vec3::new(world_pos.x, 0.0, world_pos.z), new_footprint) {
+    if building_area_blocked_by_obstacles(
+        kind,
+        Vec3::new(world_pos.x, 0.0, world_pos.z),
+        placement.rotation_y,
+        new_footprint,
+        &obstacle_grid,
+    ) {
         valid = false;
         if hint.is_none() {
             hint = Some("Blocked by trees".to_owned());
@@ -524,6 +636,7 @@ pub(crate) fn update_placement_preview(
 
     if valid {
         let build_pos = Vec3::new(world_pos.x, 0.0, world_pos.z);
+        let workers = transform_sets.p3();
         let worker_iter = workers
             .iter()
             .map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));

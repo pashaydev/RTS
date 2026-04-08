@@ -90,6 +90,7 @@ impl Plugin for BuildingsPlugin {
                     environment::sync_storage_on_spend,
                     environment::update_storage_piles,
                     environment::sawmill_yard_system,
+                    environment::sync_sawmill_fence_pieces,
                     environment::yard_tree_regrowth_system,
                     environment::sync_environment_to_terrain_changes,
                     environment::clear_vegetation_around_buildings,
@@ -207,6 +208,180 @@ fn cleanup_worker_assignment(commands: &mut Commands, worker: Entity, state: &Un
         _ => {}
     }
     commands.entity(worker).remove::<BuildingAssignment>();
+}
+
+pub const SAWMILL_YARD_HALF_X: f32 = 2.0;
+pub const SAWMILL_YARD_HALF_Z: f32 = 2.0;
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct OrientedRect {
+    pub center: Vec2,
+    pub half_extents: Vec2,
+    pub rotation_y: f32,
+}
+
+pub(crate) fn rotation_y_from_quat(rotation: Quat) -> f32 {
+    let (yaw, _, _) = rotation.to_euler(EulerRot::YXZ);
+    yaw
+}
+
+pub(crate) fn rotate_local_xz(local: Vec3, rotation_y: f32) -> Vec3 {
+    Quat::from_rotation_y(rotation_y) * local
+}
+
+pub(crate) fn sawmill_yard_center(building_pos: Vec3, rotation_y: f32) -> Vec3 {
+    building_pos + rotate_local_xz(SAWMILL_YARD_OFFSET, rotation_y)
+}
+
+pub(crate) fn sawmill_yard_rect(building_pos: Vec3, rotation_y: f32) -> OrientedRect {
+    let center = sawmill_yard_center(building_pos, rotation_y);
+    OrientedRect {
+        center: center.xz(),
+        half_extents: Vec2::new(SAWMILL_YARD_HALF_X, SAWMILL_YARD_HALF_Z),
+        rotation_y,
+    }
+}
+
+pub(crate) fn sawmill_yard_corners(building_pos: Vec3, rotation_y: f32) -> [Vec3; 4] {
+    let center = sawmill_yard_center(building_pos, rotation_y);
+    [
+        center + rotate_local_xz(Vec3::new(-SAWMILL_YARD_HALF_X, 0.0, -SAWMILL_YARD_HALF_Z), rotation_y),
+        center + rotate_local_xz(Vec3::new(SAWMILL_YARD_HALF_X, 0.0, -SAWMILL_YARD_HALF_Z), rotation_y),
+        center + rotate_local_xz(Vec3::new(SAWMILL_YARD_HALF_X, 0.0, SAWMILL_YARD_HALF_Z), rotation_y),
+        center + rotate_local_xz(Vec3::new(-SAWMILL_YARD_HALF_X, 0.0, SAWMILL_YARD_HALF_Z), rotation_y),
+    ]
+}
+
+pub(crate) fn sawmill_tree_slot_world(building_pos: Vec3, rotation_y: f32, slot: usize) -> Vec3 {
+    sawmill_yard_center(building_pos, rotation_y) + rotate_local_xz(SAWMILL_TREE_SLOTS[slot], rotation_y)
+}
+
+fn inverse_rotate_xz(v: Vec2, rotation_y: f32) -> Vec2 {
+    let (sin_y, cos_y) = rotation_y.sin_cos();
+    Vec2::new(v.x * cos_y - v.y * sin_y, v.x * sin_y + v.y * cos_y)
+}
+
+fn rect_corners(rect: OrientedRect) -> [Vec2; 4] {
+    let locals = [
+        Vec2::new(-rect.half_extents.x, -rect.half_extents.y),
+        Vec2::new(rect.half_extents.x, -rect.half_extents.y),
+        Vec2::new(rect.half_extents.x, rect.half_extents.y),
+        Vec2::new(-rect.half_extents.x, rect.half_extents.y),
+    ];
+    locals.map(|local| {
+        let rotated = rotate_local_xz(Vec3::new(local.x, 0.0, local.y), rect.rotation_y);
+        rect.center + rotated.xz()
+    })
+}
+
+fn project_rect_on_axis(rect: OrientedRect, axis: Vec2) -> (f32, f32) {
+    let corners = rect_corners(rect);
+    let mut min = corners[0].dot(axis);
+    let mut max = min;
+    for corner in corners.iter().skip(1) {
+        let projection = corner.dot(axis);
+        min = min.min(projection);
+        max = max.max(projection);
+    }
+    (min, max)
+}
+
+fn circle_intersects_oriented_rect(center: Vec2, radius: f32, rect: OrientedRect) -> bool {
+    let local = inverse_rotate_xz(center - rect.center, rect.rotation_y);
+    let closest = Vec2::new(
+        local.x.clamp(-rect.half_extents.x, rect.half_extents.x),
+        local.y.clamp(-rect.half_extents.y, rect.half_extents.y),
+    );
+    local.distance_squared(closest) < radius * radius
+}
+
+fn oriented_rects_intersect(a: OrientedRect, b: OrientedRect) -> bool {
+    let axes = [
+        rotate_local_xz(Vec3::X, a.rotation_y).xz().normalize_or_zero(),
+        rotate_local_xz(Vec3::Z, a.rotation_y).xz().normalize_or_zero(),
+        rotate_local_xz(Vec3::X, b.rotation_y).xz().normalize_or_zero(),
+        rotate_local_xz(Vec3::Z, b.rotation_y).xz().normalize_or_zero(),
+    ];
+
+    axes.iter().all(|axis| {
+        let (a_min, a_max) = project_rect_on_axis(a, *axis);
+        let (b_min, b_max) = project_rect_on_axis(b, *axis);
+        a_max >= b_min && b_max >= a_min
+    })
+}
+
+pub(crate) fn building_blocks_area(
+    kind: EntityKind,
+    pos: Vec3,
+    rotation_y: f32,
+    footprint: f32,
+    other_kind: EntityKind,
+    other_pos: Vec3,
+    other_rotation_y: f32,
+    other_footprint: f32,
+) -> bool {
+    let center_a = pos.xz();
+    let center_b = other_pos.xz();
+    if center_a.distance_squared(center_b) < (footprint + other_footprint).powi(2) {
+        return true;
+    }
+
+    if kind == EntityKind::Sawmill {
+        let rect = sawmill_yard_rect(pos, rotation_y);
+        if circle_intersects_oriented_rect(center_b, other_footprint, rect) {
+            return true;
+        }
+    }
+
+    if other_kind == EntityKind::Sawmill {
+        let rect = sawmill_yard_rect(other_pos, other_rotation_y);
+        if circle_intersects_oriented_rect(center_a, footprint, rect) {
+            return true;
+        }
+    }
+
+    if kind == EntityKind::Sawmill && other_kind == EntityKind::Sawmill {
+        return oriented_rects_intersect(
+            sawmill_yard_rect(pos, rotation_y),
+            sawmill_yard_rect(other_pos, other_rotation_y),
+        );
+    }
+
+    false
+}
+
+pub(crate) fn building_area_blocked_by_obstacles(
+    kind: EntityKind,
+    pos: Vec3,
+    rotation_y: f32,
+    footprint: f32,
+    obstacle_grid: &ObstacleGrid,
+) -> bool {
+    if obstacle_grid.is_footprint_blocked(pos, footprint) {
+        return true;
+    }
+
+    if kind == EntityKind::Sawmill {
+        let rect = sawmill_yard_rect(pos, rotation_y);
+        if obstacle_grid.is_oriented_rect_blocked(
+            Vec3::new(rect.center.x, 0.0, rect.center.y),
+            rect.half_extents.x,
+            rect.half_extents.y,
+            rect.rotation_y,
+        ) {
+            return true;
+        }
+    }
+
+    false
+}
+
+pub(crate) fn sawmill_preview_plane_size() -> f32 {
+    let furthest_corner = sawmill_yard_corners(Vec3::ZERO, 0.0)
+        .into_iter()
+        .map(|corner| corner.xz().length())
+        .fold(0.0, f32::max);
+    furthest_corner * 2.4
 }
 
 // ── Building metadata helpers ──

@@ -123,14 +123,22 @@ pub fn try_queue_build_order_authoritative(
         if !super::blocks_construction_overlap(*existing_kind) {
             continue;
         }
-        let dx = building_tf.translation.x - build_pos.x;
-        let dz = building_tf.translation.z - build_pos.z;
-        if (dx * dx + dz * dz).sqrt() < existing_fp.0 + new_footprint {
+        if super::building_blocks_area(
+            kind,
+            build_pos,
+            0.0,
+            new_footprint,
+            *existing_kind,
+            building_tf.translation,
+            super::rotation_y_from_quat(building_tf.rotation),
+            existing_fp.0,
+        ) {
             return Err("Building footprint is blocked.".to_string());
         }
     }
 
-    if obstacle_grid.is_footprint_blocked(build_pos, new_footprint) {
+    if super::building_area_blocked_by_obstacles(kind, build_pos, 0.0, new_footprint, obstacle_grid)
+    {
         return Err("Blocked by trees.".to_string());
     }
 
@@ -322,16 +330,21 @@ pub(super) fn build_site_preparation_system(
         }
 
         let new_footprint = super::footprint_for_kind(prep.kind);
-        let blocked = existing_buildings
-            .iter()
-            .any(|(building_tf, existing_fp, existing_kind)| {
-                if !super::blocks_construction_overlap(*existing_kind) {
-                    return false;
-                }
-                let check_pos =
-                    Vec3::new(prep.position.x, building_tf.translation.y, prep.position.z);
-                building_tf.translation.distance(check_pos) < existing_fp.0 + new_footprint
-            });
+        let blocked = existing_buildings.iter().any(|(building_tf, existing_fp, existing_kind)| {
+            if !super::blocks_construction_overlap(*existing_kind) {
+                return false;
+            }
+            super::building_blocks_area(
+                prep.kind,
+                prep.position,
+                prep.rotation_y,
+                new_footprint,
+                *existing_kind,
+                building_tf.translation,
+                super::rotation_y_from_quat(building_tf.rotation),
+                existing_fp.0,
+            )
+        });
 
         if blocked {
             let bp = registry.get(prep.kind);

@@ -5,7 +5,6 @@
 > WebRTC NAT traversal enables internet play without VPN.
 > **MessagePack binary wire protocol** over reliable + unreliable WebRTC data channels. Delta-compressed state sync at ~10Hz with staged client application.
 > Reconnection with 30s grace period.
-> **SQLite persistence** — player profiles (`ActiveProfile`), match history with per-player names, ELO ratings, and all settings stored in `config/game.db`.
 
 ---
 
