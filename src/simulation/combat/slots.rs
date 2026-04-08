@@ -11,7 +11,7 @@ pub struct CombatSlotsPlugin;
 impl Plugin for CombatSlotsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
-            Update,
+            FixedUpdate,
             (cleanup_stale_slot_claims, assign_melee_slot_claims)
                 .chain()
                 .in_set(GameFlowSet::Simulation)

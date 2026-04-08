@@ -29,7 +29,7 @@ impl Plugin for UnitsPlugin {
                     .run_if(not(resource_exists::<crate::infrastructure::save_load::PendingLoad>)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 (move_units, steer_avoidance)
                     .chain()
                     .in_set(GameFlowSet::Simulation)
@@ -219,7 +219,7 @@ fn steer_avoidance(
             Entity,
             &mut Transform,
             Option<&MoveTarget>,
-            &UnitState,
+            Option<&UnitState>,
             Option<&AttackTarget>,
             Option<&BuildingAssignment>,
             &Faction,
@@ -230,6 +230,9 @@ fn steer_avoidance(
         (Entity, &Transform, &BuildingFootprint),
         (With<Building>, Without<Unit>, Without<FloorTile>),
     >,
+    mut nearby_entities: Local<Vec<(Entity, Vec3)>>,
+    mut nearby_walls: Local<Vec<(Entity, Vec3, f32, Faction)>>,
+    mut nearby_buildings: Local<Vec<(Entity, Vec3)>>,
 ) {
     let moving_avoidance_radius = 2.6;
     let idle_avoidance_radius = 3.2;
@@ -261,11 +264,13 @@ fn steer_avoidance(
         };
 
         // Determine which building (if any) this unit is trying to reach
-        let my_target_building = target_building(unit_state, attack_target, building_assignment);
+        let my_target_building = unit_state
+            .map(|s| target_building(s, attack_target, building_assignment))
+            .unwrap_or(None);
 
         // ── Unit-to-unit avoidance ──
-        let nearby = spatial_grid.query_radius(my_pos, unit_avoidance_radius);
-        for (other_e, other_pos) in &nearby {
+        spatial_grid.collect_radius(my_pos, unit_avoidance_radius, &mut nearby_entities);
+        for (other_e, other_pos) in nearby_entities.iter() {
             if *other_e == entity {
                 continue;
             }
@@ -294,8 +299,8 @@ fn steer_avoidance(
 
         // ── Wall repulsion ── (push away from nearby walls)
         if is_moving {
-            let nearby_walls = wall_grid.query_radius(my_pos, wall_avoidance_radius);
-            for (wall_entity, wall_pos, wall_fp, _wall_faction) in &nearby_walls {
+            wall_grid.collect_radius(my_pos, wall_avoidance_radius, &mut nearby_walls);
+            for (wall_entity, wall_pos, wall_fp, _wall_faction) in nearby_walls.iter() {
                 // Let builders approach the wall piece they are assigned to.
                 if my_target_building == Some(*wall_entity) {
                     continue;
@@ -315,8 +320,8 @@ fn steer_avoidance(
         // ── Building repulsion ── (avoid walking through buildings)
         // Always active — idle units inside a footprint must also be pushed out.
         {
-            let nearby_buildings = spatial_grid.query_radius(my_pos, 8.0);
-            for (b_entity, b_pos) in &nearby_buildings {
+            spatial_grid.collect_radius(my_pos, 8.0, &mut nearby_buildings);
+            for (b_entity, b_pos) in nearby_buildings.iter() {
                 if *b_entity == entity {
                     continue;
                 }
@@ -354,7 +359,7 @@ fn steer_avoidance(
                 .as_ref()
                 .is_some_and(|grid| !grid.is_world_passable(my_pos.x, my_pos.z));
 
-            let is_blocked = |pos: Vec3| -> bool {
+            let mut is_blocked = |pos: Vec3| -> bool {
                 if !current_blocked {
                     if nav_grid
                         .as_ref()
@@ -364,7 +369,7 @@ fn steer_avoidance(
                     }
                 }
 
-                let nearby_walls = wall_grid.query_radius(pos, 3.0);
+                wall_grid.collect_radius(pos, 3.0, &mut nearby_walls);
                 if nearby_walls.iter().any(|(_wall_entity, wall_pos, wall_fp, _wall_faction)| {
                     let a = Vec2::new(pos.x, pos.z);
                     let b = Vec2::new(wall_pos.x, wall_pos.z);
@@ -433,6 +438,7 @@ fn move_units(
         ),
         Or<(With<Unit>, With<Mob>)>,
     >,
+    mut nearby_walls: Local<Vec<(Entity, Vec3, f32, Faction)>>,
 ) {
     let dt = time.delta_secs();
     for (
@@ -599,16 +605,24 @@ fn move_units(
             let candidate = transform.translation + step;
             let ignore_wall = attack_target.map(|at| at.0);
 
+            // If the unit is already inside a blocked cell, relax NavGrid checks
+            // so it can walk out rather than being stuck forever.
+            let current_blocked = nav_grid
+                .as_ref()
+                .is_some_and(|grid| !grid.is_world_passable(transform.translation.x, transform.translation.z));
+
             // Wall collision check helper
-            let is_blocked = |pos: Vec3| -> bool {
-                if nav_grid
-                    .as_ref()
-                    .is_some_and(|grid| !grid.is_world_passable(pos.x, pos.z))
-                {
-                    return true;
+            let mut is_blocked = |pos: Vec3| -> bool {
+                if !current_blocked {
+                    if nav_grid
+                        .as_ref()
+                        .is_some_and(|grid| !grid.is_world_passable(pos.x, pos.z))
+                    {
+                        return true;
+                    }
                 }
 
-                let nearby_walls = wall_grid.query_radius(pos, 3.0);
+                wall_grid.collect_radius(pos, 3.0, &mut nearby_walls);
                 nearby_walls
                     .iter()
                     .any(|(wall_entity, wall_pos, wall_fp, wall_faction)| {

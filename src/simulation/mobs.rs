@@ -23,7 +23,7 @@ impl Plugin for MobsPlugin {
                 .run_if(not(resource_exists::<crate::infrastructure::save_load::PendingLoad>)),
         )
         .add_systems(
-            Update,
+            FixedUpdate,
             (mob_patrol, mob_aggro, mob_leash)
                 .chain()
                 .in_set(GameFlowSet::Simulation)
@@ -740,6 +740,7 @@ fn camp_item_drops_for_kind(rng: &mut StdRng, kind: EntityKind) -> CampItemDrops
 fn mob_patrol(
     mut commands: Commands,
     time: Res<Time>,
+    nav_grid: Option<Res<crate::world::pathfinding::NavGrid>>,
     mut mobs: Query<
         (
             Entity,
@@ -777,17 +778,36 @@ fn mob_patrol(
                     continue;
                 }
 
-                // Pick a unique patrol target per mob using entity bits for randomness
+                // Try a few candidates and pick the first passable one
                 let bits = entity.to_bits();
-                let seed = bits.wrapping_mul(2654435761) as f32; // hash spread
-                let angle = seed % std::f32::consts::TAU
-                    + (now as f32) * 0.3; // slow drift over time
-                let r = patrol.radius * (0.3 + ((seed * 0.7).sin() * 0.5 + 0.5) * 0.7);
-                let target = Vec3::new(
-                    patrol.center.x + angle.cos() * r,
-                    0.0,
-                    patrol.center.z + angle.sin() * r,
-                );
+                let seed = bits.wrapping_mul(2654435761) as f32;
+                let mut target = None;
+                for attempt in 0..4u32 {
+                    let angle = seed % std::f32::consts::TAU
+                        + (now as f32) * 0.3
+                        + attempt as f32 * 1.57; // rotate 90deg per attempt
+                    let r = patrol.radius * (0.3 + ((seed * 0.7 + attempt as f32).sin() * 0.5 + 0.5) * 0.7);
+                    let candidate = Vec3::new(
+                        patrol.center.x + angle.cos() * r,
+                        0.0,
+                        patrol.center.z + angle.sin() * r,
+                    );
+
+                    // Check passability if NavGrid is available
+                    let passable = nav_grid
+                        .as_ref()
+                        .map_or(true, |grid| grid.is_world_passable(candidate.x, candidate.z));
+                    if passable {
+                        target = Some(candidate);
+                        break;
+                    }
+                }
+
+                let Some(target) = target else {
+                    // All candidates impassable — stay idle a bit longer
+                    patrol.idle_until = now + 3.0;
+                    continue;
+                };
 
                 patrol.patrol_target = Some(target);
                 patrol.patrol_started = now;

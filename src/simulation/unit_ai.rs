@@ -15,48 +15,74 @@ use crate::world::spatial::SpatialHashGrid;
 
 pub struct UnitAiPlugin;
 
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+enum UnitAiSet {
+    Cleanup,
+    Hotspots,
+    Decision,
+    TaskAdvance,
+    Execute,
+    Leash,
+    Heal,
+}
+
 impl Plugin for UnitAiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<DecisionTimer>()
             .init_resource::<CombatHotspots>()
-            .add_systems(
-                Update,
-                cleanup_assigned_workers_system.run_if(in_state(AppState::InGame)),
+            .configure_sets(
+                FixedUpdate,
+                (
+                    UnitAiSet::Cleanup,
+                    UnitAiSet::Hotspots,
+                    UnitAiSet::Decision,
+                    UnitAiSet::TaskAdvance,
+                    UnitAiSet::Execute,
+                    UnitAiSet::Leash,
+                    UnitAiSet::Heal,
+                )
+                    .chain(),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
+                cleanup_assigned_workers_system
+                    .in_set(UnitAiSet::Cleanup)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
                 update_combat_hotspots
-                    .after(cleanup_assigned_workers_system)
+                    .in_set(UnitAiSet::Hotspots)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 decision_priority_system
-                    .after(update_combat_hotspots)
+                    .in_set(UnitAiSet::Decision)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 task_queue_advance_system
-                    .after(decision_priority_system)
+                    .in_set(UnitAiSet::TaskAdvance)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 unit_state_executor_system
-                    .after(task_queue_advance_system)
+                    .in_set(UnitAiSet::Execute)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 leash_return_system
-                    .after(unit_state_executor_system)
+                    .in_set(UnitAiSet::Leash)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 auto_heal_system
-                    .after(decision_priority_system)
+                    .in_set(UnitAiSet::Heal)
                     .run_if(in_state(AppState::InGame)),
             );
     }
@@ -70,8 +96,10 @@ pub fn cleanup_assigned_workers_system(
     workers: Query<(Entity, &UnitState, Option<&BuildingAssignment>), With<Unit>>,
 ) {
     for (building_entity, mut aw) in &mut buildings {
-        aw.workers.retain(|&worker| {
-            matches!(
+        // Check if retain would actually remove anything before mutating,
+        // to avoid triggering Changed<AssignedWorkers> every frame.
+        let has_invalid = aw.workers.iter().any(|&worker| {
+            !matches!(
                 workers.get(worker),
                 Ok((
                     _,
@@ -80,6 +108,18 @@ pub fn cleanup_assigned_workers_system(
                 )) if *building == building_entity
             )
         });
+        if has_invalid {
+            aw.workers.retain(|&worker| {
+                matches!(
+                    workers.get(worker),
+                    Ok((
+                        _,
+                        UnitState::AssignedGathering { building, .. },
+                        _
+                    )) if *building == building_entity
+                )
+            });
+        }
     }
 
     // Canonicalize the worker-side assignment marker from the authoritative UnitState.
@@ -192,6 +232,7 @@ fn decision_priority_system(
     let (combat_budget, mut budget_state) = budgeting;
     let (net_role, active_player) = net_state;
     decision_timer.timer.tick(time.delta());
+    let mut nearby_targets = Vec::new();
 
     // On timer tick: start a new amortization cycle.
     if decision_timer.timer.just_finished() {
@@ -351,9 +392,14 @@ fn decision_priority_system(
             let mut best_score = f32::MAX;
             let mut best_target = None;
 
-            let nearby = spatial_grid.query_radius_limited(tf.translation, scan_range, 16);
+            spatial_grid.collect_radius_limited(
+                tf.translation,
+                scan_range,
+                16,
+                &mut nearby_targets,
+            );
             budget_state.target_rescans_this_frame += 1;
-            for (target_entity, target_pos) in &nearby {
+            for (target_entity, target_pos) in nearby_targets.iter() {
                 if *target_entity == entity {
                     continue;
                 }
@@ -636,10 +682,15 @@ pub fn task_queue_advance_system(
                 };
 
                 if can_assign {
+                    let building_pos = transforms
+                        .get(building)
+                        .map(|t| t.translation)
+                        .unwrap_or(Vec3::ZERO);
                     crate::simulation::resources::assign_worker_to_processor(
                         &mut commands,
                         entity,
                         building,
+                        building_pos,
                         TaskSource::Manual,
                     );
                     // Add to building's AssignedWorkers
@@ -703,6 +754,8 @@ pub fn unit_state_executor_system(
     let gather_range = 3.0;
     let build_range = 4.0;
     let wall_build_range_bonus = 2.5;
+    let mut nearby_targets = Vec::new();
+    let mut corridor_targets = Vec::new();
 
     for (
         entity,
@@ -755,13 +808,17 @@ pub fn unit_state_executor_system(
                                 < combat_budget.max_target_rescans_per_frame
                         {
                             let scan_range = attack_r.0;
-                            let nearby = spatial_grid
-                                .query_radius_limited(tf.translation, scan_range, 8);
+                            spatial_grid.collect_radius_limited(
+                                tf.translation,
+                                scan_range,
+                                8,
+                                &mut nearby_targets,
+                            );
                             budget_state.target_rescans_this_frame += 1;
 
                             let mut closest_dist = f32::MAX;
                             let mut closest_target = None;
-                            for (target_entity, target_pos) in &nearby {
+                            for (target_entity, target_pos) in nearby_targets.iter() {
                                 if *target_entity == entity {
                                     continue;
                                 }
@@ -1033,20 +1090,25 @@ pub fn unit_state_executor_system(
                         let mut closest_dist = f32::MAX;
                         let mut closest_target = None;
 
-                        let nearby = move_target
-                            .map(|move_target| {
-                                spatial_grid.query_corridor_limited(
-                                    tf.translation,
-                                    move_target.0,
-                                    scan_range * 0.45,
-                                    10,
-                                )
-                            })
-                            .unwrap_or_else(|| {
-                                spatial_grid.query_radius_limited(tf.translation, scan_range, 10)
-                            });
+                        if let Some(move_target) = move_target {
+                            spatial_grid.collect_corridor_limited(
+                                tf.translation,
+                                move_target.0,
+                                scan_range * 0.45,
+                                10,
+                                &mut nearby_targets,
+                                &mut corridor_targets,
+                            );
+                        } else {
+                            spatial_grid.collect_radius_limited(
+                                tf.translation,
+                                scan_range,
+                                10,
+                                &mut nearby_targets,
+                            );
+                        }
                         budget_state.target_rescans_this_frame += 1;
-                        for (target_entity, target_pos) in &nearby {
+                        for (target_entity, target_pos) in nearby_targets.iter() {
                             if *target_entity == entity {
                                 continue;
                             }
@@ -1101,10 +1163,14 @@ pub fn unit_state_executor_system(
                         {
                             continue;
                         }
-                        let nearby =
-                            spatial_grid.query_radius_limited(tf.translation, scan_range, 8);
+                        spatial_grid.collect_radius_limited(
+                            tf.translation,
+                            scan_range,
+                            8,
+                            &mut nearby_targets,
+                        );
                         budget_state.target_rescans_this_frame += 1;
-                        for (target_entity, _target_pos) in &nearby {
+                        for (target_entity, _target_pos) in nearby_targets.iter() {
                             if *target_entity == entity {
                                 continue;
                             }
@@ -1133,11 +1199,12 @@ pub fn unit_state_executor_system(
 /// Auto-heal system for Priests: scans nearby allies and heals the lowest-HP one.
 fn auto_heal_system(
     mut commands: Commands,
-    time: Res<Time>,
+    _time: Res<Time>,
     spatial_grid: Res<SpatialHashGrid>,
     teams: Res<TeamConfig>,
     net_role: Res<NetRole>,
     active_player: Res<ActivePlayer>,
+    mut nearby_allies: Local<Vec<(Entity, Vec3)>>,
     mut priests: Query<
         (
             Entity,
@@ -1181,10 +1248,10 @@ fn auto_heal_system(
 
         // Scan nearby allies for lowest HP
         let heal_range = 10.0;
-        let nearby = spatial_grid.query_radius_limited(tf.translation, heal_range, 8);
+        spatial_grid.collect_radius_limited(tf.translation, heal_range, 8, &mut nearby_allies);
         let mut best_target: Option<(Entity, f32)> = None; // (entity, hp_fraction)
 
-        for (nearby_entity, _nearby_pos) in &nearby {
+        for (nearby_entity, _nearby_pos) in nearby_allies.iter() {
             if *nearby_entity == entity {
                 continue;
             }

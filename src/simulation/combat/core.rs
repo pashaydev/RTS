@@ -16,7 +16,7 @@ pub struct CombatPlugin;
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
-            Update,
+            FixedUpdate,
             (
                 tick_damage_reservations,
                 resolve_combat_intents,
@@ -344,6 +344,7 @@ pub fn approach_attack_target(
     tactical_roles: Query<&TacticalRole>,
     spatial_grid: Res<SpatialHashGrid>,
     factions: Query<&Faction>,
+    mut nearby_entities: Local<Vec<(Entity, Vec3)>>,
 ) {
     for (
         attacker_entity,
@@ -537,11 +538,15 @@ pub fn approach_attack_target(
                     < combat_budget.max_repath_requests_per_frame
             {
                 let kite_threshold = range.0 * 0.35;
-                let nearby =
-                    spatial_grid.query_radius_limited(tf.translation, kite_threshold, 4);
+                spatial_grid.collect_radius_limited(
+                    tf.translation,
+                    kite_threshold,
+                    4,
+                    &mut nearby_entities,
+                );
                 let mut closest_melee_dist = f32::MAX;
                 let mut closest_melee_pos = Vec3::ZERO;
-                for (nearby_entity, nearby_pos) in &nearby {
+                for (nearby_entity, nearby_pos) in nearby_entities.iter() {
                     if *nearby_entity == attacker_entity {
                         continue;
                     }

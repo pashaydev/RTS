@@ -60,7 +60,7 @@ impl Plugin for GroundPlugin {
             (update_water_time, patch_water_fog_textures).run_if(in_state(AppState::InGame)),
         )
         .add_systems(
-            Update,
+            FixedUpdate,
             (
                 enqueue_building_terrain_updates,
                 process_terrain_shape_update_queue,

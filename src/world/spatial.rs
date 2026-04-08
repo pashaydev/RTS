@@ -15,7 +15,7 @@ impl Plugin for SpatialPlugin {
                 (seed_spatial_grid, seed_wall_grid),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 (
                     update_spatial_grid,
                     remove_spatial_grid_entities,
@@ -72,18 +72,33 @@ impl SpatialHashGrid {
     }
 
     pub fn upsert(&mut self, entity: Entity, pos: Vec3) {
-        self.remove(entity);
-        self.insert(entity, pos);
+        let key = self.cell_key(pos);
+        if let Some(current_key) = self.entity_cells.get(&entity).copied() {
+            if current_key == key {
+                if let Some(entries) = self.cells.get_mut(&key) {
+                    if let Some((_, stored_pos)) =
+                        entries.iter_mut().find(|(stored, _)| *stored == entity)
+                    {
+                        *stored_pos = pos;
+                        return;
+                    }
+                }
+            } else {
+                self.remove(entity);
+            }
+        }
+        self.cells.entry(key).or_default().push((entity, pos));
+        self.entity_cells.insert(entity, key);
     }
 
-    pub fn query_radius(&self, pos: Vec3, radius: f32) -> Vec<(Entity, Vec3)> {
+    pub fn collect_radius(&self, pos: Vec3, radius: f32, out: &mut Vec<(Entity, Vec3)>) {
         let radius_sq = radius * radius;
         let min_x = ((pos.x - radius) * self.inv_cell_size).floor() as i32;
         let max_x = ((pos.x + radius) * self.inv_cell_size).floor() as i32;
         let min_z = ((pos.z - radius) * self.inv_cell_size).floor() as i32;
         let max_z = ((pos.z + radius) * self.inv_cell_size).floor() as i32;
 
-        let mut results = Vec::new();
+        out.clear();
         for cx in min_x..=max_x {
             for cz in min_z..=max_z {
                 if let Some(entries) = self.cells.get(&IVec2::new(cx, cz)) {
@@ -91,13 +106,34 @@ impl SpatialHashGrid {
                         let dx = epos.x - pos.x;
                         let dz = epos.z - pos.z;
                         if dx * dx + dz * dz <= radius_sq {
-                            results.push((entity, epos));
+                            out.push((entity, epos));
                         }
                     }
                 }
             }
         }
+    }
+
+    pub fn query_radius(&self, pos: Vec3, radius: f32) -> Vec<(Entity, Vec3)> {
+        let mut results = Vec::new();
+        self.collect_radius(pos, radius, &mut results);
         results
+    }
+
+    pub fn collect_radius_limited(
+        &self,
+        pos: Vec3,
+        radius: f32,
+        limit: usize,
+        out: &mut Vec<(Entity, Vec3)>,
+    ) {
+        self.collect_radius(pos, radius, out);
+        out.sort_by(|a, b| {
+            let da = (a.1.x - pos.x).powi(2) + (a.1.z - pos.z).powi(2);
+            let db = (b.1.x - pos.x).powi(2) + (b.1.z - pos.z).powi(2);
+            da.total_cmp(&db)
+        });
+        out.truncate(limit);
     }
 
     pub fn query_radius_limited(
@@ -106,14 +142,48 @@ impl SpatialHashGrid {
         radius: f32,
         limit: usize,
     ) -> Vec<(Entity, Vec3)> {
-        let mut results = self.query_radius(pos, radius);
-        results.sort_by(|a, b| {
-            let da = (a.1.x - pos.x).powi(2) + (a.1.z - pos.z).powi(2);
-            let db = (b.1.x - pos.x).powi(2) + (b.1.z - pos.z).powi(2);
+        let mut results = Vec::new();
+        self.collect_radius_limited(pos, radius, limit, &mut results);
+        results
+    }
+
+    pub fn collect_corridor_limited(
+        &self,
+        from: Vec3,
+        to: Vec3,
+        half_width: f32,
+        limit: usize,
+        out: &mut Vec<(Entity, Vec3)>,
+        scratch: &mut Vec<(Entity, Vec3)>,
+    ) {
+        let delta = Vec2::new(to.x - from.x, to.z - from.z);
+        let length = delta.length().max(0.001);
+        let dir = delta / length;
+        self.collect_radius_limited(
+            from.lerp(to, 0.5),
+            length * 0.5 + half_width,
+            limit * 3,
+            scratch,
+        );
+        out.clear();
+        for &(entity, pos) in scratch.iter() {
+            let rel = Vec2::new(pos.x - from.x, pos.z - from.z);
+            let forward = rel.dot(dir);
+            if forward < -half_width || forward > length + half_width {
+                continue;
+            }
+            let closest = dir * forward;
+            let lateral = (rel - closest).length();
+            if lateral <= half_width {
+                out.push((entity, pos));
+            }
+        }
+        out.sort_by(|a, b| {
+            let da = (a.1.x - from.x).powi(2) + (a.1.z - from.z).powi(2);
+            let db = (b.1.x - from.x).powi(2) + (b.1.z - from.z).powi(2);
             da.total_cmp(&db)
         });
-        results.truncate(limit);
-        results
+        out.truncate(limit);
     }
 
     pub fn query_corridor_limited(
@@ -123,30 +193,9 @@ impl SpatialHashGrid {
         half_width: f32,
         limit: usize,
     ) -> Vec<(Entity, Vec3)> {
-        let delta = Vec2::new(to.x - from.x, to.z - from.z);
-        let length = delta.length().max(0.001);
-        let dir = delta / length;
         let mut results = Vec::new();
-        for (entity, pos) in
-            self.query_radius_limited(from.lerp(to, 0.5), length * 0.5 + half_width, limit * 3)
-        {
-            let rel = Vec2::new(pos.x - from.x, pos.z - from.z);
-            let forward = rel.dot(dir);
-            if forward < -half_width || forward > length + half_width {
-                continue;
-            }
-            let closest = dir * forward;
-            let lateral = (rel - closest).length();
-            if lateral <= half_width {
-                results.push((entity, pos));
-            }
-        }
-        results.sort_by(|a, b| {
-            let da = (a.1.x - from.x).powi(2) + (a.1.z - from.z).powi(2);
-            let db = (b.1.x - from.x).powi(2) + (b.1.z - from.z).powi(2);
-            da.total_cmp(&db)
-        });
-        results.truncate(limit);
+        let mut scratch = Vec::new();
+        self.collect_corridor_limited(from, to, half_width, limit, &mut results, &mut scratch);
         results
     }
 }
@@ -176,14 +225,19 @@ impl WallSpatialGrid {
         )
     }
 
-    pub fn query_radius(&self, pos: Vec3, radius: f32) -> Vec<(Entity, Vec3, f32, Faction)> {
+    pub fn collect_radius(
+        &self,
+        pos: Vec3,
+        radius: f32,
+        out: &mut Vec<(Entity, Vec3, f32, Faction)>,
+    ) {
         let radius_sq = radius * radius;
         let min_x = ((pos.x - radius) * self.inv_cell_size).floor() as i32;
         let max_x = ((pos.x + radius) * self.inv_cell_size).floor() as i32;
         let min_z = ((pos.z - radius) * self.inv_cell_size).floor() as i32;
         let max_z = ((pos.z + radius) * self.inv_cell_size).floor() as i32;
 
-        let mut results = Vec::new();
+        out.clear();
         for cx in min_x..=max_x {
             for cz in min_z..=max_z {
                 if let Some(entries) = self.cells.get(&IVec2::new(cx, cz)) {
@@ -191,18 +245,38 @@ impl WallSpatialGrid {
                         let dx = epos.x - pos.x;
                         let dz = epos.z - pos.z;
                         if dx * dx + dz * dz <= radius_sq {
-                            results.push((entity, epos, fp, faction));
+                            out.push((entity, epos, fp, faction));
                         }
                     }
                 }
             }
         }
+    }
+
+    pub fn query_radius(&self, pos: Vec3, radius: f32) -> Vec<(Entity, Vec3, f32, Faction)> {
+        let mut results = Vec::new();
+        self.collect_radius(pos, radius, &mut results);
         results
     }
 
     pub fn upsert(&mut self, entity: Entity, pos: Vec3, footprint: f32, faction: Faction) {
-        self.remove(entity);
         let key = self.cell_key(pos);
+        if let Some(current_key) = self.entity_cells.get(&entity).copied() {
+            if current_key == key {
+                if let Some(entries) = self.cells.get_mut(&key) {
+                    if let Some((_, stored_pos, stored_fp, stored_faction)) =
+                        entries.iter_mut().find(|(stored, _, _, _)| *stored == entity)
+                    {
+                        *stored_pos = pos;
+                        *stored_fp = footprint;
+                        *stored_faction = faction;
+                        return;
+                    }
+                }
+            } else {
+                self.remove(entity);
+            }
+        }
         self.cells
             .entry(key)
             .or_default()

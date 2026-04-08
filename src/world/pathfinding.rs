@@ -123,7 +123,7 @@ impl Plugin for PathfindingPlugin {
             build_nav_grid.after(crate::world::ground::spawn_ground),
         )
         .add_systems(
-            Update,
+            FixedUpdate,
             (
                 mark_nav_grid_dirty,
                 invalidate_stale_paths,

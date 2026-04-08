@@ -36,23 +36,23 @@ impl Plugin for AiPlugin {
             .init_resource::<AllyNotifications>()
             .init_resource::<AiFactionSettings>()
             .add_systems(
-                PreUpdate,
+                FixedPreUpdate,
                 build_ai_world_snapshot.run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 strategy::ai_strategy_system
                     .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 economy::ai_economy_system
                     .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 (military::ai_military_system, tactical::ai_tactical_system)
                     .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),

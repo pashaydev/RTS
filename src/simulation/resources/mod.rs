@@ -34,7 +34,7 @@ impl Plugin for ResourcesPlugin {
                     .run_if(not(resource_exists::<crate::infrastructure::save_load::PendingLoad>)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 (
                     compute_carried_totals,
                     workers::worker_ai_system,
@@ -48,7 +48,7 @@ impl Plugin for ResourcesPlugin {
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 (drain_carried_from_workers, update_carry_visuals)
                     .chain()
                     .in_set(GameFlowSet::Simulation)
@@ -56,7 +56,7 @@ impl Plugin for ResourcesPlugin {
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 (
                     trees::spawn_saplings_system,
                     trees::grow_saplings_system,
@@ -78,7 +78,7 @@ impl Plugin for ResourcesPlugin {
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 (
                     processing::processor_worker_visual_system,
                     processing::auto_assign_workers_system,

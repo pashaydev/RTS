@@ -453,10 +453,15 @@ pub(crate) fn handle_right_click_move(
                                             time.elapsed_secs_f64(),
                                         );
                                         commands.entity(*entity).remove::<AttackTarget>();
+                                        let building_pos = all_transforms
+                                            .get(target_entity)
+                                            .map(|t| t.translation())
+                                            .unwrap_or(Vec3::ZERO);
                                         crate::simulation::resources::assign_worker_to_processor(
                                             &mut commands,
                                             *entity,
                                             target_entity,
+                                            building_pos,
                                             TaskSource::Manual,
                                         );
                                         set_current_task(

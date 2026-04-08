@@ -74,13 +74,7 @@
                 document.addEventListener("touchstart", unlock, true);
             })();
         </script>
-        <script>
-            // Trigger a resize event after 3 seconds (useful for engines that
-            // need a delayed layout/viewport recalculation).
-            window.setTimeout(function () {
-                window.dispatchEvent(new Event("resize"));
-            }, 3000);
-        </script>
+
         <script>
             // DEBUG: Intercept WebGPU shader compilation errors.
             // Patches the prototype synchronously before WASM loads.
@@ -94,16 +88,37 @@
                             var m = info.messages[i];
                             if (m.type === "error") {
                                 console.error(
-                                    "WGSL ERROR [line " + m.lineNum + ":" + m.linePos + "]: " + m.message
+                                    "WGSL ERROR [line " +
+                                        m.lineNum +
+                                        ":" +
+                                        m.linePos +
+                                        "]: " +
+                                        m.message,
                                 );
                                 if (desc.code && m.lineNum > 0) {
                                     var lines = desc.code.split("\n");
                                     var s = Math.max(0, m.lineNum - 4);
-                                    var e = Math.min(lines.length, m.lineNum + 3);
-                                    console.error("Source:\n" + lines.slice(s, e).map(function (l, j) {
-                                        var n = s + j + 1;
-                                        return (n === m.lineNum ? ">>> " : "    ") + n + ": " + l;
-                                    }).join("\n"));
+                                    var e = Math.min(
+                                        lines.length,
+                                        m.lineNum + 3,
+                                    );
+                                    console.error(
+                                        "Source:\n" +
+                                            lines
+                                                .slice(s, e)
+                                                .map(function (l, j) {
+                                                    var n = s + j + 1;
+                                                    return (
+                                                        (n === m.lineNum
+                                                            ? ">>> "
+                                                            : "    ") +
+                                                        n +
+                                                        ": " +
+                                                        l
+                                                    );
+                                                })
+                                                .join("\n"),
+                                    );
                                 }
                             }
                         }

@@ -895,28 +895,41 @@ pub(super) fn rebuild_dense_grass(
         z += row_step;
     }
 
-    // Build merged meshes per chunk using shared helper
+    // Build merged meshes per chunk using shared helper — two LOD levels per chunk
     let chunk_count = chunk_instances.len();
 
     for ((cx, cz), instances) in chunk_instances {
-        let mut mesh = merge_grass_instances_into_mesh(&src, &instances, grass_settings.lean_strength);
         let chunk_center_x = (cx as f32 + 0.5) * GRASS_CHUNK_SIZE;
         let chunk_center_z = (cz as f32 + 0.5) * GRASS_CHUNK_SIZE;
+
+        // LOD 0: full density
+        let mut mesh_full =
+            merge_grass_instances_into_mesh(&src, &instances, grass_settings.lean_strength);
+        // LOD 1: every 3rd instance (⅓ density)
+        let reduced: Vec<_> = instances.iter().step_by(3).copied().collect();
+        let mut mesh_reduced =
+            merge_grass_instances_into_mesh(&src, &reduced, grass_settings.lean_strength);
+
         let mut stripped_empty = false;
         for (bx, bz, clear_radius, clear_r2) in &building_clear_areas {
             let half_extent = GRASS_CHUNK_SIZE * 0.5 + *clear_radius;
-            if (chunk_center_x - *bx).abs() > half_extent || (chunk_center_z - *bz).abs() > half_extent
+            if (chunk_center_x - *bx).abs() > half_extent
+                || (chunk_center_z - *bz).abs() > half_extent
             {
                 continue;
             }
-            if strip_world_space_triangles_in_radius(&mut mesh, *bx, *bz, *clear_r2) {
+            if strip_world_space_triangles_in_radius(&mut mesh_full, *bx, *bz, *clear_r2) {
                 stripped_empty = true;
                 break;
             }
+            strip_world_space_triangles_in_radius(&mut mesh_reduced, *bx, *bz, *clear_r2);
         }
         if stripped_empty {
             continue;
         }
+
+        let full_handle = meshes.add(mesh_full);
+        let reduced_handle = meshes.add(mesh_reduced);
 
         let entity = commands
             .spawn((
@@ -925,7 +938,11 @@ pub(super) fn rebuild_dense_grass(
                     chunk_x: cx,
                     chunk_z: cz,
                 },
-                Mesh3d(meshes.add(mesh)),
+                GrassChunkLod {
+                    full_mesh: full_handle.clone(),
+                    reduced_mesh: reduced_handle,
+                },
+                Mesh3d(full_handle),
                 MeshMaterial3d(grass_assets.material.clone()),
                 Transform::default(),
                 Visibility::Hidden,
@@ -933,9 +950,9 @@ pub(super) fn rebuild_dense_grass(
                 CullingBounds::with_offset(
                     GRASS_CHUNK_SIZE * 0.71,
                     Vec3::new(
-                        (cx as f32 + 0.5) * GRASS_CHUNK_SIZE,
+                        chunk_center_x,
                         0.0,
-                        (cz as f32 + 0.5) * GRASS_CHUNK_SIZE,
+                        chunk_center_z,
                     ),
                 ),
             ))

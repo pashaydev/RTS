@@ -15,7 +15,7 @@ impl Plugin for CombatIntentsPlugin {
             .init_resource::<CombatStatsDebug>()
             .init_resource::<MeleeSlotCache>()
             .add_systems(
-                Update,
+                FixedUpdate,
                 cleanup_expired_combat_state
                     .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),

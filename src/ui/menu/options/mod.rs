@@ -154,8 +154,12 @@ pub(crate) fn detect_native_resolution(
     let native_w = (monitor.physical_width as f64 / scale).round() as u32;
     let native_h = (monitor.physical_height as f64 / scale).round() as u32;
 
-    // Pick the closest available resolution to the native one
-    let idx = resolution_index(&resolutions.0, (native_w, native_h));
+    // In windowed mode, subtract chrome (title bar, menu bar, dock/taskbar)
+    // so the window fits within the usable screen area.
+    let usable_h = native_h.saturating_sub(systems::WINDOWED_CHROME_OFFSET);
+
+    // Pick the closest available resolution that fits the usable area
+    let idx = resolution_index(&resolutions.0, (native_w, usable_h));
     if idx < resolutions.0.len() {
         graphics.resolution = resolutions.0[idx];
     }

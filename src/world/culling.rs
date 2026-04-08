@@ -22,6 +22,7 @@ impl Plugin for CullingPlugin {
                 pause_culled_animations,
                 resume_unculled_animations,
                 distance_lod_system,
+                grass_lod_swap_system,
                 hide_nearby_trees,
                 update_tree_alpha_for_distance,
             )
@@ -239,6 +240,34 @@ fn distance_lod_system(
             if let Some(mut reason) = cull_reason {
                 *reason = CullReason::Visible;
             }
+        }
+    }
+}
+
+/// Swap grass chunk meshes between full and reduced density based on camera distance.
+fn grass_lod_swap_system(
+    camera_q: Query<&GlobalTransform, With<CullingSourceCamera>>,
+    mut grass_q: Query<(&mut Mesh3d, &GrassChunkLod, Option<&CullingBounds>, &GlobalTransform), With<GrassRevealed>>,
+) {
+    let Ok(cam_gtf) = camera_q.single() else {
+        return;
+    };
+    let cam_pos = cam_gtf.translation();
+
+    for (mut mesh3d, lod, bounds, gtf) in &mut grass_q {
+        let pos = if let Some(b) = bounds {
+            gtf.translation() + b.center_offset
+        } else {
+            gtf.translation()
+        };
+        let dist_sq = (cam_pos - pos).length_squared();
+        let desired = if dist_sq > GRASS_LOD_SWITCH_SQ {
+            &lod.reduced_mesh
+        } else {
+            &lod.full_mesh
+        };
+        if mesh3d.0 != *desired {
+            mesh3d.0 = desired.clone();
         }
     }
 }

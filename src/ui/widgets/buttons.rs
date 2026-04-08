@@ -736,6 +736,7 @@ pub fn handle_assign_worker_button(
                     &mut commands,
                     worker_entity,
                     building_entity,
+                    building_tf.translation,
                     TaskSource::Manual,
                 );
 

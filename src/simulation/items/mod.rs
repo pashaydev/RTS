@@ -101,7 +101,7 @@ impl Plugin for ItemsPlugin {
                 ),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 (
                     ensure_unit_inventories,
                     refresh_item_runtime_state,

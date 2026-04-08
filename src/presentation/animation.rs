@@ -207,17 +207,26 @@ fn drive_animations(
             }
         } else if unit_state.map_or(false, |s| matches!(s, UnitState::Building(_))) {
             AnimState::AttackA
-        } else if unit_state.map_or(false, |s| {
-            matches!(
-                s,
-                UnitState::Gathering(_) | UnitState::AssignedGathering { .. }
-            )
-        }) {
+        } else if unit_state.map_or(false, |s| matches!(s, UnitState::Gathering(_))) {
             // Walk while moving to resource; swing when arrived
             if move_target.is_some() {
                 AnimState::Walk
             } else {
                 AnimState::AttackA
+            }
+        } else if let Some(UnitState::AssignedGathering { phase, .. }) = unit_state {
+            // Only play work animation when actually harvesting/depositing
+            match phase {
+                AssignedPhase::Harvesting { .. } | AssignedPhase::Depositing { .. } => {
+                    AnimState::AttackA
+                }
+                _ => {
+                    if move_target.is_some() {
+                        AnimState::Walk
+                    } else {
+                        AnimState::Idle
+                    }
+                }
             }
         } else if unit_state.map_or(false, |s| {
             matches!(

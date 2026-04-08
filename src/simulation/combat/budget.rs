@@ -16,11 +16,11 @@ impl Plugin for CombatBudgetPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CombatBudgetState>()
             .add_systems(
-                First,
+                FixedFirst,
                 reset_combat_budget_state.run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Last,
+                FixedLast,
                 publish_combat_budget_stats.run_if(in_state(AppState::InGame)),
             );
     }

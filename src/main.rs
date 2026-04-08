@@ -9,11 +9,14 @@ mod world;
 use bevy::ecs::error;
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use bevy::window::PresentMode;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::OutlinePlugin;
 
 use types::{AppState, GameFlowSet, GameSetupConfig};
+
+const GAMEPLAY_FIXED_HZ: f64 = 30.0;
 
 fn main() {
     #[cfg(target_arch = "wasm32")]
@@ -136,8 +139,22 @@ fn main() {
         // bevy_mod_outline shaders are incompatible with browser WebGPU
         .add_plugins(cfg_outline_plugin())
         .init_state::<AppState>()
+        .insert_resource(Time::<Fixed>::from_hz(GAMEPLAY_FIXED_HZ))
         .configure_sets(
             Update,
+            (
+                GameFlowSet::Input,
+                GameFlowSet::NetworkReceive,
+                GameFlowSet::Simulation,
+                GameFlowSet::NetworkBroadcast,
+                GameFlowSet::Ui,
+                GameFlowSet::Presentation,
+                GameFlowSet::Diagnostics,
+            )
+                .chain(),
+        )
+        .configure_sets(
+            FixedUpdate,
             (
                 GameFlowSet::Input,
                 GameFlowSet::NetworkReceive,

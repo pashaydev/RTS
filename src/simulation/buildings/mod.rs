@@ -36,7 +36,7 @@ impl Plugin for BuildingsPlugin {
             .init_resource::<ObstacleGrid>()
             .add_systems(Startup, placement::create_ghost_materials)
             .add_systems(
-                Update,
+                FixedUpdate,
                 environment::sync_obstacle_grid
                     .in_set(GameFlowSet::Simulation)
                     .run_if(in_state(AppState::InGame)),
@@ -62,7 +62,7 @@ impl Plugin for BuildingsPlugin {
                     .run_if(player_can_command),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 (
                     construction::pending_build_arrival_system,
                     construction::build_site_preparation_system,
@@ -80,7 +80,7 @@ impl Plugin for BuildingsPlugin {
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
-                Update,
+                FixedUpdate,
                 (
                     upgrades::building_upgrade_system,
                     upgrades::demolish_system,

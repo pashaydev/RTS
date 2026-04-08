@@ -337,12 +337,21 @@ pub(super) fn processor_worker_visual_system(
         if *net_role == crate::infrastructure::multiplayer::NetRole::Client && *faction != active_player.0 {
             continue;
         }
+        // Check immutably first to avoid triggering Changed<UnitState> for non-assigned units
         let UnitState::AssignedGathering {
             building: building_entity,
-            ref mut phase,
-        } = *unit_state
+            ..
+        } = &*unit_state
         else {
             continue;
+        };
+        let building_entity = *building_entity;
+        // Now access mutably — only workers that actually need phase updates trigger Changed
+        let UnitState::AssignedGathering {
+            ref mut phase, ..
+        } = *unit_state
+        else {
+            unreachable!()
         };
 
         let Ok((
@@ -585,6 +594,7 @@ pub(super) fn auto_assign_workers_system(
                 &mut commands,
                 worker_entity,
                 building_entity,
+                building_tf.translation,
                 TaskSource::Auto,
             );
             assigned.workers.push(worker_entity);
@@ -598,6 +608,7 @@ pub fn assign_worker_to_processor(
     commands: &mut Commands,
     worker: Entity,
     building: Entity,
+    building_pos: Vec3,
     source: TaskSource,
 ) {
     commands
@@ -608,7 +619,7 @@ pub fn assign_worker_to_processor(
         })
         .insert(source)
         .insert(BuildingAssignment(building))
-        .remove::<MoveTarget>()
+        .insert(MoveTarget(building_pos))
         .remove::<AttackTarget>();
 }
 

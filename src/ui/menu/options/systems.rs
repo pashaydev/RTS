@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
-use bevy::window::PresentMode;
+use bevy::window::{Monitor, PresentMode};
 
 use super::{ResolutionRow, resolution_index, resolution_label};
 use crate::types::*;
@@ -11,14 +11,38 @@ use crate::ui::theme::Theme;
 
 // ── Apply Settings ──
 
+/// Height reserved for OS window chrome (title bar, menu bar, dock/taskbar).
+/// Used to ensure the window fits within the usable screen area.
+pub(crate) const WINDOWED_CHROME_OFFSET: u32 = 100;
+
 pub(crate) fn apply_graphics_settings(graphics: &GraphicsSettings, window: &mut Window) {
-    let (w, h) = graphics.resolution;
+    apply_graphics_settings_capped(graphics, window, None);
+}
+
+pub(crate) fn apply_graphics_settings_capped(
+    graphics: &GraphicsSettings,
+    window: &mut Window,
+    monitor: Option<&Monitor>,
+) {
+    let (w, mut h) = graphics.resolution;
 
     window.mode = if graphics.fullscreen {
         bevy::window::WindowMode::BorderlessFullscreen(bevy::window::MonitorSelection::Current)
     } else {
         bevy::window::WindowMode::Windowed
     };
+
+    // In windowed mode, cap the height to leave room for OS chrome
+    // (title bar, menu bar, dock/taskbar) so the window fits on screen
+    // and cursor coordinates match the UI layout.
+    if !graphics.fullscreen {
+        if let Some(monitor) = monitor {
+            let scale = monitor.scale_factor.max(1.0) as f64;
+            let screen_h = (monitor.physical_height as f64 / scale).round() as u32;
+            let usable_h = screen_h.saturating_sub(WINDOWED_CHROME_OFFSET);
+            h = h.min(usable_h);
+        }
+    }
 
     // Set logical resolution so the window size matches what the user selected,
     // regardless of display scale factor (Retina 2x, Windows HiDPI 1.5x, etc.).

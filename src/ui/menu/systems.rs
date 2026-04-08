@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use bevy::window::Monitor;
+use bevy::window::PrimaryMonitor;
 use rand::Rng;
 
 use super::helpers::*;
@@ -284,9 +286,14 @@ pub(crate) fn rebuild_dirty_menu(
 pub(crate) fn apply_window_settings_on_menu_enter(
     graphics: Res<GraphicsSettings>,
     mut windows: Query<&mut Window>,
+    monitors: Query<&Monitor, With<PrimaryMonitor>>,
 ) {
     if let Ok(mut window) = windows.single_mut() {
-        super::options::apply_graphics_settings(&graphics, &mut window);
+        super::options::apply_graphics_settings_capped(
+            &graphics,
+            &mut window,
+            monitors.single().ok(),
+        );
     }
 }
 

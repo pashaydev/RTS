@@ -55,7 +55,7 @@ pub fn ai_economy_system(
         Query<(&Faction, &ConstructionWorkers, &BuildingState), With<Building>>,
         Query<(&Faction, &EntityKind, &mut TrainingQueue), With<Building>>,
         Query<&BuildingFootprint>,
-        Query<(Entity, &Faction, &ResourceProcessor, &BuildingState), With<Building>>,
+        Query<(Entity, &Faction, &ResourceProcessor, &BuildingState, &Transform), With<Building>>,
         Query<&AssignedWorkers>,
     ),
     obstacle_grid: Res<ObstacleGrid>,
@@ -246,7 +246,7 @@ pub fn ai_economy_system(
         }
 
         // ── Assign idle workers to processor buildings with open slots ──
-        for (proc_entity, proc_faction, processor, proc_state) in processor_q.iter() {
+        for (proc_entity, proc_faction, processor, proc_state, proc_tf) in processor_q.iter() {
             if *proc_faction != faction || *proc_state != BuildingState::Complete {
                 continue;
             }
@@ -279,6 +279,7 @@ pub fn ai_economy_system(
                     &mut commands,
                     w_entity,
                     proc_entity,
+                    proc_tf.translation,
                     TaskSource::Auto,
                 );
                 commands

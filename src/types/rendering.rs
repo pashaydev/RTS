@@ -405,6 +405,17 @@ pub struct GrassChunk {
     pub chunk_z: i32,
 }
 
+/// Stores a reduced-density mesh for distant grass chunks.
+/// The culling system swaps between the full mesh (on entity) and this LOD mesh.
+#[derive(Component)]
+pub struct GrassChunkLod {
+    pub full_mesh: Handle<Mesh>,
+    pub reduced_mesh: Handle<Mesh>,
+}
+
+/// Distance² threshold where grass switches from full to reduced density.
+pub const GRASS_LOD_SWITCH_SQ: f32 = 50.0 * 50.0;
+
 #[derive(Resource, Default)]
 pub struct GrassChunkMap(pub HashMap<(i32, i32), Entity>);
 
@@ -433,7 +444,7 @@ impl Default for GrassDebugSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            spacing: 0.1,
+            spacing: 0.15,
             row_step_factor: 0.86,
             jitter: 0.4,
             density_threshold: 0.51,

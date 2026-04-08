@@ -308,7 +308,7 @@ fn update_army_overview(
             .with_children(|parent| {
                 parent.spawn((
                     Text::new(format!(
-                        "⚠ {} idle worker{}",
+                        "! {} idle worker{}",
                         idle_count,
                         if idle_count == 1 { "" } else { "s" }
                     )),
