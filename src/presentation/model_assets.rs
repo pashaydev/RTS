@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::blueprints::EntityKind;
 use crate::types::{
-    AnimState, AppState, AttentionIconAssets, DecoGltfHandles, DecorationInstanceAssets,
+    AnimState, AppState, AttentionIconAssets, DayCycleIconAssets, DecoGltfHandles, DecorationInstanceAssets,
     GrassInstanceAssets, GrassRenderSettings, IconAssets, ModelAssets, TeamColor,
 };
 use crate::presentation::materials::grass::{GrassExtension, GrassMaterial};
@@ -71,6 +71,15 @@ impl Plugin for ModelAssetsPlugin {
             building: asset_server.load("icons/attention/building.png"),
         };
         app.insert_resource(attention_icons);
+
+        // Load day cycle phase icons (CC BY 3.0, game-icons.net)
+        let daycycle_icons = DayCycleIconAssets {
+            dawn: asset_server.load("icons/daycycle/dawn.png"),
+            day: asset_server.load("icons/daycycle/day.png"),
+            dusk: asset_server.load("icons/daycycle/dusk.png"),
+            night: asset_server.load("icons/daycycle/night.png"),
+        };
+        app.insert_resource(daycycle_icons);
 
         // Load building GLTF model assets eagerly so they're available to Startup systems
         let building_models = load_building_model_assets_eager(&asset_server);

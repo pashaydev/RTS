@@ -190,7 +190,7 @@ pub(crate) fn stop_client(commands: &mut Commands, _client_state: &Option<Res<Cl
 // ── Connect to Host ──
 
 pub(crate) fn connect_to_host_system(
-    interactions: Query<(&Interaction, &MenuButton), Changed<Interaction>>,
+    interactions: Query<(&Interaction, &MenuButton), (Changed<Interaction>, Without<ButtonDisabled>)>,
     text_inputs: Query<&TextInputField, With<SessionCodeInput>>,
     mut commands: Commands,
     mut lobby: ResMut<LobbyState>,

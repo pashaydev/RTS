@@ -86,6 +86,7 @@ fn classify_unit_state(state: &UnitState) -> PathVisCategory {
         | UnitState::ReturningToDeposit { .. }
         | UnitState::Depositing { .. }
         | UnitState::WaitingForStorage { .. }
+        | UnitState::WaitingForDepot { .. }
         | UnitState::AssignedGathering { .. } => PathVisCategory::Gather,
         UnitState::MovingToPlot(_) | UnitState::MovingToBuild(_) | UnitState::Building(_) => {
             PathVisCategory::Build

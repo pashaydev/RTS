@@ -154,6 +154,23 @@ impl DayCycle {
         self.time = time.rem_euclid(1.0);
         self.phase = phase_from_time(self.time);
     }
+
+    /// Convert cycle time (0.0–1.0) to a 24h clock string "HH:MM".
+    pub fn clock_string(&self) -> String {
+        let total_minutes = (self.time * 24.0 * 60.0) as u32;
+        let hours = (total_minutes / 60) % 24;
+        let minutes = total_minutes % 60;
+        format!("{:02}:{:02}", hours, minutes)
+    }
+
+    pub fn phase_name(&self) -> &'static str {
+        match self.phase {
+            DayPhase::Night => "Night",
+            DayPhase::Dawn => "Dawn",
+            DayPhase::Day => "Day",
+            DayPhase::Dusk => "Dusk",
+        }
+    }
 }
 
 fn phase_from_time(t: f32) -> DayPhase {

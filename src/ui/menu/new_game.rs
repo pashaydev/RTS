@@ -68,7 +68,7 @@ pub(crate) fn spawn_new_game_page(
     commands.entity(overview).add_child(slots_wrap);
 
     for i in 0..4 {
-        spawn_slot_card(commands, slots_wrap, i, config, false, theme);
+        spawn_slot_card(commands, slots_wrap, i, config, false, None, theme);
     }
 
     let team_idx = match config.team_mode {
@@ -253,7 +253,7 @@ fn spawn_new_game_overview_header(
     commands.entity(container).add_child(header);
 }
 
-fn spawn_command_profile_row(
+pub(crate) fn spawn_command_profile_row(
     commands: &mut Commands,
     container: Entity,
     current_name: &str,
@@ -547,6 +547,7 @@ fn spawn_world_settings_panel(
         ))
         .with_children(|parent| {
             parent.spawn((
+                BeginCampaignText,
                 Text::new("BEGIN CAMPAIGN  >"),
                 fonts::heading(fonts, 20.0),
                 TextColor(Color::srgb(0.17, 0.25, 0.28)),
@@ -1102,6 +1103,7 @@ pub(crate) fn spawn_slot_card(
     slot_index: usize,
     config: &GameSetupConfig,
     is_multiplayer: bool,
+    lobby_players: Option<&[crate::infrastructure::multiplayer::LobbyPlayer]>,
     theme: &Theme,
 ) {
     let slot = config.slots[slot_index];
@@ -1150,7 +1152,17 @@ pub(crate) fn spawn_slot_card(
     };
     let commander_name = match slot {
         SlotOccupant::Human if is_local => config.player_name.clone(),
-        SlotOccupant::Human => format!("Connected Player {}", slot_index + 1),
+        SlotOccupant::Human => {
+            let faction = Faction::PLAYERS[slot_index];
+            lobby_players
+                .and_then(|players| {
+                    players
+                        .iter()
+                        .find(|p| p.connected && p.faction == faction)
+                })
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| format!("Connected Player {}", slot_index + 1))
+        }
         SlotOccupant::Ai(_) => format!("AI Commander {}", slot_index + 1),
         SlotOccupant::Open => "Open Multiplayer Slot".to_string(),
         SlotOccupant::Closed => "Inactive Slot".to_string(),

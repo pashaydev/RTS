@@ -15,7 +15,7 @@ use crate::presentation::minimap::MinimapInteraction;
 use crate::infrastructure::multiplayer::host_systems::execute_input_command;
 use crate::infrastructure::multiplayer::{ClientNetState, HostNetState, NetRole};
 use crate::infrastructure::net_bridge::EntityNetMap;
-use crate::simulation::items::{ItemPickup, RequestPickupItem};
+use crate::simulation::items::ItemPickup;
 
 use super::picking::{ray_aabb_dist, ray_sphere_dist};
 use super::{clear_task_queue, enqueue_task, set_current_task};
@@ -62,9 +62,7 @@ pub(crate) fn handle_right_click_move(
         Res<MinimapInteraction>,
         Res<UiClickedThisFrame>,
         Res<UiPressActive>,
-        Query<Entity, (With<ItemPickup>, With<Hovered>)>,
         bevy::ecs::message::MessageWriter<PlaySfx>,
-        bevy::ecs::message::MessageWriter<RequestPickupItem>,
     ),
     net_params: (
         Res<NetRole>,
@@ -83,7 +81,7 @@ pub(crate) fn handle_right_click_move(
     let (mobs, resource_nodes, construction_q, processor_buildings, pickups) = target_queries;
     let (other_units, other_buildings) = enemy_detect;
     let (assigned_workers_q, building_aabb_q, height_map, graphics) = picking_extra;
-    let (minimap_interaction, ui_clicked, ui_press, hovered_pickups, mut sfx, mut pickup_requests) =
+    let (minimap_interaction, ui_clicked, ui_press, mut sfx) =
         ui_flags;
     let (
         net_role,
@@ -111,14 +109,6 @@ pub(crate) fn handle_right_click_move(
         return;
     }
 
-    if let Some(pickup) = hovered_pickups.iter().next() {
-        pickup_requests.write(RequestPickupItem {
-            pickup,
-            pickers: units_vec.iter().map(|(entity, _)| *entity).collect(),
-        });
-        return;
-    }
-
     if minimap_interaction.clicked || ui_clicked.0 > 0 || ui_press.0 {
         return;
     }
@@ -137,7 +127,6 @@ pub(crate) fn handle_right_click_move(
     // Contextual right-click action types
     #[derive(Clone, Copy, PartialEq)]
     enum RClickAction {
-        PickupItem,      // item pickup
         AttackEnemy,     // enemy unit or mob
         GatherResource,  // resource node (workers)
         AssistBuild,     // construction site (workers)
@@ -171,7 +160,7 @@ pub(crate) fn handle_right_click_move(
 
         // Determine the best action for this hit
         let action = if pickups.contains(entity) {
-            Some(RClickAction::PickupItem)
+            None
         } else if mobs.contains(entity) {
             // Mobs are always hostile
             Some(RClickAction::AttackEnemy)
@@ -233,11 +222,6 @@ pub(crate) fn handle_right_click_move(
 
         // Priority tie-breaker: pickup > attack enemy > resource > construction > processor > ally
         if let Some(h) = close_hits
-            .iter()
-            .find(|h| h.action == RClickAction::PickupItem)
-        {
-            Some((h.entity, h.action))
-        } else if let Some(h) = close_hits
             .iter()
             .find(|h| h.action == RClickAction::AttackEnemy)
         {
@@ -382,12 +366,6 @@ pub(crate) fn handle_right_click_move(
 
     if let Some((target_entity, action)) = target_action {
         match action {
-            RClickAction::PickupItem => {
-                pickup_requests.write(RequestPickupItem {
-                    pickup: target_entity,
-                    pickers: units_vec.iter().map(|(entity, _)| *entity).collect(),
-                });
-            }
             RClickAction::AttackEnemy => {
                 for (entity, _kind) in &units_vec {
                     if shift {
@@ -809,7 +787,10 @@ pub(crate) fn handle_unit_command_hotkeys(
         Query<&Window, With<PrimaryWindow>>,
         Res<GraphicsSettings>,
     ),
-    selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
+    selected_units: Query<
+        (Entity, &EntityKind, &Faction, Option<&BuildingAssignment>),
+        (With<Unit>, With<Selected>),
+    >,
     mut task_queues: Query<&mut TaskQueue, With<Unit>>,
     mut unit_abilities: Query<&mut UnitAbilities>,
     active_player: Res<ActivePlayer>,
@@ -824,7 +805,7 @@ pub(crate) fn handle_unit_command_hotkeys(
         return;
     }
 
-    let has_selected = selected_units.iter().any(|(_, _, f)| *f == active_player.0);
+    let has_selected = selected_units.iter().any(|(_, _, f, _)| *f == active_player.0);
 
     // Escape cancels command mode
     if keys.just_pressed(KeyCode::Escape) {
@@ -840,7 +821,7 @@ pub(crate) fn handle_unit_command_hotkeys(
     if has_selected {
         // --- 1. Instant Commands (Hold & Stop) ---
         if keys.just_pressed(KeyCode::KeyH) {
-            for (entity, _, faction) in &selected_units {
+            for (entity, _, faction, _) in &selected_units {
                 if *faction != active_player.0 {
                     continue;
                 }
@@ -864,14 +845,18 @@ pub(crate) fn handle_unit_command_hotkeys(
         }
 
         if keys.just_pressed(KeyCode::KeyX) {
-            for (entity, kind, faction) in &selected_units {
+            for (entity, kind, faction, assignment) in &selected_units {
                 if *faction != active_player.0 {
                     continue;
                 }
                 clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
                 let grace = ManualIdleSince(time.elapsed_secs_f64());
                 if *kind == EntityKind::Worker {
-                    crate::simulation::resources::unassign_worker_from_processor(&mut commands, entity);
+                    crate::simulation::resources::unassign_worker_from_processor(
+                        &mut commands,
+                        entity,
+                        assignment.map(|assignment| assignment.0),
+                    );
                     commands.entity(entity).insert(grace);
                 } else {
                     commands
@@ -890,7 +875,7 @@ pub(crate) fn handle_unit_command_hotkeys(
 
         // --- 2. Stance Cycle (V) ---
         if keys.just_pressed(KeyCode::KeyV) {
-            for (entity, _, faction) in &selected_units {
+            for (entity, _, faction, _) in &selected_units {
                 if *faction != active_player.0 {
                     continue;
                 }
@@ -931,7 +916,7 @@ pub(crate) fn handle_unit_command_hotkeys(
         };
         if let Some(slot) = ability_hotkey {
             // Find first selected unit with abilities
-            for (entity, _kind, faction) in &selected_units {
+            for (entity, _kind, faction, _) in &selected_units {
                 if *faction != active_player.0 {
                     continue;
                 }
@@ -987,8 +972,8 @@ pub(crate) fn handle_unit_command_hotkeys(
 
     let units_vec: Vec<(Entity, EntityKind)> = selected_units
         .iter()
-        .filter(|(_, _, f)| **f == active_player.0)
-        .map(|(e, k, _)| (e, *k))
+        .filter(|(_, _, f, _)| **f == active_player.0)
+        .map(|(e, k, _, _)| (e, *k))
         .collect();
 
     if units_vec.is_empty() {

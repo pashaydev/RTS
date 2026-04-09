@@ -8,7 +8,7 @@ use crate::blueprints::{EntityKind, EntityVisualCache};
 use crate::presentation::camera;
 use crate::types::*;
 use crate::world::ground::HeightMap;
-use crate::simulation::items::{ItemPickup, RequestPickupItem};
+use crate::simulation::items::ItemPickup;
 use crate::presentation::minimap::MinimapInteraction;
 
 use super::picking::{pick_for_click, PickCycleState};
@@ -166,12 +166,11 @@ pub(crate) fn handle_click_select(
         Query<&EntityKind>,
         bevy::ecs::message::MessageWriter<PlaySfx>,
     ),
-    mut pickup_requests: bevy::ecs::message::MessageWriter<RequestPickupItem>,
 ) {
     let (ref camera_q, ref windows, ref graphics) = viewport;
     let (ref mut drag, ref mut inspected, ref mut pick_cycle) = state;
     let (ref units, ref buildings, ref mobs, ref resource_nodes, ref pickups) = entity_queries;
-    let (ref selected, ref selected_units, ref unit_transforms) = selection_queries;
+    let (ref selected, ref _selected_units, ref unit_transforms) = selection_queries;
     let (ref minimap_interaction, ref ui_clicked, ref ui_press) = flags;
     let (ref active_player, ref faction_q) = ownership;
     let (ref time, ref mut dbl_click, ref entity_kinds, ref mut sfx) = extra;
@@ -301,17 +300,7 @@ pub(crate) fn handle_click_select(
             }
 
             if result.is_pickup {
-                let pickers: Vec<Entity> = selected_units.iter().collect();
-                if pickers.is_empty() {
-                    // No units selected — just inspect the pickup
-                    inspected.entity = Some(result.entity);
-                } else {
-                    inspected.entity = None;
-                    pickup_requests.write(RequestPickupItem {
-                        pickup: result.entity,
-                        pickers,
-                    });
-                }
+                inspected.entity = Some(result.entity);
             } else if result.is_mob {
                 inspected.entity = Some(result.entity);
             } else if result.is_resource {

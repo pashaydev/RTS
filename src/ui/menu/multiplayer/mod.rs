@@ -117,5 +117,6 @@ pub(crate) use lobby::countdown_system;
 pub(crate) use lobby::kick_player_system;
 pub(crate) use lobby::lobby_ping_system;
 pub(crate) use lobby::paste_code_system;
+pub(crate) use lobby::sync_connect_button_state;
 pub(crate) use lobby::update_lobby_ui;
 pub(crate) use lobby::update_web_client_url;

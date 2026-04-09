@@ -165,3 +165,33 @@ pub fn unit_meets_requirement(kind: EntityKind, req: ItemRequirement) -> bool {
         }
     }
 }
+
+pub fn first_missing_requirement(
+    registry: &ItemRegistry,
+    kind: EntityKind,
+    item: ItemKind,
+) -> Option<ItemRequirement> {
+    registry
+        .get(item)
+        .requirements
+        .iter()
+        .copied()
+        .find(|req| !unit_meets_requirement(kind, *req))
+}
+
+pub fn requirement_failure_message(req: ItemRequirement) -> &'static str {
+    match req {
+        ItemRequirement::NotWorker => "Workers can carry this item, but only non-worker units gain its effect.",
+        ItemRequirement::BowUser => "Only Archers and Scouts gain this bow's effect.",
+        ItemRequirement::StaffUser => "Only Mages and Priests gain this staff's effect.",
+        ItemRequirement::SwordUser => "Only Soldiers, Tanks, Knights, and Cavalry gain this sword's effect.",
+    }
+}
+
+pub fn item_effect_requirement_message(
+    registry: &ItemRegistry,
+    kind: EntityKind,
+    item: ItemKind,
+) -> Option<&'static str> {
+    first_missing_requirement(registry, kind, item).map(requirement_failure_message)
+}

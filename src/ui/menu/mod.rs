@@ -1,6 +1,6 @@
 pub(crate) mod helpers;
 pub(crate) mod input;
-mod multiplayer;
+pub(crate) mod multiplayer;
 pub(crate) mod new_game;
 pub(crate) mod options;
 mod navigation;
@@ -145,6 +145,10 @@ pub(crate) struct CopyResetTimer(pub Timer);
 /// Marker for the host lobby start button text (for countdown).
 #[derive(Component)]
 pub(crate) struct StartButtonText;
+
+/// Marker for the single-player BEGIN CAMPAIGN button text.
+#[derive(Component)]
+pub(crate) struct BeginCampaignText;
 
 /// Countdown state before game starts (3-2-1-GO).
 #[derive(Resource)]
@@ -369,6 +373,7 @@ impl Plugin for MenuPlugin {
                     multiplayer::update_web_client_url,
                     multiplayer::paste_code_system,
                     multiplayer::clear_code_system,
+                    multiplayer::sync_connect_button_state,
                     multiplayer::copy_reset_system,
                     multiplayer::connection_timer_system,
                     multiplayer::countdown_system,
@@ -376,6 +381,7 @@ impl Plugin for MenuPlugin {
                     multiplayer::lobby_ping_system,
                     navigation::menu_nav_focus_visuals,
                     navigation::scroll_to_focused,
+                    helpers::update_button_hints,
                 )
                     .in_set(MenuSet::Visuals),
             );

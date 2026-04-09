@@ -1,9 +1,7 @@
 use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
 
-use super::core::constants::*;
 use super::core::framework::{WidgetId, WidgetRegistry};
-use super::core::hud::MainHudRoot;
 use super::core::interactions::UiClickEvent;
 use crate::types::AppState;
 use crate::ui::theme::{self, Theme};
@@ -15,80 +13,22 @@ impl Plugin for WidgetToolbarPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            spawn_toolbar_widget
-                .run_if(in_state(AppState::InGame))
-                .run_if(any_with_component::<MainHudRoot>),
-        )
-        .add_systems(
-            Update,
             (widget_toolbar_system, update_toolbar_visuals).run_if(in_state(AppState::InGame)),
         );
     }
 }
 
-fn spawn_toolbar_widget(
-    mut commands: Commands,
-    fonts: Res<UiFonts>,
-    theme: Res<Theme>,
-    root_q: Query<Entity, Added<MainHudRoot>>,
-) {
-    let Ok(hud_root) = root_q.single() else {
-        return;
-    };
-    spawn_toolbar(&mut commands, hud_root, &fonts, &theme);
-}
-
-#[derive(Component)]
-pub struct WidgetToolbar;
-
 #[derive(Component)]
 pub struct WidgetToolbarButton(pub WidgetId);
 
-/// Marker for the toolbar container entity
-#[derive(Component)]
-pub struct ToolbarContainer;
-
-pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts, theme: &Theme) {
-    let anchor = commands
-        .spawn((
-            ToolbarContainer,
-            Node {
-                position_type: PositionType::Absolute,
-                top: Val::Px(4.0),
-                left: Val::Px(0.0),
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Row,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-        ))
-        .id();
-    commands.entity(parent).add_child(anchor);
-
-    let toolbar = commands
-        .spawn((
-            WidgetToolbar,
-            Node {
-                flex_direction: FlexDirection::Row,
-                align_items: AlignItems::Center,
-                column_gap: Val::Px(2.0),
-                padding: PAD_COMPACT,
-                // border_radius: RADIUS_LG,
-                ..default()
-            },
-            BackgroundColor(theme::BG_PANEL.with_alpha(0.85)),
-            BoxShadow::new(
-                Color::srgba(0.0, 0.0, 0.0, 0.4),
-                Val::Px(0.0),
-                Val::Px(2.0),
-                Val::Px(0.0),
-                Val::Px(6.0),
-            ),
-        ))
-        .id();
-    commands.entity(anchor).add_child(toolbar);
-
+/// Spawn toolbar toggle buttons into an existing parent container.
+/// Called by the header bar during its spawn.
+pub fn spawn_toolbar_buttons(
+    commands: &mut Commands,
+    parent: Entity,
+    fonts: &UiFonts,
+    theme: &Theme,
+) {
     for &id in WidgetId::ALL {
         let hotkey_name = match id.hotkey() {
             KeyCode::F1 => "F1",
@@ -111,9 +51,8 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts, t
                 Node {
                     flex_direction: FlexDirection::Row,
                     align_items: AlignItems::Center,
-                    column_gap: Val::Px(3.0),
-                    padding: PAD_COMPACT,
-                    // border_radius: RADIUS_MD,
+                    column_gap: Val::Px(2.0),
+                    padding: UiRect::axes(Val::Px(4.0), Val::Px(1.0)),
                     ..default()
                 },
                 BackgroundColor(Color::NONE),
@@ -126,7 +65,7 @@ pub fn spawn_toolbar(commands: &mut Commands, parent: Entity, fonts: &UiFonts, t
                 ));
             })
             .id();
-        commands.entity(toolbar).add_child(btn);
+        commands.entity(parent).add_child(btn);
     }
 }
 

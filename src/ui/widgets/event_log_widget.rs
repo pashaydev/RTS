@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use std::collections::VecDeque;
 
-use super::core::constants::*;
 use super::core::framework::WidgetId;
 use super::core::hud::MainHudRoot;
 use crate::types::{ActivePlayer, AppState, Faction, RtsCamera, TeamConfig};
@@ -13,7 +12,6 @@ impl Plugin for EventLogWidgetPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GameEventLog>()
             .init_resource::<EventLogRenderState>()
-            .init_resource::<EventLogFilter>()
             .add_systems(
                 Update,
                 spawn_event_log_widget
@@ -22,11 +20,7 @@ impl Plugin for EventLogWidgetPlugin {
             )
             .add_systems(
                 Update,
-                (
-                    handle_log_level_pills,
-                    update_event_log.after(handle_log_level_pills),
-                    handle_event_log_click,
-                )
+                (update_event_log, handle_event_log_click)
                     .run_if(in_state(AppState::InGame)),
             );
     }
@@ -176,73 +170,20 @@ pub struct EventLogContent;
 #[derive(Component)]
 pub struct EventLogEntry(pub Option<Vec3>);
 
-/// Filter pill button — stores which log level it toggles.
-#[derive(Component)]
-pub struct LogLevelPill(pub LogLevel);
-
-/// Tracks which log levels are currently visible.
-#[derive(Resource)]
-pub struct EventLogFilter {
-    pub visible: [bool; 3], // Info, Warning, Error
-    pub revision: u64,
-}
-
-impl Default for EventLogFilter {
-    fn default() -> Self {
-        Self {
-            visible: [true, true, true],
-            revision: 0,
-        }
-    }
-}
-
-impl EventLogFilter {
-    fn index(level: LogLevel) -> usize {
-        match level {
-            LogLevel::Info => 0,
-            LogLevel::Warning => 1,
-            LogLevel::Error => 2,
-        }
-    }
-
-    pub fn is_visible(&self, level: LogLevel) -> bool {
-        self.visible[Self::index(level)]
-    }
-
-    pub fn toggle(&mut self, level: LogLevel) {
-        let i = Self::index(level);
-        self.visible[i] = !self.visible[i];
-        self.revision += 1;
-    }
-}
-
 /// Tracks the last rendered revision so we only rebuild when data changes.
 #[derive(Resource, Default)]
 pub struct EventLogRenderState {
     pub last_revision: u64,
-    pub last_filter_revision: u64,
 }
 
 /// How many entries to render per "page" visible in the scrollable area.
 const PAGE_SIZE: usize = 50;
-
-pub fn handle_log_level_pills(
-    interactions: Query<(&Interaction, &LogLevelPill), Changed<Interaction>>,
-    mut filter: ResMut<EventLogFilter>,
-) {
-    for (interaction, pill) in &interactions {
-        if *interaction == Interaction::Pressed {
-            filter.toggle(pill.0);
-        }
-    }
-}
 
 pub fn update_event_log(
     mut commands: Commands,
     event_log: Res<GameEventLog>,
     theme: Res<Theme>,
     mut render_state: ResMut<EventLogRenderState>,
-    filter: Res<EventLogFilter>,
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,
     widget_q: Query<(&super::widget_framework::Widget, &Children)>,
@@ -256,14 +197,10 @@ pub fn update_event_log(
         return;
     }
 
-    let data_changed = render_state.last_revision != event_log.revision;
-    let filter_changed = render_state.last_filter_revision != filter.revision;
-
-    if !data_changed && !filter_changed {
+    if render_state.last_revision == event_log.revision {
         return;
     }
     render_state.last_revision = event_log.revision;
-    render_state.last_filter_revision = filter.revision;
 
     let Some(content) =
         super::widget_framework::find_widget_content(WidgetId::EventLog, &widget_q, &content_q)
@@ -288,72 +225,13 @@ pub fn update_event_log(
         .id();
     commands.entity(content).add_child(container);
 
-    // ── Filter pills row ──
-    let pills_row = commands
-        .spawn(Node {
-            width: Val::Percent(100.0),
-            flex_direction: FlexDirection::Row,
-            column_gap: Val::Px(3.0),
-            padding: UiRect::axes(Val::Px(2.0), Val::Px(1.0)),
-            margin: UiRect::bottom(Val::Px(2.0)),
-            ..default()
-        })
-        .id();
-    commands.entity(container).add_child(pills_row);
-
-    for &level in LogLevel::ALL {
-        let active = filter.is_visible(level);
-        let bg = if active {
-            level.color(&theme).with_alpha(0.25)
-        } else {
-            theme::BG_RECESSED.with_alpha(0.3)
-        };
-        let text_col = if active {
-            level.color(&theme)
-        } else {
-            theme.colors.text_disabled
-        };
-
-        let pill = commands
-            .spawn((
-                LogLevelPill(level),
-                Button,
-                Node {
-                    padding: UiRect::axes(Val::Px(5.0), Val::Px(1.0)),
-                    // border_radius: RADIUS_LG,
-                    ..default()
-                },
-                BackgroundColor(bg),
-            ))
-            .id();
-        commands.entity(pills_row).add_child(pill);
-
-        let label = commands
-            .spawn((
-                Text::new(level.label()),
-                TextFont {
-                    font_size: theme.typography.micro,
-                    ..default()
-                },
-                TextColor(text_col),
-            ))
-            .id();
-        commands.entity(pill).add_child(label);
-    }
-
-    // Filter: only show events from our faction or allied factions (or global events with no faction),
-    // and matching the selected log levels.
+    // Filter: only show events from our faction or allied factions (or global events with no faction).
     let allied_events: Vec<&GameEvent> = event_log
         .entries
         .iter()
-        .filter(|e| {
-            if !filter.is_visible(e.level) {
-                return false;
-            }
-            match e.faction {
-                None => true,
-                Some(ref f) => teams.is_allied(&active_player.0, f),
-            }
+        .filter(|e| match e.faction {
+            None => true,
+            Some(ref f) => teams.is_allied(&active_player.0, f),
         })
         .collect();
 

@@ -577,6 +577,7 @@ pub fn handle_drop_cargo_button(
                 *state,
                 UnitState::ReturningToDeposit { .. }
                     | UnitState::WaitingForStorage { .. }
+                    | UnitState::WaitingForDepot { .. }
                     | UnitState::Depositing { .. }
             ) {
                 *state = UnitState::Idle;
@@ -752,18 +753,6 @@ pub fn handle_assign_worker_button(
                     worker_tf.translation = Vec3::new(target_pos.x, ground_y, target_pos.z);
                 }
 
-                // Also add to AssignedWorkers
-                commands
-                    .entity(building_entity)
-                    .entry::<AssignedWorkers>()
-                    .and_modify(move |mut aw| {
-                        if !aw.workers.contains(&worker_entity) {
-                            aw.workers.push(worker_entity);
-                        }
-                    })
-                    .or_insert(AssignedWorkers {
-                        workers: vec![worker_entity],
-                    });
                 assigned += 1;
             }
         }
@@ -790,15 +779,12 @@ pub fn handle_unassign_worker_button(
             if let Ok(aw) = assigned_workers_q.get(building_entity) {
                 let workers_to_unassign: Vec<Entity> = aw.workers.clone();
                 for worker_entity in workers_to_unassign {
-                    crate::simulation::resources::unassign_worker_from_processor(&mut commands, worker_entity);
+                    crate::simulation::resources::unassign_worker_from_processor(
+                        &mut commands,
+                        worker_entity,
+                        Some(building_entity),
+                    );
                 }
-                // Clear the building's assigned workers list
-                commands
-                    .entity(building_entity)
-                    .entry::<AssignedWorkers>()
-                    .and_modify(|mut aw| {
-                        aw.workers.clear();
-                    });
             }
         }
     }
@@ -807,7 +793,7 @@ pub fn handle_unassign_worker_button(
 pub fn handle_unassign_specific_worker_button(
     mut commands: Commands,
     interactions: Query<(&Interaction, &UnassignSpecificWorkerButton), Changed<Interaction>>,
-    mut assigned_workers_q: Query<&mut AssignedWorkers>,
+    worker_assignments: Query<&BuildingAssignment>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -819,12 +805,8 @@ pub fn handle_unassign_specific_worker_button(
         ui_press.0 = true;
 
         let worker = btn.0;
-        crate::simulation::resources::unassign_worker_from_processor(&mut commands, worker);
-
-        // Remove from all buildings' AssignedWorkers
-        for mut aw in &mut assigned_workers_q {
-            aw.workers.retain(|&w| w != worker);
-        }
+        let building = worker_assignments.get(worker).ok().map(|assignment| assignment.0);
+        crate::simulation::resources::unassign_worker_from_processor(&mut commands, worker, building);
     }
 }
 
@@ -848,7 +830,11 @@ pub fn handle_unassign_one_worker_button(
         for building_entity in &selected_buildings {
             if let Ok(mut aw) = assigned_workers_q.get_mut(building_entity) {
                 if let Some(worker_entity) = aw.workers.pop() {
-                    crate::simulation::resources::unassign_worker_from_processor(&mut commands, worker_entity);
+                    crate::simulation::resources::unassign_worker_from_processor(
+                        &mut commands,
+                        worker_entity,
+                        Some(building_entity),
+                    );
                 }
             }
         }
@@ -1155,7 +1141,10 @@ pub fn handle_hold_position_button(
 pub fn handle_stop_button(
     interactions: Query<&Interaction, (Changed<Interaction>, With<StopButton>)>,
     mut commands: Commands,
-    selected_units: Query<(Entity, &Faction, &EntityKind), (With<Unit>, With<Selected>)>,
+    selected_units: Query<
+        (Entity, &Faction, &EntityKind, Option<&BuildingAssignment>),
+        (With<Unit>, With<Selected>),
+    >,
     active_player: Res<ActivePlayer>,
     mut cmd_mode: ResMut<CommandMode>,
     time: Res<Time>,
@@ -1169,14 +1158,18 @@ pub fn handle_stop_button(
         ui_clicked.0 = 2;
         ui_press.0 = true;
         *cmd_mode = CommandMode::Normal;
-        for (entity, faction, kind) in &selected_units {
+        for (entity, faction, kind, assignment) in &selected_units {
             if *faction != active_player.0 {
                 continue;
             }
             clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
             let grace = ManualIdleSince(time.elapsed_secs_f64());
             if *kind == EntityKind::Worker {
-                crate::simulation::resources::unassign_worker_from_processor(&mut commands, entity);
+                crate::simulation::resources::unassign_worker_from_processor(
+                    &mut commands,
+                    entity,
+                    assignment.map(|assignment| assignment.0),
+                );
                 commands.entity(entity).insert(grace);
             } else {
                 commands

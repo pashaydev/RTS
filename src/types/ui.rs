@@ -325,6 +325,10 @@ pub enum ButtonStyle {
     Accent,
 }
 
+/// Marks a button as disabled. The optional string is a hint shown below the button.
+#[derive(Component)]
+pub struct ButtonDisabled(pub Option<String>);
+
 // ── UI Animations ──
 
 /// Marks an action bar child for fade-out removal.
@@ -446,6 +450,14 @@ pub struct AttentionIconAssets {
     pub gathering: Handle<Image>,
     pub attacking: Handle<Image>,
     pub building: Handle<Image>,
+}
+
+#[derive(Resource)]
+pub struct DayCycleIconAssets {
+    pub dawn: Handle<Image>,
+    pub day: Handle<Image>,
+    pub dusk: Handle<Image>,
+    pub night: Handle<Image>,
 }
 
 // ── Text Input ──

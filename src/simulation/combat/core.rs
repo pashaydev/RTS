@@ -1145,9 +1145,7 @@ fn handle_death(
 
         // If a worker dies while assigned to a processor, remove it from AssignedWorkers
         if let Some(UnitState::AssignedGathering { building, .. }) = opt_unit_state {
-            if let Ok(mut aw) = all_assigned_workers.get_mut(*building) {
-                aw.workers.retain(|&w| w != *dead_entity);
-            }
+            crate::simulation::buildings::remove_assigned_worker(&mut commands, *building, *dead_entity);
         }
 
         // If a building dies with assigned workers, eject them all
@@ -1158,7 +1156,11 @@ fn handle_death(
                     if let Ok((_, worker_state)) = workers_with_state.get(worker) {
                         if matches!(worker_state, UnitState::AssignedGathering { building, .. } if *building == *dead_entity)
                         {
-                            crate::simulation::resources::unassign_worker_from_processor(&mut commands, worker);
+                            crate::simulation::resources::unassign_worker_from_processor(
+                                &mut commands,
+                                worker,
+                                Some(*dead_entity),
+                            );
                         }
                     }
                 }

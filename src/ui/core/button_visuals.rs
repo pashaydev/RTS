@@ -70,13 +70,23 @@ pub fn animated_button_chrome_system(
             Option<&mut BorderColor>,
             Option<&mut BoxShadow>,
             Has<SelectedOption>,
+            Has<ButtonDisabled>,
         ),
         With<ButtonAnimState>,
     >,
 ) {
-    for (state, style, border_color, shadow, is_selected) in &mut query {
+    for (state, style, border_color, shadow, is_selected, is_disabled) in &mut query {
         // Selected buttons have their border/shadow managed by update_selector_visuals.
         if is_selected {
+            continue;
+        }
+        if is_disabled {
+            if let Some(mut border) = border_color {
+                *border = BorderColor::all(Color::srgba(0.3, 0.3, 0.3, 0.1));
+            }
+            if let Some(mut shadow) = shadow {
+                *shadow = BoxShadow::new(Color::NONE, Val::Px(0.0), Val::Px(0.0), Val::Px(0.0), Val::Px(0.0));
+            }
             continue;
         }
         if let Some(mut border) = border_color {
@@ -154,13 +164,25 @@ pub fn animated_button_hover_system(
         &mut BackgroundColor,
         &mut Transform,
         Has<SelectedOption>,
+        Has<ButtonDisabled>,
     )>,
 ) {
     let dt = time.delta_secs();
     let speed = 14.0_f32;
     let alpha = 1.0 - (-speed * dt).exp();
 
-    for (state, mut anim, style, mut bg, mut transform, is_selected) in &mut query {
+    for (state, mut anim, style, mut bg, mut transform, is_selected, is_disabled) in &mut query {
+        if is_disabled {
+            anim.scale_target = 1.0;
+            anim.lift_target = 0.0;
+            if !is_selected {
+                match style {
+                    ButtonStyle::Filled => anim.bg_target = [0.12, 0.12, 0.12, 0.0],
+                    ButtonStyle::Ghost | ButtonStyle::Destructive => anim.bg_target = [0.0, 0.0, 0.0, 0.0],
+                    ButtonStyle::Accent => anim.bg_target = [0.06, 0.06, 0.07, 0.5],
+                }
+            }
+        } else {
         match state.phase {
             UiInteractPhase::Hovered => {
                 anim.scale_target = 1.02;
@@ -235,6 +257,7 @@ pub fn animated_button_hover_system(
                 }
             }
         }
+        } // end else (not disabled)
 
         for i in 0..4 {
             anim.bg_current[i] += (anim.bg_target[i] - anim.bg_current[i]) * alpha;
@@ -242,11 +265,12 @@ pub fn animated_button_hover_system(
         anim.scale_current += (anim.scale_target - anim.scale_current) * alpha;
         anim.lift_current += (anim.lift_target - anim.lift_current) * alpha;
 
+        let opacity = if is_disabled { 0.4 } else { 1.0 };
         *bg = BackgroundColor(Color::srgba(
             anim.bg_current[0],
             anim.bg_current[1],
             anim.bg_current[2],
-            anim.bg_current[3],
+            anim.bg_current[3] * opacity,
         ));
         transform.scale = Vec3::splat(anim.scale_current);
         transform.translation.y = anim.lift_current;

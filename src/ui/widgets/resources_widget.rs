@@ -2,34 +2,55 @@ use bevy::prelude::*;
 
 use super::core::constants::*;
 use super::core::fonts::UiFonts;
-use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
+use super::core::framework::HEADER_HEIGHT_PX;
 use super::core::hud::MainHudRoot;
 use crate::blueprints::EntityKind;
 use crate::types::*;
 use crate::ui::theme::{self, Theme};
+use crate::world::lighting::{DayCycle, DayPhase};
 
-pub struct ResourcesWidgetPlugin;
+pub struct ResourceHeaderBarPlugin;
 
-impl Plugin for ResourcesWidgetPlugin {
+impl Plugin for ResourceHeaderBarPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            spawn_resources_widget
+            spawn_resource_header_bar
                 .run_if(in_state(AppState::InGame))
                 .run_if(any_with_component::<MainHudRoot>),
         )
         .add_systems(
             Update,
-            (update_resource_texts, update_processed_resource_visibility)
+            (update_resource_texts, update_processed_resource_visibility, update_daycycle_indicator)
                 .run_if(in_state(AppState::InGame)),
         );
     }
 }
 
-fn spawn_resources_widget(
+// ── Components ──
+
+#[derive(Component)]
+pub struct ResourceHeaderBar;
+
+#[derive(Component)]
+pub struct PopulationText;
+
+/// Marker for processed resource rows that can be hidden.
+#[derive(Component)]
+pub struct ProcessedResourceRow(pub ResourceType);
+
+#[derive(Component)]
+pub struct DayCycleIcon;
+
+#[derive(Component)]
+pub struct DayCycleText;
+
+// ── Spawn ──
+
+fn spawn_resource_header_bar(
     mut commands: Commands,
     icons: Res<IconAssets>,
-    registry: Res<WidgetRegistry>,
+    daycycle_icons: Res<DayCycleIconAssets>,
     fonts: Res<UiFonts>,
     theme: Res<Theme>,
     root_q: Query<Entity, Added<MainHudRoot>>,
@@ -37,17 +58,209 @@ fn spawn_resources_widget(
     let Ok(hud_root) = root_q.single() else {
         return;
     };
-    let content = spawn_widget_frame(
-        &mut commands,
-        hud_root,
-        WidgetId::Resources,
-        registry.slots.get(&WidgetId::Resources).unwrap(),
-        registry.is_visible(WidgetId::Resources),
-        &fonts,
-        &theme,
-    );
-    spawn_resource_content(&mut commands, content, &icons);
+
+    // Full-width header bar at the very top
+    let bar = commands
+        .spawn((
+            ResourceHeaderBar,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(0.0),
+                left: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: Val::Px(HEADER_HEIGHT_PX),
+                flex_direction: FlexDirection::Row,
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::SpaceBetween,
+                padding: UiRect::axes(Val::Px(8.0), Val::Px(0.0)),
+                ..default()
+            },
+            BackgroundColor(theme::BG_PANEL.with_alpha(0.85)),
+            BoxShadow::new(
+                Color::srgba(0.0, 0.0, 0.0, 0.4),
+                Val::Px(0.0),
+                Val::Px(2.0),
+                Val::Px(0.0),
+                Val::Px(6.0),
+            ),
+            GlobalZIndex(10),
+        ))
+        .id();
+    commands.entity(hud_root).add_child(bar);
+
+    // ── Left section: resources ──
+    let left = commands
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            ..default()
+        })
+        .id();
+    commands.entity(bar).add_child(left);
+
+    // Population
+    let pop = commands
+        .spawn((
+            PopulationText,
+            Text::new("0/8"),
+            TextFont {
+                font_size: theme::FONT_CAPTION,
+                ..default()
+            },
+            TextColor(theme.colors.text_secondary),
+        ))
+        .id();
+    commands.entity(left).add_child(pop);
+
+    spawn_separator(&mut commands, left, &theme);
+
+    // Raw resources
+    for rt in ResourceType::RAW {
+        spawn_header_resource(&mut commands, left, rt, &icons, &theme, false);
+    }
+
+    spawn_separator(&mut commands, left, &theme);
+
+    // Processed resources (hidden until unlocked)
+    for rt in ResourceType::PROCESSED {
+        spawn_header_resource(&mut commands, left, rt, &icons, &theme, true);
+    }
+
+    // ── Center section: day cycle indicator ──
+    let center = commands
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(4.0),
+            ..default()
+        })
+        .id();
+    commands.entity(bar).add_child(center);
+
+    let phase_icon = commands
+        .spawn((
+            DayCycleIcon,
+            ImageNode::new(daycycle_icons.day.clone()),
+            Node {
+                width: Val::Px(14.0),
+                height: Val::Px(14.0),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(center).add_child(phase_icon);
+
+    let phase_text = commands
+        .spawn((
+            DayCycleText,
+            Text::new("Day 12:00"),
+            TextFont {
+                font_size: theme::FONT_CAPTION,
+                ..default()
+            },
+            TextColor(theme.colors.text_secondary),
+        ))
+        .id();
+    commands.entity(center).add_child(phase_text);
+
+    // ── Right section: widget toggles ──
+    let right = commands
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(2.0),
+            ..default()
+        })
+        .id();
+    commands.entity(bar).add_child(right);
+
+    super::widget_toolbar::spawn_toolbar_buttons(&mut commands, right, &fonts, &theme);
 }
+
+fn spawn_separator(commands: &mut Commands, parent: Entity, theme: &Theme) {
+    let sep = commands
+        .spawn((
+            Node {
+                width: Val::Px(1.0),
+                height: Val::Px(14.0),
+                ..default()
+            },
+            BackgroundColor(theme.colors.separator),
+        ))
+        .id();
+    commands.entity(parent).add_child(sep);
+}
+
+fn spawn_header_resource(
+    commands: &mut Commands,
+    parent: Entity,
+    rt: ResourceType,
+    icons: &IconAssets,
+    theme: &Theme,
+    is_processed: bool,
+) {
+    let tooltip_text = format!("{}\n{}", rt.display_name(), resource_description(rt));
+
+    let mut group_cmds = commands.spawn((
+        Interaction::default(),
+        ActionTooltipTrigger { text: tooltip_text },
+        Node {
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(2.0),
+            ..default()
+        },
+    ));
+    if is_processed {
+        group_cmds.insert((ProcessedResourceRow(rt), Visibility::Hidden));
+    }
+    let group = group_cmds.id();
+    commands.entity(parent).add_child(group);
+
+    let icon = commands
+        .spawn((
+            ImageNode::new(icons.resource_icon(rt)),
+            Node {
+                width: Val::Px(14.0),
+                height: Val::Px(14.0),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(group).add_child(icon);
+
+    let text = commands
+        .spawn((
+            ResourceText(rt),
+            Text::new("0"),
+            TextFont {
+                font_size: theme::FONT_CAPTION,
+                ..default()
+            },
+            TextColor(theme.colors.text_primary),
+        ))
+        .id();
+    commands.entity(group).add_child(text);
+}
+
+fn resource_description(rt: ResourceType) -> &'static str {
+    match rt {
+        ResourceType::Wood => "Primary construction material. Gathered from forests.",
+        ResourceType::Copper => "Basic metal ore. Mined from deposits.",
+        ResourceType::Iron => "Advanced metal ore. Used for steel production.",
+        ResourceType::Gold => "Precious metal. Required for advanced units.",
+        ResourceType::Oil => "Fuel resource. Extracted from oil deposits.",
+        ResourceType::Stone => "Building material. Quarried from rock formations.",
+        ResourceType::Planks => "Processed wood. Refined at Sawmills.",
+        ResourceType::Charcoal => "Fuel product. Smelted from wood at Sawmills.",
+        ResourceType::Bronze => "Alloy of copper. Produced at Smelters.",
+        ResourceType::Steel => "Strong alloy. Produced at Smelters from iron.",
+        ResourceType::Gunpowder => "Explosive compound. Made at Alchemist labs.",
+    }
+}
+
+// ── Update Systems ──
 
 pub fn update_resource_texts(
     all_resources: Res<AllPlayerResources>,
@@ -86,11 +299,11 @@ pub fn update_resource_texts(
     for mut text in &mut text_sets.p1() {
         if unit_cap.queued > 0 {
             **text = format!(
-                "Units: {} (+{}) / {}",
+                "{} (+{}) / {}",
                 unit_cap.used, unit_cap.queued, unit_cap.cap
             );
         } else {
-            **text = format!("Units: {} / {}", unit_cap.used, unit_cap.cap);
+            **text = format!("{} / {}", unit_cap.used, unit_cap.cap);
         }
     }
 }
@@ -104,7 +317,6 @@ pub fn update_processed_resource_visibility(
     let player_res = all_resources.get(&active_player.0);
     for (mut vis, row_marker) in &mut vis_q {
         let rt = row_marker.0;
-        // Show if player has any of this resource or has ever produced it
         let has_any = player_res.get(rt) > 0;
         *vis = if has_any {
             Visibility::Inherited
@@ -114,128 +326,25 @@ pub fn update_processed_resource_visibility(
     }
 }
 
-/// Marker for processed resource rows that can be hidden.
-#[derive(Component)]
-pub struct ProcessedResourceRow(pub ResourceType);
-
-#[derive(Component)]
-pub struct PopulationText;
-
-pub fn spawn_resource_content(commands: &mut Commands, parent: Entity, icons: &IconAssets) {
-    let population = commands
-        .spawn((
-            PopulationText,
-            Text::new("Units: 0 / 8"),
-            TextFont {
-                font_size: theme::FONT_MEDIUM,
-                ..default()
-            },
-            TextColor(theme::TEXT_PRIMARY),
-            Node {
-                width: Val::Percent(100.0),
-                margin: UiRect::bottom(Val::Px(4.0)),
-                ..default()
-            },
-        ))
-        .id();
-    commands.entity(parent).add_child(population);
-
-    // Row 1: Raw resources (always shown)
-    for rt in ResourceType::RAW {
-        spawn_resource_row(commands, parent, rt, icons, false);
-    }
-
-    // Separator between raw and processed
-    let sep = commands
-        .spawn((
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Px(1.0),
-                margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(4.0), Val::Px(4.0)),
-                ..default()
-            },
-            BackgroundColor(theme::SEPARATOR),
-        ))
-        .id();
-    commands.entity(parent).add_child(sep);
-
-    // Row 2: Processed resources (hidden until unlocked)
-    for rt in ResourceType::PROCESSED {
-        spawn_resource_row(commands, parent, rt, icons, true);
-    }
-}
-
-fn spawn_resource_row(
-    commands: &mut Commands,
-    parent: Entity,
-    rt: ResourceType,
-    icons: &IconAssets,
-    is_processed: bool,
+fn update_daycycle_indicator(
+    cycle: Res<DayCycle>,
+    daycycle_icons: Res<DayCycleIconAssets>,
+    mut icon_q: Query<&mut ImageNode, With<DayCycleIcon>>,
+    mut text_q: Query<&mut Text, With<DayCycleText>>,
 ) {
-    let mut row_cmds = commands.spawn(Node {
-        width: Val::Percent(100.0),
-        flex_direction: FlexDirection::Row,
-        align_items: AlignItems::Center,
-        justify_content: JustifyContent::SpaceBetween,
-        column_gap: Val::Px(6.0),
-        ..default()
-    });
-    if is_processed {
-        row_cmds.insert((ProcessedResourceRow(rt), Visibility::Hidden));
-    }
-    let row = row_cmds.id();
-    commands.entity(parent).add_child(row);
+    let icon_handle = match cycle.phase {
+        DayPhase::Dawn => &daycycle_icons.dawn,
+        DayPhase::Day => &daycycle_icons.day,
+        DayPhase::Dusk => &daycycle_icons.dusk,
+        DayPhase::Night => &daycycle_icons.night,
+    };
 
-    let left = commands
-        .spawn(Node {
-            flex_direction: FlexDirection::Row,
-            align_items: AlignItems::Center,
-            column_gap: Val::Px(6.0),
-            ..default()
-        })
-        .id();
-    commands.entity(row).add_child(left);
-
-    // Color swatch for processed resources (since they reuse icons)
-    let color = rt.carry_color();
-    let icon = commands
-        .spawn((
-            ImageNode::new(icons.resource_icon(rt)),
-            Node {
-                width: Val::Px(18.0),
-                height: Val::Px(18.0),
-                ..default()
-            },
-        ))
-        .id();
-    commands.entity(left).add_child(icon);
-
-    // For processed resources, add a small color dot
-    if is_processed {
-        let dot = commands
-            .spawn((
-                Node {
-                    width: Val::Px(6.0),
-                    height: Val::Px(6.0),
-                    // border_radius: RADIUS_SM,
-                    ..default()
-                },
-                BackgroundColor(color),
-            ))
-            .id();
-        commands.entity(left).add_child(dot);
+    for mut img in &mut icon_q {
+        img.image = icon_handle.clone();
     }
 
-    let text = commands
-        .spawn((
-            ResourceText(rt),
-            Text::new(format!("{:?}: 0", rt)),
-            TextFont {
-                font_size: theme::FONT_MEDIUM,
-                ..default()
-            },
-            TextColor(theme::TEXT_PRIMARY),
-        ))
-        .id();
-    commands.entity(left).add_child(text);
+    let display = format!("{} {}", cycle.phase_name(), cycle.clock_string());
+    for mut text in &mut text_q {
+        **text = display.clone();
+    }
 }

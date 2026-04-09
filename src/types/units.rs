@@ -58,6 +58,9 @@ pub enum UnitState {
         depot: Entity,
         gather_node: Option<Entity>,
     },
+    WaitingForDepot {
+        gather_node: Option<Entity>,
+    },
     /// Worker moving to a location to plot (start) a new building
     MovingToPlot(Vec3),
     MovingToBuild(Entity),
@@ -543,8 +546,8 @@ impl Default for MovementSmoothing {
     fn default() -> Self {
         Self {
             current_speed: 0.0,
-            acceleration: 12.0,
-            deceleration: 8.0,
+            acceleration: 30.0,
+            deceleration: 20.0,
             speed_variation: 1.0,
         }
     }

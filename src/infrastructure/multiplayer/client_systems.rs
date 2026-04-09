@@ -163,6 +163,7 @@ fn net_to_ecs_unit_state(net: &NetUnitState, net_map: &EntityNetMap) -> Option<U
                     gather_node: None,
                 })
         }
+        NetUnitState::WaitingForDepot => Some(UnitState::WaitingForDepot { gather_node: None }),
         NetUnitState::MovingToPlot { target } => Some(UnitState::MovingToPlot(Vec3::new(
             target[0], target[1], target[2],
         ))),
@@ -453,6 +454,7 @@ pub fn client_apply_state_sync(
                     .get(net_carry.resource_type as usize)
                     .copied();
                 carry.amount = net_carry.amount;
+                commands.insert_resource(crate::simulation::resources::CarriedTotalsDirty(true));
             }
         }
         if let Some(stance_u8) = snap.stance {
@@ -976,6 +978,7 @@ pub fn client_handle_disconnect(
     mut net_role: ResMut<NetRole>,
     mut event_log: ResMut<GameEventLog>,
     time: Res<Time>,
+    mut victory_state: Option<ResMut<crate::simulation::victory::VictoryState>>,
 ) {
     if client.disconnected.load(Ordering::Relaxed) {
         warn!("Host disconnected — returning to main menu");
@@ -988,6 +991,9 @@ pub fn client_handle_disconnect(
             None,
             None,
         );
+        if let Some(ref mut victory_state) = victory_state {
+            **victory_state = crate::simulation::victory::VictoryState::default();
+        }
         *net_role = NetRole::Offline;
         next_state.set(AppState::MainMenu);
     }
@@ -1126,7 +1132,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(bevy::state::app::StatesPlugin);
         app.init_state::<AppState>();
-        let mut client = ClientNetState {
+        let client = ClientNetState {
             player_id: 1,
             seat_index: 0,
             my_faction: Faction::Player2,
@@ -1138,6 +1144,10 @@ mod tests {
         app.insert_resource(NetRole::Client);
         app.insert_resource(GameEventLog::default());
         app.insert_resource(Time::<()>::default());
+        let mut victory_state = crate::simulation::victory::VictoryState::default();
+        victory_state.game_over = true;
+        victory_state.overlay_spawned = true;
+        app.insert_resource(victory_state);
         app.add_systems(Update, client_handle_disconnect);
 
         app.update();
@@ -1148,6 +1158,9 @@ mod tests {
             &AppState::MainMenu
         );
         assert_eq!(app.world().resource::<GameEventLog>().entries.len(), 1);
+        let victory_state = app.world().resource::<crate::simulation::victory::VictoryState>();
+        assert!(!victory_state.game_over);
+        assert!(!victory_state.overlay_spawned);
     }
 
     // Note: client_send_ping test removed — requires MatchboxSocket which needs a live connection.

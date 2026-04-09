@@ -90,6 +90,8 @@ pub enum NetUnitState {
     Returning { depot_id: EntityId },
     #[serde(rename = "depositing")]
     Depositing { depot_id: EntityId },
+    #[serde(rename = "waiting_for_depot")]
+    WaitingForDepot,
     #[serde(rename = "moving_to_plot")]
     MovingToPlot { target: Vec3 },
     #[serde(rename = "moving_to_build")]
@@ -481,6 +483,14 @@ pub enum ClientMessage {
         timestamp: f64,
         message: String,
     },
+
+    /// Player name update from client to host (lobby only).
+    #[serde(rename = "name_update")]
+    NameUpdate {
+        seq: u32,
+        timestamp: f64,
+        player_name: String,
+    },
 }
 
 // ── Server Frame (batched messages per tick) ────────────────────────────────
@@ -524,7 +534,8 @@ impl ClientMessage {
             | Self::LeaveNotice { seq, .. }
             | Self::Ping { seq, .. }
             | Self::Reconnect { seq, .. }
-            | Self::Chat { seq, .. } => *seq,
+            | Self::Chat { seq, .. }
+            | Self::NameUpdate { seq, .. } => *seq,
         }
     }
 }
@@ -707,6 +718,11 @@ mod tests {
                 seq: 5,
                 timestamp: 50.0,
                 session_token: 12345,
+            },
+            ClientMessage::NameUpdate {
+                seq: 6,
+                timestamp: 60.0,
+                player_name: "NewName".to_string(),
             },
         ];
         for msg in &messages {

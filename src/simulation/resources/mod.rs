@@ -12,6 +12,16 @@ use crate::types::*;
 pub use processing::{assign_worker_to_processor, unassign_worker_from_processor};
 pub use terrain::reveal_explored_grass;
 
+#[derive(Message, Clone, Copy, Debug)]
+pub struct CarryingDelta {
+    pub faction: Faction,
+    pub resource_type: ResourceType,
+    pub delta: i32,
+}
+
+#[derive(Resource, Default)]
+pub struct CarriedTotalsDirty(pub bool);
+
 pub struct ResourcesPlugin;
 
 impl Plugin for ResourcesPlugin {
@@ -19,25 +29,32 @@ impl Plugin for ResourcesPlugin {
         app.init_resource::<TreeGrowthConfig>()
             .init_resource::<TreeLeafMaterials>()
             .init_resource::<CarriedResourceTotals>()
+            .init_resource::<CarriedTotalsDirty>()
             .init_resource::<PendingCarriedDrains>()
             .init_resource::<GrassDebugSettings>()
             .init_resource::<GrassRebuildState>()
             .init_resource::<GrassRenderSettings>()
+            .add_message::<CarryingDelta>()
             .add_systems(
                 Startup,
                 (create_resource_node_materials, create_carry_visual_assets),
             )
             .add_systems(
                 OnEnter(AppState::InGame),
-                (spawning::spawn_resource_nodes, terrain::spawn_decorations)
-                    .after(crate::world::ground::spawn_ground)
-                    .run_if(not(resource_exists::<crate::infrastructure::save_load::PendingLoad>)),
+                (
+                    mark_carried_totals_dirty,
+                    (spawning::spawn_resource_nodes, terrain::spawn_decorations)
+                        .after(crate::world::ground::spawn_ground)
+                        .run_if(not(resource_exists::<crate::infrastructure::save_load::PendingLoad>)),
+                ),
+            )
+            .add_systems(
+                FixedUpdate,
+                workers::worker_ai_system,
             )
             .add_systems(
                 FixedUpdate,
                 (
-                    compute_carried_totals,
-                    workers::worker_ai_system,
                     processing::resource_processor_system,
                     processing::production_chain_system,
                     spawning::deplete_resource_nodes,
@@ -54,6 +71,10 @@ impl Plugin for ResourcesPlugin {
                     .in_set(GameFlowSet::Simulation)
                     .after(spawning::deplete_resource_nodes)
                     .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                FixedLast,
+                sync_carried_totals.run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 FixedUpdate,
@@ -208,8 +229,27 @@ fn create_carry_visual_assets(
     });
 }
 
-/// Recompute per-faction totals of resources carried by workers each frame.
-fn compute_carried_totals(
+fn mark_carried_totals_dirty(mut dirty: ResMut<CarriedTotalsDirty>) {
+    dirty.0 = true;
+}
+
+pub fn emit_carrying_delta(
+    writer: &mut bevy::ecs::message::MessageWriter<CarryingDelta>,
+    faction: Faction,
+    resource_type: ResourceType,
+    delta: i32,
+) {
+    if delta != 0 {
+        writer.write(CarryingDelta {
+            faction,
+            resource_type,
+            delta,
+        });
+    }
+}
+
+/// Full rebuild fallback for save-load, client sync, or recovery.
+fn rebuild_carried_totals_full(
     workers: Query<(&Carrying, &Faction), With<Unit>>,
     mut totals: ResMut<CarriedResourceTotals>,
 ) {
@@ -227,10 +267,36 @@ fn compute_carried_totals(
     }
 }
 
+pub(crate) fn sync_carried_totals(
+    workers: Query<(&Carrying, &Faction), With<Unit>>,
+    mut totals: ResMut<CarriedResourceTotals>,
+    mut dirty: ResMut<CarriedTotalsDirty>,
+    mut deltas: bevy::ecs::message::MessageReader<CarryingDelta>,
+) {
+    if dirty.0 {
+        rebuild_carried_totals_full(workers, totals);
+        dirty.0 = false;
+        for _ in deltas.read() {}
+        return;
+    }
+
+    for delta in deltas.read() {
+        let entry = totals
+            .per_faction
+            .entry(delta.faction)
+            .or_insert_with(PlayerResources::empty);
+        let idx = delta.resource_type.index();
+        let current = entry.amounts[idx] as i64;
+        let next = (current + delta.delta as i64).max(0) as u32;
+        entry.amounts[idx] = next;
+    }
+}
+
 /// Drain carried resources from workers for pending spend requests.
 fn drain_carried_from_workers(
     mut drains: ResMut<PendingCarriedDrains>,
     mut workers: Query<(&mut Carrying, &Faction), With<Unit>>,
+    mut carry_deltas: bevy::ecs::message::MessageWriter<CarryingDelta>,
 ) {
     for msg in drains.drains.iter_mut() {
         if !msg.has_deficit() {
@@ -253,6 +319,7 @@ fn drain_carried_from_workers(
             let take = needed.min(carrying.amount);
             carrying.amount -= take;
             carrying.weight = carrying.amount as f32 * rt.weight();
+            emit_carrying_delta(&mut carry_deltas, *faction, rt, -(take as i32));
             msg.sub(rt, take);
             if carrying.amount == 0 {
                 carrying.resource_type = None;

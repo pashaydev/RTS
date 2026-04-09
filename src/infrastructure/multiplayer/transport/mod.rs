@@ -61,6 +61,7 @@ pub(super) fn client_msg_kind(msg: &ClientMessage) -> &'static str {
         ClientMessage::Ping { .. } => "ping",
         ClientMessage::Reconnect { .. } => "reconnect",
         ClientMessage::Chat { .. } => "chat",
+        ClientMessage::NameUpdate { .. } => "name_update",
     }
 }
 

@@ -154,8 +154,8 @@ pub fn spawn_from_blueprint_with_faction(
                 },
                 MovementSmoothing {
                     current_speed: 0.0,
-                    acceleration: 12.0,
-                    deceleration: 8.0,
+                    acceleration: 30.0,
+                    deceleration: 20.0,
                     speed_variation: rng.random_range(0.93..1.07),
                 },
                 IdleBehavior {

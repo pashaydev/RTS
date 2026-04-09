@@ -1,53 +1,74 @@
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
+use bevy::ecs::system::SystemParam;
 
 use crate::infrastructure::audio::{PlaySfx, SfxKind};
 use crate::blueprints::EntityKind;
 use crate::types::*;
 use crate::ui::theme;
+use super::{emit_carrying_delta, CarryingDelta};
+
+#[derive(SystemParam)]
+pub(super) struct WorkerAiParams<'w, 's> {
+    all_resources: ResMut<'w, AllPlayerResources>,
+    event_log: ResMut<'w, crate::ui::event_log_widget::GameEventLog>,
+    vfx_assets: Option<Res<'w, VfxAssets>>,
+    net_role: Res<'w, crate::infrastructure::multiplayer::NetRole>,
+    active_player: Res<'w, ActivePlayer>,
+    workers: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Transform,
+            &'static mut UnitState,
+            &'static mut TaskSource,
+            &'static mut Carrying,
+            &'static GatherSpeed,
+            &'static CarryCapacity,
+            &'static mut GatherAccumulator,
+            &'static EntityKind,
+            &'static Faction,
+            Option<&'static MoveTarget>,
+            &'static mut TaskQueue,
+            Option<&'static ManualIdleSince>,
+        ),
+        With<Unit>,
+    >,
+    nodes: Query<'w, 's, (&'static Transform, &'static mut ResourceNode), Without<Unit>>,
+    deposit_points: Query<
+        'w,
+        's,
+        (Entity, &'static Transform, &'static BuildingState, &'static Faction),
+        (With<DepositPoint>, Without<Unit>),
+    >,
+    inventories: Query<
+        'w,
+        's,
+        (&'static Transform, Option<&'static mut StorageInventory>),
+        (With<DepositPoint>, Without<Unit>),
+    >,
+    all_nodes: Query<'w, 's, (Entity, &'static Transform), (With<ResourceNode>, Without<Unit>)>,
+    construction_sites: Query<
+        'w,
+        's,
+        (Entity, &'static Transform, &'static BuildingState, &'static Faction),
+        (With<Building>, Without<Unit>, Without<ResourceNode>),
+    >,
+    storage_auras: Query<
+        'w,
+        's,
+        (&'static Transform, &'static StorageAura, &'static BuildingState),
+        With<Building>,
+    >,
+    footprints: Query<'w, 's, &'static BuildingFootprint>,
+    carry_deltas: bevy::ecs::message::MessageWriter<'w, CarryingDelta>,
+}
 
 pub(super) fn worker_ai_system(
     mut commands: Commands,
     time: Res<Time>,
-    mut all_resources: ResMut<AllPlayerResources>,
-    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
-    vfx_assets: Option<Res<VfxAssets>>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
-    active_player: Res<ActivePlayer>,
-    mut workers: Query<
-        (
-            Entity,
-            &Transform,
-            &mut UnitState,
-            &mut TaskSource,
-            &mut Carrying,
-            &GatherSpeed,
-            &CarryCapacity,
-            &mut GatherAccumulator,
-            &EntityKind,
-            &Faction,
-            Option<&MoveTarget>,
-            &mut TaskQueue,
-            Option<&ManualIdleSince>,
-        ),
-        With<Unit>,
-    >,
-    mut nodes: Query<(&Transform, &mut ResourceNode), Without<Unit>>,
-    deposit_points: Query<
-        (Entity, &Transform, &BuildingState, &Faction),
-        (With<DepositPoint>, Without<Unit>),
-    >,
-    mut inventories: Query<
-        (&Transform, Option<&mut StorageInventory>),
-        (With<DepositPoint>, Without<Unit>),
-    >,
-    all_nodes: Query<(Entity, &Transform), (With<ResourceNode>, Without<Unit>)>,
-    construction_sites: Query<
-        (Entity, &Transform, &BuildingState, &Faction),
-        (With<Building>, Without<Unit>, Without<ResourceNode>),
-    >,
-    storage_auras: Query<(&Transform, &StorageAura, &BuildingState), With<Building>>,
-    footprints: Query<&BuildingFootprint>,
+    mut params: WorkerAiParams,
     mut sfx_state: (bevy::ecs::message::MessageWriter<PlaySfx>, Local<f32>),
 ) {
     let gather_range = 3.0;
@@ -75,11 +96,13 @@ pub(super) fn worker_ai_system(
         _move_target,
         mut task_queue,
         manual_idle_since,
-    ) in &mut workers
+    ) in &mut params.workers
     {
         // Clients only simulate their local faction's worker logic.
         // The host remains authoritative for all factions' economy state.
-        if *net_role == crate::infrastructure::multiplayer::NetRole::Client && *worker_faction != active_player.0 {
+        if *params.net_role == crate::infrastructure::multiplayer::NetRole::Client
+            && *worker_faction != params.active_player.0
+        {
             continue;
         }
         if *kind != EntityKind::Worker {
@@ -114,15 +137,15 @@ pub(super) fn worker_ai_system(
 
                 // If carrying resources, find depot to deposit (resource-type aware)
                 if carrying.amount > 0 {
-                    let new_state = return_to_depot_or_idle(
+                    let new_state = return_to_depot_or_wait(
                         &mut commands,
                         entity,
                         &tf.translation,
                         worker_faction,
                         &carrying,
                         None,
-                        &deposit_points,
-                        Some(&inventories),
+                        &params.deposit_points,
+                        Some(&params.inventories),
                     );
                     if !matches!(new_state, UnitState::Idle) {
                         *state = new_state;
@@ -135,7 +158,7 @@ pub(super) fn worker_ai_system(
                 let auto_build_range = 20.0;
                 let mut closest_site = None;
                 let mut closest_site_dist = f32::MAX;
-                for (site_entity, site_tf, site_state, site_faction) in &construction_sites {
+                for (site_entity, site_tf, site_state, site_faction) in &params.construction_sites {
                     if *site_state != BuildingState::UnderConstruction
                         || site_faction != worker_faction
                     {
@@ -152,11 +175,11 @@ pub(super) fn worker_ai_system(
                 } else if let Some(node) = find_nearest_node(
                     &tf.translation,
                     auto_scan_range,
-                    &all_nodes,
-                    &nodes,
+                    &params.all_nodes,
+                    &params.nodes,
                     Some(worker_faction),
-                    Some(&deposit_points),
-                    Some(&inventories),
+                    Some(&params.deposit_points),
+                    Some(&params.inventories),
                 ) {
                     *state = UnitState::Gathering(node);
                 }
@@ -168,7 +191,7 @@ pub(super) fn worker_ai_system(
                     let auto_build_range = 20.0;
                     let mut closest_site = None;
                     let mut closest_site_dist = f32::MAX;
-                    for (site_entity, site_tf, site_state, site_faction) in &construction_sites {
+                    for (site_entity, site_tf, site_state, site_faction) in &params.construction_sites {
                         if *site_state != BuildingState::UnderConstruction
                             || site_faction != worker_faction
                         {
@@ -187,18 +210,18 @@ pub(super) fn worker_ai_system(
                     }
                 }
 
-                let Ok((node_tf, mut node_data)) = nodes.get_mut(node) else {
+                let Ok((node_tf, mut node_data)) = params.nodes.get_mut(node) else {
                     // Node gone
                     commands.entity(entity).remove::<MoveTarget>();
-                    let new_state = return_to_depot_or_idle(
+                    let new_state = return_to_depot_or_wait(
                         &mut commands,
                         entity,
                         &tf.translation,
                         worker_faction,
                         &carrying,
                         None,
-                        &deposit_points,
-                        Some(&inventories),
+                        &params.deposit_points,
+                        Some(&params.inventories),
                     );
                     *state = new_state;
                     if matches!(*state, UnitState::Idle) {
@@ -209,15 +232,15 @@ pub(super) fn worker_ai_system(
                 };
 
                 if node_data.amount_remaining == 0 {
-                    let new_state = return_to_depot_or_idle(
+                    let new_state = return_to_depot_or_wait(
                         &mut commands,
                         entity,
                         &tf.translation,
                         worker_faction,
                         &carrying,
                         None,
-                        &deposit_points,
-                        Some(&inventories),
+                        &params.deposit_points,
+                        Some(&params.inventories),
                     );
                     *state = new_state;
                     if matches!(*state, UnitState::Idle) {
@@ -247,15 +270,15 @@ pub(super) fn worker_ai_system(
                 if carrying.amount > 0 {
                     if let Some(carried_rt) = carrying.resource_type {
                         if carried_rt != rt {
-                            let new_state = return_to_depot_or_idle(
+                            let new_state = return_to_depot_or_wait(
                                 &mut commands,
                                 entity,
                                 &tf.translation,
                                 worker_faction,
                                 &carrying,
                                 Some(node),
-                                &deposit_points,
-                                Some(&inventories),
+                                &params.deposit_points,
+                                Some(&params.inventories),
                             );
                             *state = new_state;
                             if matches!(*state, UnitState::Idle) {
@@ -270,7 +293,7 @@ pub(super) fn worker_ai_system(
                 // Frame-rate independent gather tick (with storage aura + per-resource modifier).
                 let unit_weight = rt.weight();
                 let aura_bonus =
-                    crate::simulation::buildings::storage_aura_bonus(tf.translation, &storage_auras);
+                    crate::simulation::buildings::storage_aura_bonus(tf.translation, &params.storage_auras);
                 let effective_speed = speed.0 * (1.0 + aura_bonus) * rt.gather_rate_multiplier();
                 gather_accumulator.0 += effective_speed * time.delta_secs();
                 let mut amount = gather_accumulator.0.floor() as u32;
@@ -283,15 +306,15 @@ pub(super) fn worker_ai_system(
                 let remaining_capacity = (capacity.0 - carrying.weight).max(0.0);
                 let can_carry = (remaining_capacity / unit_weight).floor() as u32;
                 if can_carry == 0 {
-                    let new_state = return_to_depot_or_idle(
+                    let new_state = return_to_depot_or_wait(
                         &mut commands,
                         entity,
                         &tf.translation,
                         worker_faction,
                         &carrying,
                         Some(node),
-                        &deposit_points,
-                        Some(&inventories),
+                        &params.deposit_points,
+                        Some(&params.inventories),
                     );
                     *state = new_state;
                     if matches!(*state, UnitState::Idle) {
@@ -310,12 +333,13 @@ pub(super) fn worker_ai_system(
                 carrying.amount += actual;
                 carrying.weight += actual as f32 * unit_weight;
                 carrying.resource_type = Some(rt);
+                emit_carrying_delta(&mut params.carry_deltas, *worker_faction, rt, actual as i32);
 
-                if let Some(ref vfx) = vfx_assets {
+                if let Some(ref vfx) = params.vfx_assets {
                     spawn_gather_vfx(&mut commands, vfx, tf.translation, node_pos, rt, actual);
                 }
 
-                if play_gather && *worker_faction == active_player.0 {
+                if play_gather && *worker_faction == params.active_player.0 {
                     sfx_state.0.write(PlaySfx {
                         kind: SfxKind::WorkerGather,
                         position: Some(tf.translation),
@@ -325,15 +349,15 @@ pub(super) fn worker_ai_system(
                 // If effectively full for this resource type, head to a depot.
                 let remaining_capacity_after = (capacity.0 - carrying.weight).max(0.0);
                 if remaining_capacity_after < unit_weight {
-                    let new_state = return_to_depot_or_idle(
+                    let new_state = return_to_depot_or_wait(
                         &mut commands,
                         entity,
                         &tf.translation,
                         worker_faction,
                         &carrying,
                         Some(node),
-                        &deposit_points,
-                        Some(&inventories),
+                        &params.deposit_points,
+                        Some(&params.inventories),
                     );
                     *state = new_state;
                     if matches!(*state, UnitState::Idle) {
@@ -345,17 +369,17 @@ pub(super) fn worker_ai_system(
 
             UnitState::ReturningToDeposit { depot, gather_node } => {
                 // Check depot still exists
-                let Ok((depot_tf, _)) = inventories.get(depot) else {
+                let Ok((depot_tf, _)) = params.inventories.get(depot) else {
                     commands.entity(entity).remove::<MoveTarget>();
-                    let new_state = return_to_depot_or_idle(
+                    let new_state = return_to_depot_or_wait(
                         &mut commands,
                         entity,
                         &tf.translation,
                         worker_faction,
                         &carrying,
                         gather_node,
-                        &deposit_points,
-                        Some(&inventories),
+                        &params.deposit_points,
+                        Some(&params.inventories),
                     );
                     *state = new_state;
                     if matches!(*state, UnitState::Idle) {
@@ -366,7 +390,7 @@ pub(super) fn worker_ai_system(
                 };
 
                 let dist = tf.translation.distance(depot_tf.translation);
-                let fp_radius = footprints.get(depot).map_or(3.0, |fp| fp.0);
+                let fp_radius = params.footprints.get(depot).map_or(3.0, |fp| fp.0);
                 let deposit_range = fp_radius + deposit_margin;
 
                 if dist <= deposit_range {
@@ -394,7 +418,7 @@ pub(super) fn worker_ai_system(
                     let mut deposited = carrying.amount;
 
                     // Check storage capacity
-                    if let Ok((_, inventory)) = inventories.get_mut(depot) {
+                    if let Ok((_, inventory)) = params.inventories.get_mut(depot) {
                         if let Some(mut inv) = inventory {
                             deposited = inv.add_capped(rt, carrying.amount);
                         }
@@ -402,7 +426,7 @@ pub(super) fn worker_ai_system(
 
                     if deposited == 0 {
                         // Storage full — wait nearby
-                        event_log.push(
+                        params.event_log.push(
                             time.elapsed_secs(),
                             "Storage full — worker waiting".into(),
                             crate::ui::event_log_widget::EventCategory::Alert,
@@ -415,7 +439,7 @@ pub(super) fn worker_ai_system(
                     }
 
                     // Add deposited amount to global resources
-                    all_resources.get_mut(worker_faction).add(rt, deposited);
+                    params.all_resources.get_mut(worker_faction).add(rt, deposited);
                     deposit_info = Some((rt, deposited));
 
                     // Update carrying with leftover
@@ -423,13 +447,19 @@ pub(super) fn worker_ai_system(
                     if leftover > 0 {
                         carrying.amount = leftover;
                         carrying.weight = leftover as f32 * rt.weight();
+                        emit_carrying_delta(
+                            &mut params.carry_deltas,
+                            *worker_faction,
+                            rt,
+                            -(deposited as i32),
+                        );
                         // Worker still has resources — wait for capacity
                         commands.entity(entity).remove::<MoveTarget>();
                         *state = UnitState::WaitingForStorage { depot, gather_node };
 
                         // Still spawn VFX for partial deposit
-                        if let Some(ref vfx) = vfx_assets {
-                            if let Ok((depot_tf, _)) = inventories.get(depot) {
+                        if let Some(ref vfx) = params.vfx_assets {
+                            if let Ok((depot_tf, _)) = params.inventories.get(depot) {
                                 let deposit_pos = depot_tf.translation + Vec3::Y * 2.0;
                                 spawn_deposit_vfx(&mut commands, &vfx, deposit_pos, 4, 0.15, 0.3);
                                 spawn_resource_popup(
@@ -445,8 +475,8 @@ pub(super) fn worker_ai_system(
                 }
 
                 // Spawn deposit VFX + resource popup
-                if let Some(ref vfx) = vfx_assets {
-                    if let Ok((depot_tf, _)) = inventories.get(depot) {
+                if let Some(ref vfx) = params.vfx_assets {
+                    if let Ok((depot_tf, _)) = params.inventories.get(depot) {
                         let deposit_pos = depot_tf.translation + Vec3::Y * 2.0;
                         spawn_deposit_vfx(&mut commands, &vfx, deposit_pos, 4, 0.15, 0.3);
                         if let Some((rt, amount)) = deposit_info {
@@ -461,6 +491,14 @@ pub(super) fn worker_ai_system(
                 }
 
                 // Clear carrying
+                if let Some(rt) = carrying.resource_type {
+                    emit_carrying_delta(
+                        &mut params.carry_deltas,
+                        *worker_faction,
+                        rt,
+                        -(carrying.amount as i32),
+                    );
+                }
                 carrying.amount = 0;
                 carrying.weight = 0.0;
                 carrying.resource_type = None;
@@ -468,7 +506,7 @@ pub(super) fn worker_ai_system(
 
                 // Return to gather node if it still has resources
                 if let Some(gn) = gather_node {
-                    if let Ok((_, node_data)) = nodes.get(gn) {
+                    if let Ok((_, node_data)) = params.nodes.get(gn) {
                         if node_data.amount_remaining > 0 {
                             *state = UnitState::Gathering(gn);
                             continue;
@@ -479,11 +517,11 @@ pub(super) fn worker_ai_system(
                 if let Some(node) = find_nearest_node(
                     &tf.translation,
                     auto_scan_range,
-                    &all_nodes,
-                    &nodes,
+                    &params.all_nodes,
+                    &params.nodes,
                     Some(worker_faction),
-                    Some(&deposit_points),
-                    Some(&inventories),
+                    Some(&params.deposit_points),
+                    Some(&params.inventories),
                 ) {
                     *state = UnitState::Gathering(node);
                 } else {
@@ -497,7 +535,7 @@ pub(super) fn worker_ai_system(
                 let carried_rt = carrying.resource_type;
 
                 // Periodically check if depot has capacity for the carried resource type
-                let has_space = if let Ok((_, inventory)) = inventories.get(depot) {
+                let has_space = if let Ok((_, inventory)) = params.inventories.get(depot) {
                     inventory.map_or(true, |inv| {
                         if let Some(rt) = carried_rt {
                             inv.accepts(rt) && inv.remaining_capacity_for(rt) > 0
@@ -517,12 +555,12 @@ pub(super) fn worker_ai_system(
                 // Try a different depot that accepts our resource type and has space
                 let mut best_depot = None;
                 let mut best_dist = f32::MAX;
-                for (dp_entity, dp_tf, dp_state, dp_faction) in &deposit_points {
+                for (dp_entity, dp_tf, dp_state, dp_faction) in &params.deposit_points {
                     if dp_faction != worker_faction || *dp_state != BuildingState::Complete {
                         continue;
                     }
                     // Check this depot accepts and has capacity for the carried resource
-                    if let Ok((_, inv_opt)) = inventories.get(dp_entity) {
+                    if let Ok((_, inv_opt)) = params.inventories.get(dp_entity) {
                         if let Some(inv) = inv_opt {
                             if let Some(rt) = carried_rt {
                                 if !inv.accepts(rt) || inv.remaining_capacity_for(rt) == 0 {
@@ -541,7 +579,7 @@ pub(super) fn worker_ai_system(
                 }
 
                 if let Some(new_depot) = best_depot {
-                    let depot_pos = deposit_points.get(new_depot).unwrap().1.translation;
+                    let depot_pos = params.deposit_points.get(new_depot).unwrap().1.translation;
                     let approach =
                         depot_approach_point(tf.translation, depot_pos, 3.0);
                     commands.entity(entity).insert(MoveTarget(approach));
@@ -551,6 +589,22 @@ pub(super) fn worker_ai_system(
                     };
                 }
                 // Otherwise keep waiting at current depot
+            }
+
+            UnitState::WaitingForDepot { gather_node } => {
+                let new_state = return_to_depot_or_wait(
+                    &mut commands,
+                    entity,
+                    &tf.translation,
+                    worker_faction,
+                    &carrying,
+                    gather_node,
+                    &params.deposit_points,
+                    Some(&params.inventories),
+                );
+                if !matches!(new_state, UnitState::WaitingForDepot { .. }) {
+                    *state = new_state;
+                }
             }
 
             // Building/MovingToBuild states are handled by unit_state_executor
@@ -631,9 +685,9 @@ pub(super) fn update_resource_popups(
     }
 }
 
-/// Try to send a worker to the nearest depot, or go idle if none found.
+/// Try to send a worker to the nearest depot, or enter a blocked state if none found.
 /// Returns the new state to assign.
-fn return_to_depot_or_idle(
+fn return_to_depot_or_wait(
     commands: &mut Commands,
     entity: Entity,
     pos: &Vec3,
@@ -661,6 +715,8 @@ fn return_to_depot_or_idle(
             commands.entity(entity).insert(MoveTarget(approach));
             return UnitState::ReturningToDeposit { depot, gather_node };
         }
+        commands.entity(entity).remove::<MoveTarget>();
+        return UnitState::WaitingForDepot { gather_node };
     }
     UnitState::Idle
 }

@@ -114,7 +114,8 @@ fn worker_availability_priority(
         UnitState::Gathering(_)
         | UnitState::ReturningToDeposit { .. }
         | UnitState::Depositing { .. }
-        | UnitState::WaitingForStorage { .. } => Some(1),
+        | UnitState::WaitingForStorage { .. }
+        | UnitState::WaitingForDepot { .. } => Some(1),
         UnitState::AssignedGathering { .. } => Some(2),
         UnitState::MovingToBuild(building) | UnitState::Building(building) => {
             let count = build_counts.get(building).copied().unwrap_or(1);
@@ -197,17 +198,34 @@ fn cleanup_worker_assignment(commands: &mut Commands, worker: Entity, state: &Un
         UnitState::AssignedGathering { building, .. }
         | UnitState::MovingToBuild(building)
         | UnitState::Building(building) => {
-            let building_entity = *building;
-            commands
-                .entity(building_entity)
-                .entry::<AssignedWorkers>()
-                .and_modify(move |mut aw| {
-                    aw.workers.retain(|w| *w != worker);
-                });
+            remove_assigned_worker(commands, *building, worker);
         }
         _ => {}
     }
     commands.entity(worker).remove::<BuildingAssignment>();
+}
+
+pub fn add_assigned_worker(commands: &mut Commands, building: Entity, worker: Entity) {
+    commands
+        .entity(building)
+        .entry::<AssignedWorkers>()
+        .and_modify(move |mut aw| {
+            if !aw.workers.contains(&worker) {
+                aw.workers.push(worker);
+            }
+        })
+        .or_insert(AssignedWorkers {
+            workers: vec![worker],
+        });
+}
+
+pub fn remove_assigned_worker(commands: &mut Commands, building: Entity, worker: Entity) {
+    commands
+        .entity(building)
+        .entry::<AssignedWorkers>()
+        .and_modify(move |mut aw| {
+            aw.workers.retain(|w| *w != worker);
+        });
 }
 
 pub const SAWMILL_YARD_HALF_X: f32 = 2.0;

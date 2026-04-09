@@ -122,6 +122,7 @@ pub(super) fn spawn_units_action_bar(
                             UnitState::MovingToBuild(_) => "Moving to build",
                             UnitState::Building(_) => "Building",
                             UnitState::WaitingForStorage { .. } => "Storage full!",
+                            UnitState::WaitingForDepot { .. } => "No storage available",
                             UnitState::AssignedGathering { .. } => "Working at building",
                             UnitState::Attacking(_) => "Attacking",
                             UnitState::AttackMoving(_) => "Attack moving",

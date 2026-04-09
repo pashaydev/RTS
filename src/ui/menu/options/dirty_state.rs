@@ -1,9 +1,8 @@
 use bevy::prelude::*;
 
 use crate::types::*;
-use crate::ui::menu::helpers::*;
 use crate::ui::menu::*;
-use crate::ui::theme::{Theme, TEXT_PRIMARY, OVERLAY};
+use crate::ui::theme::{BG_PANEL, OVERLAY, TEXT_PRIMARY, Theme};
 use crate::ui::core::components as ui_components;
 use crate::ui::core::fonts::{self, UiFonts};
 
@@ -169,7 +168,7 @@ fn spawn_unsaved_changes_popup(commands: &mut Commands, theme: &Theme, fonts: &U
                             btn.spawn((
                                 Text::new("SAVE"),
                                 fonts::heading(fonts, theme.typography.small),
-                                TextColor(TEXT_PRIMARY),
+                                TextColor(BG_PANEL),
                                 Pickable::IGNORE,
                             ));
                         });
@@ -188,7 +187,7 @@ fn spawn_unsaved_changes_popup(commands: &mut Commands, theme: &Theme, fonts: &U
                             btn.spawn((
                                 Text::new("DISCARD"),
                                 fonts::heading(fonts, theme.typography.small),
-                                TextColor(TEXT_PRIMARY),
+                                TextColor(BG_PANEL),
                                 Pickable::IGNORE,
                             ));
                         });

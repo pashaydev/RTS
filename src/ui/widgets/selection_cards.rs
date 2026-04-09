@@ -7,11 +7,13 @@ use super::core::shared::spawn_hp_bar;
 use super::group_hotkeys_widget::{group_color, ControlGroups};
 use super::selection_widget::{
     DropInventoryItemButton, InventorySlotButton, SelectionInventoryUiState,
+    TransferInventoryItemButton, TransferTargetOption,
 };
 use crate::blueprints::EntityKind;
 use crate::types::*;
 use crate::simulation::items::{
-    inferred_inventory_capacity, ItemAssets, ItemKind, ItemRuntimeState, UnitInventory,
+    inferred_inventory_capacity, item_effect_requirement_message, ItemAssets, ItemKind,
+    ItemRegistry, ItemRuntimeState, UnitInventory,
 };
 use crate::ui::theme::Theme;
 
@@ -29,6 +31,8 @@ pub(super) fn spawn_friendly_detail_card(
     inventory: Option<&UnitInventory>,
     runtime_state: Option<&ItemRuntimeState>,
     inventory_ui: &SelectionInventoryUiState,
+    transfer_targets: &[TransferTargetOption],
+    item_registry: &ItemRegistry,
     icons: &IconAssets,
     item_assets: &ItemAssets,
     theme: &Theme,
@@ -195,6 +199,8 @@ pub(super) fn spawn_friendly_detail_card(
         inventory,
         runtime_state,
         inventory_ui,
+        transfer_targets,
+        item_registry,
         item_assets,
         theme,
     );
@@ -218,6 +224,8 @@ pub(super) fn spawn_single_inventory_section(
     inventory: Option<&UnitInventory>,
     runtime_state: Option<&ItemRuntimeState>,
     inventory_ui: &SelectionInventoryUiState,
+    transfer_targets: &[TransferTargetOption],
+    item_registry: &ItemRegistry,
     item_assets: &ItemAssets,
     theme: &Theme,
 ) {
@@ -283,7 +291,7 @@ pub(super) fn spawn_single_inventory_section(
 
     commands.entity(section).with_children(|section| {
         section.spawn((
-            Text::new("Hover a slot to inspect it. Drop works on the focused slot only."),
+            Text::new("Click a slot to inspect it. Drop works on the selected slot only."),
             TextFont {
                 font_size: theme.typography.tiny,
                 ..default()
@@ -400,8 +408,8 @@ pub(super) fn spawn_single_inventory_section(
 
     match focused_slot.and_then(|slot| items.get(slot).copied().map(|item| (slot, item))) {
         Some((slot, item)) => {
-            let status = runtime_state
-                .and_then(|state| state.items.iter().find(|entry| entry.item == item))
+            let runtime_entry = runtime_state.and_then(|state| state.items.get(slot));
+            let status = runtime_entry
                 .map(|entry| {
                     if entry.cooldown_remaining > 0.0 {
                         format!("Cooldown {:.1}s", entry.cooldown_remaining)
@@ -419,6 +427,9 @@ pub(super) fn spawn_single_inventory_section(
                     }
                 })
                 .unwrap_or_else(|| "Ready".to_string());
+            let effect_note = runtime_entry
+                .filter(|entry| !entry.enabled)
+                .and_then(|_| item_effect_requirement_message(item_registry, kind, item));
 
             let header = commands
                 .spawn(Node {
@@ -476,6 +487,16 @@ pub(super) fn spawn_single_inventory_section(
                     },
                     TextColor(theme.colors.text_secondary),
                 ));
+                if let Some(note) = effect_note {
+                    details.spawn((
+                        Text::new(format!("Why inactive: {}", note)),
+                        TextFont {
+                            font_size: theme.typography.small,
+                            ..default()
+                        },
+                        TextColor(theme.colors.warning),
+                    ));
+                }
             });
 
             let drop_button = commands
@@ -504,6 +525,72 @@ pub(super) fn spawn_single_inventory_section(
                 })
                 .id();
             commands.entity(details).add_child(drop_button);
+
+            if !transfer_targets.is_empty() {
+                let transfer_section = commands
+                    .spawn(Node {
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(6.0),
+                        margin: UiRect::top(Val::Px(4.0)),
+                        ..default()
+                    })
+                    .id();
+                commands.entity(details).add_child(transfer_section);
+
+                commands.entity(transfer_section).with_children(|section| {
+                    section.spawn((
+                        Text::new("Transfer To"),
+                        TextFont {
+                            font_size: theme.typography.small,
+                            ..default()
+                        },
+                        TextColor(theme.colors.text_primary),
+                    ));
+                });
+
+                let transfer_row = commands
+                    .spawn(Node {
+                        width: Val::Percent(100.0),
+                        flex_direction: FlexDirection::Row,
+                        flex_wrap: FlexWrap::Wrap,
+                        column_gap: Val::Px(6.0),
+                        row_gap: Val::Px(6.0),
+                        ..default()
+                    })
+                    .id();
+                commands.entity(transfer_section).add_child(transfer_row);
+
+                for target in transfer_targets {
+                    let button = commands
+                        .spawn((
+                            Button,
+                            StandardButton,
+                            TransferInventoryItemButton {
+                                from_unit: unit,
+                                from_slot: slot,
+                                to_unit: target.unit,
+                            },
+                            ui_components::compact_button_node(10.0, 5.0),
+                            ui_components::ghost_button_chrome(theme, ui_components::UiTone::Neutral),
+                            ActionTooltipTrigger {
+                                text: format!("Transfer {} to {}", item.display_name(), target.label),
+                            },
+                        ))
+                        .with_children(|button| {
+                            button.spawn((
+                                Text::new(target.label.clone()),
+                                TextFont {
+                                    font_size: theme.typography.tiny,
+                                    ..default()
+                                },
+                                TextColor(theme.colors.text_primary),
+                            ));
+                        })
+                        .id();
+                    commands.entity(transfer_row).add_child(button);
+                }
+            }
         }
         None if items.is_empty() => {
             commands.entity(details).with_children(|details| {

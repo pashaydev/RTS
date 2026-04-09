@@ -410,6 +410,7 @@ fn victory_ui_spawn_system(
     commands
         .spawn((
             VictoryOverlay,
+            DespawnOnExit(AppState::InGame),
             Node {
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),

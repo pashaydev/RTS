@@ -4,18 +4,19 @@ use super::core::constants::*;
 use super::core::components as ui_components;
 use super::core::fonts::UiFonts;
 use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
-use super::core::hud::MainHudRoot;
+use super::core::hud::WidgetGridArea;
 use super::core::shared::hp_color;
 use super::group_hotkeys_widget::ControlGroups;
 use super::selection_cards::{
     spawn_friendly_detail_card, spawn_building_detail_card, spawn_enemy_detail_card,
-    spawn_multi_inventory_summary, spawn_unit_mini_card,
+    spawn_multi_inventory_summary, spawn_single_inventory_section, spawn_unit_mini_card,
 };
 use crate::blueprints::EntityKind;
 use crate::types::*;
 use crate::simulation::items::{
     InventoryChanged, ItemAssets, ItemPickupCollected,
-    ItemPickupFailed, ItemRuntimeState, RequestDropItem, UnitInventory,
+    ItemPickupFailed, ItemRuntimeState, ItemTransferFailed, ItemRegistry, RequestDropItem,
+    RequestTransferItem, UnitInventory,
 };
 use crate::ui::theme::Theme;
 
@@ -36,10 +37,28 @@ pub(super) struct InventorySlotButton {
     pub(super) slot: usize,
 }
 
+#[derive(Component)]
+pub(super) struct InventoryFocusUnitButton {
+    pub(super) unit: Entity,
+}
+
+#[derive(Component)]
+pub(super) struct TransferInventoryItemButton {
+    pub(super) from_unit: Entity,
+    pub(super) from_slot: usize,
+    pub(super) to_unit: Entity,
+}
+
 #[derive(Clone, Debug)]
-struct InventoryWarningState {
+pub(super) struct InventoryWarningState {
     text: String,
     expires_at: f32,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct TransferTargetOption {
+    pub(super) unit: Entity,
+    pub(super) label: String,
 }
 
 #[derive(Resource, Default)]
@@ -56,15 +75,17 @@ impl Plugin for SelectionWidgetPlugin {
             Update,
             spawn_selection_widget
                 .run_if(in_state(AppState::InGame))
-                .run_if(any_with_component::<MainHudRoot>),
+                .run_if(any_with_component::<WidgetGridArea>),
         )
         .add_systems(
             Update,
             (
                 maintain_selection_inventory_ui_state,
                 handle_item_inventory_feedback,
+                handle_inventory_focus_unit_click,
                 handle_inventory_slot_focus,
                 handle_drop_inventory_item_click,
+                handle_transfer_inventory_item_click,
             )
                 .run_if(in_state(AppState::InGame)),
         )
@@ -95,14 +116,14 @@ fn spawn_selection_widget(
     registry: Res<WidgetRegistry>,
     theme: Res<Theme>,
     fonts: Res<UiFonts>,
-    root_q: Query<Entity, Added<MainHudRoot>>,
+    grid_q: Query<Entity, Added<WidgetGridArea>>,
 ) {
-    let Ok(hud_root) = root_q.single() else {
+    let Ok(grid_area) = grid_q.single() else {
         return;
     };
     let selection_content = spawn_widget_frame(
         &mut commands,
-        hud_root,
+        grid_area,
         WidgetId::Selection,
         registry.slots.get(&WidgetId::Selection).unwrap(),
         registry.is_visible(WidgetId::Selection),
@@ -240,25 +261,49 @@ fn handle_item_inventory_feedback(
     mut inventory_ui: ResMut<SelectionInventoryUiState>,
     mut pickup_failed: MessageReader<ItemPickupFailed>,
     mut pickup_collected: MessageReader<ItemPickupCollected>,
+    mut transfer_failed: MessageReader<ItemTransferFailed>,
     mut inventory_changed: MessageReader<InventoryChanged>,
 ) {
     let mut clear_warning = false;
+    let mut next_warning = None;
 
     for failure in pickup_failed.read() {
-        inventory_ui.warning = Some(InventoryWarningState {
-            text: format!("{}: {}", failure.item.display_name(), failure.reason.label()),
-            expires_at: time.elapsed_secs() + 4.0,
-        });
+        next_warning = Some(format!(
+            "{}: {}",
+            failure.item.display_name(),
+            failure.reason.label()
+        ));
     }
 
-    for _ in pickup_collected.read() {
-        clear_warning = true;
+    for failure in transfer_failed.read() {
+        next_warning = Some(format!(
+            "{}: {}",
+            failure.item.display_name(),
+            failure.reason.label()
+        ));
+    }
+
+    for collected in pickup_collected.read() {
+        if let Some(message) = collected.info_message {
+            next_warning = Some(format!(
+                "{}: {}",
+                collected.item.display_name(),
+                message
+            ));
+        } else {
+            clear_warning = true;
+        }
     }
     for _ in inventory_changed.read() {
         clear_warning = true;
     }
 
-    if clear_warning {
+    if let Some(text) = next_warning {
+        inventory_ui.warning = Some(InventoryWarningState {
+            text,
+            expires_at: time.elapsed_secs() + 4.0,
+        });
+    } else if clear_warning {
         inventory_ui.warning = None;
     }
 }
@@ -277,10 +322,12 @@ fn maintain_selection_inventory_ui_state(
     }
 
     match &*ui_mode {
-        UiMode::SelectedUnits(units) if units.len() == 1 => {
-            let unit = units[0];
-            if inventory_ui.focused_unit != Some(unit) {
-                inventory_ui.focused_unit = Some(unit);
+        UiMode::SelectedUnits(units) if !units.is_empty() => {
+            if inventory_ui
+                .focused_unit
+                .is_none_or(|focused| !units.contains(&focused))
+            {
+                inventory_ui.focused_unit = Some(units[0]);
                 inventory_ui.focused_slot = None;
             }
         }
@@ -295,6 +342,23 @@ fn maintain_selection_inventory_ui_state(
     }
 }
 
+fn handle_inventory_focus_unit_click(
+    interactions: Query<(&Interaction, &InventoryFocusUnitButton), (Changed<Interaction>, With<Button>)>,
+    mut inventory_ui: ResMut<SelectionInventoryUiState>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for (interaction, button) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        inventory_ui.focused_unit = Some(button.unit);
+        inventory_ui.focused_slot = None;
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+    }
+}
+
 fn handle_inventory_slot_focus(
     interactions: Query<(&Interaction, &InventorySlotButton), (Changed<Interaction>, With<Button>)>,
     mut inventory_ui: ResMut<SelectionInventoryUiState>,
@@ -303,10 +367,7 @@ fn handle_inventory_slot_focus(
 ) {
     for (interaction, button) in &interactions {
         match *interaction {
-            Interaction::Hovered => {
-                inventory_ui.focused_unit = Some(button.unit);
-                inventory_ui.focused_slot = Some(button.slot);
-            }
+            Interaction::Hovered => {}
             Interaction::Pressed => {
                 inventory_ui.focused_unit = Some(button.unit);
                 inventory_ui.focused_slot = Some(button.slot);
@@ -333,6 +394,26 @@ fn handle_drop_inventory_item_click(
         drop_requests.write(RequestDropItem {
             unit: button.unit,
             slot: button.slot,
+        });
+    }
+}
+
+fn handle_transfer_inventory_item_click(
+    interactions: Query<(&Interaction, &TransferInventoryItemButton), (Changed<Interaction>, With<Button>)>,
+    mut transfer_requests: MessageWriter<RequestTransferItem>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for (interaction, button) in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        ui_clicked.0 = 2;
+        ui_press.0 = true;
+        transfer_requests.write(RequestTransferItem {
+            from_unit: button.from_unit,
+            from_slot: button.from_slot,
+            to_unit: button.to_unit,
         });
     }
 }
@@ -404,6 +485,7 @@ fn rebuild_selection_panel(
         Res<TeamConfig>,
         Res<IconAssets>,
         Res<ItemAssets>,
+        Res<ItemRegistry>,
         Res<ControlGroups>,
         Res<ActiveFormation>,
     ),
@@ -473,6 +555,7 @@ fn rebuild_selection_panel(
         teams,
         icons,
         item_assets,
+        item_registry,
         control_groups,
         formation,
     ) = resources;
@@ -540,6 +623,8 @@ fn rebuild_selection_panel(
                     inventory,
                     runtime_state,
                     &inventory_ui,
+                    &transfer_targets_for_unit(entity, None, &selected_units),
+                    &item_registry,
                     &icons,
                     &item_assets,
                     &theme,
@@ -570,6 +655,128 @@ fn rebuild_selection_panel(
                 })
                 .id();
             commands.entity(panel_entity).add_child(grid_container);
+
+            let focused_unit = inventory_ui
+                .focused_unit
+                .filter(|unit| entities.contains(unit))
+                .unwrap_or(entities[0]);
+
+            let source_picker = commands
+                .spawn(Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(6.0),
+                    margin: UiRect::bottom(Val::Px(8.0)),
+                    padding: PAD_LG,
+                    border: BORDER_1,
+                    ..default()
+                })
+                .insert(BorderColor::all(theme.colors.border_subtle))
+                .insert(BackgroundColor(theme.colors.bg_surface))
+                .id();
+            commands.entity(grid_container).add_child(source_picker);
+
+            commands.entity(source_picker).with_children(|picker| {
+                picker.spawn((
+                    Text::new("Inventory Source"),
+                    TextFont {
+                        font_size: theme.typography.body,
+                        ..default()
+                    },
+                    TextColor(theme.colors.text_primary),
+                ));
+                picker.spawn((
+                    Text::new("Pick a selected unit, then a slot to drop or transfer its item."),
+                    TextFont {
+                        font_size: theme.typography.tiny,
+                        ..default()
+                    },
+                    TextColor(theme.colors.text_secondary),
+                ));
+            });
+
+            let source_row = commands
+                .spawn(Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    flex_wrap: FlexWrap::Wrap,
+                    column_gap: Val::Px(6.0),
+                    row_gap: Val::Px(6.0),
+                    ..default()
+                })
+                .id();
+            commands.entity(source_picker).add_child(source_row);
+
+            for (entity, kind, display_name, _, _, _, _, _, inventory, _) in &selected_units {
+                let capacity = inventory.map(|inv| inv.capacity).unwrap_or(0);
+                if capacity == 0 {
+                    continue;
+                }
+                let is_focused = focused_unit == entity;
+                let label = display_name
+                    .map(|name| name.0.clone())
+                    .unwrap_or_else(|| kind.display_name().to_string());
+                let filled = inventory.map(|inv| inv.items.len().min(inv.capacity as usize)).unwrap_or(0);
+                let button = commands
+                    .spawn((
+                        Button,
+                        StandardButton,
+                        InventoryFocusUnitButton { unit: entity },
+                        ui_components::compact_button_node(10.0, 5.0),
+                        if is_focused {
+                            ui_components::filled_button_chrome(&theme, ui_components::UiTone::Accent)
+                        } else {
+                            ui_components::ghost_button_chrome(&theme, ui_components::UiTone::Neutral)
+                        },
+                        ActionTooltipTrigger {
+                            text: format!("Inspect {} inventory", label),
+                        },
+                    ))
+                    .with_children(|button| {
+                        button.spawn((
+                            Text::new(format!("{} {}/{}", label, filled, capacity)),
+                            TextFont {
+                                font_size: theme.typography.tiny,
+                                ..default()
+                            },
+                            TextColor(if is_focused {
+                                crate::ui::theme::TEXT_PRIMARY
+                            } else {
+                                theme.colors.text_primary
+                            }),
+                        ));
+                    })
+                    .id();
+                commands.entity(source_row).add_child(button);
+            }
+
+            if let Some((
+                entity,
+                kind,
+                _display_name,
+                _health,
+                _dmg,
+                _rng,
+                _spd,
+                _stance,
+                inventory,
+                runtime_state,
+            )) = selected_units.iter().find(|(entity, _, _, _, _, _, _, _, _, _)| *entity == focused_unit)
+            {
+                spawn_single_inventory_section(
+                    &mut commands,
+                    grid_container,
+                    entity,
+                    *kind,
+                    inventory,
+                    runtime_state,
+                    &inventory_ui,
+                    &transfer_targets_for_unit(entity, inventory_ui.focused_slot, &selected_units),
+                    &item_registry,
+                    &item_assets,
+                    &theme,
+                );
+            }
 
             let formation_controls = commands
                 .spawn((
@@ -879,6 +1086,8 @@ fn rebuild_selection_panel(
                 None,
                 None,
                 &inventory_ui,
+                &[],
+                &item_registry,
                 &icons,
                 &item_assets,
                 &theme,
@@ -932,6 +1141,67 @@ fn rebuild_selection_panel(
             commands.entity(panel_entity).add_child(label);
         }
     }
+}
+
+fn transfer_targets_for_unit(
+    source_unit: Entity,
+    source_slot: Option<usize>,
+    selected_units: &Query<
+        (
+            Entity,
+            &EntityKind,
+            Option<&UnitDisplayName>,
+            &Health,
+            &AttackDamage,
+            &AttackRange,
+            &UnitSpeed,
+            Option<&UnitStance>,
+            Option<&UnitInventory>,
+            Option<&ItemRuntimeState>,
+        ),
+        (With<Unit>, With<Selected>),
+    >,
+) -> Vec<TransferTargetOption> {
+    let Some((_, _, _, _, _, _, _, _, inventory, _)) = selected_units
+        .iter()
+        .find(|(entity, _, _, _, _, _, _, _, _, _)| *entity == source_unit)
+    else {
+        return Vec::new();
+    };
+    let Some(inventory) = inventory else {
+        return Vec::new();
+    };
+    let effective_slot = source_slot.or_else(|| (!inventory.items.is_empty()).then_some(0));
+    let Some(source_item) = effective_slot.and_then(|slot| inventory.items.get(slot).copied())
+    else {
+        return Vec::new();
+    };
+
+    let mut targets = Vec::new();
+    for (entity, kind, display_name, _, _, _, _, _, inventory, _) in selected_units.iter() {
+        if entity == source_unit {
+            continue;
+        }
+        let Some(inventory) = inventory else {
+            continue;
+        };
+        if inventory.capacity == 0 || inventory.items.len() >= inventory.capacity as usize {
+            continue;
+        }
+        if inventory
+            .items
+            .iter()
+            .any(|existing| existing.category() == source_item.category())
+        {
+            continue;
+        }
+        let label = display_name
+            .map(|name| name.0.clone())
+            .unwrap_or_else(|| kind.display_name().to_string());
+        targets.push(TransferTargetOption { unit: entity, label });
+    }
+    targets.sort_by(|a, b| a.label.cmp(&b.label));
+    targets
 }
 
 fn spawn_selection_footer(

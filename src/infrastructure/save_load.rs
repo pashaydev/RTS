@@ -394,6 +394,9 @@ pub enum SavedUnitState {
         depot: u32,
         gather_node: Option<u32>,
     },
+    WaitingForDepot {
+        gather_node: Option<u32>,
+    },
     MovingToPlot([f32; 3]),
     MovingToBuild(u32),
     Building(u32),
@@ -613,6 +616,9 @@ fn unit_state_to_saved(state: &UnitState, entity_map: &HashMap<Entity, u32>) -> 
             depot: *entity_map.get(depot).unwrap_or(&u32::MAX),
             gather_node: gather_node.and_then(|e| entity_map.get(&e).copied()),
         },
+        UnitState::WaitingForDepot { gather_node } => SavedUnitState::WaitingForDepot {
+            gather_node: gather_node.and_then(|e| entity_map.get(&e).copied()),
+        },
         UnitState::MovingToPlot(v) => SavedUnitState::MovingToPlot(vec3_to_arr(*v)),
         UnitState::MovingToBuild(e) => {
             SavedUnitState::MovingToBuild(*entity_map.get(e).unwrap_or(&u32::MAX))
@@ -663,6 +669,9 @@ fn saved_to_unit_state(state: &SavedUnitState, id_map: &HashMap<u32, Entity>) ->
         },
         SavedUnitState::WaitingForStorage { depot, gather_node } => UnitState::WaitingForStorage {
             depot: resolve(depot),
+            gather_node: gather_node.map(|id| resolve(&id)),
+        },
+        SavedUnitState::WaitingForDepot { gather_node } => UnitState::WaitingForDepot {
             gather_node: gather_node.map(|id| resolve(&id)),
         },
         SavedUnitState::MovingToPlot(v) => UnitState::MovingToPlot(arr_to_vec3(*v)),
@@ -2008,6 +2017,9 @@ pub fn load_saved_game(
                             .resource_type
                             .map(|i| resource_type_from_index(i as usize)),
                     });
+                    commands.insert_resource(crate::simulation::resources::CarriedTotalsDirty(
+                        true,
+                    ));
                 }
                 if let Some([cur, lvl]) = unit_data.experience {
                     commands.entity(e).insert(Experience {

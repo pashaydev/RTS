@@ -16,7 +16,7 @@ use crate::ui::core::interactions::UiClickEvent;
 
 pub(crate) fn handle_menu_buttons(
     mut click_events: MessageReader<UiClickEvent>,
-    buttons: Query<&MenuButton>,
+    buttons: Query<&MenuButton, Without<ButtonDisabled>>,
     mut next_state: ResMut<NextState<AppState>>,
     mut page: ResMut<MenuPage>,
     mut config: ResMut<GameSetupConfig>,
@@ -34,6 +34,7 @@ pub(crate) fn handle_menu_buttons(
         Option<Res<super::OptionsSnapshot>>,
         ResMut<super::ConfirmPopupState>,
     ),
+    mut loading_texts: Query<&mut Text, With<super::BeginCampaignText>>,
 ) {
     let (db, profile) = db_and_profile;
     let (mut widget_registry, snapshot, mut popup_state) = options_state;
@@ -58,6 +59,9 @@ pub(crate) fn handle_menu_buttons(
                 *page = MenuPage::Title;
             }
             MenuAction::StartGame => {
+                for mut text in &mut loading_texts {
+                    **text = "LOADING...".to_string();
+                }
                 next_state.set(AppState::InGame);
             }
             MenuAction::ApplySettings => {
@@ -170,6 +174,7 @@ fn rebuild_slot_cards(
     slots_q: &Query<(Entity, &Children), With<SlotCardsContainer>>,
     config: &GameSetupConfig,
     is_multiplayer: bool,
+    lobby_players: Option<&[crate::infrastructure::multiplayer::LobbyPlayer]>,
     theme: &Theme,
 ) {
     if let Ok((container, children)) = slots_q.single() {
@@ -177,7 +182,7 @@ fn rebuild_slot_cards(
             commands.entity(child).try_despawn();
         }
         for i in 0..4 {
-            super::new_game::spawn_slot_card(commands, container, i, config, is_multiplayer, theme);
+            super::new_game::spawn_slot_card(commands, container, i, config, is_multiplayer, lobby_players, theme);
         }
     }
 }
@@ -268,6 +273,7 @@ pub(crate) fn handle_selector_clicks(
                         &slots_container,
                         &config,
                         *page == MenuPage::HostLobby,
+                        lobby.as_ref().map(|l| l.players.as_slice()),
                         &theme,
                     );
                 }
@@ -291,6 +297,7 @@ pub(crate) fn handle_selector_clicks(
                             &slots_container,
                             &config,
                             *page == MenuPage::HostLobby,
+                            lobby.as_ref().map(|l| l.players.as_slice()),
                             &theme,
                         );
                     }
@@ -311,6 +318,7 @@ pub(crate) fn handle_selector_clicks(
                         &slots_container,
                         &config,
                         *page == MenuPage::HostLobby,
+                        lobby.as_ref().map(|l| l.players.as_slice()),
                         &theme,
                     );
                 }

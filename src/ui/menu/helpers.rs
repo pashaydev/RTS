@@ -53,6 +53,10 @@ pub struct SelectedOption;
 #[derive(Component)]
 pub struct SeedDisplay;
 
+/// Small hint text shown below a button to explain disabled state.
+#[derive(Component)]
+pub struct ButtonHintText;
+
 #[derive(Component)]
 pub struct RandomizeSeedButton;
 
@@ -122,6 +126,53 @@ pub fn spawn_styled_button(
         ));
     });
     entity_commands.id()
+}
+
+/// Spawns a small hint text below a button (initially hidden).
+pub fn spawn_button_hint(
+    commands: &mut Commands,
+    container: Entity,
+    theme: &Theme,
+) -> Entity {
+    let hint = commands
+        .spawn((
+            ButtonHintText,
+            Text::new(""),
+            TextFont {
+                font_size: theme.typography.small,
+                ..default()
+            },
+            TextColor(theme.colors.warning.with_alpha(0.85)),
+            Node {
+                margin: UiRect::top(Val::Px(4.0)),
+                display: Display::None,
+                ..default()
+            },
+            Pickable::IGNORE,
+        ))
+        .id();
+    commands.entity(container).add_child(hint);
+    hint
+}
+
+/// Update hint text visibility based on nearby ButtonDisabled state.
+pub fn update_button_hints(
+    disabled_buttons: Query<&ButtonDisabled, With<super::MenuButton>>,
+    mut hints: Query<(&mut Text, &mut Node, &mut TextColor), With<ButtonHintText>>,
+    theme: Res<Theme>,
+) {
+    // Find the first disabled button with a reason (simple approach — one hint per page)
+    let reason = disabled_buttons.iter().find_map(|d| d.0.as_ref());
+
+    for (mut text, mut node, mut color) in &mut hints {
+        if let Some(reason) = reason {
+            **text = reason.clone();
+            node.display = Display::Flex;
+            *color = TextColor(theme.colors.warning.with_alpha(0.85));
+        } else {
+            node.display = Display::None;
+        }
+    }
 }
 
 /// Spawns a controls hint row at the bottom-left of the screen.

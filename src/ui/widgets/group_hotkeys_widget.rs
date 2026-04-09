@@ -195,8 +195,8 @@ pub fn update_group_hotkeys_widget(
                     padding: PAD_SM,
                     border: BORDER_1,
                     // border_radius: RADIUS_LG,
-                    min_width: Val::Px(40.0),
-                    min_height: Val::Px(40.0),
+                    min_width: Val::Px(25.0),
+                    min_height: Val::Px(25.0),
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(1.0),
                     ..default()

@@ -17,7 +17,6 @@ pub struct UnitAiPlugin;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 enum UnitAiSet {
-    Cleanup,
     Hotspots,
     Decision,
     TaskAdvance,
@@ -33,7 +32,6 @@ impl Plugin for UnitAiPlugin {
             .configure_sets(
                 FixedUpdate,
                 (
-                    UnitAiSet::Cleanup,
                     UnitAiSet::Hotspots,
                     UnitAiSet::Decision,
                     UnitAiSet::TaskAdvance,
@@ -42,12 +40,6 @@ impl Plugin for UnitAiPlugin {
                     UnitAiSet::Heal,
                 )
                     .chain(),
-            )
-            .add_systems(
-                FixedUpdate,
-                cleanup_assigned_workers_system
-                    .in_set(UnitAiSet::Cleanup)
-                    .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 FixedUpdate,
@@ -85,57 +77,6 @@ impl Plugin for UnitAiPlugin {
                     .in_set(UnitAiSet::Heal)
                     .run_if(in_state(AppState::InGame)),
             );
-    }
-}
-
-/// Removes dead/invalid worker entities from all AssignedWorkers lists,
-/// and ejects workers whose building no longer exists.
-pub fn cleanup_assigned_workers_system(
-    mut commands: Commands,
-    mut buildings: Query<(Entity, &mut AssignedWorkers), With<Building>>,
-    workers: Query<(Entity, &UnitState, Option<&BuildingAssignment>), With<Unit>>,
-) {
-    for (building_entity, mut aw) in &mut buildings {
-        // Check if retain would actually remove anything before mutating,
-        // to avoid triggering Changed<AssignedWorkers> every frame.
-        let has_invalid = aw.workers.iter().any(|&worker| {
-            !matches!(
-                workers.get(worker),
-                Ok((
-                    _,
-                    UnitState::AssignedGathering { building, .. },
-                    _
-                )) if *building == building_entity
-            )
-        });
-        if has_invalid {
-            aw.workers.retain(|&worker| {
-                matches!(
-                    workers.get(worker),
-                    Ok((
-                        _,
-                        UnitState::AssignedGathering { building, .. },
-                        _
-                    )) if *building == building_entity
-                )
-            });
-        }
-    }
-
-    // Canonicalize the worker-side assignment marker from the authoritative UnitState.
-    for (worker, state, assignment) in &workers {
-        match *state {
-            UnitState::AssignedGathering { building, .. } => {
-                if assignment.map(|a| a.0) != Some(building) {
-                    commands.entity(worker).insert(BuildingAssignment(building));
-                }
-            }
-            _ => {
-                if assignment.is_some() {
-                    commands.entity(worker).remove::<BuildingAssignment>();
-                }
-            }
-        }
     }
 }
 
@@ -303,6 +244,7 @@ fn decision_priority_system(
             | UnitState::Depositing { .. }
             | UnitState::ReturningToDeposit { .. }
             | UnitState::WaitingForStorage { .. }
+            | UnitState::WaitingForDepot { .. }
             | UnitState::HoldPosition
             | UnitState::Patrolling { .. }
             | UnitState::AttackMoving(_) => continue,
@@ -598,7 +540,7 @@ pub fn task_queue_advance_system(
     >,
     transforms: Query<&Transform>,
     processors: Query<(&ResourceProcessor, &BuildingState, &Faction), With<Building>>,
-    mut assigned_workers_q: Query<&mut AssignedWorkers>,
+    assigned_workers_q: Query<&AssignedWorkers>,
     net_role: Res<NetRole>,
     active_player: Res<ActivePlayer>,
 ) {
@@ -693,12 +635,6 @@ pub fn task_queue_advance_system(
                         building_pos,
                         TaskSource::Manual,
                     );
-                    // Add to building's AssignedWorkers
-                    if let Ok(mut aw) = assigned_workers_q.get_mut(building) {
-                        if !aw.workers.contains(&entity) {
-                            aw.workers.push(entity);
-                        }
-                    }
                 }
             }
             QueuedTask::HoldPosition => {
@@ -958,7 +894,9 @@ pub fn unit_state_executor_system(
                 }
             }
 
-            UnitState::Depositing { .. } | UnitState::WaitingForStorage { .. } => {
+            UnitState::Depositing { .. }
+            | UnitState::WaitingForStorage { .. }
+            | UnitState::WaitingForDepot { .. } => {
                 // Handled by worker_ai_system
             }
 
@@ -1059,6 +997,11 @@ pub fn unit_state_executor_system(
                 // Check building still exists
                 if processors.get(building).is_err() {
                     // Building destroyed — unassign worker
+                    crate::simulation::buildings::remove_assigned_worker(
+                        &mut commands,
+                        building,
+                        entity,
+                    );
                     commands.entity(entity).remove::<BuildingAssignment>();
                     reset_combat_state(&mut commands, entity);
                     *state = UnitState::Idle;

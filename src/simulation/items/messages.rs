@@ -58,6 +58,13 @@ pub struct RequestDropItem {
 }
 
 #[derive(Message, Clone, Copy, Debug)]
+pub struct RequestTransferItem {
+    pub from_unit: Entity,
+    pub from_slot: usize,
+    pub to_unit: Entity,
+}
+
+#[derive(Message, Clone, Copy, Debug)]
 pub struct InventoryChanged {
     pub unit: Entity,
 }
@@ -67,11 +74,20 @@ pub struct ItemPickupCollected {
     pub pickup: Entity,
     pub collector: Entity,
     pub item: ItemKind,
+    pub info_message: Option<&'static str>,
 }
 
 #[derive(Message, Clone, Copy, Debug)]
 pub struct ItemPickupFailed {
     pub pickup: Entity,
     pub item: ItemKind,
+    pub reason: ItemPickupFailureReason,
+}
+
+#[derive(Message, Clone, Debug)]
+pub struct ItemTransferFailed {
+    pub item: ItemKind,
+    pub from_unit: Entity,
+    pub to_unit: Entity,
     pub reason: ItemPickupFailureReason,
 }

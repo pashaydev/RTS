@@ -12,6 +12,12 @@ pub struct UiRoot;
 #[derive(Component)]
 pub struct MainHudRoot;
 
+/// Container for the widget grid area, positioned below the header bar.
+/// Widgets are parented to this entity so percent-based grid positioning
+/// works within the remaining screen space.
+#[derive(Component)]
+pub struct WidgetGridArea;
+
 /// Floating label showing biome placement feedback
 #[derive(Component)]
 pub struct PlacementHintLabel;
@@ -71,6 +77,24 @@ pub fn spawn_hud_roots(
         ))
         .id();
     commands.entity(root).add_child(hud_root);
+
+    // Widget grid area — sits below the header bar, fills remaining space.
+    let grid_area = commands
+        .spawn((
+            GameWorld,
+            WidgetGridArea,
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(super::framework::HEADER_HEIGHT_PX),
+                left: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                bottom: Val::Px(0.0),
+                ..default()
+            },
+            Pickable::IGNORE,
+        ))
+        .id();
+    commands.entity(hud_root).add_child(grid_area);
 
     let front_overlay_root = commands
         .spawn((

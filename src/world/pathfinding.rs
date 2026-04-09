@@ -1,6 +1,7 @@
 use bevy::ecs::entity::Entities;
 use bevy::ecs::lifecycle::RemovedComponents;
 use bevy::prelude::*;
+use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::Duration;
@@ -17,9 +18,9 @@ use crate::world::spatial::WallSpatialGrid;
 
 const NAV_GRID_STEP: f32 = 2.5;
 const ASTAR_NODE_LIMIT: usize = 12_000;
-const PATHS_PER_FRAME: usize = 12;
-const PATHFINDING_BUDGET_MS: u64 = 2;
-const NEW_PATH_REQUESTS_PER_FRAME: usize = 24;
+const PATHS_PER_FRAME: usize = 48;
+const PATHFINDING_BUDGET_MS: u64 = 6;
+const NEW_PATH_REQUESTS_PER_FRAME: usize = 96;
 /// Distance threshold below which we skip A* and just walk directly
 const DIRECT_MOVE_THRESHOLD: f32 = 3.0;
 /// Cost for cells near obstacles (soft margin — guides paths away but doesn't block)
@@ -32,8 +33,6 @@ const OBSTACLE_MARGIN_COST: u8 = 40;
 pub struct NavPath {
     pub waypoints: Vec<Vec3>,
     pub current_index: usize,
-    /// The final destination (same as last waypoint)
-    pub destination: Vec3,
 }
 
 /// Marker: skip pathfinding for this MoveTarget (short-range adjustment)
@@ -44,11 +43,20 @@ pub struct NavDirect;
 #[derive(Component)]
 pub struct NavPending;
 
+#[derive(Component, Default)]
+pub struct NavRequestTracker {
+    pub latest_request_id: u64,
+    pub last_goal: Option<Vec3>,
+}
+
+#[derive(Component)]
+struct NavPathTask(Task<AsyncPathResult>);
+
 // ── Resources ──
 
 /// Navigation grid — passability costs aligned to the terrain grid.
 /// 0 = impassable, 1-255 = traversal cost (1 = cheapest).
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct NavGrid {
     pub costs: Vec<u8>,
     /// Terrain-only base costs computed once at init. Used to quickly reset
@@ -57,6 +65,7 @@ pub struct NavGrid {
     pub grid_size: usize,
     pub step: f32,
     pub half_map: f32,
+    pub revision: u64,
 }
 
 impl NavGrid {
@@ -100,11 +109,32 @@ pub struct PathRequest {
     pub entity: Entity,
     pub start: Vec3,
     pub goal: Vec3,
+    pub request_id: u64,
+    pub nav_revision: u64,
 }
 
 #[derive(Resource, Default)]
 pub struct PathRequestQueue {
     pub requests: VecDeque<PathRequest>,
+}
+
+#[derive(Resource, Default)]
+pub struct PathRequestIds {
+    next: u64,
+}
+
+impl PathRequestIds {
+    fn next_id(&mut self) -> u64 {
+        self.next = self.next.wrapping_add(1).max(1);
+        self.next
+    }
+}
+
+struct AsyncPathResult {
+    request_id: u64,
+    nav_revision: u64,
+    goal: Vec3,
+    path: Option<Vec<(f32, f32)>>,
 }
 
 // ── Plugin ──
@@ -118,6 +148,7 @@ impl Plugin for PathfindingPlugin {
             ..default()
         })
         .init_resource::<PathRequestQueue>()
+        .init_resource::<PathRequestIds>()
         .add_systems(
             OnEnter(AppState::InGame),
             build_nav_grid.after(crate::world::ground::spawn_ground),
@@ -126,12 +157,14 @@ impl Plugin for PathfindingPlugin {
             FixedUpdate,
             (
                 mark_nav_grid_dirty,
-                invalidate_stale_paths,
+                handle_move_target_updates,
                 cleanup_orphan_paths,
                 refresh_nav_grid,
+                invalidate_paths_on_nav_revision,
                 detect_stuck_units,
                 queue_path_requests,
-                process_path_requests,
+                spawn_pathfinding_tasks,
+                collect_completed_path_tasks,
             )
                 .chain()
                 .in_set(GameFlowSet::Simulation)
@@ -143,34 +176,53 @@ impl Plugin for PathfindingPlugin {
 
 // ── Systems ──
 
-/// When MoveTarget changes destination, clear the old NavPath so A* re-runs.
-fn invalidate_stale_paths(
+/// React directly to MoveTarget mutations instead of comparing destinations every tick.
+fn handle_move_target_updates(
     mut commands: Commands,
-    pathed: Query<(Entity, &MoveTarget, &NavPath), Or<(With<Unit>, With<Mob>)>>,
-    pending: Query<(Entity, &MoveTarget), (Or<(With<Unit>, With<Mob>)>, With<NavPending>, Without<NavPath>)>,
+    movers: Query<
+        (Entity, Option<&MoveTarget>, Option<&mut NavRequestTracker>),
+        (
+            Or<(With<Unit>, With<Mob>)>,
+            Or<(Added<MoveTarget>, Changed<MoveTarget>)>,
+        ),
+    >,
     mut queue: ResMut<PathRequestQueue>,
 ) {
-    for (entity, target, nav) in &pathed {
-        let flat_dist = Vec2::new(
-            target.0.x - nav.destination.x,
-            target.0.z - nav.destination.z,
-        )
-        .length();
-        if flat_dist > 2.0 {
-            // Destination changed — clear old path and pending
-            commands
-                .entity(entity)
-                .remove::<NavPath>()
-                .remove::<NavPending>();
-            queue.requests.retain(|r| r.entity != entity);
-        }
-    }
-    // Also clear pending if MoveTarget destination changed while waiting
-    for (entity, _target) in &pending {
-        // NavPending without NavPath — check if still queued
-        if !queue.requests.iter().any(|r| r.entity == entity) {
-            // Request was lost or already processed, remove stale pending
-            commands.entity(entity).remove::<NavPending>();
+    for (entity, move_target, tracker) in movers {
+        match move_target {
+            Some(target) => {
+                let same_goal = tracker.as_ref().and_then(|tracker| tracker.last_goal).is_some_and(
+                    |previous| same_nav_goal(previous, target.0),
+                );
+                if same_goal {
+                    continue;
+                }
+
+                let mut entity_commands = commands.entity(entity);
+                entity_commands
+                    .remove::<NavPath>()
+                    .remove::<NavPending>()
+                    .remove::<NavPathTask>();
+                queue.requests.retain(|r| r.entity != entity);
+
+                if let Some(mut tracker) = tracker {
+                    tracker.last_goal = Some(target.0);
+                } else {
+                    entity_commands.insert(NavRequestTracker {
+                        latest_request_id: 0,
+                        last_goal: Some(target.0),
+                    });
+                }
+            }
+            None => {
+                let mut entity_commands = commands.entity(entity);
+                entity_commands
+                    .remove::<NavPath>()
+                    .remove::<NavPending>()
+                    .remove::<NavPathTask>()
+                    .remove::<NavRequestTracker>();
+                queue.requests.retain(|r| r.entity != entity);
+            }
         }
     }
 }
@@ -180,18 +232,38 @@ fn cleanup_orphan_paths(
     mut commands: Commands,
     pathed: Query<Entity, (With<NavPath>, Without<MoveTarget>)>,
     pending: Query<Entity, (With<NavPending>, Without<MoveTarget>)>,
+    path_tasks: Query<Entity, (With<NavPathTask>, Without<MoveTarget>)>,
     stuck: Query<Entity, (With<StuckTimer>, Without<MoveTarget>)>,
     mut queue: ResMut<PathRequestQueue>,
 ) {
     for entity in &pathed {
-        commands.entity(entity).remove::<NavPath>();
+        commands
+            .entity(entity)
+            .remove::<NavPath>()
+            .remove::<NavPathTask>()
+            .remove::<NavRequestTracker>();
     }
     for entity in &pending {
-        commands.entity(entity).remove::<NavPending>();
+        commands
+            .entity(entity)
+            .remove::<NavPending>()
+            .remove::<NavPathTask>()
+            .remove::<NavRequestTracker>();
+        queue.requests.retain(|r| r.entity != entity);
+    }
+    for entity in &path_tasks {
+        commands
+            .entity(entity)
+            .remove::<NavPathTask>()
+            .remove::<NavRequestTracker>();
         queue.requests.retain(|r| r.entity != entity);
     }
     for entity in &stuck {
-        commands.entity(entity).remove::<StuckTimer>();
+        commands
+            .entity(entity)
+            .remove::<StuckTimer>()
+            .remove::<NavRequestTracker>()
+            .remove::<NavPathTask>();
     }
 }
 
@@ -290,13 +362,41 @@ fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut comm
             }
 
             let biome = biome_map.get_biome(wx, wz);
+            let h = height_map.sample(wx, wz);
+
+            // Check slope to cardinal neighbors — if any neighbor has a height
+            // difference > max_slope per grid step, mark as impassable or very costly.
+            let max_slope = 4.0; // max height difference per step before impassable
+            let steep_slope = 2.5; // height diff that adds significant cost
+            let mut max_diff: f32 = 0.0;
+            if gx > 0 {
+                let nh = height_map.sample((gx - 1) as f32 * step - half_map, wz);
+                max_diff = max_diff.max((h - nh).abs());
+            }
+            if gx + 1 < grid_size {
+                let nh = height_map.sample((gx + 1) as f32 * step - half_map, wz);
+                max_diff = max_diff.max((h - nh).abs());
+            }
+            if gz > 0 {
+                let nh = height_map.sample(wx, (gz - 1) as f32 * step - half_map);
+                max_diff = max_diff.max((h - nh).abs());
+            }
+            if gz + 1 < grid_size {
+                let nh = height_map.sample(wx, (gz + 1) as f32 * step - half_map);
+                max_diff = max_diff.max((h - nh).abs());
+            }
+
+            if max_diff > max_slope {
+                costs[idx] = 0; // impassable cliff
+                continue;
+            }
+
             match biome {
                 Biome::Water => {
                     costs[idx] = 0; // impassable
                 }
                 Biome::Mountain => {
                     // Mountains are passable but expensive
-                    let h = height_map.sample(wx, wz);
                     if h > 8.0 {
                         costs[idx] = 0; // too steep
                     } else {
@@ -304,10 +404,14 @@ fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut comm
                     }
                 }
                 _ => {
-                    // Height gradient cost
-                    let h = height_map.sample(wx, wz);
-                    let base = 1 + (h.abs() * 2.0).min(30.0) as u8;
-                    costs[idx] = base;
+                    // Height gradient cost + slope penalty
+                    let height_cost = (h.abs() * 2.0).min(30.0) as u8;
+                    let slope_cost = if max_diff > steep_slope {
+                        ((max_diff - steep_slope) * 10.0).min(30.0) as u8
+                    } else {
+                        0
+                    };
+                    costs[idx] = 1 + height_cost + slope_cost;
                 }
             }
         }
@@ -320,6 +424,7 @@ fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut comm
         grid_size,
         step,
         half_map,
+        revision: 1,
     });
     commands.insert_resource(NavGridDirty::default());
 }
@@ -420,6 +525,28 @@ fn refresh_nav_grid(
             stamp_obstacle(&mut nav_grid, pos, radius, margin_radius, gs);
         }
     }
+
+    nav_grid.revision = nav_grid.revision.wrapping_add(1).max(1);
+}
+
+fn invalidate_paths_on_nav_revision(
+    mut commands: Commands,
+    nav_grid: Res<NavGrid>,
+    mut queue: ResMut<PathRequestQueue>,
+    movers: Query<Entity, (Or<(With<Unit>, With<Mob>)>, With<MoveTarget>)>,
+) {
+    if !nav_grid.is_changed() {
+        return;
+    }
+
+    queue.requests.clear();
+    for entity in &movers {
+        commands
+            .entity(entity)
+            .remove::<NavPath>()
+            .remove::<NavPending>()
+            .remove::<NavPathTask>();
+    }
 }
 
 /// Stamp a circular obstacle into the nav grid.
@@ -445,19 +572,21 @@ fn stamp_obstacle(nav_grid: &mut NavGrid, pos: Vec3, radius: f32, margin_radius:
 fn queue_path_requests(
     mut commands: Commands,
     mut queue: ResMut<PathRequestQueue>,
+    mut request_ids: ResMut<PathRequestIds>,
     nav_grid: Res<NavGrid>,
-    new_movers: Query<
-        (Entity, &Transform, &MoveTarget),
+    mut new_movers: Query<
+        (Entity, &Transform, &MoveTarget, Option<&mut NavRequestTracker>),
         (
             Or<(With<Unit>, With<Mob>)>,
             Without<NavPath>,
             Without<NavDirect>,
             Without<NavPending>,
+            Without<NavPathTask>,
         ),
     >,
 ) {
     let mut queued_this_frame = 0usize;
-    for (entity, tf, target) in &new_movers {
+    for (entity, tf, target, tracker) in &mut new_movers {
         if queued_this_frame >= NEW_PATH_REQUESTS_PER_FRAME {
             break;
         }
@@ -471,6 +600,18 @@ fn queue_path_requests(
             continue;
         }
 
+        let request_id = request_ids.next_id();
+        let nav_revision = nav_grid.revision;
+        if let Some(mut tracker) = tracker {
+            tracker.latest_request_id = request_id;
+            tracker.last_goal = Some(goal);
+        } else {
+            commands.entity(entity).insert(NavRequestTracker {
+                latest_request_id: request_id,
+                last_goal: Some(goal),
+            });
+        }
+
         if let Some(existing) = queue
             .requests
             .iter_mut()
@@ -478,11 +619,15 @@ fn queue_path_requests(
         {
             existing.start = start;
             existing.goal = goal;
+            existing.request_id = request_id;
+            existing.nav_revision = nav_revision;
         } else {
             queue.requests.push_back(PathRequest {
                 entity,
                 start,
                 goal,
+                request_id,
+                nav_revision,
             });
         }
         // Mark as pending so the unit waits instead of walking blindly
@@ -491,12 +636,12 @@ fn queue_path_requests(
     }
 }
 
-/// Process queued path requests (throttled per frame).
-fn process_path_requests(
+/// Spawn async pathfinding jobs from the request queue.
+fn spawn_pathfinding_tasks(
     mut commands: Commands,
     mut queue: ResMut<PathRequestQueue>,
     nav_grid: Res<NavGrid>,
-    height_map: Res<HeightMap>,
+    trackers: Query<&NavRequestTracker>,
     entities: &Entities,
 ) {
     let mut processed = 0;
@@ -517,12 +662,65 @@ fn process_path_requests(
             continue;
         }
 
-        // Always remove pending marker
-        commands.entity(request.entity).remove::<NavPending>();
+        if request.nav_revision != nav_grid.revision
+            || trackers
+                .get(request.entity)
+                .map_or(true, |tracker| tracker.latest_request_id != request.request_id)
+        {
+            commands.entity(request.entity).remove::<NavPending>();
+            processed += 1;
+            continue;
+        }
 
-        if let Some(path) = find_path(&nav_grid, request.start, request.goal) {
-            // Convert grid path to world waypoints with terrain Y.
-            // Skip the first waypoint (start position) — the unit is already there.
+        let grid = nav_grid.clone();
+        let task = AsyncComputeTaskPool::get().spawn(async move {
+            AsyncPathResult {
+                request_id: request.request_id,
+                nav_revision: request.nav_revision,
+                goal: request.goal,
+                path: find_path(&grid, request.start, request.goal),
+            }
+        });
+        commands.entity(request.entity).insert(NavPathTask(task));
+
+        processed += 1;
+    }
+}
+
+fn collect_completed_path_tasks(
+    mut commands: Commands,
+    height_map: Res<HeightMap>,
+    nav_grid: Res<NavGrid>,
+    mut tasks: Query<
+        (
+            Entity,
+            &mut NavPathTask,
+            &NavRequestTracker,
+            Option<&MoveTarget>,
+        ),
+        Or<(With<Unit>, With<Mob>)>,
+    >,
+) {
+    for (entity, mut task, tracker, move_target) in &mut tasks {
+        let Some(result) = block_on(poll_once(&mut task.0)) else {
+            continue;
+        };
+
+        let mut entity_commands = commands.entity(entity);
+        entity_commands.remove::<NavPathTask>();
+        entity_commands.remove::<NavPending>();
+
+        if tracker.latest_request_id != result.request_id
+            || nav_grid.revision != result.nav_revision
+            || move_target.is_none_or(|target| {
+                Vec2::new(target.0.x - result.goal.x, target.0.z - result.goal.z).length_squared()
+                    > 0.01
+            })
+        {
+            continue;
+        }
+
+        if let Some(path) = result.path {
             let waypoints: Vec<Vec3> = path
                 .into_iter()
                 .skip(1)
@@ -533,16 +731,12 @@ fn process_path_requests(
                 .collect();
 
             if !waypoints.is_empty() {
-                commands.entity(request.entity).insert(NavPath {
+                entity_commands.insert(NavPath {
                     waypoints,
                     current_index: 0,
-                    destination: request.goal,
                 });
             }
         }
-        // If pathfinding fails, NavPending is removed so unit falls back to direct movement
-
-        processed += 1;
     }
 }
 
@@ -807,4 +1001,8 @@ fn find_nearest_passable(nav_grid: &NavGrid, gx: usize, gz: usize) -> Option<usi
         }
     }
     None
+}
+
+fn same_nav_goal(a: Vec3, b: Vec3) -> bool {
+    Vec2::new(a.x - b.x, a.z - b.z).length_squared() <= 0.01
 }

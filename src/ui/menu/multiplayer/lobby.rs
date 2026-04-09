@@ -313,6 +313,16 @@ pub(crate) fn update_lobby_ui(
                         lobby_changed = true;
                     }
                 }
+                game_state::message::ClientMessage::NameUpdate { player_name, .. } => {
+                    if let Some(player) =
+                        lobby.players.iter_mut().find(|p| p.player_id == player_id)
+                    {
+                        if !player_name.trim().is_empty() {
+                            player.name = player_name;
+                            lobby_changed = true;
+                        }
+                    }
+                }
                 game_state::message::ClientMessage::Input { .. } => {}
                 game_state::message::ClientMessage::Ping { .. } => {}
                 game_state::message::ClientMessage::Reconnect { .. } => {}
@@ -900,6 +910,54 @@ pub(crate) fn lobby_ping_system(
                 timestamp: time.elapsed_secs_f64(),
             };
             matchbox_transport::send_to_host(socket, &ping);
+        }
+    }
+}
+
+/// Dynamically enable/disable the CONNECT button based on session code input.
+pub(crate) fn sync_connect_button_state(
+    inputs: Query<&TextInputField, With<SessionCodeInput>>,
+    mut connect_buttons: Query<
+        (Entity, Option<&ButtonDisabled>),
+        With<MenuButton>,
+    >,
+    all_buttons: Query<&MenuButton>,
+    lobby: Option<Res<LobbyState>>,
+    mut commands: Commands,
+) {
+    let Some(lobby) = lobby else { return };
+    let is_connecting = matches!(lobby.status, LobbyStatus::Connecting);
+
+    let code = inputs
+        .iter()
+        .next()
+        .map(|f| f.value.trim().to_string())
+        .unwrap_or_default();
+
+    for (entity, existing_disabled) in &connect_buttons {
+        let Ok(btn) = all_buttons.get(entity) else {
+            continue;
+        };
+        if btn.0 != MenuAction::ConnectToHost {
+            continue;
+        }
+
+        let should_disable = is_connecting || code.is_empty();
+        if should_disable {
+            let reason = if is_connecting {
+                "Connecting to host..."
+            } else {
+                "Enter a session code or IP address"
+            };
+            if existing_disabled.is_none()
+                || existing_disabled.and_then(|d| d.0.as_deref()) != Some(reason)
+            {
+                commands
+                    .entity(entity)
+                    .insert(ButtonDisabled(Some(reason.to_string())));
+            }
+        } else if existing_disabled.is_some() {
+            commands.entity(entity).remove::<ButtonDisabled>();
         }
     }
 }

@@ -737,6 +737,9 @@ pub fn host_process_client_commands(
                 ClientMessage::Chat { .. } => {
                     // Chat during gameplay — not handled here, lobby handles it
                 }
+                ClientMessage::NameUpdate { .. } => {
+                    // Name updates are handled in the lobby, not during gameplay
+                }
             }
         }
     }
@@ -909,6 +912,7 @@ fn ecs_to_net_unit_state(state: &UnitState, net_map: &EntityNetMap) -> NetUnitSt
                 NetUnitState::Idle
             }
         }
+        UnitState::WaitingForDepot { .. } => NetUnitState::WaitingForDepot,
         UnitState::MovingToPlot(pos) => NetUnitState::MovingToPlot {
             target: [pos.x, pos.y, pos.z],
         },

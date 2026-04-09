@@ -1568,17 +1568,11 @@ pub(crate) fn confirm_wall_plot(
             .remove::<MoveTarget>()
             .insert(UnitState::MovingToBuild(target_building))
             .insert(TaskSource::Manual);
-        commands
-            .entity(target_building)
-            .entry::<AssignedWorkers>()
-            .and_modify(move |mut aw| {
-                if !aw.workers.contains(&worker_entity) {
-                    aw.workers.push(worker_entity);
-                }
-            })
-            .or_insert(AssignedWorkers {
-                workers: vec![worker_entity],
-            });
+        crate::simulation::buildings::add_assigned_worker(
+            &mut commands,
+            target_building,
+            worker_entity,
+        );
     }
 
     clear_wall_preview(&mut commands, &mut wall_preview);
@@ -1653,6 +1647,7 @@ pub(crate) fn confirm_gate_plot(
                         | UnitState::ReturningToDeposit { .. }
                         | UnitState::Depositing { .. }
                         | UnitState::WaitingForStorage { .. }
+                        | UnitState::WaitingForDepot { .. }
                         | UnitState::Moving(_)
                 )
         })
@@ -1692,17 +1687,7 @@ pub(crate) fn confirm_gate_plot(
         .remove::<MoveTarget>()
         .insert(UnitState::MovingToBuild(segment_entity))
         .insert(TaskSource::Manual);
-    commands
-        .entity(segment_entity)
-        .entry::<AssignedWorkers>()
-        .and_modify(move |mut aw| {
-            if !aw.workers.contains(&worker_entity) {
-                aw.workers.push(worker_entity);
-            }
-        })
-        .or_insert(AssignedWorkers {
-            workers: vec![worker_entity],
-        });
+    crate::simulation::buildings::add_assigned_worker(&mut commands, segment_entity, worker_entity);
 
     placement.mode = PlacementMode::None;
     placement.awaiting_release = false;

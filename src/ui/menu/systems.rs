@@ -630,6 +630,10 @@ pub(crate) fn random_name_system(
     mut profile: ResMut<crate::infrastructure::database::ActiveProfile>,
     db: Res<crate::infrastructure::database::GameDatabase>,
     mut inputs: Query<&mut TextInputField>,
+    mut commands: Commands,
+    role: Option<Res<crate::infrastructure::multiplayer::NetRole>>,
+    mut socket: Option<ResMut<bevy_matchbox::prelude::MatchboxSocket>>,
+    mut lobby: Option<ResMut<crate::infrastructure::multiplayer::LobbyState>>,
 ) {
     for interaction in &interactions {
         if *interaction != Interaction::Pressed {
@@ -645,6 +649,32 @@ pub(crate) fn random_name_system(
             field.value = name.clone();
             field.cursor_pos = name.len();
             field.selection_anchor = None;
+        }
+
+        // Sync name to multiplayer lobby if connected
+        if let Some(ref role) = role {
+            use crate::infrastructure::multiplayer::NetRole;
+            match **role {
+                NetRole::Client => {
+                    if let Some(ref mut socket) = socket {
+                        let msg = game_state::message::ClientMessage::NameUpdate {
+                            seq: 0,
+                            timestamp: 0.0,
+                            player_name: name,
+                        };
+                        crate::infrastructure::multiplayer::matchbox_transport::send_to_host(socket, &msg);
+                    }
+                }
+                NetRole::Host => {
+                    if let Some(ref mut lobby) = lobby {
+                        if let Some(host_player) = lobby.players.iter_mut().find(|p| p.is_host) {
+                            host_player.name = name;
+                        }
+                        commands.insert_resource(super::multiplayer::PendingLobbyBroadcast);
+                    }
+                }
+                NetRole::Offline => {}
+            }
         }
     }
 }

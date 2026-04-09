@@ -351,33 +351,37 @@ fn hash_unit_state(state: &UnitState, hasher: &mut DefaultHasher) {
             depot.to_bits().hash(hasher);
             gather_node.map(Entity::to_bits).hash(hasher);
         }
-        UnitState::MovingToPlot(pos) => {
+        UnitState::WaitingForDepot { gather_node } => {
             7u8.hash(hasher);
+            gather_node.map(Entity::to_bits).hash(hasher);
+        }
+        UnitState::MovingToPlot(pos) => {
+            8u8.hash(hasher);
             hash_vec3(*pos, hasher);
         }
         UnitState::MovingToBuild(entity) => {
-            8u8.hash(hasher);
-            entity.to_bits().hash(hasher);
-        }
-        UnitState::Building(entity) => {
             9u8.hash(hasher);
             entity.to_bits().hash(hasher);
         }
-        UnitState::AssignedGathering { building, phase } => {
+        UnitState::Building(entity) => {
             10u8.hash(hasher);
+            entity.to_bits().hash(hasher);
+        }
+        UnitState::AssignedGathering { building, phase } => {
+            11u8.hash(hasher);
             building.to_bits().hash(hasher);
             std::mem::discriminant(phase).hash(hasher);
         }
         UnitState::Patrolling { target, origin } => {
-            11u8.hash(hasher);
+            12u8.hash(hasher);
             hash_vec3(*target, hasher);
             hash_vec3(*origin, hasher);
         }
         UnitState::AttackMoving(pos) => {
-            12u8.hash(hasher);
+            13u8.hash(hasher);
             hash_vec3(*pos, hasher);
         }
-        UnitState::HoldPosition => 13u8.hash(hasher),
+        UnitState::HoldPosition => 14u8.hash(hasher),
     }
 }
 
@@ -823,6 +827,7 @@ fn format_active_state(
         UnitState::ReturningToDeposit { .. } => "Return to deposit".to_string(),
         UnitState::Depositing { .. } => "Deposit resources".to_string(),
         UnitState::WaitingForStorage { .. } => "Waiting for storage".to_string(),
+        UnitState::WaitingForDepot { .. } => "Waiting for depot".to_string(),
         UnitState::MovingToPlot(pos) => format!("Plot building at {}", format_position(pos)),
         UnitState::MovingToBuild(target) => {
             format!(

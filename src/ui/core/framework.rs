@@ -19,7 +19,6 @@ pub struct ScrollConsumedByWidget(pub bool);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum WidgetId {
-    Resources,
     Selection,
     Actions,
     Minimap,
@@ -33,7 +32,6 @@ pub enum WidgetId {
 
 impl WidgetId {
     pub const ALL: &'static [WidgetId] = &[
-        WidgetId::Resources,
         WidgetId::ArmyOverview,
         WidgetId::Selection,
         WidgetId::Actions,
@@ -47,7 +45,6 @@ impl WidgetId {
 
     pub fn display_name(self) -> &'static str {
         match self {
-            WidgetId::Resources => "Resources",
             WidgetId::Selection => "Selection",
             WidgetId::Actions => "Actions",
             WidgetId::Minimap => "Map",
@@ -62,7 +59,6 @@ impl WidgetId {
 
     pub fn icon(self) -> &'static str {
         match self {
-            WidgetId::Resources => "R",
             WidgetId::Selection => "S",
             WidgetId::Actions => "A",
             WidgetId::Minimap => "M",
@@ -77,16 +73,15 @@ impl WidgetId {
 
     pub fn hotkey(self) -> KeyCode {
         match self {
-            WidgetId::Resources => KeyCode::F1,
-            WidgetId::ArmyOverview => KeyCode::F2,
-            WidgetId::Selection => KeyCode::F3,
-            WidgetId::Actions => KeyCode::F4,
-            WidgetId::Minimap => KeyCode::F5,
-            WidgetId::ProductionQueue => KeyCode::F6,
-            WidgetId::TechTree => KeyCode::F7,
-            WidgetId::GroupHotkeys => KeyCode::F8,
-            WidgetId::EventLog => KeyCode::F9,
-            WidgetId::Debug => KeyCode::F10,
+            WidgetId::ArmyOverview => KeyCode::F1,
+            WidgetId::Selection => KeyCode::F2,
+            WidgetId::Actions => KeyCode::F3,
+            WidgetId::Minimap => KeyCode::F4,
+            WidgetId::ProductionQueue => KeyCode::F5,
+            WidgetId::TechTree => KeyCode::F6,
+            WidgetId::GroupHotkeys => KeyCode::F7,
+            WidgetId::EventLog => KeyCode::F8,
+            WidgetId::Debug => KeyCode::F9,
         }
     }
 }
@@ -199,19 +194,17 @@ pub struct WidgetRegistry {
 impl Default for WidgetRegistry {
     fn default() -> Self {
         let mut slots = HashMap::new();
-        slots.insert(WidgetId::Resources, GridSlot::new(0, 0, 1, 2));
-        slots.insert(WidgetId::ArmyOverview, GridSlot::new(0, 2, 1, 2));
+        slots.insert(WidgetId::ArmyOverview, GridSlot::new(0, 0, 1, 2));
         slots.insert(WidgetId::GroupHotkeys, GridSlot::new(0, 4, 2, 3));
         slots.insert(WidgetId::Selection, GridSlot::new(0, 7, 2, 5));
         slots.insert(WidgetId::Actions, GridSlot::new(2, 7, 2, 5));
         slots.insert(WidgetId::ProductionQueue, GridSlot::new(7, 7, 2, 5));
         slots.insert(WidgetId::Minimap, GridSlot::new(9, 7, 3, 5));
         slots.insert(WidgetId::EventLog, GridSlot::new(10, 0, 2, 2));
-        slots.insert(WidgetId::TechTree, GridSlot::new(3, 4, 6, 4));
+        slots.insert(WidgetId::TechTree, GridSlot::new(3, 3, 6, 6));
         slots.insert(WidgetId::Debug, GridSlot::new(9, 0, 3, 7));
 
         let mut visibility = HashMap::new();
-        visibility.insert(WidgetId::Resources, true);
         visibility.insert(WidgetId::Selection, true);
         visibility.insert(WidgetId::Actions, true);
         visibility.insert(WidgetId::Minimap, true);
@@ -250,6 +243,11 @@ impl WidgetRegistry {
 const GRID_COLS: f32 = 12.0;
 const GRID_ROWS: f32 = 12.0;
 
+/// Height reserved for the top header bar (resources + widget toggles).
+pub const HEADER_HEIGHT_PX: f32 = 28.0;
+
+/// Widgets are parented to `WidgetGridArea` which already starts below the
+/// header, so `grid_to_style` uses pure-percent positioning within that area.
 pub fn grid_to_style(slot: &GridSlot) -> Node {
     Node {
         position_type: PositionType::Absolute,

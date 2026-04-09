@@ -29,7 +29,7 @@ impl Plugin for UnitsPlugin {
                     .run_if(not(resource_exists::<crate::infrastructure::save_load::PendingLoad>)),
             )
             .add_systems(
-                FixedUpdate,
+                Update,
                 (move_units, steer_avoidance)
                     .chain()
                     .in_set(GameFlowSet::Simulation)
@@ -199,6 +199,7 @@ fn target_building(
         UnitState::ReturningToDeposit { depot, .. }
         | UnitState::Depositing { depot, .. }
         | UnitState::WaitingForStorage { depot, .. } => Some(*depot),
+        UnitState::WaitingForDepot { .. } => None,
         UnitState::AssignedGathering { building, .. } => Some(*building),
         UnitState::Attacking(e) => Some(*e),
         _ => attack_target
@@ -581,8 +582,8 @@ fn move_units(
                 let mut target_speed = base_max_speed * variation;
 
                 // Decelerate near final destination for smooth stopping
-                if is_final_waypoint && distance < 3.0 {
-                    target_speed *= (distance / 3.0).clamp(0.15, 1.0);
+                if is_final_waypoint && distance < 1.5 {
+                    target_speed *= (distance / 1.5).clamp(0.3, 1.0);
                 }
 
                 // Ramp current_speed toward target_speed
@@ -607,13 +608,17 @@ fn move_units(
 
             // If the unit is already inside a blocked cell, relax NavGrid checks
             // so it can walk out rather than being stuck forever.
+            // Also relax when following a computed NavPath — the pathfinder already
+            // validated the route, so per-step grid checks near cell boundaries
+            // should not block progress.
             let current_blocked = nav_grid
                 .as_ref()
                 .is_some_and(|grid| !grid.is_world_passable(transform.translation.x, transform.translation.z));
+            let has_nav_path = nav_path.as_ref().is_some_and(|n| n.current_index < n.waypoints.len());
 
             // Wall collision check helper
             let mut is_blocked = |pos: Vec3| -> bool {
-                if !current_blocked {
+                if !current_blocked && !has_nav_path {
                     if nav_grid
                         .as_ref()
                         .is_some_and(|grid| !grid.is_world_passable(pos.x, pos.z))

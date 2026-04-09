@@ -95,6 +95,9 @@ pub(crate) fn spawn_host_lobby_page(
         theme,
     );
 
+    // ── Command Profile (host name input) ──
+    new_game::spawn_command_profile_row(commands, container, &config.player_name, theme);
+
     spawn_animated_section_divider(commands, container, "SESSION CODE", fonts, theme);
 
     let code_row = commands
@@ -230,7 +233,7 @@ pub(crate) fn spawn_host_lobby_page(
     commands.entity(container).add_child(slots_wrap);
 
     for i in 0..4 {
-        new_game::spawn_slot_card(commands, slots_wrap, i, config, true, theme);
+        new_game::spawn_slot_card(commands, slots_wrap, i, config, true, Some(&lobby.players), theme);
     }
 
     // ── World Settings ──
@@ -320,32 +323,39 @@ pub(crate) fn spawn_host_lobby_page(
         .id();
     commands.entity(container).add_child(status);
 
-    let start_btn = commands
-        .spawn((
-            MenuButton(MenuAction::StartMultiplayer),
-            Button,
-            ButtonAnimState::new(theme.colors.accent.to_srgba().to_f32_array()),
-            ButtonStyle::Filled,
-            Node {
-                width: Val::Px(280.0),
-                height: Val::Px(80.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                margin: UiRect::top(Val::Px(12.0)),
-                ..default()
-            },
-            BackgroundColor(theme.colors.accent),
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Text::new("START GAME"),
-                fonts::heading(fonts, theme.typography.button),
-                TextColor(TEXT_PRIMARY),
-                Pickable::IGNORE,
-            ));
-        })
-        .id();
+    let connected_count = lobby.players.iter().filter(|p| p.connected).count();
+    let mut start_cmd = commands.spawn((
+        MenuButton(MenuAction::StartMultiplayer),
+        Button,
+        ButtonAnimState::new(theme.colors.accent.to_srgba().to_f32_array()),
+        ButtonStyle::Filled,
+        Node {
+            width: Val::Px(280.0),
+            height: Val::Px(80.0),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            margin: UiRect::top(Val::Px(12.0)),
+            ..default()
+        },
+        BackgroundColor(theme.colors.accent),
+    ));
+    if connected_count <= 1 {
+        start_cmd.insert(ButtonDisabled(Some(
+            "Waiting for players to join...".to_string(),
+        )));
+    }
+    start_cmd.with_children(|parent| {
+        parent.spawn((
+            StartButtonText,
+            Text::new("START GAME"),
+            fonts::heading(fonts, theme.typography.button),
+            TextColor(TEXT_PRIMARY),
+            Pickable::IGNORE,
+        ));
+    });
+    let start_btn = start_cmd.id();
     commands.entity(container).add_child(start_btn);
+    spawn_button_hint(commands, container, theme);
 }
 
 // ── Join Lobby Page ──
@@ -372,6 +382,9 @@ pub(crate) fn spawn_join_lobby_page(
         fonts,
         theme,
     );
+
+    // ── Command Profile (player name input) ──
+    new_game::spawn_command_profile_row(commands, container, &config.player_name, theme);
 
     // ── Connection state banner ──
     let (banner_dot_color, banner_text, banner_text_color, banner_bg) = if is_connected {
@@ -659,17 +672,34 @@ pub(crate) fn spawn_join_lobby_page(
             })
             .id();
         commands.entity(container).add_child(dc_btn);
-    } else if !is_connecting {
+    } else {
+        let label = if is_connecting { "CONNECTING..." } else { "CONNECT" };
         let connect_btn = spawn_styled_button(
             commands,
-            "CONNECT",
+            label,
             MenuButton(MenuAction::ConnectToHost),
             true,
             fonts,
             None,
             theme,
         );
+        // Disable when connecting or when session code is empty
+        let has_code = lobby
+            .client_session_code
+            .trim()
+            .len() > 0;
+        if is_connecting || !has_code {
+            let reason = if is_connecting {
+                "Connecting to host...".to_string()
+            } else {
+                "Enter a session code or IP address".to_string()
+            };
+            commands
+                .entity(connect_btn)
+                .insert(ButtonDisabled(Some(reason)));
+        }
         commands.entity(container).add_child(connect_btn);
+        spawn_button_hint(commands, container, theme);
     }
 
     spawn_animated_section_divider(commands, container, "STATUS", fonts, theme);

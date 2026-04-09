@@ -282,17 +282,6 @@ pub fn ai_economy_system(
                     proc_tf.translation,
                     TaskSource::Auto,
                 );
-                commands
-                    .entity(proc_entity)
-                    .entry::<AssignedWorkers>()
-                    .and_modify(move |mut aw| {
-                        if !aw.workers.contains(&w_entity) {
-                            aw.workers.push(w_entity);
-                        }
-                    })
-                    .or_insert(AssignedWorkers {
-                        workers: vec![w_entity],
-                    });
                 brain.add_to_squad(w_entity, SquadRole::GatherCopper);
                 assigned += 1;
             }

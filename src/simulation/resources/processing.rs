@@ -525,7 +525,7 @@ pub(super) fn auto_assign_workers_system(
             &ResourceProcessor,
             &BuildingState,
             &Faction,
-            &mut AssignedWorkers,
+            Option<&AssignedWorkers>,
         ),
         With<Building>,
     >,
@@ -549,14 +549,15 @@ pub(super) fn auto_assign_workers_system(
         return;
     }
 
-    for (building_entity, building_tf, processor, state, building_faction, mut assigned) in
+    for (building_entity, building_tf, processor, state, building_faction, assigned) in
         &mut processors
     {
         if *state != BuildingState::Complete {
             continue;
         }
         let slots = processor.max_workers as usize;
-        if assigned.workers.len() >= slots {
+        let current_assigned = assigned.map(|aw| aw.workers.len()).unwrap_or(0);
+        if current_assigned >= slots {
             continue;
         }
 
@@ -588,7 +589,7 @@ pub(super) fn auto_assign_workers_system(
         }
         candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-        let needed = slots - assigned.workers.len();
+        let needed = slots - current_assigned;
         for (worker_entity, _) in candidates.into_iter().take(needed) {
             assign_worker_to_processor(
                 &mut commands,
@@ -597,7 +598,6 @@ pub(super) fn auto_assign_workers_system(
                 building_tf.translation,
                 TaskSource::Auto,
             );
-            assigned.workers.push(worker_entity);
         }
     }
 }
@@ -611,6 +611,7 @@ pub fn assign_worker_to_processor(
     building_pos: Vec3,
     source: TaskSource,
 ) {
+    crate::simulation::buildings::add_assigned_worker(commands, building, worker);
     commands
         .entity(worker)
         .insert(UnitState::AssignedGathering {
@@ -623,7 +624,14 @@ pub fn assign_worker_to_processor(
         .remove::<AttackTarget>();
 }
 
-pub fn unassign_worker_from_processor(commands: &mut Commands, worker: Entity) {
+pub fn unassign_worker_from_processor(
+    commands: &mut Commands,
+    worker: Entity,
+    building: Option<Entity>,
+) {
+    if let Some(building) = building {
+        crate::simulation::buildings::remove_assigned_worker(commands, building, worker);
+    }
     commands
         .entity(worker)
         .insert(UnitState::Idle)

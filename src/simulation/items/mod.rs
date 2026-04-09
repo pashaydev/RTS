@@ -8,6 +8,7 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::render::alpha::AlphaMode;
 use std::f32::consts::PI;
+use std::collections::HashSet;
 
 use crate::blueprints::EntityKind;
 use crate::simulation::combat::{apply_manual_move_intent, clear_combat_intent};
@@ -88,9 +89,11 @@ impl Plugin for ItemsPlugin {
             .add_message::<SpawnItemPickup>()
             .add_message::<RequestPickupItem>()
             .add_message::<RequestDropItem>()
+            .add_message::<RequestTransferItem>()
             .add_message::<InventoryChanged>()
             .add_message::<ItemPickupCollected>()
             .add_message::<ItemPickupFailed>()
+            .add_message::<ItemTransferFailed>()
             .add_message::<vfx::ItemVfxTrigger>()
             .add_systems(
                 Startup,
@@ -109,9 +112,11 @@ impl Plugin for ItemsPlugin {
                     vfx::update_item_vfx_conditions,
                     vfx::spawn_triggered_item_vfx,
                     spawn_pickup_entities,
+                    auto_collect_nearby_pickups,
                     resolve_pending_item_pickups,
                     collect_item_pickups,
                     drop_inventory_items,
+                    transfer_inventory_items,
                     tick_pickup_collect_vfx,
                     despawn_expired_pickups,
                     notify_pickup_failures,
@@ -193,12 +198,7 @@ fn refresh_item_runtime_state(
     for (kind, inventory, mut runtime) in &mut units {
         runtime.items.clear();
         for &item in inventory.items.iter().take(inventory.capacity as usize) {
-            let def = registry.get(item);
-            let missing_requirement = def
-                .requirements
-                .iter()
-                .copied()
-                .find(|req| !registry::unit_meets_requirement(*kind, *req));
+            let missing_requirement = registry::first_missing_requirement(&registry, *kind, item);
             runtime.items.push(ItemStateEntry {
                 item,
                 enabled: missing_requirement.is_none(),
@@ -362,12 +362,8 @@ fn pickup_failure_for_unit(
     pickup_tf: &Transform,
     radius: &PickRadius,
     unit_tf: &Transform,
-    kind: EntityKind,
     inventory: &UnitInventory,
 ) -> Option<ItemPickupFailureReason> {
-    if inventory.capacity == 0 {
-        return Some(ItemPickupFailureReason::NoInventorySlots);
-    }
     // Use XZ distance only — the pickup floats above ground so 3D distance
     // would unfairly penalize ground-level units.
     let dx = unit_tf.translation.x - pickup_tf.translation.x;
@@ -376,32 +372,26 @@ fn pickup_failure_for_unit(
     if xz_dist > radius.0 + 1.25 {
         return Some(ItemPickupFailureReason::TooFar);
     }
+    inventory_failure_for_item(pickup.item, inventory)
+}
+
+fn inventory_failure_for_item(
+    item: ItemKind,
+    inventory: &UnitInventory,
+) -> Option<ItemPickupFailureReason> {
+    if inventory.capacity == 0 {
+        return Some(ItemPickupFailureReason::NoInventorySlots);
+    }
     if inventory.items.len() >= inventory.capacity as usize {
         return Some(ItemPickupFailureReason::InventoryFull);
     }
     if inventory
         .items
         .iter()
-        .any(|existing| existing.category() == pickup.item.category())
+        .any(|existing| existing.category() == item.category())
     {
         return Some(ItemPickupFailureReason::CategoryConflict);
     }
-
-    let allowed = match pickup.item.category() {
-        ItemCategory::Bow => matches!(kind, EntityKind::Archer | EntityKind::Scout),
-        ItemCategory::Staff => matches!(kind, EntityKind::Mage | EntityKind::Priest),
-        ItemCategory::Sword => matches!(
-            kind,
-            EntityKind::Soldier | EntityKind::Tank | EntityKind::Knight | EntityKind::Cavalry
-        ),
-        ItemCategory::Armor | ItemCategory::Helmet => kind != EntityKind::Worker,
-        ItemCategory::Ring => true,
-    };
-
-    if !allowed {
-        return Some(ItemPickupFailureReason::WrongUnitType);
-    }
-
     None
 }
 
@@ -445,40 +435,26 @@ fn best_unit_to_approach(candidates: &[PickupCandidate]) -> Option<Entity> {
 
 fn can_pickup_if_close(
     pickup: &ItemPickup,
-    kind: EntityKind,
     inventory: &UnitInventory,
 ) -> bool {
-    if inventory.capacity == 0 {
-        return false;
-    }
-    if inventory.items.len() >= inventory.capacity as usize {
-        return false;
-    }
-    if inventory
-        .items
-        .iter()
-        .any(|existing| existing.category() == pickup.item.category())
-    {
-        return false;
-    }
+    inventory_failure_for_item(pickup.item, inventory).is_none()
+}
 
-    match pickup.item.category() {
-        ItemCategory::Bow => matches!(kind, EntityKind::Archer | EntityKind::Scout),
-        ItemCategory::Staff => matches!(kind, EntityKind::Mage | EntityKind::Priest),
-        ItemCategory::Sword => matches!(
-            kind,
-            EntityKind::Soldier | EntityKind::Tank | EntityKind::Knight | EntityKind::Cavalry
-        ),
-        ItemCategory::Armor | ItemCategory::Helmet => kind != EntityKind::Worker,
-        ItemCategory::Ring => true,
-    }
+fn item_info_message(
+    registry: &ItemRegistry,
+    kind: EntityKind,
+    item: ItemKind,
+) -> Option<&'static str> {
+    registry::item_effect_requirement_message(registry, kind, item)
 }
 
 fn collect_pickup_for_unit(
     commands: &mut Commands,
     changed: &mut MessageWriter<InventoryChanged>,
     collected: &mut MessageWriter<ItemPickupCollected>,
+    registry: &ItemRegistry,
     unit: Entity,
+    kind: EntityKind,
     pickup_entity: Entity,
     item: ItemKind,
     inventory: &mut UnitInventory,
@@ -489,11 +465,65 @@ fn collect_pickup_for_unit(
         pickup: pickup_entity,
         collector: unit,
         item,
+        info_message: item_info_message(registry, kind, item),
     });
     commands.entity(unit).remove::<PendingItemPickup>();
     commands.entity(pickup_entity).insert(PickupCollectVfx {
         timer: Timer::from_seconds(0.18, TimerMode::Once),
     });
+}
+
+fn auto_collect_nearby_pickups(
+    mut commands: Commands,
+    registry: Res<ItemRegistry>,
+    mut changed: MessageWriter<InventoryChanged>,
+    mut collected: MessageWriter<ItemPickupCollected>,
+    pickups: Query<(Entity, &ItemPickup, &Transform, &PickRadius), Without<PickupCollectVfx>>,
+    mut units: Query<(Entity, &Transform, &EntityKind, &mut UnitInventory), With<Unit>>,
+) {
+    let mut collected_pickups = HashSet::new();
+
+    for (pickup_entity, pickup, pickup_tf, radius) in &pickups {
+        if collected_pickups.contains(&pickup_entity) {
+            continue;
+        }
+
+        let mut best_unit = None;
+        let mut best_distance_sq = f32::MAX;
+
+        for (unit, unit_tf, kind, inventory) in &mut units {
+            if pickup_failure_for_unit(pickup, pickup_tf, radius, unit_tf, &inventory).is_some() {
+                continue;
+            }
+
+            let dx = unit_tf.translation.x - pickup_tf.translation.x;
+            let dz = unit_tf.translation.z - pickup_tf.translation.z;
+            let distance_sq = dx * dx + dz * dz;
+            if distance_sq < best_distance_sq {
+                best_distance_sq = distance_sq;
+                best_unit = Some((unit, *kind));
+            }
+        }
+
+        let Some((best_unit, best_kind)) = best_unit else {
+            continue;
+        };
+        let Ok((_, _, _, mut inventory)) = units.get_mut(best_unit) else {
+            continue;
+        };
+        collect_pickup_for_unit(
+            &mut commands,
+            &mut changed,
+            &mut collected,
+            &registry,
+            best_unit,
+            best_kind,
+            pickup_entity,
+            pickup.item,
+            &mut inventory,
+        );
+        collected_pickups.insert(pickup_entity);
+    }
 }
 
 fn collect_item_pickups(
@@ -502,6 +532,7 @@ fn collect_item_pickups(
     mut changed: MessageWriter<InventoryChanged>,
     mut collected: MessageWriter<ItemPickupCollected>,
     mut failed: MessageWriter<ItemPickupFailed>,
+    registry: Res<ItemRegistry>,
     pickups: Query<(&ItemPickup, &Transform, &PickRadius)>,
     mut units: Query<
         (
@@ -522,7 +553,7 @@ fn collect_item_pickups(
 
         let mut candidates = Vec::with_capacity(msg.pickers.len());
         for &picker in &msg.pickers {
-            let Ok((_, unit_tf, kind, inventory, _, _)) = units.get_mut(picker) else {
+            let Ok((_, unit_tf, _kind, inventory, _, _)) = units.get_mut(picker) else {
                 continue;
             };
             let dx = unit_tf.translation.x - pickup_tf.translation.x;
@@ -535,23 +566,24 @@ fn collect_item_pickups(
                     pickup_tf,
                     radius,
                     unit_tf,
-                    *kind,
                     &inventory,
                 ),
-                can_pick_if_close: can_pickup_if_close(pickup, *kind, &inventory),
+                can_pick_if_close: can_pickup_if_close(pickup, &inventory),
             });
         }
 
         match best_unit_for_pickup(&candidates) {
             Ok(best_picker) => {
-                let Ok((_, _, _, mut inventory, _, _)) = units.get_mut(best_picker) else {
+                let Ok((_, _, kind, mut inventory, _, _)) = units.get_mut(best_picker) else {
                     continue;
                 };
                 collect_pickup_for_unit(
                     &mut commands,
                     &mut changed,
                     &mut collected,
+                    &registry,
                     best_picker,
+                    *kind,
                     msg.pickup,
                     pickup.item,
                     &mut inventory,
@@ -603,6 +635,7 @@ fn resolve_pending_item_pickups(
     mut changed: MessageWriter<InventoryChanged>,
     mut collected: MessageWriter<ItemPickupCollected>,
     mut failed: MessageWriter<ItemPickupFailed>,
+    registry: Res<ItemRegistry>,
     pickups: Query<(&ItemPickup, &Transform, &PickRadius)>,
     mut units: Query<
         (
@@ -626,13 +659,15 @@ fn resolve_pending_item_pickups(
             continue;
         };
 
-        match pickup_failure_for_unit(pickup, pickup_tf, radius, unit_tf, *kind, &inventory) {
+        match pickup_failure_for_unit(pickup, pickup_tf, radius, unit_tf, &inventory) {
             None => {
                 collect_pickup_for_unit(
                     &mut commands,
                     &mut changed,
                     &mut collected,
+                    &registry,
                     unit,
+                    *kind,
                     pending.pickup,
                     pickup.item,
                     &mut inventory,
@@ -674,6 +709,64 @@ fn resolve_pending_item_pickups(
                 commands.entity(unit).remove::<PendingItemPickup>();
             }
         }
+    }
+}
+
+fn transfer_inventory_items(
+    mut requests: MessageReader<RequestTransferItem>,
+    mut changed: MessageWriter<InventoryChanged>,
+    mut failed: MessageWriter<ItemTransferFailed>,
+    mut inventories: ParamSet<(
+        Query<&UnitInventory, With<Unit>>,
+        Query<&mut UnitInventory, With<Unit>>,
+    )>,
+) {
+    for msg in requests.read() {
+        if msg.from_unit == msg.to_unit {
+            continue;
+        }
+
+        {
+            let inventories_ro = inventories.p0();
+            let Ok(source_ro) = inventories_ro.get(msg.from_unit) else {
+                continue;
+            };
+            let Some(&item) = source_ro.items.get(msg.from_slot) else {
+                continue;
+            };
+
+            let reason = match inventories_ro.get(msg.to_unit) {
+                Ok(target_ro) => inventory_failure_for_item(item, target_ro),
+                Err(_) => None,
+            };
+            if let Some(reason) = reason {
+                failed.write(ItemTransferFailed {
+                    item,
+                    from_unit: msg.from_unit,
+                    to_unit: msg.to_unit,
+                    reason,
+                });
+                continue;
+            }
+        }
+
+        let mut inventories_rw = inventories.p1();
+        let Ok([mut from_inventory, mut to_inventory]) =
+            inventories_rw.get_many_mut([msg.from_unit, msg.to_unit])
+        else {
+            continue;
+        };
+        if msg.from_slot >= from_inventory.items.len() {
+            continue;
+        }
+        let item = from_inventory.items.remove(msg.from_slot);
+        if inventory_failure_for_item(item, &to_inventory).is_some() {
+            from_inventory.items.insert(msg.from_slot, item);
+            continue;
+        }
+        to_inventory.items.push(item);
+        changed.write(InventoryChanged { unit: msg.from_unit });
+        changed.write(InventoryChanged { unit: msg.to_unit });
     }
 }
 

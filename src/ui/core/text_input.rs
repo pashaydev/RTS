@@ -131,6 +131,9 @@ pub fn text_input_system(
     mut keyboard_events: MessageReader<KeyboardInput>,
     keys: Res<ButtonInput<KeyCode>>,
     theme: Res<Theme>,
+    role: Option<Res<crate::infrastructure::multiplayer::NetRole>>,
+    mut socket: Option<ResMut<bevy_matchbox::prelude::MatchboxSocket>>,
+    mut lobby: Option<ResMut<crate::infrastructure::multiplayer::LobbyState>>,
 ) {
     // ── Focus management via click ──
     let mut clicked_entity: Option<Entity> = None;
@@ -173,6 +176,20 @@ pub fn text_input_system(
                     config.player_name = field.value.clone();
                     profile.name = field.value.clone();
                     db.update_profile_name(&profile.id, &profile.name);
+                    // Sync name to multiplayer lobby if connected
+                    if let Some(ref role) = role {
+                        use crate::infrastructure::multiplayer::NetRole;
+                        if *role.as_ref() == &NetRole::Client {
+                            if let Some(ref mut socket) = socket {
+                                let msg = game_state::message::ClientMessage::NameUpdate {
+                                    seq: 0,
+                                    timestamp: 0.0,
+                                    player_name: field.value.clone(),
+                                };
+                                crate::infrastructure::multiplayer::matchbox_transport::send_to_host(socket, &msg);
+                            }
+                        }
+                    }
                 }
                 break;
             }
@@ -365,6 +382,32 @@ pub fn text_input_system(
                 config.player_name = field.value.clone();
                 profile.name = field.value.clone();
                 db.update_profile_name(&profile.id, &profile.name);
+
+                // Sync name to multiplayer lobby if connected
+                if let Some(ref role) = role {
+                    use crate::infrastructure::multiplayer::NetRole;
+                    match **role {
+                        NetRole::Client => {
+                            if let Some(ref mut socket) = socket {
+                                let msg = game_state::message::ClientMessage::NameUpdate {
+                                    seq: 0,
+                                    timestamp: 0.0,
+                                    player_name: field.value.clone(),
+                                };
+                                crate::infrastructure::multiplayer::matchbox_transport::send_to_host(socket, &msg);
+                            }
+                        }
+                        NetRole::Host => {
+                            if let Some(ref mut lobby) = lobby {
+                                if let Some(host_player) = lobby.players.iter_mut().find(|p| p.is_host) {
+                                    host_player.name = field.value.clone();
+                                }
+                                commands.insert_resource(crate::ui::menu::multiplayer::PendingLobbyBroadcast);
+                            }
+                        }
+                        NetRole::Offline => {}
+                    }
+                }
             }
         }
     }

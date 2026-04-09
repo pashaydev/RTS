@@ -130,8 +130,22 @@ fn tooltip_anchor_under_cursor(
     let ui_h = window.height() / scale;
     let cx = cursor.x / scale;
     let cy = cursor.y / scale;
-    let left = (cx - tooltip_w * 0.5).clamp(6.0, (ui_w - tooltip_w - 6.0).max(6.0));
-    let top = (cy + 16.0).clamp(6.0, (ui_h - tooltip_h - 6.0).max(6.0));
+    let screen_padding = 6.0;
+    let cursor_gap = 16.0;
+
+    let left = (cx - tooltip_w * 0.5)
+        .clamp(screen_padding, (ui_w - tooltip_w - screen_padding).max(screen_padding));
+
+    // Keep the tooltip off the cursor. If there's no room below, flip it above instead of
+    // clamping it into the cursor position, which causes hover/despawn flicker on tall tooltips.
+    let below_top = cy + cursor_gap;
+    let below_fits = below_top + tooltip_h <= ui_h - screen_padding;
+    let top = if below_fits {
+        below_top
+    } else {
+        (cy - cursor_gap - tooltip_h).max(screen_padding)
+    };
+
     (left, top)
 }
 
