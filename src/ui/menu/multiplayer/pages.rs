@@ -244,6 +244,7 @@ pub(crate) fn spawn_host_lobby_page(
         MapSize::Small => 0,
         MapSize::Medium => 1,
         MapSize::Large => 2,
+        MapSize::ExtraLarge => 3,
     };
     spawn_selector_row(
         commands,

@@ -10,6 +10,7 @@ use crate::world::ground::{playable_half_map, HeightMap, TerrainSurfaceDirtyArea
 use super::{
     rotate_local_xz, rotation_y_from_quat, sawmill_tree_slot_world, sawmill_yard_corners,
 };
+use crate::simulation::resources::terrain::GRASS_CHUNK_SIZE;
 
 #[derive(Component)]
 pub(crate) struct SawmillFencePiece {
@@ -752,8 +753,7 @@ pub(super) fn yard_tree_regrowth_system(
 /// Max buildings to clear vegetation for per frame — spreads GPU re-upload
 /// cost when many buildings spawn at once (e.g. AI wall lines).
 const VEGETATION_CLEAR_BUDGET: usize = 2;
-/// Chunk world-space size used for AABB pre-filtering (must match resources.rs).
-const VEG_CHUNK_SIZE: f32 = 32.0;
+// GRASS_CHUNK_SIZE imported from crate::simulation::resources::terrain
 
 pub(super) fn clear_vegetation_around_buildings(
     mut commands: Commands,
@@ -818,9 +818,9 @@ fn clear_vegetation_in_radius(
 
     // Grass chunks store vertices directly in world space.
     for (chunk_entity, chunk, mesh_handle) in grass_chunks.iter() {
-        let chunk_cx = (chunk.chunk_x as f32 + 0.5) * VEG_CHUNK_SIZE;
-        let chunk_cz = (chunk.chunk_z as f32 + 0.5) * VEG_CHUNK_SIZE;
-        let half = VEG_CHUNK_SIZE * 0.5 + clear_radius;
+        let chunk_cx = (chunk.chunk_x as f32 + 0.5) * GRASS_CHUNK_SIZE;
+        let chunk_cz = (chunk.chunk_z as f32 + 0.5) * GRASS_CHUNK_SIZE;
+        let half = GRASS_CHUNK_SIZE * 0.5 + clear_radius;
         if (bx - chunk_cx).abs() > half || (bz - chunk_cz).abs() > half {
             continue;
         }
@@ -847,9 +847,9 @@ fn clear_vegetation_in_radius(
     for (chunk_entity, chunk, chunk_tf, mesh_handle) in deco_chunks.iter() {
         let ox = chunk_tf.translation.x;
         let oz = chunk_tf.translation.z;
-        let chunk_cx = (chunk.chunk_x as f32 + 0.5) * VEG_CHUNK_SIZE;
-        let chunk_cz = (chunk.chunk_z as f32 + 0.5) * VEG_CHUNK_SIZE;
-        let half = VEG_CHUNK_SIZE * 0.5 + clear_radius;
+        let chunk_cx = (chunk.chunk_x as f32 + 0.5) * GRASS_CHUNK_SIZE;
+        let chunk_cz = (chunk.chunk_z as f32 + 0.5) * GRASS_CHUNK_SIZE;
+        let half = GRASS_CHUNK_SIZE * 0.5 + clear_radius;
         if (bx - chunk_cx).abs() > half || (bz - chunk_cz).abs() > half {
             continue;
         }

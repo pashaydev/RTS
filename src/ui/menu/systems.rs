@@ -108,6 +108,7 @@ pub(crate) fn spawn_menu(
         &theme,
         &db,
         &profile,
+        &asset_server,
     );
 }
 
@@ -127,6 +128,7 @@ fn dispatch_page(
     theme: &Theme,
     db: &GameDatabase,
     profile: &ActiveProfile,
+    asset_server: &AssetServer,
 ) {
     match *page {
         MenuPage::Title => super::title::spawn_title_page(commands, container, root, fonts, theme),
@@ -148,7 +150,7 @@ fn dispatch_page(
             )
         }
         MenuPage::LoadGame => {
-            pages::spawn_load_game_page(commands, container, fonts, theme, db, profile)
+            pages::spawn_load_game_page(commands, container, fonts, theme, db, profile, asset_server)
         }
     }
 }
@@ -170,9 +172,9 @@ pub(crate) fn refresh_menu_page(
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
     theme: Res<Theme>,
-    db_and_profile: (Res<GameDatabase>, Res<ActiveProfile>),
+    extras: (Res<GameDatabase>, Res<ActiveProfile>, Res<AssetServer>),
 ) {
-    let (db, profile) = db_and_profile;
+    let (db, profile, asset_server) = extras;
 
     if !page.is_changed() {
         return;
@@ -213,6 +215,7 @@ pub(crate) fn refresh_menu_page(
         &theme,
         &db,
         &profile,
+        &asset_server,
     );
 }
 
@@ -233,9 +236,9 @@ pub(crate) fn rebuild_dirty_menu(
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
     theme: Res<Theme>,
-    db_and_profile: (Res<GameDatabase>, Res<ActiveProfile>),
+    extras: (Res<GameDatabase>, Res<ActiveProfile>, Res<AssetServer>),
 ) {
-    let (db, profile) = db_and_profile;
+    let (db, profile, asset_server) = extras;
 
     if dirty.is_none() {
         return;
@@ -277,6 +280,7 @@ pub(crate) fn rebuild_dirty_menu(
         &theme,
         &db,
         &profile,
+        &asset_server,
     );
 }
 
@@ -378,6 +382,7 @@ pub(crate) fn update_selector_visuals(
                         MapSize::Small => 0,
                         MapSize::Medium => 1,
                         MapSize::Large => 2,
+                        MapSize::ExtraLarge => 3,
                     }
             }
             SelectorField::ResourceDensity => {
@@ -678,4 +683,3 @@ pub(crate) fn random_name_system(
         }
     }
 }
-

@@ -448,6 +448,7 @@ fn spawn_world_settings_panel(
         MapSize::Small => 0,
         MapSize::Medium => 1,
         MapSize::Large => 2,
+        MapSize::ExtraLarge => 3,
     };
     let res_idx = match config.resource_density {
         ResourceDensity::Sparse => 0,

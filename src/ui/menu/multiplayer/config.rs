@@ -68,6 +68,7 @@ impl SerializableGameConfig {
                 MapSize::Small => 0,
                 MapSize::Medium => 1,
                 MapSize::Large => 2,
+                MapSize::ExtraLarge => 3,
             },
             resource_density: match config.resource_density {
                 ResourceDensity::Sparse => 0,

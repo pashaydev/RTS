@@ -500,6 +500,11 @@ impl StatusEffects {
 #[derive(Component)]
 pub struct FootstepTimer(pub Timer);
 
+/// Brief dampening period after a unit arrives at its destination.
+/// Reduces avoidance forces to prevent the "shoved backward" visual glitch.
+#[derive(Component)]
+pub struct JustArrived(pub Timer);
+
 // ── Animation ──
 
 /// Tracks which animation state a unit is currently playing.

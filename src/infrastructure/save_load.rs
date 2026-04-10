@@ -23,6 +23,9 @@ use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::infrastructure::multiplayer::NetRole;
 use crate::simulation::victory::{FactionStatus as VictFactionStatus, VictoryState};
 
+use bevy::light::NotShadowCaster;
+use rand::Rng;
+
 // ── Plugin ──────────────────────────────────────────────────────────────────
 
 pub struct SaveLoadPlugin;
@@ -50,6 +53,12 @@ impl Plugin for SaveLoadPlugin {
         .add_systems(
             Update,
             restore_production_states.run_if(in_state(AppState::InGame)),
+        )
+        .add_systems(
+            Update,
+            restore_load_visuals
+                .run_if(resource_exists::<PendingLoadVisuals>)
+                .run_if(in_state(AppState::InGame)),
         );
     }
 }
@@ -77,6 +86,10 @@ struct PendingFogRestore {
 }
 
 /// Deferred production state restoration — inserted on building entities during load.
+#[derive(Component)]
+#[derive(Resource)]
+struct PendingLoadVisuals;
+
 #[derive(Component)]
 struct PendingProductionRestore {
     active_recipe: Option<usize>,
@@ -1901,7 +1914,7 @@ pub fn load_saved_game(
     let mut all_res = AllPlayerResources::default();
     for (fi, amounts) in &save.resources {
         let faction = u8_to_faction(*fi);
-        let mut pr = PlayerResources::default();
+        let mut pr = PlayerResources::empty();
         for (i, &val) in amounts.iter().enumerate() {
             if i < pr.amounts.len() {
                 pr.amounts[i] = val;
@@ -2602,7 +2615,10 @@ pub fn load_saved_game(
         commands.insert_resource(ControlGroups { groups });
     }
 
-    // 14. Remove PendingLoad to signal completion
+    // 14. Queue visual restoration for resource nodes, trees, etc.
+    commands.insert_resource(PendingLoadVisuals);
+
+    // 15. Remove PendingLoad to signal completion
     commands.remove_resource::<PendingLoad>();
 
     info!(
@@ -2789,5 +2805,165 @@ fn restore_production_states(
         }
         ps.auto_repeat = pending.auto_repeat;
         commands.entity(entity).remove::<PendingProductionRestore>();
+    }
+}
+
+/// Attaches visual components (meshes, scene roots, materials) to resource nodes,
+/// trees, and growing resources that were spawned without visuals during game load.
+fn restore_load_visuals(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    model_assets: Res<ModelAssets>,
+    node_mats: Res<ResourceNodeMaterials>,
+    resource_nodes: Query<
+        (Entity, &ResourceNode, &Transform),
+        (Without<Mesh3d>, Without<SceneRoot>),
+    >,
+    saplings: Query<(Entity, &Sapling), Without<SceneRoot>>,
+    growing_trees: Query<(Entity, &GrowingTree), Without<SceneRoot>>,
+    growing_resources: Query<
+        (Entity, &GrowingResource, &Transform),
+        (Without<Mesh3d>, Without<SceneRoot>),
+    >,
+) {
+    let has_tree_models = !model_assets.trees.is_empty();
+    let has_rock_models = !model_assets.rocks.is_empty();
+    let mut rng = rand::rng();
+
+    // ── Resource nodes ──
+    let oil_mesh = meshes.add(Cylinder::new(0.5, 1.2));
+
+    for (entity, node, _tf) in &resource_nodes {
+        let rt = node.resource_type;
+
+        if rt == ResourceType::Wood && has_tree_models {
+            let idx = rng.random_range(0..model_assets.trees.len());
+            let scene_handle = model_assets.trees[idx].clone();
+            commands.entity(entity).insert((
+                MatureTree,
+                FogHideable::Object,
+                PickRadius(3.0),
+                SceneRoot(scene_handle),
+                NotShadowCaster,
+                TerrainHeightOffset(0.0),
+            ));
+        } else if matches!(
+            rt,
+            ResourceType::Copper
+                | ResourceType::Iron
+                | ResourceType::Gold
+                | ResourceType::Stone
+        ) && has_rock_models
+        {
+            let scene_handle =
+                model_assets.rocks[rng.random_range(0..model_assets.rocks.len())].clone();
+            commands.entity(entity).insert((
+                FogHideable::Object,
+                PickRadius(1.8),
+                SceneRoot(scene_handle),
+                NotShadowCaster,
+                TerrainHeightOffset(0.0),
+            ));
+        } else {
+            // Oil or fallback primitive mesh
+            let (mesh, mat, half_h) = match rt {
+                ResourceType::Oil => (oil_mesh.clone(), node_mats.oil.clone(), 0.6),
+                ResourceType::Copper => (
+                    meshes.add(Cuboid::new(1.0, 0.8, 1.0)),
+                    node_mats.copper.clone(),
+                    0.4,
+                ),
+                ResourceType::Iron => (
+                    meshes.add(Cuboid::new(1.0, 0.8, 1.0)),
+                    node_mats.iron.clone(),
+                    0.4,
+                ),
+                ResourceType::Stone => (
+                    meshes.add(Cuboid::new(0.9, 0.7, 0.9)),
+                    node_mats.stone.clone(),
+                    0.35,
+                ),
+                _ => (
+                    meshes.add(Cuboid::new(0.6, 2.5, 0.6)),
+                    node_mats.wood.clone(),
+                    1.25,
+                ),
+            };
+            commands.entity(entity).insert((
+                FogHideable::Object,
+                PickRadius(half_h * 1.5),
+                Mesh3d(mesh),
+                MeshMaterial3d(mat),
+                NotShadowCaster,
+                TerrainHeightOffset(half_h),
+            ));
+        }
+    }
+
+    // ── Saplings (growing trees) ──
+    for (entity, _sapling) in &saplings {
+        if has_tree_models {
+            let idx = rng.random_range(0..model_assets.trees.len());
+            let scene_handle = model_assets.trees[idx].clone();
+            commands.entity(entity).insert((
+                FogHideable::Object,
+                SceneRoot(scene_handle),
+            ));
+        }
+    }
+
+    // ── Growing trees ──
+    for (entity, _growing) in &growing_trees {
+        if has_tree_models {
+            let idx = rng.random_range(0..model_assets.trees.len());
+            let scene_handle = model_assets.trees[idx].clone();
+            commands.entity(entity).insert((
+                FogHideable::Object,
+                SceneRoot(scene_handle),
+            ));
+        }
+    }
+
+    // ── Growing resources (ore/oil emerging near buildings) ──
+    for (entity, res, _tf) in &growing_resources {
+        let rt = res.resource_type;
+        if matches!(
+            rt,
+            ResourceType::Copper | ResourceType::Iron | ResourceType::Gold | ResourceType::Stone
+        ) && has_rock_models
+        {
+            let scene_handle =
+                model_assets.rocks[rng.random_range(0..model_assets.rocks.len())].clone();
+            commands.entity(entity).insert((
+                FogHideable::Object,
+                SceneRoot(scene_handle),
+                TerrainHeightOffset(0.0),
+            ));
+        } else {
+            // Oil or fallback
+            let mesh = meshes.add(Cylinder::new(0.5, 1.2));
+            let mat = node_mats.oil.clone();
+            commands.entity(entity).insert((
+                FogHideable::Object,
+                Mesh3d(mesh),
+                MeshMaterial3d(mat),
+                TerrainHeightOffset(0.6),
+            ));
+        }
+    }
+
+    // Note: ItemPickup visuals are not restored — they're ephemeral entities
+    // that expire quickly and use complex multi-child visual hierarchies.
+
+    commands.remove_resource::<PendingLoadVisuals>();
+
+    let node_count = resource_nodes.iter().count();
+    let tree_count = saplings.iter().count() + growing_trees.iter().count();
+    let growing_count = growing_resources.iter().count();
+    if node_count + tree_count + growing_count > 0 {
+        info!(
+            "Restored load visuals: {} resource nodes, {} trees, {} growing resources",
+            node_count, tree_count, growing_count,
+        );
     }
 }

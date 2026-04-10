@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use crate::blueprints::IsRanged;
 use crate::types::*;
 
-use super::{approach_attack_target, attack_surface_distance, CombatBudgetState};
+use super::{attack_surface_distance, CombatBudgetState, CombatCoreSet};
 
 pub struct CombatSlotsPlugin;
 
@@ -15,16 +15,22 @@ impl Plugin for CombatSlotsPlugin {
             (cleanup_stale_slot_claims, assign_melee_slot_claims)
                 .chain()
                 .in_set(GameFlowSet::Simulation)
-                .before(approach_attack_target)
+                .before(CombatCoreSet::Approach)
                 .run_if(in_state(AppState::InGame)),
         );
     }
 }
 
 fn intended_attack_target(
+    engagement: Option<&Engagement>,
     intent: Option<&CombatIntent>,
     target_lock: Option<&CombatTargetLock>,
 ) -> Option<Entity> {
+    if let Some(engagement) = engagement {
+        if let Some(target) = engagement.target {
+            return Some(target);
+        }
+    }
     match intent {
         Some(CombatIntent::Attack(target, _)) => Some(*target),
         Some(CombatIntent::AttackMove(_, _)) => target_lock.map(|lock| lock.target),
@@ -52,12 +58,13 @@ fn cleanup_stale_slot_claims(
     attackers: Query<(
         Entity,
         &SlotClaim,
+        Option<&Engagement>,
         Option<&CombatIntent>,
         Option<&CombatTargetLock>,
     )>,
 ) {
-    for (entity, claim, intent, lock) in &attackers {
-        let intended = intended_attack_target(intent, lock);
+    for (entity, claim, engagement, intent, lock) in &attackers {
+        let intended = intended_attack_target(engagement, intent, lock);
         if intended != Some(claim.target) || !all_entities.contains(claim.target) {
             commands.entity(entity).remove::<SlotClaim>();
         }
@@ -76,9 +83,11 @@ fn assign_melee_slot_claims(
             &Transform,
             &AttackRange,
             Option<&AttackTiming>,
+            Option<&Engagement>,
             Option<&CombatIntent>,
             Option<&CombatTargetLock>,
             Option<&SlotClaim>,
+            Option<&MeleeContact>,
         ),
         (
             Or<(With<Unit>, With<Mob>)>,
@@ -93,10 +102,13 @@ fn assign_melee_slot_claims(
     let now = time.elapsed_secs_f64();
     let mut per_target: HashMap<Entity, Vec<(Entity, Vec3, f32, Option<u16>)>> = HashMap::new();
 
-    for (entity, tf, range, timing, intent, lock, claim) in &attackers {
-        let Some(target) = intended_attack_target(intent, lock) else {
+    for (entity, tf, range, timing, engagement, intent, lock, claim, contact) in &attackers {
+        let Some(target) = intended_attack_target(engagement, intent, lock) else {
             continue;
         };
+        if contact.is_some_and(|contact| contact.target == target && now < contact.sticky_until) {
+            continue;
+        }
         if let Ok(target_tf) = target_positions.get(target) {
             let preferred_range = timing
                 .map(|timing| timing.minimum_range.max(range.0 * 0.85))

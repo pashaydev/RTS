@@ -6,6 +6,26 @@ const DEFAULT_COMMAND_BUFFER_TTL_SECS: f64 = 0.35;
 const DEFAULT_MANUAL_TARGET_LOCK_SECS: f64 = 1.5;
 const DEFAULT_AUTO_TARGET_LOCK_SECS: f64 = 1.1;
 
+fn make_engagement(
+    target: Option<Entity>,
+    source: IntentSource,
+    mode: EngageMode,
+    anchor: Vec3,
+    issue_time: f64,
+    persistence_secs: f64,
+) -> Engagement {
+    Engagement {
+        target,
+        source,
+        mode,
+        anchor,
+        acquired_at: issue_time,
+        last_confirmed_at: issue_time,
+        persistence_until: issue_time + persistence_secs,
+        status: EngageStatus::Acquiring,
+    }
+}
+
 pub struct CombatIntentsPlugin;
 
 impl Plugin for CombatIntentsPlugin {
@@ -38,6 +58,7 @@ pub fn apply_manual_move_intent(
             expires_at: Some(issue_time + DEFAULT_COMMAND_BUFFER_TTL_SECS),
         })
         .remove::<CombatTargetLock>()
+        .remove::<Engagement>()
         .remove::<AttackCommit>()
         .remove::<PathBlockedTimer>()
         .remove::<SlotClaim>();
@@ -62,6 +83,14 @@ pub fn apply_manual_attack_intent(
             locked_until: issue_time + DEFAULT_MANUAL_TARGET_LOCK_SECS,
             source: IntentSource::Manual,
         })
+        .insert(make_engagement(
+            Some(target),
+            IntentSource::Manual,
+            EngageMode::Direct,
+            Vec3::ZERO,
+            issue_time,
+            DEFAULT_MANUAL_TARGET_LOCK_SECS,
+        ))
         .remove::<AttackCommit>()
         .remove::<PathBlockedTimer>()
         .remove::<SlotClaim>();
@@ -81,6 +110,14 @@ pub fn apply_manual_attack_move_intent(
             issue_time,
             expires_at: Some(issue_time + DEFAULT_COMMAND_BUFFER_TTL_SECS),
         })
+        .insert(make_engagement(
+            None,
+            IntentSource::Manual,
+            EngageMode::AttackMove,
+            destination,
+            issue_time,
+            DEFAULT_MANUAL_TARGET_LOCK_SECS,
+        ))
         .remove::<CombatTargetLock>()
         .remove::<AttackCommit>()
         .remove::<PathBlockedTimer>()
@@ -96,6 +133,14 @@ pub fn apply_manual_hold_intent(commands: &mut Commands, entity: Entity, issue_t
             issue_time,
             expires_at: Some(issue_time + DEFAULT_COMMAND_BUFFER_TTL_SECS),
         })
+        .insert(make_engagement(
+            None,
+            IntentSource::Manual,
+            EngageMode::Hold,
+            Vec3::ZERO,
+            issue_time,
+            DEFAULT_MANUAL_TARGET_LOCK_SECS,
+        ))
         .remove::<CombatTargetLock>()
         .remove::<AttackCommit>()
         .remove::<PathBlockedTimer>()
@@ -111,6 +156,7 @@ pub fn clear_combat_intent(commands: &mut Commands, entity: Entity, issue_time: 
             expires_at: Some(issue_time + DEFAULT_COMMAND_BUFFER_TTL_SECS),
         })
         .remove::<CombatTargetLock>()
+        .remove::<Engagement>()
         .remove::<AttackCommit>()
         .remove::<PathBlockedTimer>()
         .remove::<SlotClaim>();
@@ -122,6 +168,7 @@ pub fn reset_combat_state(commands: &mut Commands, entity: Entity) {
         .insert(CombatIntent::None)
         .remove::<BufferedCommand>()
         .remove::<CombatTargetLock>()
+        .remove::<Engagement>()
         .remove::<AttackCommit>()
         .remove::<PathBlockedTimer>()
         .remove::<SlotClaim>();
@@ -134,6 +181,7 @@ pub fn apply_auto_move_intent(commands: &mut Commands, entity: Entity, destinati
         .insert(CombatIntent::Move(destination))
         .remove::<BufferedCommand>()
         .remove::<CombatTargetLock>()
+        .remove::<Engagement>()
         .remove::<AttackCommit>()
         .remove::<PathBlockedTimer>()
         .remove::<SlotClaim>();
@@ -155,6 +203,14 @@ pub fn apply_auto_attack_intent(
             locked_until: issue_time + DEFAULT_AUTO_TARGET_LOCK_SECS,
             source: IntentSource::Auto,
         })
+        .insert(make_engagement(
+            Some(target),
+            IntentSource::Auto,
+            EngageMode::Direct,
+            anchor,
+            issue_time,
+            DEFAULT_AUTO_TARGET_LOCK_SECS,
+        ))
         .insert(LeashOrigin(anchor))
         .remove::<BufferedCommand>()
         .remove::<AttackCommit>()
@@ -168,6 +224,8 @@ pub fn set_intent_target_lock(
     target: Entity,
     source: IntentSource,
     issue_time: f64,
+    mode: EngageMode,
+    anchor: Vec3,
 ) {
     let lock_secs = match source {
         IntentSource::Manual => DEFAULT_MANUAL_TARGET_LOCK_SECS,
@@ -177,6 +235,16 @@ pub fn set_intent_target_lock(
         target,
         locked_until: issue_time + lock_secs,
         source,
+    });
+    commands.entity(entity).insert(Engagement {
+        target: Some(target),
+        source,
+        mode,
+        anchor,
+        acquired_at: issue_time,
+        last_confirmed_at: issue_time,
+        persistence_until: issue_time + lock_secs,
+        status: EngageStatus::Acquiring,
     });
 }
 

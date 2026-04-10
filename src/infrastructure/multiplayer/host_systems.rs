@@ -1479,6 +1479,7 @@ fn map_size_to_net(map_size: MapSize) -> u8 {
         MapSize::Small => 0,
         MapSize::Medium => 1,
         MapSize::Large => 2,
+        MapSize::ExtraLarge => 3,
     }
 }
 

@@ -14,7 +14,7 @@ impl Plugin for VfxPlugin {
         app.add_systems(Startup, create_vfx_assets).add_systems(
             Update,
             (
-                update_projectiles,
+                handle_projectile_impacts,
                 update_vfx_flashes,
                 update_gather_particles,
                 footstep_dust_spawner,
@@ -115,140 +115,59 @@ fn create_vfx_assets(
     });
 }
 
-fn update_projectiles(
+fn handle_projectile_impacts(
     mut commands: Commands,
-    time: Res<Time>,
+    mut impact_events: bevy::ecs::message::MessageReader<ProjectileImpactEvent>,
     vfx_assets: Option<Res<VfxAssets>>,
-    spatial_grid: Res<crate::world::spatial::SpatialHashGrid>,
-    mut projectiles: Query<(Entity, &mut Transform, &Projectile, Option<&AoeSplash>)>,
-    mut targets: Query<
-        (
-            &Transform,
-            &mut Health,
-            Option<&ArmorType>,
-            Option<&Faction>,
-            Option<&mut ReservedIncomingDamage>,
-            Option<&HitRecoil>,
-        ),
-        Without<Projectile>,
-    >,
-    _factions: Query<&Faction>,
+    targets: Query<(&Transform, Option<&HitRecoil>), Without<Projectile>>,
 ) {
     let Some(vfx) = vfx_assets else { return };
 
-    for (proj_entity, mut proj_tf, projectile, opt_aoe) in &mut projectiles {
-        let Ok((target_tf, _, _, _, _, opt_existing_recoil)) = targets.get(projectile.target) else {
-            // Target gone, despawn projectile
-            commands.entity(proj_entity).try_despawn();
+    for impact in impact_events.read() {
+        let Ok((target_tf, opt_existing_recoil)) = targets.get(impact.target) else {
             continue;
         };
 
-        let target_pos = target_tf.translation;
-        // Use existing recoil's base_scale to avoid ratcheting scale up on repeated hits
         let target_scale = opt_existing_recoil.map_or(target_tf.scale, |r| r.base_scale);
-        let dir = target_pos - proj_tf.translation;
-        let dist = dir.length();
-
-        if dist < 0.5 {
-            {
-                let Ok((_, mut health, opt_armor, _, opt_reserved, _)) =
-                    targets.get_mut(projectile.target)
-                else {
-                    commands.entity(proj_entity).try_despawn();
-                    continue;
-                };
-
-                // Hit! Clear damage reservation from this projectile's source
-                if let Some(mut reserved) = opt_reserved {
-                    let src = projectile.source;
-                    reserved.reservations.retain(|(s, _, _)| *s != src);
-                }
-
-                // Apply damage with armor multiplier
-                let multiplier = opt_armor
-                    .map(|armor| projectile.damage_type.multiplier_vs(*armor))
-                    .unwrap_or(1.0);
-                health.current -= projectile.damage * multiplier;
+        let impact_material = match impact.fx_kind {
+            CombatFxKind::Slash | CombatFxKind::Shadow => vfx.melee_material.clone(),
+            CombatFxKind::Pierce | CombatFxKind::Arcane | CombatFxKind::Siege => {
+                vfx.impact_material.clone()
             }
-
-            // AoE splash damage if present
-            if let Some(aoe) = opt_aoe {
-                let nearby = spatial_grid.query_radius(target_pos, aoe.radius);
-                for (splash_entity, splash_pos) in &nearby {
-                    if *splash_entity == projectile.target {
-                        continue; // already damaged primary target
-                    }
-                    if let Ok((_, mut splash_health, splash_armor, _, _, _)) =
-                        targets.get_mut(*splash_entity)
-                    {
-                        let splash_dist = (target_pos - *splash_pos).length();
-                        let dmg_mult = if aoe.falloff {
-                            (1.0 - splash_dist / aoe.radius).max(0.3)
-                        } else {
-                            1.0
-                        };
-                        let armor_mult = splash_armor
-                            .map(|a| projectile.damage_type.multiplier_vs(*a))
-                            .unwrap_or(1.0);
-                        splash_health.current -= projectile.damage * dmg_mult * armor_mult;
-                    }
-                }
-            }
-
-            // Spawn impact flash
-            let impact_material = match projectile.fx_kind {
-                CombatFxKind::Slash | CombatFxKind::Shadow => vfx.melee_material.clone(),
-                CombatFxKind::Pierce | CombatFxKind::Arcane | CombatFxKind::Siege => {
-                    vfx.impact_material.clone()
-                }
-            };
-
-            let impact_scale = if opt_aoe.is_some() {
-                projectile.impact_scale * 2.0
-            } else {
-                projectile.impact_scale
-            };
-
-            commands.spawn((
-                VfxFlash {
-                    timer: Timer::from_seconds(0.2, TimerMode::Once),
-                    start_scale: impact_scale * 0.3,
-                    end_scale: impact_scale,
-                    rise_speed: 0.6,
-                },
-                FogHideable::Vfx,
-                Mesh3d(vfx.sphere_mesh.clone()),
-                MeshMaterial3d(impact_material),
-                Transform::from_translation(target_pos).with_scale(Vec3::splat(impact_scale * 0.3)),
-                NotShadowCaster,
-                NotShadowReceiver,
-            ));
-
-            // ── Juice: hit recoil + hit reaction on ranged hit ──
-            let hit_dir = dir.normalize_or_zero();
-            let hit_dir_flat = Vec3::new(-hit_dir.x, 0.0, -hit_dir.z); // projectile dir is toward target
-            commands.entity(projectile.target).insert(HitRecoil {
-                direction: hit_dir_flat,
-                timer: Timer::from_seconds(0.14, TimerMode::Once),
-                strength: (0.1 + projectile.damage * 0.003).min(0.26),
-                lift: (0.02 + projectile.damage * 0.001).min(0.07),
-                base_scale: target_scale,
-                applied_offset: Vec3::ZERO,
-            });
-            commands
-                .entity(projectile.target)
-                .insert(HitReaction(Timer::from_seconds(0.2, TimerMode::Once)));
-
-            commands.entity(proj_entity).try_despawn();
+        };
+        let impact_scale = if impact.is_aoe {
+            impact.impact_scale * 2.0
         } else {
-            let forward = dir.normalize();
-            let step = forward * projectile.speed * time.delta_secs();
-            proj_tf.translation += step;
-            // Orient arrow/bolt projectiles to face travel direction
-            if projectile.orient_to_velocity {
-                proj_tf.rotation = Quat::from_rotation_arc(Vec3::Z, forward);
-            }
-        }
+            impact.impact_scale
+        };
+
+        commands.spawn((
+            VfxFlash {
+                timer: Timer::from_seconds(0.2, TimerMode::Once),
+                start_scale: impact_scale * 0.3,
+                end_scale: impact_scale,
+                rise_speed: 0.6,
+            },
+            FogHideable::Vfx,
+            Mesh3d(vfx.sphere_mesh.clone()),
+            MeshMaterial3d(impact_material),
+            Transform::from_translation(impact.position).with_scale(Vec3::splat(impact_scale * 0.3)),
+            NotShadowCaster,
+            NotShadowReceiver,
+        ));
+
+        let hit_dir_flat = Vec3::new(-impact.direction.x, 0.0, -impact.direction.z);
+        commands.entity(impact.target).insert(HitRecoil {
+            direction: hit_dir_flat,
+            timer: Timer::from_seconds(0.14, TimerMode::Once),
+            strength: (0.1 + impact.damage * 0.003).min(0.26),
+            lift: (0.02 + impact.damage * 0.001).min(0.07),
+            base_scale: target_scale,
+            applied_offset: Vec3::ZERO,
+        });
+        commands
+            .entity(impact.target)
+            .insert(HitReaction(Timer::from_seconds(0.2, TimerMode::Once)));
     }
 }
 

@@ -414,7 +414,7 @@ pub struct GrassChunkLod {
 }
 
 /// Distance² threshold where grass switches from full to reduced density.
-pub const GRASS_LOD_SWITCH_SQ: f32 = 50.0 * 50.0;
+pub const GRASS_LOD_SWITCH_SQ: f32 = 75.0 * 75.0;
 
 #[derive(Resource, Default)]
 pub struct GrassChunkMap(pub HashMap<(i32, i32), Entity>);

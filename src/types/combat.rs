@@ -49,6 +49,38 @@ pub enum CombatIntent {
     Hold,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum EngageMode {
+    #[default]
+    Direct,
+    AttackMove,
+    Hold,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum EngageStatus {
+    #[default]
+    Acquiring,
+    Approaching,
+    InBand,
+    Windup,
+    Recovery,
+    Blocked,
+}
+
+/// Authoritative runtime combat state for a unit or mob.
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct Engagement {
+    pub target: Option<Entity>,
+    pub source: IntentSource,
+    pub mode: EngageMode,
+    pub anchor: Vec3,
+    pub acquired_at: f64,
+    pub last_confirmed_at: f64,
+    pub persistence_until: f64,
+    pub status: EngageStatus,
+}
+
 // ---------------------------------------------------------------------------
 // 5. BufferedCommandKind
 // ---------------------------------------------------------------------------
@@ -256,6 +288,13 @@ pub struct CombatHotspots {
     pub spots: Vec<(Vec3, Entity, Faction)>,
 }
 
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RecentCombatDamage {
+    pub attacker: Entity,
+    pub observed_at: f64,
+    pub expires_at: f64,
+}
+
 // ---------------------------------------------------------------------------
 // 19. LeashOrigin
 // ---------------------------------------------------------------------------
@@ -280,6 +319,15 @@ pub struct CombatTuning {
     pub command_buffer_ttl_secs: f32,
     pub manual_target_lock_secs: f32,
     pub auto_target_lock_secs: f32,
+    pub retarget_grace_secs: f32,
+    pub retarget_score_margin: f32,
+    pub range_stay_buffer: f32,
+    pub minimum_range_stay_buffer: f32,
+    pub melee_contact_sticky_secs: f32,
+    pub blocked_repath_interval: f32,
+    pub squad_focus_hold_secs: f32,
+    pub damage_memory_secs: f32,
+    pub ally_alert_assist_range: f32,
 }
 
 impl Default for CombatTuning {
@@ -295,6 +343,15 @@ impl Default for CombatTuning {
             command_buffer_ttl_secs: 0.35,
             manual_target_lock_secs: 0.75,
             auto_target_lock_secs: 0.5,
+            retarget_grace_secs: 0.8,
+            retarget_score_margin: 0.35,
+            range_stay_buffer: 0.45,
+            minimum_range_stay_buffer: 0.25,
+            melee_contact_sticky_secs: 0.5,
+            blocked_repath_interval: 0.2,
+            squad_focus_hold_secs: 1.2,
+            damage_memory_secs: 1.6,
+            ally_alert_assist_range: 16.0,
         }
     }
 }
@@ -506,6 +563,23 @@ pub struct AttackRecovery {
 pub struct ChaseTimer {
     pub elapsed: f32,
     pub max_secs: f32,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct MeleeContact {
+    pub target: Entity,
+    pub sticky_until: f64,
+}
+
+#[derive(Message, Clone, Copy, Debug)]
+pub struct ProjectileImpactEvent {
+    pub position: Vec3,
+    pub target: Entity,
+    pub damage: f32,
+    pub fx_kind: CombatFxKind,
+    pub impact_scale: f32,
+    pub is_aoe: bool,
+    pub direction: Vec3,
 }
 
 // ---------------------------------------------------------------------------

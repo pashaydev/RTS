@@ -165,7 +165,7 @@ impl ItemDisabledReason {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ItemStateEntry {
     pub item: ItemKind,
     pub enabled: bool,
@@ -180,7 +180,7 @@ pub struct UnitInventory {
     pub items: Vec<ItemKind>,
 }
 
-#[derive(Component, Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Component, Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ItemRuntimeState {
     pub items: Vec<ItemStateEntry>,
 }

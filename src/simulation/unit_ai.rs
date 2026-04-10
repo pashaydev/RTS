@@ -43,7 +43,10 @@ impl Plugin for UnitAiPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                update_combat_hotspots
+                (
+                    cleanup_recent_combat_damage,
+                    update_combat_hotspots,
+                )
                     .in_set(UnitAiSet::Hotspots)
                     .run_if(in_state(AppState::InGame)),
             )
@@ -110,7 +113,7 @@ fn stance_leash_distance(stance: UnitStance, tuning: &CombatTuning) -> f32 {
 fn update_combat_hotspots(
     mut hotspots: ResMut<CombatHotspots>,
     mut frame_counter: Local<u32>,
-    units: Query<(&Transform, &UnitState, &Faction), With<Unit>>,
+    units: Query<(&Transform, &UnitState, &Faction, Option<&RecentCombatDamage>), With<Unit>>,
 ) {
     *frame_counter = frame_counter.wrapping_add(1);
     // Only update every 6 frames to save cost
@@ -118,12 +121,31 @@ fn update_combat_hotspots(
         return;
     }
     hotspots.spots.clear();
-    for (tf, state, faction) in &units {
+    for (tf, state, faction, recent_damage) in &units {
         if let UnitState::Attacking(target) = *state {
             hotspots.spots.push((tf.translation, target, *faction));
+            continue;
+        }
+        if let Some(recent_damage) = recent_damage {
+            hotspots
+                .spots
+                .push((tf.translation, recent_damage.attacker, *faction));
         }
     }
     hotspots.spots.truncate(128);
+}
+
+fn cleanup_recent_combat_damage(
+    mut commands: Commands,
+    time: Res<Time>,
+    memories: Query<(Entity, &RecentCombatDamage)>,
+) {
+    let now = time.elapsed_secs_f64();
+    for (entity, memory) in &memories {
+        if now > memory.expires_at {
+            commands.entity(entity).remove::<RecentCombatDamage>();
+        }
+    }
 }
 
 fn decision_priority_system(
@@ -146,11 +168,15 @@ fn decision_priority_system(
             &Health,
             Option<&AttackRange>,
             &TaskQueue,
-            Option<&TargetingProfile>,
-            Option<&DamageType>,
-            Option<&CombatIntent>,
-            Option<&CombatTargetLock>,
-            Option<&mut CombatThinkTimer>,
+            (
+                Option<&TargetingProfile>,
+                Option<&DamageType>,
+                Option<&RecentCombatDamage>,
+                Option<&mut Engagement>,
+                Option<&CombatIntent>,
+                Option<&CombatTargetLock>,
+                Option<&mut CombatThinkTimer>,
+            ),
             (Option<&TacticalRole>, Option<&ManualIdleSince>),
         ),
         With<Unit>,
@@ -205,11 +231,15 @@ fn decision_priority_system(
             health,
             attack_range,
             task_queue,
-            opt_targeting_profile,
-            opt_damage_type,
-            combat_intent,
-            target_lock,
-            opt_think_timer,
+            (
+                opt_targeting_profile,
+                opt_damage_type,
+                opt_recent_damage,
+                opt_engagement,
+                combat_intent,
+                target_lock,
+                opt_think_timer,
+            ),
             (opt_tactical_role, manual_idle_since),
         ),
     ) in units.iter_mut().enumerate()
@@ -226,11 +256,10 @@ fn decision_priority_system(
             continue;
         }
 
-        // Skip units with manual orders, queued tasks, or in manual-idle grace period
+        // Skip units with manual orders or queued tasks
         if *source == TaskSource::Manual
             || task_queue.current.is_some()
             || !task_queue.queue.is_empty()
-            || manual_idle_since.is_some_and(|s| now - s.0 < 5.0)
         {
             continue;
         }
@@ -249,6 +278,43 @@ fn decision_priority_system(
             | UnitState::Patrolling { .. }
             | UnitState::AttackMoving(_) => continue,
             _ => {}
+        }
+
+        // Manual-idle grace period: combat units get a short grace (0.5s) so they
+        // react to nearby threats quickly; non-combat units (workers) keep a longer
+        // grace (5s) to prevent AI from immediately reassigning them after a manual move.
+        let grace_secs = if attack_range.is_some() { 0.5 } else { 5.0 };
+        let in_grace = manual_idle_since.is_some_and(|s| now - s.0 < grace_secs);
+
+        // ── Priority 1: Damage response (bypasses grace period entirely) ──
+        if let Some(recent_damage) = opt_recent_damage {
+            let attacker_still_hostile = now <= recent_damage.expires_at
+                && factions
+                    .get(recent_damage.attacker)
+                    .ok()
+                    .is_some_and(|target_faction| teams.is_hostile(faction, target_faction));
+            if attacker_still_hostile
+                && attack_range.is_some()
+                && *stance != UnitStance::Passive
+                && matches!(*state, UnitState::Idle | UnitState::Gathering(_))
+            {
+                apply_auto_attack_intent(
+                    &mut commands,
+                    entity,
+                    recent_damage.attacker,
+                    tf.translation,
+                    now,
+                );
+                *state = UnitState::Attacking(recent_damage.attacker);
+                *source = TaskSource::Auto;
+                commands.entity(entity).remove::<ManualIdleSince>();
+                continue;
+            }
+        }
+
+        // Grace period blocks proactive scanning (but not damage response above)
+        if in_grace {
+            continue;
         }
 
         // ── Priority 2: Survival retreat (hp < 25%, not Aggressive) ──
@@ -331,8 +397,33 @@ fn decision_priority_system(
                 }
             }
 
+            if let Some(ref engagement) = opt_engagement {
+                if let Some(target) = engagement.target {
+                    let still_valid = now <= engagement.persistence_until
+                        && factions
+                            .get(target)
+                            .ok()
+                            .is_some_and(|target_faction| teams.is_hostile(faction, target_faction));
+                    if still_valid {
+                        if !matches!(*state, UnitState::Attacking(current) if current == target) {
+                            apply_auto_attack_intent(
+                                &mut commands,
+                                entity,
+                                target,
+                                engagement.anchor,
+                                now,
+                            );
+                            *state = UnitState::Attacking(target);
+                            *source = TaskSource::Auto;
+                        }
+                        continue;
+                    }
+                }
+            }
+
             let mut best_score = f32::MAX;
             let mut best_target = None;
+            let mut current_score = None;
 
             spatial_grid.collect_radius_limited(
                 tf.translation,
@@ -407,6 +498,13 @@ fn decision_priority_system(
                             best_score = score;
                             best_target = Some(*target_entity);
                         }
+                        if opt_engagement
+                            .as_ref()
+                            .and_then(|engagement| engagement.target)
+                            == Some(*target_entity)
+                        {
+                            current_score = Some(score);
+                        }
                     }
                 } else {
                     // Fallback: nearest enemy
@@ -423,8 +521,8 @@ fn decision_priority_system(
             // Ally-assist: if no enemy found in scan range, check if nearby allies are fighting
             if best_target.is_none() {
                 let assist_range = match stance {
-                    UnitStance::Defensive => 18.0,
-                    UnitStance::Aggressive => 30.0,
+                    UnitStance::Defensive => combat_tuning.ally_alert_assist_range,
+                    UnitStance::Aggressive => combat_tuning.ally_alert_assist_range * 1.75,
                     _ => 0.0,
                 };
                 if assist_range > 0.0 {
@@ -448,6 +546,23 @@ fn decision_priority_system(
             }
 
             if let Some(target) = best_target {
+                let should_switch = match (opt_engagement.as_ref(), current_score) {
+                    (Some(engagement), Some(cur_score))
+                        if engagement.target.is_some()
+                            && now <= engagement.persistence_until
+                            && target != engagement.target.unwrap() =>
+                    {
+                        best_score + combat_tuning.retarget_score_margin < cur_score
+                    }
+                    _ => true,
+                };
+                if !should_switch {
+                    commands.entity(entity).insert(CombatThinkTimer {
+                        next_think_at: now + 0.12,
+                        interval_secs: 0.16,
+                    });
+                    continue;
+                }
                 apply_auto_attack_intent(&mut commands, entity, target, tf.translation, now);
                 *state = UnitState::Attacking(target);
                 *source = TaskSource::Auto;
@@ -784,10 +899,16 @@ pub fn unit_state_executor_system(
                                     target,
                                     IntentSource::Auto,
                                     now,
+                                    EngageMode::Hold,
+                                    tf.translation,
                                 );
                             } else {
-                                // No enemies in range — clear attack target
-                                commands.entity(entity).remove::<AttackTarget>();
+                                // No enemies in range — clear the active engagement target too.
+                                commands
+                                    .entity(entity)
+                                    .remove::<AttackTarget>()
+                                    .remove::<CombatTargetLock>()
+                                    .remove::<Engagement>();
                             }
 
                             commands.entity(entity).insert(CombatThinkTimer {
@@ -798,7 +919,11 @@ pub fn unit_state_executor_system(
                     }
                 } else {
                     // Passive stance: no auto-attack
-                    commands.entity(entity).remove::<AttackTarget>();
+                    commands
+                        .entity(entity)
+                        .remove::<AttackTarget>()
+                        .remove::<CombatTargetLock>()
+                        .remove::<Engagement>();
                 }
             }
 
@@ -855,9 +980,52 @@ pub fn unit_state_executor_system(
                             commands.entity(entity).insert(MoveTarget(patrol_target));
                         }
                         _ => {
-                            *state = UnitState::Idle;
-                            *source = TaskSource::Auto;
-                            task_queue.current = None;
+                            // Scan for nearby enemies before going idle
+                            let scan_range = attack_range.map_or(0.0, |r| r.0 * 1.5);
+                            let mut found_new_target = false;
+                            if scan_range > 0.0 && *stance != UnitStance::Passive {
+                                spatial_grid.collect_radius_limited(
+                                    tf.translation,
+                                    scan_range,
+                                    8,
+                                    &mut nearby_targets,
+                                );
+                                let mut best_dist = f32::MAX;
+                                let mut best_new_target = None;
+                                for (candidate, candidate_pos) in nearby_targets.iter() {
+                                    if *candidate == entity {
+                                        continue;
+                                    }
+                                    let Some(target_faction) = factions.get(*candidate).ok() else {
+                                        continue;
+                                    };
+                                    if !teams.is_hostile(faction, target_faction) {
+                                        continue;
+                                    }
+                                    let dist = tf.translation.distance(*candidate_pos);
+                                    if dist < best_dist {
+                                        best_dist = dist;
+                                        best_new_target = Some(*candidate);
+                                    }
+                                }
+                                if let Some(new_target) = best_new_target {
+                                    apply_auto_attack_intent(
+                                        &mut commands,
+                                        entity,
+                                        new_target,
+                                        tf.translation,
+                                        time.elapsed_secs_f64(),
+                                    );
+                                    *state = UnitState::Attacking(new_target);
+                                    *source = TaskSource::Auto;
+                                    found_new_target = true;
+                                }
+                            }
+                            if !found_new_target {
+                                *state = UnitState::Idle;
+                                *source = TaskSource::Auto;
+                                task_queue.current = None;
+                            }
                         }
                     }
                 }
@@ -1010,7 +1178,7 @@ pub fn unit_state_executor_system(
                 }
             }
 
-            UnitState::AttackMoving(_pos) => {
+            UnitState::AttackMoving(pos) => {
                 if move_target.is_none() {
                     // Arrived at destination
                     reset_combat_state(&mut commands, entity);
@@ -1077,6 +1245,8 @@ pub fn unit_state_executor_system(
                                 target,
                                 IntentSource::Manual,
                                 time.elapsed_secs_f64(),
+                                EngageMode::AttackMove,
+                                pos,
                             );
                             commands.entity(entity).remove::<MoveTarget>();
                         }

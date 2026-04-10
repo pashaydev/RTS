@@ -196,16 +196,25 @@ fn refresh_item_runtime_state(
     mut units: Query<(&EntityKind, &UnitInventory, &mut ItemRuntimeState), With<Unit>>,
 ) {
     for (kind, inventory, mut runtime) in &mut units {
-        runtime.items.clear();
-        for &item in inventory.items.iter().take(inventory.capacity as usize) {
-            let missing_requirement = registry::first_missing_requirement(&registry, *kind, item);
-            runtime.items.push(ItemStateEntry {
-                item,
-                enabled: missing_requirement.is_none(),
-                disabled_reason: missing_requirement.map(|_| ItemDisabledReason::MissingRequirement),
-                cooldown_remaining: 0.0,
-                active_toggled: false,
-            });
+        let new_items: Vec<ItemStateEntry> = inventory
+            .items
+            .iter()
+            .take(inventory.capacity as usize)
+            .map(|&item| {
+                let missing_requirement =
+                    registry::first_missing_requirement(&registry, *kind, item);
+                ItemStateEntry {
+                    item,
+                    enabled: missing_requirement.is_none(),
+                    disabled_reason: missing_requirement
+                        .map(|_| ItemDisabledReason::MissingRequirement),
+                    cooldown_remaining: 0.0,
+                    active_toggled: false,
+                }
+            })
+            .collect();
+        if runtime.items != new_items {
+            runtime.items = new_items;
         }
     }
 }

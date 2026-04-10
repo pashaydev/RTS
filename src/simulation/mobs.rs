@@ -5,7 +5,7 @@ use rand::SeedableRng;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::simulation::combat::{
-    apply_auto_attack_intent, approach_attack_target, reset_combat_state, CombatBudgetState,
+    apply_auto_attack_intent, reset_combat_state, CombatBudgetState, CombatCoreSet,
 };
 use crate::types::*;
 use crate::world::ground::{is_in_mountain_border, BorderSettings, HeightMap};
@@ -27,7 +27,7 @@ impl Plugin for MobsPlugin {
             (mob_patrol, mob_aggro, mob_leash)
                 .chain()
                 .in_set(GameFlowSet::Simulation)
-                .before(approach_attack_target)
+                .before(CombatCoreSet::Approach)
                 .run_if(in_state(AppState::InGame)),
         );
     }
@@ -581,6 +581,7 @@ fn spawn_mob_camps(
         MapSize::Small => 4,
         MapSize::Medium => 6,
         MapSize::Large => 8,
+        MapSize::ExtraLarge => 12,
     };
 
     let player_spawns = config.spawn_positions(map_seed.0);
@@ -886,7 +887,7 @@ fn mob_aggro(
     let now = time.elapsed_secs_f64();
     for (mob_entity, mob_tf, aggro, intent, lock, opt_think_timer) in &mut mobs {
         if budget_state.target_rescans_this_frame >= combat_budget.max_target_rescans_per_frame {
-            break;
+            continue;
         }
         if opt_think_timer.is_some_and(|timer| now < timer.next_think_at) {
             continue;

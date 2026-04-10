@@ -148,10 +148,17 @@ fn assign_network_ids(
 
 // ── System: rebuild_entity_net_map ───────────────────────────────────────────
 
-fn rebuild_entity_net_map(mut net_map: ResMut<EntityNetMap>, query: Query<(Entity, &NetworkId)>) {
-    net_map.to_net.clear();
-    net_map.to_ecs.clear();
-    for (entity, net_id) in &query {
+fn rebuild_entity_net_map(
+    mut net_map: ResMut<EntityNetMap>,
+    added: Query<(Entity, &NetworkId), Added<NetworkId>>,
+    mut removed: RemovedComponents<NetworkId>,
+) {
+    for entity in removed.read() {
+        if let Some(net_id) = net_map.to_net.remove(&entity) {
+            net_map.to_ecs.remove(&net_id);
+        }
+    }
+    for (entity, net_id) in &added {
         net_map.to_net.insert(entity, net_id.0);
         net_map.to_ecs.insert(net_id.0, entity);
     }

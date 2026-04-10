@@ -233,7 +233,7 @@ pub fn spawn_from_blueprint_with_faction(
                 entity_cmds.insert((
                     DepositPoint,
                     StorageInventory {
-                        caps: [500, 80, 120, 0, 0, 0, 0, 0, 0, 0, 0],
+                        caps: [500, 200, 250, 100, 100, 0, 0, 0, 0, 0, 0],
                         ..default()
                     },
                 ));

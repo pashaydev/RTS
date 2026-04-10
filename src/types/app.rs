@@ -410,14 +410,16 @@ pub enum MapSize {
     #[default]
     Medium,
     Large,
+    ExtraLarge,
 }
 
 impl MapSize {
     pub fn world_size(&self) -> f32 {
         match self {
-            MapSize::Small => 300.0,
-            MapSize::Medium => 500.0,
-            MapSize::Large => 700.0,
+            MapSize::Small => 500.0,
+            MapSize::Medium => 700.0,
+            MapSize::Large => 900.0,
+            MapSize::ExtraLarge => 1200.0,
         }
     }
 }

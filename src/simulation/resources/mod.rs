@@ -1,6 +1,6 @@
 mod processing;
 mod spawning;
-mod terrain;
+pub(crate) mod terrain;
 mod trees;
 mod workers;
 

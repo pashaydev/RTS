@@ -81,6 +81,23 @@ CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 - `wasm-bindgen-test-runner` is used to execute the generated `.wasm` test binary instead of trying to run it directly as a native executable.
 - The current multiplayer test coverage includes native host/client transport and systems plus wasm-side WebSocket payload encoding and decoding paths.
 
+## Deployment
+
+Build and deploy everything with a single command:
+
+```sh
+./scripts/deploy.sh                # Windows build + Fly.io deploy (default)
+./scripts/deploy.sh --windows-only # Windows zip only
+./scripts/deploy.sh --fly-only     # Web deploy to Fly.io only
+```
+
+**Prerequisites:**
+
+| Target  | Requirement |
+|---------|-------------|
+| Windows | `cargo install cargo-xwin` + LLVM (`/opt/homebrew/opt/llvm`) |
+| Web     | [flyctl](https://fly.io/docs/flyctl/install/) + `fly auth login` |
+
 ### Docker / Fly.io
 
 The Dockerfile builds the WASM client with Trunk and serves it with nginx. This is suitable for hosting a downloadable web client, though for LAN multiplayer the native host can serve the client directly (see below).

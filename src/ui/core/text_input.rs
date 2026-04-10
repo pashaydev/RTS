@@ -179,7 +179,7 @@ pub fn text_input_system(
                     // Sync name to multiplayer lobby if connected
                     if let Some(ref role) = role {
                         use crate::infrastructure::multiplayer::NetRole;
-                        if *role.as_ref() == &NetRole::Client {
+                        if *role.as_ref() == NetRole::Client {
                             if let Some(ref mut socket) = socket {
                                 let msg = game_state::message::ClientMessage::NameUpdate {
                                     seq: 0,

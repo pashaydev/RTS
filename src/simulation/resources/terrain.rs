@@ -459,7 +459,7 @@ pub(super) fn build_decoration_chunks(
     info!("Built decoration chunks: {} instances merged", total_count);
 }
 
-const GRASS_CHUNK_SIZE: f32 = 32.0;
+pub const GRASS_CHUNK_SIZE: f32 = 128.0;
 
 // ── Shared vertex-merge helpers for chunk instancing ──
 
@@ -978,6 +978,7 @@ pub fn reveal_explored_grass(
     mut grass_query: Query<(Entity, &GrassChunk, &mut Visibility), Without<GrassRevealed>>,
 ) {
     let step = GRASS_CHUNK_SIZE;
+    let sample_step = 8.0_f32; // fixed world-space sampling interval
     for (entity, chunk, mut vis) in grass_query.iter_mut() {
         if fog_settings.reveal_all {
             commands.entity(entity).insert(GrassRevealed);
@@ -987,7 +988,6 @@ pub fn reveal_explored_grass(
         // Check if any cell in this chunk's bounds is explored
         let x_start = chunk.chunk_x as f32 * step;
         let z_start = chunk.chunk_z as f32 * step;
-        let sample_step = step / 4.0; // Check 4x4 sample points in chunk
 
         let mut explored = false;
         let mut sx = x_start;

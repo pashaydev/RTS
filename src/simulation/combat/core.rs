@@ -13,34 +13,61 @@ use super::{slot_anchor, CombatBudgetState};
 
 pub struct CombatPlugin;
 
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum CombatCoreSet {
+    ResolveIntent,
+    Approach,
+    Windup,
+    ResolveHit,
+    Recovery,
+    Cleanup,
+}
+
 impl Plugin for CombatPlugin {
     fn build(&self, app: &mut App) {
+        app.configure_sets(
+            FixedUpdate,
+            (
+                CombatCoreSet::ResolveIntent,
+                CombatCoreSet::Approach,
+                CombatCoreSet::Windup,
+                CombatCoreSet::ResolveHit,
+                CombatCoreSet::Recovery,
+                CombatCoreSet::Cleanup,
+            )
+                .chain()
+                .in_set(GameFlowSet::Simulation),
+        );
         app.add_systems(
             FixedUpdate,
             (
-                tick_damage_reservations,
-                resolve_combat_intents,
-                approach_attack_target,
-                start_attack_windups,
-                resolve_attack_windups,
-                emit_item_combat_vfx,
-                tick_attack_recovery,
-                explode_props,
-                handle_death,
-                emit_item_death_vfx,
-                tick_dying,
+                tick_damage_reservations.in_set(CombatCoreSet::ResolveIntent),
+                resolve_combat_intents.in_set(CombatCoreSet::ResolveIntent),
+                approach_attack_target.in_set(CombatCoreSet::Approach),
+                start_attack_windups.in_set(CombatCoreSet::Windup),
+                resolve_attack_windups.in_set(CombatCoreSet::ResolveHit),
+                emit_item_combat_vfx.in_set(CombatCoreSet::ResolveHit),
+                tick_attack_recovery.in_set(CombatCoreSet::Recovery),
+                explode_props.in_set(CombatCoreSet::Cleanup),
+                handle_death.in_set(CombatCoreSet::Cleanup),
+                emit_item_death_vfx.in_set(CombatCoreSet::Cleanup),
+                tick_dying.in_set(CombatCoreSet::Cleanup),
             )
-                .chain()
-                .in_set(GameFlowSet::Simulation)
                 .run_if(in_state(AppState::InGame)),
         );
     }
 }
 
 fn intended_attack_target(
+    engagement: Option<&Engagement>,
     intent: Option<&CombatIntent>,
     target_lock: Option<&CombatTargetLock>,
 ) -> Option<Entity> {
+    if let Some(engagement) = engagement {
+        if let Some(target) = engagement.target {
+            return Some(target);
+        }
+    }
     match intent {
         Some(CombatIntent::Attack(target, _)) => Some(*target),
         Some(CombatIntent::AttackMove(_, _)) => target_lock.map(|lock| lock.target),
@@ -58,6 +85,7 @@ fn resolve_combat_intents(
         (
             Entity,
             Option<&Faction>,
+            Option<&Engagement>,
             Option<&CombatIntent>,
             Option<&CombatTargetLock>,
             Option<&mut UnitState>,
@@ -72,6 +100,7 @@ fn resolve_combat_intents(
     for (
         entity,
         faction,
+        engagement,
         intent,
         target_lock,
         opt_state,
@@ -87,7 +116,7 @@ fn resolve_combat_intents(
 
         // Windup is the true commit point. Recovery should still accept the next move/order.
         let committed = windup.is_some();
-        let desired_target = intended_attack_target(intent, target_lock)
+        let desired_target = intended_attack_target(engagement, intent, target_lock)
             .filter(|target| all_entities.contains(*target));
 
         if let Some(target) = desired_target {
@@ -109,8 +138,11 @@ fn resolve_combat_intents(
             continue;
         }
 
-        match intent.copied().unwrap_or_default() {
-            CombatIntent::AttackMove(destination, _) => {
+        let engage_mode = engagement.map(|e| e.mode);
+        let fallback_intent = intent.copied().unwrap_or_default();
+        match engage_mode {
+            Some(EngageMode::AttackMove) => {
+                let destination = engagement.map(|e| e.anchor).unwrap_or(Vec3::ZERO);
                 if attack_target.is_some() && !committed {
                     commands
                         .entity(entity)
@@ -130,30 +162,8 @@ fn resolve_combat_intents(
                     }
                 }
             }
-            CombatIntent::Move(destination) => {
-                if attack_target.is_some() && !committed {
-                    commands
-                        .entity(entity)
-                        .remove::<AttackTarget>()
-                        .remove::<ChaseTimer>();
-                }
-                if !committed
-                    && move_target.map_or(true, |current| current.0.distance(destination) > 0.6)
-                {
-                    commands.entity(entity).insert(MoveTarget(destination));
-                }
-                if let Some(mut state) = opt_state {
-                    if !matches!(*state, UnitState::Moving(dest) if dest.distance(destination) <= 0.1)
-                        && !committed
-                    {
-                        *state = UnitState::Moving(destination);
-                    }
-                }
-            }
-            CombatIntent::Hold => {
+            Some(EngageMode::Hold) => {
                 if !committed {
-                    // Hold: never move, but keep AttackTarget if we have a valid lock
-                    // (target scanning is done in unit_state_executor_system)
                     commands
                         .entity(entity)
                         .remove::<MoveTarget>()
@@ -163,20 +173,73 @@ fn resolve_combat_intents(
                     }
                 }
             }
-            CombatIntent::None => {
-                if attack_target.is_some() && !committed {
-                    commands
-                        .entity(entity)
-                        .remove::<AttackTarget>()
-                        .remove::<ChaseTimer>();
+            _ => match fallback_intent {
+                CombatIntent::Move(destination) => {
+                    if attack_target.is_some() && !committed {
+                        commands
+                            .entity(entity)
+                            .remove::<AttackTarget>()
+                            .remove::<ChaseTimer>();
+                    }
+                    if !committed
+                        && move_target.map_or(true, |current| current.0.distance(destination) > 0.6)
+                    {
+                        commands.entity(entity).insert(MoveTarget(destination));
+                    }
                     if let Some(mut state) = opt_state {
-                        if matches!(*state, UnitState::Attacking(_)) {
-                            *state = UnitState::Idle;
+                        if !matches!(*state, UnitState::Moving(dest) if dest.distance(destination) <= 0.1)
+                            && !committed
+                        {
+                            *state = UnitState::Moving(destination);
                         }
                     }
                 }
-            }
-            CombatIntent::Attack(_, _) => {}
+                CombatIntent::AttackMove(destination, _) => {
+                    if attack_target.is_some() && !committed {
+                        commands
+                            .entity(entity)
+                            .remove::<AttackTarget>()
+                            .remove::<ChaseTimer>();
+                    }
+                    if !committed
+                        && move_target.map_or(true, |current| current.0.distance(destination) > 0.6)
+                    {
+                        commands.entity(entity).insert(MoveTarget(destination));
+                    }
+                    if let Some(mut state) = opt_state {
+                        if !matches!(*state, UnitState::AttackMoving(dest) if dest.distance(destination) <= 0.1)
+                            && !committed
+                        {
+                            *state = UnitState::AttackMoving(destination);
+                        }
+                    }
+                }
+                CombatIntent::Hold => {
+                    if !committed {
+                        commands
+                            .entity(entity)
+                            .remove::<MoveTarget>()
+                            .remove::<ChaseTimer>();
+                        if let Some(mut state) = opt_state {
+                            *state = UnitState::HoldPosition;
+                        }
+                    }
+                }
+                CombatIntent::None => {
+                    if attack_target.is_some() && !committed {
+                        commands
+                            .entity(entity)
+                            .remove::<AttackTarget>()
+                            .remove::<ChaseTimer>();
+                        if let Some(mut state) = opt_state {
+                            if matches!(*state, UnitState::Attacking(_)) {
+                                *state = UnitState::Idle;
+                            }
+                        }
+                    }
+                }
+                CombatIntent::Attack(_, _) => {}
+            },
         }
     }
 }
@@ -302,12 +365,12 @@ fn explode_props(
 pub fn approach_attack_target(
     mut commands: Commands,
     time: Res<Time>,
+    tuning: Res<CombatTuning>,
     combat_budget: Res<CombatBudget>,
     mut budget_state: ResMut<CombatBudgetState>,
     teams: Res<TeamConfig>,
     wall_grid: Res<WallSpatialGrid>,
-    net_role: Res<NetRole>,
-    active_player: Res<ActivePlayer>,
+    net_state: (Res<NetRole>, Res<ActivePlayer>),
     mut attackers: Query<
         (
             Entity,
@@ -317,35 +380,45 @@ pub fn approach_attack_target(
             Option<&AttackTiming>,
             Option<&IsRanged>,
             &Faction,
-            Option<&mut UnitState>,
-            Option<&MoveTarget>,
-            Option<&AttackWindup>,
-            Option<&AttackRecovery>,
-            Option<&mut ChaseTimer>,
-            Option<&TaskSource>,
-            Option<&mut CombatTargetLock>,
-            Option<&SlotClaim>,
+            (
+                Option<&mut UnitState>,
+                Option<&MoveTarget>,
+                Option<&AttackWindup>,
+                Option<&AttackRecovery>,
+            ),
+            (
+                Option<&mut ChaseTimer>,
+                Option<&TaskSource>,
+                Option<&mut Engagement>,
+                Option<&mut CombatTargetLock>,
+                Option<&SlotClaim>,
+                Option<&MeleeContact>,
+            ),
         ),
         Or<(With<Unit>, With<Mob>)>,
     >,
-    wall_check: Query<
-        (),
-        (
-            With<Building>,
-            Or<(
-                With<WallSegmentPiece>,
-                With<WallPostPiece>,
-                With<WallCornerPiece>,
-            )>,
-        ),
-    >,
-    all_transforms: Query<&Transform>,
-    building_footprints: Query<&BuildingFootprint, With<Building>>,
-    tactical_roles: Query<&TacticalRole>,
+    scene_queries: (
+        Query<
+            (),
+            (
+                With<Building>,
+                Or<(
+                    With<WallSegmentPiece>,
+                    With<WallPostPiece>,
+                    With<WallCornerPiece>,
+                )>,
+            ),
+        >,
+        Query<&Transform>,
+        Query<&BuildingFootprint, With<Building>>,
+        Query<&TacticalRole>,
+        Query<&Faction>,
+    ),
     spatial_grid: Res<SpatialHashGrid>,
-    factions: Query<&Faction>,
     mut nearby_entities: Local<Vec<(Entity, Vec3)>>,
 ) {
+    let (net_role, active_player) = net_state;
+    let (wall_check, all_transforms, building_footprints, tactical_roles, factions) = scene_queries;
     for (
         attacker_entity,
         tf,
@@ -354,14 +427,15 @@ pub fn approach_attack_target(
         attack_timing,
         is_ranged,
         faction,
-        opt_state,
-        current_move_target,
-        windup,
-        recovery,
-        opt_chase_timer,
-        opt_task_source,
-        opt_target_lock,
-        slot_claim,
+        (opt_state, current_move_target, windup, recovery),
+        (
+            opt_chase_timer,
+            opt_task_source,
+            opt_engagement,
+            opt_target_lock,
+            slot_claim,
+            opt_melee_contact,
+        ),
     ) in &mut attackers
     {
         // During windup/recovery, unit is locked in animation — skip
@@ -436,6 +510,8 @@ pub fn approach_attack_target(
                         .insert(CombatIntent::Attack(wall_entity, source));
                     if let Some(mut target_lock) = opt_target_lock {
                         target_lock.target = wall_entity;
+                        target_lock.locked_until = time.elapsed_secs_f64() + 0.5;
+                        target_lock.source = source;
                     } else {
                         commands.entity(attacker_entity).insert(CombatTargetLock {
                             target: wall_entity,
@@ -443,17 +519,36 @@ pub fn approach_attack_target(
                             source,
                         });
                     }
+                    if let Some(mut engagement) = opt_engagement {
+                        engagement.target = Some(wall_entity);
+                        engagement.last_confirmed_at = time.elapsed_secs_f64();
+                        engagement.persistence_until =
+                            engagement.persistence_until.max(time.elapsed_secs_f64() + 0.5);
+                        engagement.status = EngageStatus::Approaching;
+                    }
                     continue;
                 }
             }
         }
 
         // ── Distance check (2D only — ignore terrain height) ──
+        let stay_tolerance = opt_engagement
+            .as_ref()
+            .is_some_and(|engagement| matches!(engagement.status, EngageStatus::InBand | EngageStatus::Windup | EngageStatus::Recovery))
+            .then_some(tuning.range_stay_buffer)
+            .unwrap_or(0.15);
         let surface_dist =
             attack_surface_distance(tf.translation, target_tf.translation, target_radius);
-        let in_band = is_in_attack_band(surface_dist, range.0, minimum_range, 0.15);
+        let in_band = is_in_attack_band(surface_dist, range.0, minimum_range, stay_tolerance);
 
         if !in_band {
+            if opt_melee_contact.is_some() {
+                commands.entity(attacker_entity).remove::<MeleeContact>();
+            }
+            if let Some(mut engagement) = opt_engagement {
+                engagement.status = EngageStatus::Approaching;
+                engagement.last_confirmed_at = time.elapsed_secs_f64();
+            }
             // Reposition until the target sits inside the allowed attack band.
             if budget_state.repath_requests_this_frame
                 >= combat_budget.max_repath_requests_per_frame
@@ -527,6 +622,18 @@ pub fn approach_attack_target(
                 .entity(attacker_entity)
                 .remove::<MoveTarget>()
                 .remove::<ChaseTimer>();
+            if let Some(mut engagement) = opt_engagement {
+                engagement.status = EngageStatus::InBand;
+                engagement.last_confirmed_at = time.elapsed_secs_f64();
+            }
+            if is_ranged.is_none() {
+                commands.entity(attacker_entity).insert(MeleeContact {
+                    target: attack_target.0,
+                    sticky_until: time.elapsed_secs_f64() + tuning.melee_contact_sticky_secs as f64,
+                });
+            } else if opt_melee_contact.is_some() {
+                commands.entity(attacker_entity).remove::<MeleeContact>();
+            }
 
             // Ranged kiting: if a melee enemy is dangerously close, retreat backward
             if is_ranged.is_some()
@@ -606,6 +713,7 @@ fn start_attack_windups(
         &AttackProfile,
         &AttackDamage,
         &Faction,
+        Option<&mut Engagement>,
         Option<&AttackWindup>,
         Option<&AttackRecovery>,
         Option<&StatusEffects>,
@@ -624,6 +732,7 @@ fn start_attack_windups(
         profile,
         atk_damage,
         faction,
+        opt_engagement,
         windup,
         recovery,
         opt_status,
@@ -662,6 +771,9 @@ fn start_attack_windups(
             target: attack_target.0,
             remaining_secs: profile.windup_secs.max(0.01),
         });
+        if let Some(mut engagement) = opt_engagement {
+            engagement.status = EngageStatus::Windup;
+        }
 
         // Reserve damage on the target
         if let Ok(mut reserved) = reserved_q.get_mut(attack_target.0) {
@@ -674,6 +786,7 @@ fn start_attack_windups(
 fn resolve_attack_windups(
     mut commands: Commands,
     time: Res<Time>,
+    tuning: Res<CombatTuning>,
     vfx_assets: Option<Res<VfxAssets>>,
     projectile_assets: Option<Res<crate::presentation::model_assets::ProjectileModelAssets>>,
     net_role: Res<NetRole>,
@@ -689,6 +802,7 @@ fn resolve_attack_windups(
         Option<&IsRanged>,
         &Faction,
         Option<&DamageType>,
+        Option<&mut Engagement>,
         &mut AttackWindup,
         Option<&ChargeBonus>,
         Option<&EntityKind>,
@@ -716,6 +830,7 @@ fn resolve_attack_windups(
         is_ranged,
         faction,
         opt_dmg_type,
+        opt_engagement,
         mut windup,
         opt_charge,
         opt_entity_kind,
@@ -840,6 +955,11 @@ fn resolve_attack_windups(
             let charge_mult = opt_charge.map(|c| c.damage_mult).unwrap_or(1.0);
             let dealt = damage.0 * multiplier * charge_mult;
             health.current -= dealt;
+            commands.entity(target).insert(RecentCombatDamage {
+                attacker: entity,
+                observed_at: time.elapsed_secs_f64(),
+                expires_at: time.elapsed_secs_f64() + tuning.damage_memory_secs as f64,
+            });
             // Consume charge bonus after use
             if opt_charge.is_some() {
                 commands.entity(entity).remove::<ChargeBonus>();
@@ -907,18 +1027,27 @@ fn resolve_attack_windups(
         commands.entity(entity).insert(AttackRecovery {
             remaining_secs: profile.recovery_secs,
         });
+        if let Some(mut engagement) = opt_engagement {
+            engagement.status = EngageStatus::Recovery;
+        }
     }
 }
 
 fn tick_attack_recovery(
     mut commands: Commands,
     time: Res<Time>,
-    mut recoveries: Query<(Entity, &mut AttackRecovery)>,
+    mut recoveries: Query<(Entity, &mut AttackRecovery, Option<&mut Engagement>)>,
 ) {
-    for (entity, mut recovery) in &mut recoveries {
+    for (entity, mut recovery, mut opt_engagement) in &mut recoveries {
         recovery.remaining_secs -= time.delta_secs();
+        if let Some(ref mut engagement) = opt_engagement {
+            engagement.status = EngageStatus::Recovery;
+        }
         if recovery.remaining_secs <= 0.0 {
             commands.entity(entity).remove::<AttackRecovery>();
+            if let Some(ref mut engagement) = opt_engagement {
+                engagement.status = EngageStatus::InBand;
+            }
         }
     }
 }
@@ -1017,7 +1146,12 @@ fn handle_death(
         Without<Dying>,
     >,
     mut attackers_with_target: Query<
-        (Entity, &AttackTarget, Option<&mut PatrolState>),
+        (
+            Entity,
+            &AttackTarget,
+            Option<&mut PatrolState>,
+            Option<&mut Engagement>,
+        ),
         Without<Dying>,
     >,
     mut experience_q: Query<&mut Experience>,
@@ -1110,8 +1244,8 @@ fn handle_death(
                 // Find who was attacking this mob to determine the rewarded faction
                 let killer_faction = attackers_with_target
                     .iter()
-                    .find(|(_, at, _)| at.0 == *dead_entity)
-                    .and_then(|(attacker_e, _, _)| attacker_factions.get(attacker_e).ok());
+                    .find(|(_, at, _, _)| at.0 == *dead_entity)
+                    .and_then(|(attacker_e, _, _, _)| attacker_factions.get(attacker_e).ok());
                 if let Some(killer_f) = killer_faction {
                     if let Some(res) = all_resources.resources.get_mut(killer_f) {
                         for (rt, amt) in reward.resources.cost_entries() {
@@ -1129,14 +1263,30 @@ fn handle_death(
             }
         }
 
-        for (attacker_entity, attack_target, opt_patrol) in &mut attackers_with_target {
+        for (attacker_entity, attack_target, opt_patrol, opt_engagement) in &mut attackers_with_target
+        {
             if attack_target.0 == *dead_entity {
+                let preserve_engagement_mode = opt_engagement.as_ref().is_some_and(|engagement| {
+                    matches!(engagement.mode, EngageMode::AttackMove | EngageMode::Hold)
+                });
                 commands
                     .entity(attacker_entity)
                     .remove::<AttackTarget>()
                     .remove::<CombatTargetLock>()
-                    .remove::<SlotClaim>()
-                    .insert(CombatIntent::None);
+                    .remove::<MeleeContact>()
+                    .remove::<SlotClaim>();
+                if preserve_engagement_mode {
+                    if let Some(mut engagement) = opt_engagement {
+                        engagement.target = None;
+                        engagement.status = EngageStatus::Acquiring;
+                        engagement.last_confirmed_at = time.elapsed_secs_f64();
+                    }
+                } else {
+                    commands
+                        .entity(attacker_entity)
+                        .remove::<Engagement>()
+                        .insert(CombatIntent::None);
+                }
                 if let Some(mut patrol) = opt_patrol {
                     patrol.state = PatrolStateKind::Returning;
                 }
@@ -1200,8 +1350,8 @@ fn handle_death(
             // Find killer entity and faction for XP granting
             let killer_entity = attackers_with_target
                 .iter()
-                .find(|(_, at, _)| at.0 == *dead_entity)
-                .map(|(e, _, _)| e);
+                .find(|(_, at, _, _)| at.0 == *dead_entity)
+                .map(|(e, _, _, _)| e);
             let killer_faction = killer_entity
                 .and_then(|e| attacker_factions.get(e).ok())
                 .copied();
@@ -1230,6 +1380,8 @@ fn handle_death(
                 .remove::<Unit>()
                 .remove::<AttackTarget>()
                 .remove::<MoveTarget>()
+                .remove::<Engagement>()
+                .remove::<MeleeContact>()
                 .remove::<AttackWindup>()
                 .remove::<AttackRecovery>()
                 .remove::<AttackCooldown>()

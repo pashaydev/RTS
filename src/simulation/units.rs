@@ -209,6 +209,7 @@ fn target_building(
 }
 
 fn steer_avoidance(
+    mut commands: Commands,
     time: Res<Time>,
     spatial_grid: Res<SpatialHashGrid>,
     wall_grid: Res<WallSpatialGrid>,
@@ -224,9 +225,11 @@ fn steer_avoidance(
             Option<&AttackTarget>,
             Option<&BuildingAssignment>,
             &Faction,
+            Option<&mut JustArrived>,
         ),
         (Or<(With<Unit>, With<Mob>)>, Without<Building>),
     >,
+    move_targets: Query<&MoveTarget, Or<(With<Unit>, With<Mob>)>>,
     buildings: Query<
         (Entity, &Transform, &BuildingFootprint),
         (With<Building>, Without<Unit>, Without<FloorTile>),
@@ -235,21 +238,35 @@ fn steer_avoidance(
     mut nearby_walls: Local<Vec<(Entity, Vec3, f32, Faction)>>,
     mut nearby_buildings: Local<Vec<(Entity, Vec3)>>,
 ) {
-    let moving_avoidance_radius = 2.6;
-    let idle_avoidance_radius = 3.2;
+    let moving_avoidance_radius = 2.4;
+    let idle_avoidance_radius = 2.8;
     let unit_strength = 8.5;
-    let idle_strength = 12.5;
+    let idle_strength = 10.0;
     let hard_push_radius = 0.9;
     let wall_avoidance_radius = 3.5;
     let wall_strength = 12.0;
     let building_avoidance_radius = 1.5; // extra margin beyond footprint
     let building_strength = 15.0;
 
-    for (entity, mut transform, move_target, unit_state, attack_target, building_assignment, faction) in &mut units {
+    for (entity, mut transform, move_target, unit_state, attack_target, building_assignment, faction, mut just_arrived) in &mut units {
         // Client: only apply avoidance to local player's units; remote units positioned by state sync
         if *net_role == crate::infrastructure::multiplayer::NetRole::Client && *faction != active_player.0 {
             continue;
         }
+
+        // Tick JustArrived timer and compute dampening factor
+        let arrival_dampen = if let Some(ref mut arrived) = just_arrived {
+            arrived.0.tick(time.delta());
+            if arrived.0.is_finished() {
+                commands.entity(entity).remove::<JustArrived>();
+                1.0
+            } else {
+                0.3
+            }
+        } else {
+            1.0
+        };
+
         let my_pos = transform.translation;
         let mut separation = Vec3::ZERO;
         let is_moving = move_target.is_some();
@@ -282,6 +299,19 @@ fn steer_avoidance(
             let diff = my_pos - *other_pos;
             let flat_diff = Vec3::new(diff.x, 0.0, diff.z);
             let dist = flat_diff.length();
+
+            // Reduce avoidance for units moving to similar destinations (group move)
+            let co_moving_factor = if let Some(my_target) = move_target {
+                if let Ok(other_target) = move_targets.get(*other_e) {
+                    let target_dist = my_target.0.distance(other_target.0);
+                    if target_dist < 8.0 { 0.3 } else { 1.0 }
+                } else {
+                    1.0
+                }
+            } else {
+                1.0
+            };
+
             if dist < 0.01 {
                 // Nearly perfectly overlapping — push in a deterministic direction based on entity IDs
                 let angle = (entity.to_bits().wrapping_sub(other_e.to_bits()) % 360) as f32
@@ -291,10 +321,10 @@ fn steer_avoidance(
             } else if dist < hard_push_radius {
                 // Very close — strong quadratic push to prevent stacking
                 let weight = ((hard_push_radius - dist) / hard_push_radius).powi(2) * 2.2 + 0.8;
-                separation += flat_diff.normalize() * weight;
+                separation += flat_diff.normalize() * weight * co_moving_factor;
             } else if dist < unit_avoidance_radius {
                 let weight = ((unit_avoidance_radius - dist) / unit_avoidance_radius).powi(2);
-                separation += flat_diff.normalize() * weight * 0.5;
+                separation += flat_diff.normalize() * weight * 0.5 * co_moving_factor;
             }
         }
 
@@ -345,6 +375,9 @@ fn steer_avoidance(
         }
 
         if separation.length_squared() > 0.0 {
+            // Dampen separation for just-arrived units to prevent backward shove
+            separation *= arrival_dampen;
+
             // Cap separation to avoid teleporting
             let max_sep = if is_moving { 6.0 } else { 9.0 } * time.delta_secs();
             let sep_vec = separation * effective_strength * time.delta_secs();
@@ -496,21 +529,10 @@ fn move_units(
         let arrival_dist = if !is_final_waypoint {
             1.8 // intermediate waypoint
         } else {
-            0.5 // final destination
+            0.7 // final destination
         };
 
         if distance < arrival_dist {
-            // Skip arrival spread for workers heading to a building (deposit/build/gather)
-            // — they need precise positioning for the deposit check to succeed.
-            let skip_spread = opt_unit_state.is_some_and(|s| {
-                matches!(
-                    s,
-                    UnitState::ReturningToDeposit { .. }
-                        | UnitState::MovingToBuild(_)
-                        | UnitState::AssignedGathering { .. }
-                )
-            });
-
             // Advance waypoint or finish
             if let Some(mut nav) = nav_path {
                 nav.current_index += 1;
@@ -519,33 +541,22 @@ fn move_units(
                     if let Some(mut smoothing) = opt_smoothing {
                         smoothing.current_speed = 0.0;
                     }
-                    if !skip_spread {
-                        // Random offset to prevent units stacking on exact same point
-                        let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 3.5;
-                        let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 3.5;
-                        transform.translation.x += spread_x;
-                        transform.translation.z += spread_z;
-                    }
                     commands
                         .entity(entity)
                         .remove::<MoveTarget>()
                         .remove::<NavPath>()
-                        .remove::<NavDirect>();
+                        .remove::<NavDirect>()
+                        .insert(JustArrived(Timer::from_seconds(0.3, TimerMode::Once)));
                 }
             } else {
                 if let Some(mut smoothing) = opt_smoothing {
                     smoothing.current_speed = 0.0;
                 }
-                if !skip_spread {
-                    let spread_x = ((entity.to_bits() % 97) as f32 / 97.0 - 0.5) * 3.5;
-                    let spread_z = ((entity.to_bits() % 83) as f32 / 83.0 - 0.5) * 3.5;
-                    transform.translation.x += spread_x;
-                    transform.translation.z += spread_z;
-                }
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
-                    .remove::<NavDirect>();
+                    .remove::<NavDirect>()
+                    .insert(JustArrived(Timer::from_seconds(0.3, TimerMode::Once)));
             }
         } else {
             // Encumbrance: slow down when carrying heavy loads
@@ -582,8 +593,8 @@ fn move_units(
                 let mut target_speed = base_max_speed * variation;
 
                 // Decelerate near final destination for smooth stopping
-                if is_final_waypoint && distance < 1.5 {
-                    target_speed *= (distance / 1.5).clamp(0.3, 1.0);
+                if is_final_waypoint && distance < 1.0 {
+                    target_speed *= (distance / 1.0).clamp(0.5, 1.0);
                 }
 
                 // Ramp current_speed toward target_speed

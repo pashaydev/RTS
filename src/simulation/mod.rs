@@ -27,6 +27,7 @@ impl PluginGroup for SimulationPlugins {
             .add(combat::CombatPlugin)
             .add(combat::CombatIntentsPlugin)
             .add(combat::CombatBudgetPlugin)
+            .add(combat::CombatProjectilesPlugin)
             .add(combat::CombatSlotsPlugin)
             .add(abilities::AbilitiesPlugin)
             .add(mobs::MobsPlugin)

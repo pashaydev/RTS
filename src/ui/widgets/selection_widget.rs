@@ -332,8 +332,10 @@ fn maintain_selection_inventory_ui_state(
             }
         }
         _ => {
-            inventory_ui.focused_unit = None;
-            inventory_ui.focused_slot = None;
+            if inventory_ui.focused_unit.is_some() {
+                inventory_ui.focused_unit = None;
+                inventory_ui.focused_slot = None;
+            }
         }
     }
 
