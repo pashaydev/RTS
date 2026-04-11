@@ -203,22 +203,24 @@ pub(super) fn tower_auto_attack(
                     Some(crate::presentation::model_assets::ProjectileVisualKind::CatapultRock)
                 );
             let spawn_pos = tower_tf.translation + Vec3::Y * 3.0;
+            let target_tf = hostiles
+                .get(target_entity)
+                .map(|(_, tf, ..)| tf.translation)
+                .unwrap_or(spawn_pos);
+            let dir = (target_tf - spawn_pos).normalize_or_zero();
             let proj_component = Projectile {
                 source: tower_entity,
                 target: target_entity,
+                velocity: dir * projectile_speed,
                 speed: projectile_speed,
                 damage: damage.0,
                 damage_type: tower_dmg_type,
                 fx_kind: *fx_kind,
                 impact_scale: attack_profile.impact_scale,
+                lifetime_secs: travel_dist / projectile_speed.max(0.1) + 0.35,
                 orient_to_velocity: orient,
             };
             if let (Some(visual_kind), Some(ref proj_res)) = (proj_visual, &projectile_assets) {
-                let target_tf = hostiles
-                    .get(target_entity)
-                    .map(|(_, tf, ..)| tf.translation)
-                    .unwrap_or(spawn_pos);
-                let dir = (target_tf - spawn_pos).normalize_or_zero();
                 let proj_scale = match visual_kind {
                     crate::presentation::model_assets::ProjectileVisualKind::Arrow => 0.35,
                     crate::presentation::model_assets::ProjectileVisualKind::Bolt => 0.4,

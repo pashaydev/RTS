@@ -17,8 +17,8 @@ pub struct AudioSettings {
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
-            music_volume: 0.5,
-            sfx_volume: 0.7,
+            music_volume: 0.1,
+            sfx_volume: 0.5,
         }
     }
 }
@@ -60,7 +60,13 @@ struct FadeIn {
 struct FadeOut {
     elapsed: f32,
     duration: f32,
+    start_volume: f32,
 }
+
+/// Distance-based volume scale captured when an SFX was spawned, so that
+/// later slider changes preserve spatial attenuation instead of clobbering it.
+#[derive(Component)]
+struct SfxSpawnScale(f32);
 
 // ── SFX event ──
 
@@ -75,6 +81,7 @@ pub struct PlaySfx {
 
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)]
+#[repr(u8)]
 pub enum SfxKind {
     // Combat
     MeleeHit,
@@ -249,6 +256,62 @@ impl MusicTracks {
     }
 }
 
+// ── Voice limiting ──
+
+/// Hard cap on simultaneously playing one-shot SFX voices. Above this, new
+/// events are dropped for the frame. Tuned for WASM; desktop can take more
+/// but there's no reason to let the mixer get messy.
+const MAX_SFX_VOICES: usize = 24;
+
+/// Number of distinct SfxKind variants. Keep in sync with the enum.
+const SFX_KIND_COUNT: usize = 24;
+
+/// Per-kind last-played timestamps (in seconds). Indexed by `SfxKind as usize`.
+#[derive(Resource)]
+struct SfxCooldowns {
+    last_played: [f32; SFX_KIND_COUNT],
+}
+
+impl Default for SfxCooldowns {
+    fn default() -> Self {
+        Self {
+            last_played: [f32::NEG_INFINITY; SFX_KIND_COUNT],
+        }
+    }
+}
+
+/// Minimum seconds between two plays of the same SfxKind.
+fn cooldown_for(kind: SfxKind) -> f32 {
+    match kind {
+        // Group-emitted, easy to storm
+        SfxKind::WorkerGather => 0.15,
+        SfxKind::ConstructionHammer => 0.20,
+        // Combat bursts — short but not zero so overlapping hits don't stack
+        SfxKind::MeleeHit
+        | SfxKind::ArrowFire
+        | SfxKind::ArrowImpact
+        | SfxKind::MagicCast
+        | SfxKind::HealCast
+        | SfxKind::CatapultLaunch
+        | SfxKind::RamHit
+        | SfxKind::KnightCharge => 0.06,
+        // Unit command chatter
+        SfxKind::UnitSelect | SfxKind::UnitMove | SfxKind::UnitAttack => 0.08,
+        SfxKind::UnitDeath => 0.05,
+        // UI clicks/hovers — cheap but spammable
+        SfxKind::ButtonClick | SfxKind::ButtonHover => 0.03,
+        // Low-frequency gameplay beats
+        SfxKind::TrainingComplete
+        | SfxKind::ConstructionComplete
+        | SfxKind::BuildingUpgrade
+        | SfxKind::BuildingDemolish
+        | SfxKind::BuildingDestroyed
+        | SfxKind::AgeAdvance
+        | SfxKind::ResourceWarning
+        | SfxKind::UnderAttack => 0.05,
+    }
+}
+
 // ── Systems ──
 
 const FADE_DURATION: f32 = 2.0;
@@ -288,20 +351,23 @@ fn change_music_track(
     music_state: Res<MusicState>,
     tracks: Option<Res<MusicTracks>>,
     settings: Res<AudioSettings>,
-    existing: Query<Entity, With<MusicChannel>>,
+    existing: Query<(Entity, &AudioSink), With<MusicChannel>>,
 ) {
     if !music_state.is_changed() {
         return;
     }
     let Some(tracks) = tracks else { return };
 
-    // Fade out all existing music entities.
-    for entity in existing.iter() {
+    // Fade out all existing music entities, capturing current volume so
+    // fade_out_system can interpolate linearly instead of compounding.
+    for (entity, sink) in existing.iter() {
+        let start_volume = sink.volume().to_linear();
         commands
             .entity(entity)
             .insert(FadeOut {
                 elapsed: 0.0,
                 duration: FADE_DURATION,
+                start_volume,
             })
             .remove::<FadeIn>();
     }
@@ -349,12 +415,7 @@ fn fade_out_system(
     for (entity, mut sink, mut fade) in q.iter_mut() {
         fade.elapsed += time.delta_secs();
         let t = (fade.elapsed / fade.duration).min(1.0);
-        let current = sink.volume();
-        // Lerp from current volume towards 0.
-        let vol = match current {
-            Volume::Linear(v) => v * (1.0 - t),
-            _ => 1.0 - t,
-        };
+        let vol = fade.start_volume * (1.0 - t);
         sink.set_volume(Volume::Linear(vol.max(0.0)));
         if t >= 1.0 {
             commands.entity(entity).despawn();
@@ -387,13 +448,17 @@ fn sync_music_volume(
 }
 
 /// Apply volume changes from AudioSettings to already-playing one-shot SFX.
-fn sync_sfx_volume(settings: Res<AudioSettings>, mut q: Query<&mut AudioSink, With<SfxChannel>>) {
+/// Preserves the per-sound distance attenuation captured at spawn time.
+fn sync_sfx_volume(
+    settings: Res<AudioSettings>,
+    mut q: Query<(&mut AudioSink, &SfxSpawnScale), With<SfxChannel>>,
+) {
     if !settings.is_changed() {
         return;
     }
-
-    for mut sink in q.iter_mut() {
-        sink.set_volume(slider_to_volume(settings.sfx_volume));
+    let base = slider_to_volume(settings.sfx_volume).to_linear();
+    for (mut sink, scale) in q.iter_mut() {
+        sink.set_volume(Volume::Linear(base * scale.0));
     }
 }
 
@@ -410,13 +475,34 @@ fn play_sfx_system(
     mut events: MessageReader<PlaySfx>,
     sfx_lib: Option<Res<SfxLibrary>>,
     settings: Res<AudioSettings>,
+    time: Res<Time>,
+    mut cooldowns: ResMut<SfxCooldowns>,
     camera_q: Query<&Transform, With<RtsCamera>>,
+    active_sfx: Query<(), With<SfxChannel>>,
 ) {
-    let Some(sfx_lib) = sfx_lib else { return };
+    let Some(sfx_lib) = sfx_lib else {
+        events.clear();
+        return;
+    };
     let camera_pos = camera_q.iter().next().map(|t| t.translation);
+    let now = time.elapsed_secs();
+    let mut active = active_sfx.iter().count();
+    let base_vol = slider_to_volume(settings.sfx_volume).to_linear();
 
     for ev in events.read() {
-        // Distance-based attenuation for positional sounds
+        if active >= MAX_SFX_VOICES {
+            // Voice budget exhausted for this frame; drop remaining events.
+            break;
+        }
+
+        // Per-kind cooldown to absorb storms (workers, construction, combat bursts).
+        let kind_idx = ev.kind as usize;
+        let last = cooldowns.last_played[kind_idx];
+        if now - last < cooldown_for(ev.kind) {
+            continue;
+        }
+
+        // Distance-based attenuation for positional sounds.
         let distance_scale = if let (Some(sfx_pos), Some(cam_pos)) = (ev.position, camera_pos) {
             let dist = sfx_pos.distance(cam_pos);
             if dist > SFX_MAX_DISTANCE {
@@ -425,7 +511,6 @@ fn play_sfx_system(
             if dist <= SFX_FULL_VOLUME_DISTANCE {
                 1.0
             } else {
-                // Linear falloff from full volume to 0 between FULL and MAX distance
                 1.0 - (dist - SFX_FULL_VOLUME_DISTANCE)
                     / (SFX_MAX_DISTANCE - SFX_FULL_VOLUME_DISTANCE)
             }
@@ -433,9 +518,10 @@ fn play_sfx_system(
             1.0 // No position = UI sound, play at full volume
         };
 
-        let base_vol = slider_to_volume(settings.sfx_volume).to_linear();
-        let final_vol = Volume::Linear(base_vol * distance_scale);
+        cooldowns.last_played[kind_idx] = now;
+        active += 1;
 
+        let final_vol = Volume::Linear(base_vol * distance_scale);
         let handle = sfx_lib.handle_for(ev.kind);
         commands.spawn((
             AudioPlayer(handle),
@@ -445,6 +531,7 @@ fn play_sfx_system(
                 ..default()
             },
             SfxChannel,
+            SfxSpawnScale(distance_scale),
         ));
     }
 }
@@ -464,6 +551,7 @@ impl Plugin for GameAudioPlugin {
     fn build(&self, app: &mut App) {
         // AudioSettings is already inserted by main() via database::init_early().
         app.init_resource::<MusicState>()
+            .init_resource::<SfxCooldowns>()
             .add_message::<PlaySfx>()
             .add_systems(Startup, setup_audio)
             .add_systems(

@@ -1,9 +1,12 @@
 use bevy::prelude::*;
+use std::collections::HashMap;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
 use crate::types::*;
 
-use super::workers::{depot_approach_point, spawn_deposit_vfx, spawn_resource_popup};
+use super::workers::{
+    building_worker_interaction_target, spawn_deposit_vfx, spawn_resource_popup,
+};
 
 /// Resource processing buildings auto-harvest nearby nodes on a timer and deposit into player resources.
 pub(super) fn resource_processor_system(
@@ -309,6 +312,7 @@ pub(super) fn processor_worker_visual_system(
         (
             Entity,
             &Transform,
+            &EntityKind,
             &ResourceProcessor,
             &BuildingState,
             Option<&BuildingPaused>,
@@ -338,14 +342,9 @@ pub(super) fn processor_worker_visual_system(
             continue;
         }
         // Check immutably first to avoid triggering Changed<UnitState> for non-assigned units
-        let UnitState::AssignedGathering {
-            building: building_entity,
-            ..
-        } = &*unit_state
-        else {
+        let Some(building_entity) = unit_state.assigned_processor_building() else {
             continue;
         };
-        let building_entity = *building_entity;
         // Now access mutably — only workers that actually need phase updates trigger Changed
         let UnitState::AssignedGathering {
             ref mut phase, ..
@@ -357,6 +356,7 @@ pub(super) fn processor_worker_visual_system(
         let Ok((
             _,
             building_tf,
+            building_kind,
             processor,
             building_state,
             building_paused,
@@ -460,19 +460,25 @@ pub(super) fn processor_worker_visual_system(
                 *timer_secs += time.delta_secs();
                 if *timer_secs >= 2.5 {
                     // Walk back to building edge, not center
-                    let approach = depot_approach_point(
+                    let target = building_worker_interaction_target(
                         tf.translation,
-                        building_tf.translation,
+                        building_tf,
                         building_fp.0,
+                        *building_kind,
                     );
-                    commands.entity(entity).insert(MoveTarget(approach));
+                    commands.entity(entity).insert(MoveTarget(target.position));
                     *phase = AssignedPhase::ReturningToBuilding;
                 }
             }
             AssignedPhase::ReturningToBuilding => {
-                // Check if worker arrived at building (footprint-aware)
-                let dist = tf.translation.distance(building_tf.translation);
-                let arrive_range = building_fp.0 + 2.5;
+                let target = building_worker_interaction_target(
+                    tf.translation,
+                    building_tf,
+                    building_fp.0,
+                    *building_kind,
+                );
+                let dist = tf.translation.distance(target.position);
+                let arrive_range = target.arrive_radius;
                 let path_arrived = move_target.is_none();
                 if dist <= arrive_range || path_arrived {
                     commands.entity(entity).remove::<MoveTarget>();
@@ -510,99 +516,69 @@ pub(super) fn processor_worker_visual_system(
     }
 }
 
-// ── Auto-assign workers to newly completed processors ──
+// ── Worker assignment helpers ──
 
-/// Every 3 seconds, find idle workers near completed processor buildings and assign them.
-pub(super) fn auto_assign_workers_system(
+/// Assigned processor workers should not remain directly selectable or hoverable.
+pub(super) fn lock_assigned_workers_from_user_interaction(
     mut commands: Commands,
-    time: Res<Time>,
-    mut timer: Local<Option<Timer>>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
-    mut processors: Query<
-        (
-            Entity,
-            &Transform,
-            &ResourceProcessor,
-            &BuildingState,
-            &Faction,
-            Option<&AssignedWorkers>,
-        ),
-        With<Building>,
-    >,
-    workers: Query<
-        (Entity, &Transform, &UnitState, &Faction, &TaskSource),
-        (
-            With<Unit>,
-            With<crate::blueprints::EntityKind>,
-            Without<BuildingAssignment>,
-        ),
-    >,
-    kinds: Query<&crate::blueprints::EntityKind>,
+    locked_workers: Query<Entity, (With<BuildingAssignment>, Or<(With<Selected>, With<Hovered>)>)>,
 ) {
-    // Client: don't auto-assign workers — host handles all worker assignment
-    if *net_role == crate::infrastructure::multiplayer::NetRole::Client {
-        return;
-    }
-    let t = timer.get_or_insert_with(|| Timer::from_seconds(3.0, TimerMode::Repeating));
-    t.tick(time.delta());
-    if !t.just_finished() {
-        return;
-    }
-
-    for (building_entity, building_tf, processor, state, building_faction, assigned) in
-        &mut processors
-    {
-        if *state != BuildingState::Complete {
-            continue;
-        }
-        let slots = processor.max_workers as usize;
-        let current_assigned = assigned.map(|aw| aw.workers.len()).unwrap_or(0);
-        if current_assigned >= slots {
-            continue;
-        }
-
-        // Collect idle workers of the same faction within 25 units, sorted by distance
-        let mut candidates: Vec<(Entity, f32)> = Vec::new();
-        for (worker_entity, worker_tf, unit_state, worker_faction, task_source) in &workers {
-            if worker_faction != building_faction {
-                continue;
-            }
-            if *unit_state != UnitState::Idle {
-                continue;
-            }
-            // Only auto-assign workers that are in Auto task source (not manually commanded)
-            if *task_source != TaskSource::Auto {
-                continue;
-            }
-            // Must be a Worker
-            if let Ok(kind) = kinds.get(worker_entity) {
-                if *kind != crate::blueprints::EntityKind::Worker {
-                    continue;
-                }
-            } else {
-                continue;
-            }
-            let dist = worker_tf.translation.distance(building_tf.translation);
-            if dist <= 25.0 {
-                candidates.push((worker_entity, dist));
-            }
-        }
-        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
-
-        let needed = slots - current_assigned;
-        for (worker_entity, _) in candidates.into_iter().take(needed) {
-            assign_worker_to_processor(
-                &mut commands,
-                worker_entity,
-                building_entity,
-                building_tf.translation,
-                TaskSource::Auto,
-            );
-        }
+    for entity in &locked_workers {
+        commands.entity(entity).remove::<Selected>().remove::<Hovered>();
     }
 }
 
-// ── Worker assignment helpers ──
+/// Repair worker/building-side assignment drift.
+///
+/// This keeps `BuildingAssignment`, `UnitState::AssignedGathering`, and the building's
+/// `AssignedWorkers` list aligned even after save/load or network sync edge cases.
+pub(super) fn reconcile_processor_assignments(
+    mut commands: Commands,
+    processors: Query<Entity, (With<Building>, With<ResourceProcessor>)>,
+    workers: Query<(Entity, &UnitState, Option<&BuildingAssignment>), With<Unit>>,
+    building_lists: Query<(Entity, Option<&AssignedWorkers>), (With<Building>, With<ResourceProcessor>)>,
+) {
+    let mut expected: HashMap<Entity, Vec<Entity>> = HashMap::new();
+
+    for (worker, state, assignment) in &workers {
+        let state_building = state.assigned_processor_building();
+        let assignment_building = assignment.map(|a| a.0);
+
+        match (state_building, assignment_building) {
+            (Some(state_bld), Some(assignment_bld)) if state_bld != assignment_bld => {
+                commands.entity(worker).insert(BuildingAssignment(state_bld));
+            }
+            (Some(state_bld), None) => {
+                commands.entity(worker).insert(BuildingAssignment(state_bld));
+            }
+            (None, Some(_)) => {
+                commands.entity(worker).remove::<BuildingAssignment>();
+            }
+            _ => {}
+        }
+
+        if let Some(building) = state_building.or(assignment_building) {
+            if processors.contains(building) {
+                expected.entry(building).or_default().push(worker);
+            }
+        }
+    }
+
+    for workers in expected.values_mut() {
+        workers.sort_by_key(|entity| entity.to_bits());
+        workers.dedup();
+    }
+
+    for (building, assigned) in &building_lists {
+        let desired = expected.remove(&building).unwrap_or_default();
+        let current = assigned.map(|aw| aw.workers.clone()).unwrap_or_default();
+        if current != desired {
+            commands
+                .entity(building)
+                .insert(AssignedWorkers { workers: desired });
+        }
+    }
+}
 
 pub fn assign_worker_to_processor(
     commands: &mut Commands,
@@ -621,6 +597,8 @@ pub fn assign_worker_to_processor(
         .insert(source)
         .insert(BuildingAssignment(building))
         .insert(MoveTarget(building_pos))
+        .remove::<Selected>()
+        .remove::<Hovered>()
         .remove::<AttackTarget>();
 }
 
@@ -639,4 +617,28 @@ pub fn unassign_worker_from_processor(
         .remove::<BuildingAssignment>()
         .remove::<MoveTarget>()
         .remove::<AttackTarget>();
+}
+
+/// Safety net: eject excess workers when a building has more assigned than max_workers.
+/// This handles deferred-command races where multiple systems assign workers in the same frame.
+pub(super) fn enforce_processor_worker_limit(
+    mut commands: Commands,
+    processors: Query<(Entity, &ResourceProcessor, &AssignedWorkers), With<Building>>,
+    worker_states: Query<&UnitState, With<Unit>>,
+) {
+    for (building_entity, processor, assigned) in &processors {
+        let max = processor.max_workers as usize;
+        if assigned.workers.len() <= max {
+            continue;
+        }
+        // Eject excess workers (keep the first `max`, remove the rest)
+        for &worker in assigned.workers.iter().skip(max) {
+            // Only eject if the worker is actually assigned to this building
+            if let Ok(state) = worker_states.get(worker) {
+                if state.assigned_processor_building() == Some(building_entity) {
+                    unassign_worker_from_processor(&mut commands, worker, Some(building_entity));
+                }
+            }
+        }
+    }
 }

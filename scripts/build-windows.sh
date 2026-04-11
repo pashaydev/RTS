@@ -31,7 +31,7 @@ mkdir -p "$DIST"
 cp "$ROOT/target/x86_64-pc-windows-msvc/release/rts.exe" "$DIST/"
 
 # Create runtime directories
-mkdir -p "$DIST/config" "$DIST/saves"
+mkdir -p "$DIST/config" "$DIST/saves" "$DIST/logs"
 
 # Copy only the asset subtrees the game actually loads.
 # This list mirrors the Dockerfile and model_assets.rs references.

@@ -43,10 +43,10 @@ pub struct SessionLog {
 
 impl SessionLog {
     fn new(base_dir: PathBuf) -> Self {
+        let base_dir = resolve_log_base_dir(base_dir);
         let started_at_unix_ms = now_unix_ms();
         let session_id = uuid::Uuid::new_v4().to_string();
-        let output_path = base_dir
-            .join("logs")
+        let output_path = logs_dir(&base_dir)
             .join(format!("session-{started_at_unix_ms}-{session_id}.json"));
 
         Self {
@@ -112,6 +112,24 @@ impl SessionLog {
             }
         }
     }
+}
+
+fn resolve_log_base_dir(base_dir: PathBuf) -> PathBuf {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(exe_dir) = exe_path.parent() {
+                // In development, keep logs in the working tree instead of `target/...`.
+                // In packaged desktop builds, prefer the executable directory so logs
+                // land inside the distributed game folder regardless of launch CWD.
+                if !exe_dir.components().any(|c| c.as_os_str() == "target") {
+                    return exe_dir.to_path_buf();
+                }
+            }
+        }
+    }
+
+    base_dir
 }
 
 #[derive(Clone)]

@@ -86,9 +86,11 @@ CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 Build and deploy everything with a single command:
 
 ```sh
-./scripts/deploy.sh                # Windows build + Fly.io deploy (default)
-./scripts/deploy.sh --windows-only # Windows zip only
-./scripts/deploy.sh --fly-only     # Web deploy to Fly.io only
+./scripts/deploy.sh                        # bump patch + Windows build + Fly.io deploy
+./scripts/deploy.sh --windows-only         # bump patch + Windows zip only
+./scripts/deploy.sh --fly-only             # bump patch + Web deploy only
+./scripts/deploy.sh --minor --windows-only # bump minor + Windows zip only
+./scripts/deploy.sh --major --fly-only     # bump major + Web deploy only
 ```
 
 **Prerequisites:**

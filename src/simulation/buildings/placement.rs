@@ -1429,6 +1429,9 @@ pub(crate) fn confirm_placement(
         cleanup_worker_assignment(&mut commands, worker_entity, w_state);
     }
 
+    // Clear any stale combat order so resolve_combat_intents doesn't overwrite MoveTarget
+    crate::simulation::combat::reset_combat_state(&mut commands, worker_entity);
+
     // Assign worker to move to the build site (building spawns on arrival)
     commands
         .entity(worker_entity)
@@ -1561,6 +1564,8 @@ pub(crate) fn confirm_wall_plot(
         if let Ok((_, _, w_state, _, _)) = workers.get(worker_entity) {
             cleanup_worker_assignment(&mut commands, worker_entity, w_state);
         }
+        // Clear any stale combat order so resolve_combat_intents doesn't overwrite MoveTarget
+        crate::simulation::combat::reset_combat_state(&mut commands, worker_entity);
         let target_building = spawned_entities[0];
         commands
             .entity(worker_entity)
@@ -1681,6 +1686,8 @@ pub(crate) fn confirm_gate_plot(
     if let Some(preview) = placement.preview_entity.take() {
         commands.entity(preview).try_despawn();
     }
+    // Clear any stale combat order so resolve_combat_intents doesn't overwrite MoveTarget
+    crate::simulation::combat::reset_combat_state(&mut commands, worker_entity);
     commands
         .entity(worker_entity)
         .remove::<AttackTarget>()

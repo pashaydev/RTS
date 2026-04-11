@@ -228,7 +228,10 @@ fn build_ai_world_snapshot(
     mut index: ResMut<AiSnapshotIndex>,
     units_q: Query<(Entity, &Faction, &EntityKind, &Transform), With<Unit>>,
     buildings_q: Query<(Entity, &Faction, &EntityKind, &Transform, &BuildingState), With<Building>>,
-    resource_nodes_q: Query<(Entity, &Transform, &ResourceNode), Without<Unit>>,
+    resource_nodes_q: Query<
+        (Entity, &Transform, &ResourceNode, Option<&YardResourceNode>),
+        Without<Unit>,
+    >,
 ) {
     if dirty.force_full {
         rebuild_ai_world_snapshot_full(&mut snapshot, &mut index, &units_q, &buildings_q, &resource_nodes_q);
@@ -273,7 +276,10 @@ fn rebuild_ai_world_snapshot_full(
         (Entity, &Faction, &EntityKind, &Transform, &BuildingState),
         With<Building>,
     >,
-    resource_nodes_q: &Query<(Entity, &Transform, &ResourceNode), Without<Unit>>,
+    resource_nodes_q: &Query<
+        (Entity, &Transform, &ResourceNode, Option<&YardResourceNode>),
+        Without<Unit>,
+    >,
 ) {
     snapshot.factions.clear();
     snapshot.resource_nodes_by_type.clear();
@@ -359,12 +365,18 @@ fn rebuild_faction_snapshot(
 fn rebuild_resource_node_snapshot(
     snapshot: &mut AiWorldSnapshot,
     index: &mut AiSnapshotIndex,
-    resource_nodes_q: &Query<(Entity, &Transform, &ResourceNode), Without<Unit>>,
+    resource_nodes_q: &Query<
+        (Entity, &Transform, &ResourceNode, Option<&YardResourceNode>),
+        Without<Unit>,
+    >,
 ) {
     snapshot.resource_nodes_by_type.clear();
     index.resource_nodes.clear();
 
-    for (entity, tf, node) in resource_nodes_q.iter() {
+    for (entity, tf, node, yard_tag) in resource_nodes_q.iter() {
+        if yard_tag.is_some() {
+            continue;
+        }
         index.resource_nodes.insert(entity);
         if node.amount_remaining == 0 {
             continue;
@@ -469,7 +481,7 @@ fn validate_ai_snapshot_integrity(
                 forced_totals
                     .per_faction
                     .entry(*faction)
-                    .or_default()
+                    .or_insert_with(PlayerResources::empty)
                     .amounts[rt as usize] += carrying.amount;
             }
         }

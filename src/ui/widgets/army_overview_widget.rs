@@ -67,9 +67,11 @@ fn count_player_units(
         if *unit_faction != faction {
             continue;
         }
+        let has_processor_assignment = building_assignment.is_some()
+            || unit_state.is_some_and(|state| state.assigned_processor_building().is_some());
         let is_idle_worker = *kind == EntityKind::Worker
             && unit_state.is_some_and(|s| *s == UnitState::Idle)
-            && building_assignment.is_none();
+            && !has_processor_assignment;
 
         if let Some(entry) = counts.iter_mut().find(|c| c.kind == *kind) {
             entry.total += 1;
@@ -92,7 +94,7 @@ fn handle_army_overview_hover(
     mut commands: Commands,
     active_player: Res<ActivePlayer>,
     interactions: Query<(&Interaction, &ArmyOverviewEntry), With<Button>>,
-    units: Query<(Entity, &EntityKind, &Faction), With<Unit>>,
+    units: Query<(Entity, &EntityKind, &Faction, Option<&BuildingAssignment>), With<Unit>>,
 ) {
     let mut hovered_kind = None;
     for (interaction, entry) in &interactions {
@@ -102,8 +104,12 @@ fn handle_army_overview_hover(
         }
     }
 
-    for (entity, kind, faction) in &units {
+    for (entity, kind, faction, assignment) in &units {
         if *faction != active_player.0 {
+            continue;
+        }
+        if assignment.is_some() {
+            commands.entity(entity).remove::<ArmyOverviewHighlighted>();
             continue;
         }
 
@@ -119,7 +125,7 @@ fn handle_army_overview_click(
     mut commands: Commands,
     interactions: Query<(&Interaction, &ArmyOverviewEntry), Changed<Interaction>>,
     selected: Query<Entity, With<Selected>>,
-    units: Query<(Entity, &EntityKind, &Faction), With<Unit>>,
+    units: Query<(Entity, &EntityKind, &Faction, Option<&BuildingAssignment>), With<Unit>>,
     active_player: Res<ActivePlayer>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -134,8 +140,8 @@ fn handle_army_overview_click(
             commands.entity(entity).remove::<Selected>();
         }
 
-        for (entity, kind, faction) in &units {
-            if *faction == active_player.0 && *kind == entry.kind {
+        for (entity, kind, faction, assignment) in &units {
+            if *faction == active_player.0 && *kind == entry.kind && assignment.is_none() {
                 commands.entity(entity).insert(Selected);
             }
         }

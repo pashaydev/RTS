@@ -18,6 +18,7 @@ const ACCENT_BAR_WIDTH: f32 = 3.0;
 const STATUS_BAR_HEIGHT: f32 = 36.0;
 const STATUS_ICON_SIZE: f32 = 24.0;
 const STATUS_ICON_INNER: f32 = 16.0;
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // ── Title Page ──
 
@@ -52,7 +53,7 @@ pub(crate) fn spawn_title_page(
 
     let quit_btn = spawn_quit_menu_button(
         commands,
-        "QUIT INTERFACE",
+        "QUIT",
         MenuButton(MenuAction::Quit),
         Some(4),
         fonts,
@@ -282,7 +283,7 @@ pub(crate) fn spawn_status_bar(
                         TextColor(theme.colors.text_disabled.with_alpha(0.5)),
                     ));
                     right.spawn((
-                        Text::new("v0.1"),
+                        Text::new(format!("v{APP_VERSION}")),
                         TextFont {
                             font: fonts.body.clone(),
                             font_size: 9.0,

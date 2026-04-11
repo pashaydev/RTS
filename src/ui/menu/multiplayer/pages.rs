@@ -250,7 +250,7 @@ pub(crate) fn spawn_host_lobby_page(
         commands,
         container,
         "Map Size:",
-        &["Small", "Medium", "Large"],
+        &["Small", "Medium", "Large", "EPIC"],
         map_idx,
         SelectorField::MapSize,
         None,

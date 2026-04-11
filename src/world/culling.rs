@@ -46,7 +46,7 @@ const LOD_HIDE_DISTANCE_SQ: f32 = LOD_HIDE_DISTANCE * LOD_HIDE_DISTANCE;
 const DECO_HIDE_DISTANCE_SQ: f32 = 120.0 * 120.0;
 
 /// Grass chunks are hidden at a similar distance to decorations.
-const GRASS_HIDE_DISTANCE_SQ: f32 = 100.0 * 100.0;
+const GRASS_HIDE_DISTANCE_SQ: f32 = 180.0 * 180.0;
 
 /// Trees are hidden earlier than general entities — their leaf canopy overdraw
 /// is the main GPU cost when looking top-down, and at 130 units they're tiny.

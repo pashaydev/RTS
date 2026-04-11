@@ -4,6 +4,8 @@ use crate::infrastructure::multiplayer::NetRole;
 use crate::types::*;
 use crate::world::spatial::SpatialHashGrid;
 
+use super::damage::apply_damage;
+
 pub struct CombatProjectilesPlugin;
 
 impl Plugin for CombatProjectilesPlugin {
@@ -24,7 +26,7 @@ fn tick_projectiles(
     net_role: Res<NetRole>,
     spatial_grid: Res<SpatialHashGrid>,
     mut impacts: MessageWriter<ProjectileImpactEvent>,
-    mut projectiles: Query<(Entity, &mut Transform, &Projectile, Option<&AoeSplash>)>,
+    mut projectiles: Query<(Entity, &mut Transform, &mut Projectile, Option<&AoeSplash>)>,
     mut targets: Query<
         (
             &Transform,
@@ -39,7 +41,13 @@ fn tick_projectiles(
         return;
     }
 
-    for (proj_entity, mut proj_tf, projectile, opt_aoe) in &mut projectiles {
+    for (proj_entity, mut proj_tf, mut projectile, opt_aoe) in &mut projectiles {
+        projectile.lifetime_secs -= time.delta_secs();
+        if projectile.lifetime_secs <= 0.0 {
+            commands.entity(proj_entity).try_despawn();
+            continue;
+        }
+
         let Ok((target_tf, _, _, _)) = targets.get(projectile.target) else {
             commands.entity(proj_entity).try_despawn();
             continue;
@@ -51,7 +59,9 @@ fn tick_projectiles(
 
         if dist < 0.5 {
             let direction = dir.normalize_or_zero();
-            let mut applied_damage = 0.0;
+            let now = time.elapsed_secs_f64();
+            let mem = tuning.damage_memory_secs;
+            let applied_damage;
 
             {
                 let Ok((_, mut health, opt_armor, opt_reserved)) = targets.get_mut(projectile.target)
@@ -59,23 +69,19 @@ fn tick_projectiles(
                     commands.entity(proj_entity).try_despawn();
                     continue;
                 };
-
-                if let Some(mut reserved) = opt_reserved {
-                    let src = projectile.source;
-                    reserved.reservations.retain(|(s, _, _)| *s != src);
-                }
-
-                let multiplier = opt_armor
-                    .map(|armor| projectile.damage_type.multiplier_vs(*armor))
-                    .unwrap_or(1.0);
-                applied_damage = projectile.damage * multiplier;
-                health.current -= applied_damage;
+                applied_damage = apply_damage(
+                    &mut commands,
+                    projectile.target,
+                    Some(projectile.source),
+                    projectile.damage,
+                    projectile.damage_type,
+                    &mut health,
+                    opt_armor.copied(),
+                    opt_reserved.map(|r| r.into_inner()),
+                    now,
+                    mem,
+                );
             }
-            commands.entity(projectile.target).insert(RecentCombatDamage {
-                attacker: projectile.source,
-                observed_at: time.elapsed_secs_f64(),
-                expires_at: time.elapsed_secs_f64() + tuning.damage_memory_secs as f64,
-            });
 
             if let Some(aoe) = opt_aoe {
                 let nearby = spatial_grid.query_radius(target_pos, aoe.radius);
@@ -83,7 +89,8 @@ fn tick_projectiles(
                     if *splash_entity == projectile.target {
                         continue;
                     }
-                    if let Ok((_, mut splash_health, splash_armor, _)) = targets.get_mut(*splash_entity)
+                    if let Ok((_, mut splash_health, splash_armor, splash_reserved)) =
+                        targets.get_mut(*splash_entity)
                     {
                         let splash_dist = (target_pos - *splash_pos).length();
                         let dmg_mult = if aoe.falloff {
@@ -91,15 +98,18 @@ fn tick_projectiles(
                         } else {
                             1.0
                         };
-                        let armor_mult = splash_armor
-                            .map(|a| projectile.damage_type.multiplier_vs(*a))
-                            .unwrap_or(1.0);
-                        splash_health.current -= projectile.damage * dmg_mult * armor_mult;
-                        commands.entity(*splash_entity).insert(RecentCombatDamage {
-                            attacker: projectile.source,
-                            observed_at: time.elapsed_secs_f64(),
-                            expires_at: time.elapsed_secs_f64() + tuning.damage_memory_secs as f64,
-                        });
+                        apply_damage(
+                            &mut commands,
+                            *splash_entity,
+                            Some(projectile.source),
+                            projectile.damage * dmg_mult,
+                            projectile.damage_type,
+                            &mut splash_health,
+                            splash_armor.copied(),
+                            splash_reserved.map(|r| r.into_inner()),
+                            now,
+                            mem,
+                        );
                     }
                 }
             }
@@ -107,7 +117,7 @@ fn tick_projectiles(
             impacts.write(ProjectileImpactEvent {
                 position: target_pos,
                 target: projectile.target,
-                damage: applied_damage.max(projectile.damage),
+                damage: applied_damage,
                 fx_kind: projectile.fx_kind,
                 impact_scale: projectile.impact_scale,
                 is_aoe: opt_aoe.is_some(),
@@ -116,11 +126,13 @@ fn tick_projectiles(
 
             commands.entity(proj_entity).try_despawn();
         } else {
-            let forward = dir.normalize();
-            let step = forward * projectile.speed * time.delta_secs();
+            let step = projectile.velocity * time.delta_secs();
             proj_tf.translation += step;
             if projectile.orient_to_velocity {
-                proj_tf.rotation = Quat::from_rotation_arc(Vec3::Z, forward);
+                let forward = projectile.velocity.normalize_or_zero();
+                if forward.length_squared() > 0.0 {
+                    proj_tf.rotation = Quat::from_rotation_arc(Vec3::Z, forward);
+                }
             }
         }
     }

@@ -1,5 +1,6 @@
 pub mod animation;
 pub mod camera;
+pub mod cursor;
 pub mod entity_labels;
 pub mod materials;
 pub mod minimap;
@@ -24,5 +25,6 @@ impl PluginGroup for PresentationPlugins {
             .add(procedural_mobs::ProceduralMobsPlugin)
             .add(entity_labels::EntityLabelPlugin)
             .add(minimap::MinimapPlugin)
+            .add(cursor::CursorPlugin)
     }
 }

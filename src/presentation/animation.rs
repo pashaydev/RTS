@@ -44,7 +44,6 @@ fn discover_animation_players(
     anim_players: Query<Entity, With<AnimationPlayer>>,
     registry: Option<Res<UnitAnimationRegistry>>,
     legacy_assets: Option<Res<AnimationAssets>>,
-    mut anim_player_mut: Query<&mut AnimationPlayer>,
 ) {
     for (scene_entity, child_of) in &scene_children {
         let parent = child_of.parent();
@@ -102,6 +101,20 @@ fn discover_animation_players(
             continue;
         };
 
+        // Insert AnimPlayerRef on parent, and the graph + transitions on the
+        // animation player entity.  Both are deferred commands so they apply
+        // at the same time.
+        //
+        // Set initial controller state to `DeathB` — a sentinel that will
+        // never match the first real `desired` state, guaranteeing an
+        // immediate transition on the next `drive_animations` tick.
+        //
+        // NOTE: Do **not** call `player.play()` here.  The AnimationGraphHandle
+        // is inserted via deferred commands, so the AnimationPlayer does not
+        // have a graph yet on this frame.  Calling play() without a graph
+        // causes undefined behaviour that manifests as broken animations on
+        // Windows/WASM.  Instead, we let `drive_animations` handle the first
+        // transition on the next frame, once the graph is available.
         commands.entity(parent).insert((
             AnimPlayerRef(player_entity),
             AnimationController {
@@ -112,12 +125,6 @@ fn discover_animation_players(
         commands
             .entity(player_entity)
             .insert((AnimationGraphHandle(graph), AnimationTransitions::new()));
-
-        if let Some(node_idx) = idle_node {
-            if let Ok(mut player) = anim_player_mut.get_mut(player_entity) {
-                player.play(node_idx).repeat();
-            }
-        }
     }
 }
 
@@ -167,6 +174,7 @@ fn drive_animations(
     target_transforms: Query<&Transform, Without<AnimationController>>,
     registry: Option<Res<UnitAnimationRegistry>>,
     legacy_assets: Option<Res<AnimationAssets>>,
+    anim_graph_check: Query<(), With<AnimationGraphHandle>>,
     mut anim_players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
 ) {
     for (
@@ -294,6 +302,15 @@ fn drive_animations(
         };
 
         if desired != controller.current_state {
+            // Guard: skip if the animation graph hasn't been attached yet.
+            // This happens on the first frame after `discover_animation_players`
+            // inserts components via deferred commands.  We intentionally do NOT
+            // update `controller.current_state` here so the mismatch persists
+            // and the transition fires on the next frame once the graph exists.
+            if !anim_graph_check.contains(anim_ref.0) {
+                continue;
+            }
+
             controller.current_state = desired;
 
             // Look up node index from per-unit-type graph or legacy

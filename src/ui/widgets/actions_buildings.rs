@@ -206,554 +206,15 @@ pub(super) fn spawn_building_action_bar(
         spawn_separator(commands, container, theme);
     }
 
-    // Processor info section
+    // Processor info section (harvesting + worker assignment controls)
     if let Some(proc) = processor {
-        let worker_count = worker_info.len();
-        let proc_row = commands
-            .spawn(Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(3.0),
-                ..default()
-            })
-            .id();
-        commands.entity(container).add_child(proc_row);
-
-        let rt_names: Vec<&str> = proc
-            .resource_types
-            .iter()
-            .map(|rt| rt.display_name())
-            .collect();
-        let effective_rate =
-            proc.harvest_rate + (worker_count as f32 * proc.harvest_rate * proc.worker_rate_bonus);
-        let status_suffix = if is_paused { " [PAUSED]" } else { "" };
-        let harvest_label = commands
-            .spawn((
-                Text::new(format!(
-                    "Harvesting: {} ({:.1}/s){}",
-                    rt_names.join(", "),
-                    if is_paused { 0.0 } else { effective_rate },
-                    status_suffix
-                )),
-                TextFont {
-                    font_size: theme.typography.body,
-                    ..default()
-                },
-                TextColor(if is_paused {
-                    theme.colors.warning
-                } else {
-                    theme.colors.text_secondary
-                }),
-            ))
-            .id();
-        commands.entity(proc_row).add_child(harvest_label);
-
-        if proc.max_workers > 0 {
-            // Worker slots row: interactive clickable slots
-            let slot_row = commands
-                .spawn(Node {
-                    ..widget_wrap_row(4.0, 2.0)
-                })
-                .id();
-            commands.entity(proc_row).add_child(slot_row);
-
-            for i in 0..proc.max_workers as usize {
-                if i < worker_count {
-                    // Filled slot — clickable, shows phase letter
-                    let (worker_entity, phase) = &worker_info[i];
-                    let phase_letter = match phase {
-                        AssignedPhase::SeekingNode => "S",
-                        AssignedPhase::MovingToNode(_) => "M",
-                        AssignedPhase::Harvesting { .. } => "H",
-                        AssignedPhase::ReturningToBuilding => "R",
-                        AssignedPhase::Depositing { .. } => "D",
-                    };
-                    let slot = commands
-                        .spawn((
-                            Button,
-                            UnassignSpecificWorkerButton(*worker_entity),
-                            Node {
-                                width: Val::Px(20.0),
-                                height: Val::Px(20.0),
-                                // border_radius: RADIUS_MD,
-                                border: BORDER_1,
-                                justify_content: JustifyContent::Center,
-                                align_items: AlignItems::Center,
-                                ..default()
-                            },
-                            BorderColor::all(theme.colors.accent),
-                            BackgroundColor(theme.colors.accent.with_alpha(0.7)),
-                            Interaction::None,
-                        ))
-                        .with_children(|btn| {
-                            btn.spawn((
-                                Text::new(phase_letter),
-                                TextFont {
-                                    font_size: 10.0,
-                                    ..default()
-                                },
-                                TextColor(theme::TEXT_PRIMARY),
-                            ));
-                        })
-                        .id();
-                    commands.entity(slot_row).add_child(slot);
-                } else {
-                    // Empty slot — non-interactive placeholder
-                    let slot = commands
-                        .spawn((
-                            Node {
-                                width: Val::Px(20.0),
-                                height: Val::Px(20.0),
-                                // border_radius: RADIUS_MD,
-                                border: BORDER_1,
-                                ..default()
-                            },
-                            BorderColor::all(theme.colors.accent.with_alpha(0.3)),
-                            BackgroundColor(theme::BG_RECESSED.with_alpha(0.2)),
-                        ))
-                        .id();
-                    commands.entity(slot_row).add_child(slot);
-                }
-            }
-
-            // Button row: [ - ] Workers: X/Y [ + ]   [Pause/Resume]  [Unassign All]
-            let btn_row = commands
-                .spawn(Node {
-                    ..widget_wrap_row(4.0, 4.0)
-                })
-                .id();
-            commands.entity(proc_row).add_child(btn_row);
-
-            let rest_bg = [0.14, 0.14, 0.14, 0.94];
-
-            // "-" button (unassign one)
-            if worker_count > 0 {
-                let minus_btn = commands
-                    .spawn((
-                        Button,
-                        UnassignOneWorkerButton,
-                        ButtonAnimState::new(rest_bg),
-                        ButtonStyle::Destructive,
-                        Node {
-                            width: Val::Px(28.0),
-                            height: Val::Px(24.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border: BORDER_1,
-                            // border_radius: RADIUS_MD,
-                            ..default()
-                        },
-                        BorderColor::all(theme.colors.destructive.with_alpha(0.3)),
-                        BackgroundColor(theme.colors.bg_elevated),
-                        Interaction::None,
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            Text::new("-"),
-                            TextFont {
-                                font_size: theme.typography.body,
-                                ..default()
-                            },
-                            TextColor(theme.colors.destructive),
-                        ));
-                    })
-                    .id();
-                commands.entity(btn_row).add_child(minus_btn);
-            }
-
-            // Workers label
-            let workers_label = commands
-                .spawn((
-                    Text::new(format!("Workers: {}/{}", worker_count, proc.max_workers)),
-                    TextFont {
-                        font_size: theme.typography.body,
-                        ..default()
-                    },
-                    TextColor(theme.colors.text_secondary),
-                    Node {
-                        margin: UiRect::axes(Val::Px(4.0), Val::ZERO),
-                        ..default()
-                    },
-                ))
-                .id();
-            commands.entity(btn_row).add_child(workers_label);
-
-            // "+" button (assign one)
-            if worker_count < proc.max_workers as usize {
-                let plus_btn = commands
-                    .spawn((
-                        Button,
-                        AssignWorkerButton,
-                        ButtonAnimState::new(rest_bg),
-                        ButtonStyle::Ghost,
-                        Node {
-                            width: Val::Px(28.0),
-                            height: Val::Px(24.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            border: BORDER_1,
-                            // border_radius: RADIUS_MD,
-                            ..default()
-                        },
-                        BorderColor::all(theme.colors.accent.with_alpha(0.3)),
-                        BackgroundColor(theme.colors.bg_elevated),
-                        Interaction::None,
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            Text::new("+"),
-                            TextFont {
-                                font_size: theme.typography.body,
-                                ..default()
-                            },
-                            TextColor(theme.colors.accent),
-                        ));
-                    })
-                    .id();
-                commands.entity(btn_row).add_child(plus_btn);
-            }
-
-            // Pause/Resume toggle button
-            let pause_label = if is_paused { "Resume" } else { "Pause" };
-            let pause_color = if is_paused {
-                theme.colors.accent
-            } else {
-                theme.colors.warning
-            };
-            let pause_btn = commands
-                .spawn((
-                    Button,
-                    PauseBuildingButton,
-                    ButtonAnimState::new(rest_bg),
-                    ButtonStyle::Ghost,
-                    Node {
-                        padding: PAD_COMPACT,
-                        border: BORDER_1,
-                        // border_radius: RADIUS_MD,
-                        margin: UiRect::left(Val::Px(8.0)),
-                        ..default()
-                    },
-                    BorderColor::all(pause_color.with_alpha(0.3)),
-                    BackgroundColor(theme.colors.bg_elevated),
-                    Interaction::None,
-                ))
-                .with_children(|btn| {
-                    btn.spawn((
-                        Text::new(pause_label),
-                        TextFont {
-                            font_size: theme.typography.small,
-                            ..default()
-                        },
-                        TextColor(pause_color),
-                    ));
-                })
-                .id();
-            commands.entity(btn_row).add_child(pause_btn);
-
-            // "Unassign All" small button (only when >1 worker)
-            if worker_count > 1 {
-                let unassign_all_btn = commands
-                    .spawn((
-                        Button,
-                        UnassignWorkerButton,
-                        ButtonAnimState::new(rest_bg),
-                        ButtonStyle::Destructive,
-                        Node {
-                            padding: PAD_COMPACT,
-                            border: BORDER_1,
-                            // border_radius: RADIUS_MD,
-                            margin: UiRect::left(Val::Px(4.0)),
-                            ..default()
-                        },
-                        BorderColor::all(theme.colors.destructive.with_alpha(0.3)),
-                        BackgroundColor(theme.colors.bg_elevated),
-                        Interaction::None,
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            Text::new("Unassign All"),
-                            TextFont {
-                                font_size: theme.typography.small,
-                                ..default()
-                            },
-                            TextColor(theme.colors.destructive),
-                        ));
-                    })
-                    .id();
-                commands.entity(btn_row).add_child(unassign_all_btn);
-            }
-        } else {
-            let auto_badge = commands
-                .spawn((
-                    Text::new("Automated (no workers needed)"),
-                    TextFont {
-                        font_size: theme.typography.small,
-                        ..default()
-                    },
-                    TextColor(theme.colors.accent),
-                ))
-                .id();
-            commands.entity(proc_row).add_child(auto_badge);
-
-            // Pause/Resume for automated buildings too
-            let rest_bg = [0.14, 0.14, 0.14, 0.94];
-            let pause_label = if is_paused { "Resume" } else { "Pause" };
-            let pause_color = if is_paused {
-                theme.colors.accent
-            } else {
-                theme.colors.warning
-            };
-            let pause_btn = commands
-                .spawn((
-                    Button,
-                    PauseBuildingButton,
-                    ButtonAnimState::new(rest_bg),
-                    ButtonStyle::Ghost,
-                    Node {
-                        padding: PAD_COMPACT,
-                        border: BORDER_1,
-                        // border_radius: RADIUS_MD,
-                        margin: UiRect::top(Val::Px(4.0)),
-                        ..default()
-                    },
-                    BorderColor::all(pause_color.with_alpha(0.3)),
-                    BackgroundColor(theme.colors.bg_elevated),
-                    Interaction::None,
-                ))
-                .with_children(|btn| {
-                    btn.spawn((
-                        Text::new(pause_label),
-                        TextFont {
-                            font_size: theme.typography.small,
-                            ..default()
-                        },
-                        TextColor(pause_color),
-                    ));
-                })
-                .id();
-            commands.entity(proc_row).add_child(pause_btn);
-        }
-
+        spawn_processor_section(commands, container, proc, worker_info, is_paused, theme);
         spawn_separator(commands, container, theme);
     }
 
-    // Production state section
+    // Production state section (recipe selection + progress)
     if let Some(prod) = production {
-        let prod_col = commands
-            .spawn(Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(3.0),
-                ..default()
-            })
-            .id();
-        commands.entity(container).add_child(prod_col);
-
-        // Section label
-        let section_label = commands
-            .spawn((
-                Text::new("Production"),
-                TextFont {
-                    font_size: theme.typography.body,
-                    ..default()
-                },
-                TextColor(theme.colors.text_secondary),
-            ))
-            .id();
-        commands.entity(prod_col).add_child(section_label);
-
-        for (idx, recipe) in prod.recipes.iter().enumerate() {
-            let is_active = prod.active_recipe == Some(idx);
-            let is_locked = recipe.requires_level > level;
-
-            if is_locked {
-                let locked_row = commands
-                    .spawn(Node {
-                        width: Val::Percent(100.0),
-                        padding: PAD_SM,
-                        ..default()
-                    })
-                    .id();
-                commands.entity(prod_col).add_child(locked_row);
-                let locked_text = commands
-                    .spawn((
-                        Text::new(format!(
-                            "\u{1f512} {}  (Requires L{})",
-                            recipe.name, recipe.requires_level
-                        )),
-                        TextFont {
-                            font_size: theme.typography.body,
-                            ..default()
-                        },
-                        TextColor(theme.colors.text_secondary.with_alpha(0.5)),
-                    ))
-                    .id();
-                commands.entity(locked_row).add_child(locked_text);
-            } else {
-                // Clickable recipe row — click to select, click active to deselect
-                let rest_bg = [0.14, 0.14, 0.14, 0.94];
-                let recipe_row = commands
-                    .spawn((
-                        Button,
-                        SelectRecipeButton(idx),
-                        ButtonAnimState::new(rest_bg),
-                        ButtonStyle::Ghost,
-                        Node {
-                            width: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Column,
-                            row_gap: Val::Px(2.0),
-                            padding: PAD_SM,
-                            border: UiRect::left(Val::Px(if is_active { 3.0 } else { 0.0 })),
-                            // border_radius: RADIUS_XS,
-                            ..default()
-                        },
-                        BorderColor::all(if is_active {
-                            theme.colors.accent
-                        } else {
-                            Color::NONE
-                        }),
-                        BackgroundColor(if is_active {
-                            theme.colors.accent.with_alpha(0.1)
-                        } else {
-                            Color::NONE
-                        }),
-                        Interaction::None,
-                    ))
-                    .id();
-                commands.entity(prod_col).add_child(recipe_row);
-
-                // Recipe name + cycle time
-                let status = if is_active {
-                    "Active"
-                } else {
-                    "Click to start"
-                };
-                let header_text =
-                    format!("{}  ({:.0}s) [{}]", recipe.name, recipe.cycle_secs, status);
-                let header = commands
-                    .spawn((
-                        Text::new(header_text),
-                        TextFont {
-                            font_size: theme.typography.body,
-                            ..default()
-                        },
-                        TextColor(if is_active {
-                            theme.colors.accent
-                        } else {
-                            theme.colors.text_primary
-                        }),
-                    ))
-                    .id();
-                commands.entity(recipe_row).add_child(header);
-
-                // Inputs
-                if !recipe.inputs.is_empty() {
-                    let inputs_str: Vec<String> = recipe
-                        .inputs
-                        .iter()
-                        .map(|(rt, qty)| format!("{} {}", qty, rt.display_name()))
-                        .collect();
-                    let inputs_label = commands
-                        .spawn((
-                            Text::new(format!("  In: {}", inputs_str.join(", "))),
-                            TextFont {
-                                font_size: theme.typography.body,
-                                ..default()
-                            },
-                            TextColor(theme.colors.text_secondary),
-                        ))
-                        .id();
-                    commands.entity(recipe_row).add_child(inputs_label);
-                }
-
-                // Outputs
-                if !recipe.outputs.is_empty() {
-                    let outputs_str: Vec<String> = recipe
-                        .outputs
-                        .iter()
-                        .map(|(rt, qty)| format!("{} {}", qty, rt.display_name()))
-                        .collect();
-                    let outputs_label = commands
-                        .spawn((
-                            Text::new(format!("  Out: {}", outputs_str.join(", "))),
-                            TextFont {
-                                font_size: theme.typography.body,
-                                ..default()
-                            },
-                            TextColor(theme.colors.text_secondary),
-                        ))
-                        .id();
-                    commands.entity(recipe_row).add_child(outputs_label);
-                }
-
-                // Visual progress bar for active recipe
-                if is_active {
-                    let elapsed = prod.progress_timer.elapsed_secs();
-                    let duration = prod.progress_timer.duration().as_secs_f32();
-                    let pct = if duration > 0.0 {
-                        (elapsed / duration).clamp(0.0, 1.0)
-                    } else {
-                        0.0
-                    };
-
-                    // Progress bar container
-                    let bar_row = commands
-                        .spawn(Node {
-                            width: Val::Percent(100.0),
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(6.0),
-                            margin: UiRect::top(Val::Px(2.0)),
-                            ..default()
-                        })
-                        .id();
-                    commands.entity(recipe_row).add_child(bar_row);
-
-                    // Outer bar background
-                    let bar_bg = commands
-                        .spawn((
-                            Node {
-                                width: Val::Percent(80.0),
-                                height: Val::Px(6.0),
-                                // border_radius: RADIUS_SM,
-                                overflow: Overflow::clip(),
-                                ..default()
-                            },
-                            BackgroundColor(theme::BG_RECESSED.with_alpha(0.8)),
-                        ))
-                        .id();
-                    commands.entity(bar_row).add_child(bar_bg);
-
-                    // Inner bar fill
-                    let bar_fill = commands
-                        .spawn((
-                            Node {
-                                width: Val::Percent(pct * 100.0),
-                                height: Val::Percent(100.0),
-                                // border_radius: RADIUS_SM,
-                                ..default()
-                            },
-                            BackgroundColor(theme.colors.accent),
-                        ))
-                        .id();
-                    commands.entity(bar_bg).add_child(bar_fill);
-
-                    // Percentage text
-                    let pct_label = commands
-                        .spawn((
-                            Text::new(format!("{:.0}%", pct * 100.0)),
-                            TextFont {
-                                font_size: theme.typography.small,
-                                ..default()
-                            },
-                            TextColor(theme.colors.accent),
-                        ))
-                        .id();
-                    commands.entity(bar_row).add_child(pct_label);
-                }
-            }
-        }
-
+        spawn_production_section(commands, container, prod, level, theme);
         spawn_separator(commands, container, theme);
     }
 
@@ -1150,6 +611,594 @@ pub(super) fn spawn_building_action_bar(
         })
         .id();
     commands.entity(demolish_row).add_child(demolish_btn);
+}
+
+// ── Processor Section (harvesting rate + worker slots + assignment controls) ──
+
+fn spawn_processor_section(
+    commands: &mut Commands,
+    parent: Entity,
+    proc: &ResourceProcessor,
+    worker_info: &[(Entity, AssignedPhase)],
+    is_paused: bool,
+    theme: &Theme,
+) {
+    let worker_count = worker_info.len();
+
+    let section = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(3.0),
+            ..default()
+        })
+        .id();
+    commands.entity(parent).add_child(section);
+
+    // Harvest rate label
+    let rt_names: Vec<&str> = proc
+        .resource_types
+        .iter()
+        .map(|rt| rt.display_name())
+        .collect();
+    let effective_rate =
+        proc.harvest_rate + (worker_count as f32 * proc.harvest_rate * proc.worker_rate_bonus);
+    let status_suffix = if is_paused { " [PAUSED]" } else { "" };
+    let harvest_label = commands
+        .spawn((
+            Text::new(format!(
+                "Harvesting: {} ({:.1}/s){}",
+                rt_names.join(", "),
+                if is_paused { 0.0 } else { effective_rate },
+                status_suffix
+            )),
+            TextFont {
+                font_size: theme.typography.body,
+                ..default()
+            },
+            TextColor(if is_paused {
+                theme.colors.warning
+            } else {
+                theme.colors.text_secondary
+            }),
+        ))
+        .id();
+    commands.entity(section).add_child(harvest_label);
+
+    if proc.max_workers > 0 {
+        // Worker slots (clickable grid)
+        spawn_worker_slots(commands, section, proc, worker_info, theme);
+        // Assignment controls: [-] Workers: X/Y [+] [Pause] [Unassign All]
+        spawn_worker_controls(commands, section, proc, worker_count, is_paused, theme);
+    } else {
+        // Automated processor — no worker slots
+        let auto_badge = commands
+            .spawn((
+                Text::new("Automated (no workers needed)"),
+                TextFont {
+                    font_size: theme.typography.small,
+                    ..default()
+                },
+                TextColor(theme.colors.accent),
+            ))
+            .id();
+        commands.entity(section).add_child(auto_badge);
+
+        spawn_pause_button(
+            commands,
+            section,
+            is_paused,
+            UiRect::top(Val::Px(4.0)),
+            theme,
+        );
+    }
+}
+
+fn spawn_worker_slots(
+    commands: &mut Commands,
+    parent: Entity,
+    proc: &ResourceProcessor,
+    worker_info: &[(Entity, AssignedPhase)],
+    theme: &Theme,
+) {
+    let worker_count = worker_info.len();
+    let slot_row = commands
+        .spawn(Node {
+            ..widget_wrap_row(4.0, 2.0)
+        })
+        .id();
+    commands.entity(parent).add_child(slot_row);
+
+    for i in 0..proc.max_workers as usize {
+        if i < worker_count {
+            let (worker_entity, phase) = &worker_info[i];
+            let phase_letter = match phase {
+                AssignedPhase::SeekingNode => "S",
+                AssignedPhase::MovingToNode(_) => "M",
+                AssignedPhase::Harvesting { .. } => "H",
+                AssignedPhase::ReturningToBuilding => "R",
+                AssignedPhase::Depositing { .. } => "D",
+            };
+            let slot = commands
+                .spawn((
+                    Button,
+                    UnassignSpecificWorkerButton(*worker_entity),
+                    Node {
+                        width: Val::Px(20.0),
+                        height: Val::Px(20.0),
+                        border: BORDER_1,
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BorderColor::all(theme.colors.accent),
+                    BackgroundColor(theme.colors.accent.with_alpha(0.7)),
+                    Interaction::None,
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        Text::new(phase_letter),
+                        TextFont {
+                            font_size: 10.0,
+                            ..default()
+                        },
+                        TextColor(theme::TEXT_PRIMARY),
+                    ));
+                })
+                .id();
+            commands.entity(slot_row).add_child(slot);
+        } else {
+            let slot = commands
+                .spawn((
+                    Node {
+                        width: Val::Px(20.0),
+                        height: Val::Px(20.0),
+                        border: BORDER_1,
+                        ..default()
+                    },
+                    BorderColor::all(theme.colors.accent.with_alpha(0.3)),
+                    BackgroundColor(theme::BG_RECESSED.with_alpha(0.2)),
+                ))
+                .id();
+            commands.entity(slot_row).add_child(slot);
+        }
+    }
+}
+
+fn spawn_worker_controls(
+    commands: &mut Commands,
+    parent: Entity,
+    proc: &ResourceProcessor,
+    worker_count: usize,
+    is_paused: bool,
+    theme: &Theme,
+) {
+    let btn_row = commands
+        .spawn(Node {
+            ..widget_wrap_row(4.0, 4.0)
+        })
+        .id();
+    commands.entity(parent).add_child(btn_row);
+
+    let rest_bg = [0.14, 0.14, 0.14, 0.94];
+
+    // "-" button (unassign one)
+    if worker_count > 0 {
+        let minus_btn = commands
+            .spawn((
+                Button,
+                UnassignOneWorkerButton,
+                ButtonAnimState::new(rest_bg),
+                ButtonStyle::Destructive,
+                Node {
+                    width: Val::Px(28.0),
+                    height: Val::Px(24.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: BORDER_1,
+                    ..default()
+                },
+                BorderColor::all(theme.colors.destructive.with_alpha(0.3)),
+                BackgroundColor(theme.colors.bg_elevated),
+                Interaction::None,
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Text::new("-"),
+                    TextFont {
+                        font_size: theme.typography.body,
+                        ..default()
+                    },
+                    TextColor(theme.colors.destructive),
+                ));
+            })
+            .id();
+        commands.entity(btn_row).add_child(minus_btn);
+    }
+
+    // Workers label
+    let workers_label = commands
+        .spawn((
+            Text::new(format!("Workers: {}/{}", worker_count, proc.max_workers)),
+            TextFont {
+                font_size: theme.typography.body,
+                ..default()
+            },
+            TextColor(theme.colors.text_secondary),
+            Node {
+                margin: UiRect::axes(Val::Px(4.0), Val::ZERO),
+                ..default()
+            },
+        ))
+        .id();
+    commands.entity(btn_row).add_child(workers_label);
+
+    // "+" button (assign one)
+    if worker_count < proc.max_workers as usize {
+        let plus_btn = commands
+            .spawn((
+                Button,
+                AssignWorkerButton,
+                ButtonAnimState::new(rest_bg),
+                ButtonStyle::Ghost,
+                Node {
+                    width: Val::Px(28.0),
+                    height: Val::Px(24.0),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    border: BORDER_1,
+                    ..default()
+                },
+                BorderColor::all(theme.colors.accent.with_alpha(0.3)),
+                BackgroundColor(theme.colors.bg_elevated),
+                Interaction::None,
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Text::new("+"),
+                    TextFont {
+                        font_size: theme.typography.body,
+                        ..default()
+                    },
+                    TextColor(theme.colors.accent),
+                ));
+            })
+            .id();
+        commands.entity(btn_row).add_child(plus_btn);
+    }
+
+    // Pause/Resume
+    spawn_pause_button(
+        commands,
+        btn_row,
+        is_paused,
+        UiRect::left(Val::Px(8.0)),
+        theme,
+    );
+
+    // "Unassign All" (only when >1 worker)
+    if worker_count > 1 {
+        let unassign_all_btn = commands
+            .spawn((
+                Button,
+                UnassignWorkerButton,
+                ButtonAnimState::new(rest_bg),
+                ButtonStyle::Destructive,
+                Node {
+                    padding: PAD_COMPACT,
+                    border: BORDER_1,
+                    margin: UiRect::left(Val::Px(4.0)),
+                    ..default()
+                },
+                BorderColor::all(theme.colors.destructive.with_alpha(0.3)),
+                BackgroundColor(theme.colors.bg_elevated),
+                Interaction::None,
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Text::new("Unassign All"),
+                    TextFont {
+                        font_size: theme.typography.small,
+                        ..default()
+                    },
+                    TextColor(theme.colors.destructive),
+                ));
+            })
+            .id();
+        commands.entity(btn_row).add_child(unassign_all_btn);
+    }
+}
+
+fn spawn_pause_button(
+    commands: &mut Commands,
+    parent: Entity,
+    is_paused: bool,
+    margin: UiRect,
+    theme: &Theme,
+) {
+    let rest_bg = [0.14, 0.14, 0.14, 0.94];
+    let label = if is_paused { "Resume" } else { "Pause" };
+    let color = if is_paused {
+        theme.colors.accent
+    } else {
+        theme.colors.warning
+    };
+    let btn = commands
+        .spawn((
+            Button,
+            PauseBuildingButton,
+            ButtonAnimState::new(rest_bg),
+            ButtonStyle::Ghost,
+            Node {
+                padding: PAD_COMPACT,
+                border: BORDER_1,
+                margin,
+                ..default()
+            },
+            BorderColor::all(color.with_alpha(0.3)),
+            BackgroundColor(theme.colors.bg_elevated),
+            Interaction::None,
+        ))
+        .with_children(|btn| {
+            btn.spawn((
+                Text::new(label),
+                TextFont {
+                    font_size: theme.typography.small,
+                    ..default()
+                },
+                TextColor(color),
+            ));
+        })
+        .id();
+    commands.entity(parent).add_child(btn);
+}
+
+// ── Production Section (recipe list + progress bars) ──
+
+fn spawn_production_section(
+    commands: &mut Commands,
+    parent: Entity,
+    prod: &ProductionState,
+    level: u8,
+    theme: &Theme,
+) {
+    let prod_col = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(3.0),
+            ..default()
+        })
+        .id();
+    commands.entity(parent).add_child(prod_col);
+
+    let section_label = commands
+        .spawn((
+            Text::new("Production"),
+            TextFont {
+                font_size: theme.typography.body,
+                ..default()
+            },
+            TextColor(theme.colors.text_secondary),
+        ))
+        .id();
+    commands.entity(prod_col).add_child(section_label);
+
+    for (idx, recipe) in prod.recipes.iter().enumerate() {
+        let is_active = prod.active_recipe == Some(idx);
+        let is_locked = recipe.requires_level > level;
+
+        if is_locked {
+            spawn_locked_recipe_row(commands, prod_col, recipe, theme);
+        } else {
+            spawn_recipe_row(commands, prod_col, idx, recipe, is_active, prod, theme);
+        }
+    }
+}
+
+fn spawn_locked_recipe_row(
+    commands: &mut Commands,
+    parent: Entity,
+    recipe: &crate::types::economy::ProductionRecipe,
+    theme: &Theme,
+) {
+    let locked_row = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            padding: PAD_SM,
+            ..default()
+        })
+        .id();
+    commands.entity(parent).add_child(locked_row);
+
+    let locked_text = commands
+        .spawn((
+            Text::new(format!(
+                "\u{1f512} {}  (Requires L{})",
+                recipe.name, recipe.requires_level
+            )),
+            TextFont {
+                font_size: theme.typography.body,
+                ..default()
+            },
+            TextColor(theme.colors.text_secondary.with_alpha(0.5)),
+        ))
+        .id();
+    commands.entity(locked_row).add_child(locked_text);
+}
+
+fn spawn_recipe_row(
+    commands: &mut Commands,
+    parent: Entity,
+    idx: usize,
+    recipe: &crate::types::economy::ProductionRecipe,
+    is_active: bool,
+    prod: &ProductionState,
+    theme: &Theme,
+) {
+    let rest_bg = [0.14, 0.14, 0.14, 0.94];
+    let recipe_row = commands
+        .spawn((
+            Button,
+            SelectRecipeButton(idx),
+            ButtonAnimState::new(rest_bg),
+            ButtonStyle::Ghost,
+            Node {
+                width: Val::Percent(100.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(2.0),
+                padding: PAD_SM,
+                border: UiRect::left(Val::Px(if is_active { 3.0 } else { 0.0 })),
+                ..default()
+            },
+            BorderColor::all(if is_active {
+                theme.colors.accent
+            } else {
+                Color::NONE
+            }),
+            BackgroundColor(if is_active {
+                theme.colors.accent.with_alpha(0.1)
+            } else {
+                Color::NONE
+            }),
+            Interaction::None,
+        ))
+        .id();
+    commands.entity(parent).add_child(recipe_row);
+
+    // Recipe name + cycle time + status
+    let status = if is_active {
+        "Active"
+    } else {
+        "Click to start"
+    };
+    let header = commands
+        .spawn((
+            Text::new(format!(
+                "{}  ({:.0}s) [{}]",
+                recipe.name, recipe.cycle_secs, status
+            )),
+            TextFont {
+                font_size: theme.typography.body,
+                ..default()
+            },
+            TextColor(if is_active {
+                theme.colors.accent
+            } else {
+                theme.colors.text_primary
+            }),
+        ))
+        .id();
+    commands.entity(recipe_row).add_child(header);
+
+    // Inputs
+    if !recipe.inputs.is_empty() {
+        let inputs_str: Vec<String> = recipe
+            .inputs
+            .iter()
+            .map(|(rt, qty)| format!("{} {}", qty, rt.display_name()))
+            .collect();
+        let inputs_label = commands
+            .spawn((
+                Text::new(format!("  In: {}", inputs_str.join(", "))),
+                TextFont {
+                    font_size: theme.typography.body,
+                    ..default()
+                },
+                TextColor(theme.colors.text_secondary),
+            ))
+            .id();
+        commands.entity(recipe_row).add_child(inputs_label);
+    }
+
+    // Outputs
+    if !recipe.outputs.is_empty() {
+        let outputs_str: Vec<String> = recipe
+            .outputs
+            .iter()
+            .map(|(rt, qty)| format!("{} {}", qty, rt.display_name()))
+            .collect();
+        let outputs_label = commands
+            .spawn((
+                Text::new(format!("  Out: {}", outputs_str.join(", "))),
+                TextFont {
+                    font_size: theme.typography.body,
+                    ..default()
+                },
+                TextColor(theme.colors.text_secondary),
+            ))
+            .id();
+        commands.entity(recipe_row).add_child(outputs_label);
+    }
+
+    // Progress bar for active recipe
+    if is_active {
+        spawn_recipe_progress_bar(commands, recipe_row, prod, theme);
+    }
+}
+
+fn spawn_recipe_progress_bar(
+    commands: &mut Commands,
+    parent: Entity,
+    prod: &ProductionState,
+    theme: &Theme,
+) {
+    let elapsed = prod.progress_timer.elapsed_secs();
+    let duration = prod.progress_timer.duration().as_secs_f32();
+    let pct = if duration > 0.0 {
+        (elapsed / duration).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+
+    let bar_row = commands
+        .spawn(Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(6.0),
+            margin: UiRect::top(Val::Px(2.0)),
+            ..default()
+        })
+        .id();
+    commands.entity(parent).add_child(bar_row);
+
+    let bar_bg = commands
+        .spawn((
+            Node {
+                width: Val::Percent(80.0),
+                height: Val::Px(6.0),
+                overflow: Overflow::clip(),
+                ..default()
+            },
+            BackgroundColor(theme::BG_RECESSED.with_alpha(0.8)),
+        ))
+        .id();
+    commands.entity(bar_row).add_child(bar_bg);
+
+    let bar_fill = commands
+        .spawn((
+            Node {
+                width: Val::Percent(pct * 100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            BackgroundColor(theme.colors.accent),
+        ))
+        .id();
+    commands.entity(bar_bg).add_child(bar_fill);
+
+    let pct_label = commands
+        .spawn((
+            Text::new(format!("{:.0}%", pct * 100.0)),
+            TextFont {
+                font_size: theme.typography.small,
+                ..default()
+            },
+            TextColor(theme.colors.accent),
+        ))
+        .id();
+    commands.entity(bar_row).add_child(pct_label);
 }
 
 pub(super) fn spawn_training_queue_ui(

@@ -35,11 +35,27 @@ pub(super) struct WorkerAiParams<'w, 's> {
         ),
         With<Unit>,
     >,
-    nodes: Query<'w, 's, (&'static Transform, &'static mut ResourceNode), Without<Unit>>,
+    nodes: Query<
+        'w,
+        's,
+        (
+            &'static Transform,
+            &'static mut ResourceNode,
+            Option<&'static YardResourceNode>,
+        ),
+        Without<Unit>,
+    >,
     deposit_points: Query<
         'w,
         's,
-        (Entity, &'static Transform, &'static BuildingState, &'static Faction),
+        (
+            Entity,
+            &'static Transform,
+            &'static BuildingState,
+            &'static Faction,
+            &'static EntityKind,
+            &'static BuildingFootprint,
+        ),
         (With<DepositPoint>, Without<Unit>),
     >,
     inventories: Query<
@@ -48,7 +64,12 @@ pub(super) struct WorkerAiParams<'w, 's> {
         (&'static Transform, Option<&'static mut StorageInventory>),
         (With<DepositPoint>, Without<Unit>),
     >,
-    all_nodes: Query<'w, 's, (Entity, &'static Transform), (With<ResourceNode>, Without<Unit>)>,
+    all_nodes: Query<
+        'w,
+        's,
+        (Entity, &'static Transform, Option<&'static YardResourceNode>),
+        (With<ResourceNode>, Without<Unit>),
+    >,
     construction_sites: Query<
         'w,
         's,
@@ -61,7 +82,6 @@ pub(super) struct WorkerAiParams<'w, 's> {
         (&'static Transform, &'static StorageAura, &'static BuildingState),
         With<Building>,
     >,
-    footprints: Query<'w, 's, &'static BuildingFootprint>,
     carry_deltas: bevy::ecs::message::MessageWriter<'w, CarryingDelta>,
 }
 
@@ -72,7 +92,6 @@ pub(super) fn worker_ai_system(
     mut sfx_state: (bevy::ecs::message::MessageWriter<PlaySfx>, Local<f32>),
 ) {
     let gather_range = 3.0;
-    let deposit_margin = 2.5; // distance from building edge worker can deposit
     let auto_scan_range = 20.0;
 
     const GATHER_SFX_INTERVAL: f32 = 2.0;
@@ -210,7 +229,7 @@ pub(super) fn worker_ai_system(
                     }
                 }
 
-                let Ok((node_tf, mut node_data)) = params.nodes.get_mut(node) else {
+                let Ok((node_tf, mut node_data, yard_tag)) = params.nodes.get_mut(node) else {
                     // Node gone
                     commands.entity(entity).remove::<MoveTarget>();
                     let new_state = return_to_depot_or_wait(
@@ -230,6 +249,14 @@ pub(super) fn worker_ai_system(
                     }
                     continue;
                 };
+
+                if yard_tag.is_some() {
+                    commands.entity(entity).remove::<MoveTarget>();
+                    *state = UnitState::Idle;
+                    *source = TaskSource::Auto;
+                    task_queue.current = None;
+                    continue;
+                }
 
                 if node_data.amount_remaining == 0 {
                     let new_state = return_to_depot_or_wait(
@@ -369,7 +396,8 @@ pub(super) fn worker_ai_system(
 
             UnitState::ReturningToDeposit { depot, gather_node } => {
                 // Check depot still exists
-                let Ok((depot_tf, _)) = params.inventories.get(depot) else {
+                let Ok((_, depot_tf, _, _, depot_kind, depot_fp)) = params.deposit_points.get(depot)
+                else {
                     commands.entity(entity).remove::<MoveTarget>();
                     let new_state = return_to_depot_or_wait(
                         &mut commands,
@@ -389,9 +417,14 @@ pub(super) fn worker_ai_system(
                     continue;
                 };
 
-                let dist = tf.translation.distance(depot_tf.translation);
-                let fp_radius = params.footprints.get(depot).map_or(3.0, |fp| fp.0);
-                let deposit_range = fp_radius + deposit_margin;
+                let target = building_worker_interaction_target(
+                    tf.translation,
+                    depot_tf,
+                    depot_fp.0,
+                    *depot_kind,
+                );
+                let dist = tf.translation.distance(target.position);
+                let deposit_range = target.arrive_radius;
 
                 if dist <= deposit_range {
                     commands.entity(entity).remove::<MoveTarget>();
@@ -404,9 +437,7 @@ pub(super) fn worker_ai_system(
                     if dist <= deposit_range + 2.0 {
                         *state = UnitState::Depositing { depot, gather_node };
                     } else {
-                        let approach =
-                            depot_approach_point(tf.translation, depot_tf.translation, fp_radius);
-                        commands.entity(entity).insert(MoveTarget(approach));
+                        commands.entity(entity).insert(MoveTarget(target.position));
                     }
                 }
             }
@@ -506,10 +537,16 @@ pub(super) fn worker_ai_system(
 
                 // Return to gather node if it still has resources
                 if let Some(gn) = gather_node {
-                    if let Ok((_, node_data)) = params.nodes.get(gn) {
-                        if node_data.amount_remaining > 0 {
-                            *state = UnitState::Gathering(gn);
-                            continue;
+                        if let Ok((_, node_data, yard_tag)) = params.nodes.get(gn) {
+                            if yard_tag.is_some() {
+                                *state = UnitState::Idle;
+                                *source = TaskSource::Auto;
+                                task_queue.current = None;
+                                continue;
+                            }
+                            if node_data.amount_remaining > 0 {
+                                *state = UnitState::Gathering(gn);
+                                continue;
                         }
                     }
                 }
@@ -555,7 +592,7 @@ pub(super) fn worker_ai_system(
                 // Try a different depot that accepts our resource type and has space
                 let mut best_depot = None;
                 let mut best_dist = f32::MAX;
-                for (dp_entity, dp_tf, dp_state, dp_faction) in &params.deposit_points {
+                for (dp_entity, dp_tf, dp_state, dp_faction, _dp_kind, _dp_fp) in &params.deposit_points {
                     if dp_faction != worker_faction || *dp_state != BuildingState::Complete {
                         continue;
                     }
@@ -579,10 +616,15 @@ pub(super) fn worker_ai_system(
                 }
 
                 if let Some(new_depot) = best_depot {
-                    let depot_pos = params.deposit_points.get(new_depot).unwrap().1.translation;
-                    let approach =
-                        depot_approach_point(tf.translation, depot_pos, 3.0);
-                    commands.entity(entity).insert(MoveTarget(approach));
+                    let (_, depot_tf, _, _, depot_kind, depot_fp) =
+                        params.deposit_points.get(new_depot).unwrap();
+                    let target = building_worker_interaction_target(
+                        tf.translation,
+                        depot_tf,
+                        depot_fp.0,
+                        *depot_kind,
+                    );
+                    commands.entity(entity).insert(MoveTarget(target.position));
                     *state = UnitState::ReturningToDeposit {
                         depot: new_depot,
                         gather_node,
@@ -695,7 +737,14 @@ fn return_to_depot_or_wait(
     carrying: &Carrying,
     gather_node: Option<Entity>,
     deposit_points: &Query<
-        (Entity, &Transform, &BuildingState, &Faction),
+        (
+            Entity,
+            &Transform,
+            &BuildingState,
+            &Faction,
+            &EntityKind,
+            &BuildingFootprint,
+        ),
         (With<DepositPoint>, Without<Unit>),
     >,
     inventories: Option<
@@ -710,9 +759,10 @@ fn return_to_depot_or_wait(
             deposit_points,
             inventories,
         ) {
-            let depot_tf = deposit_points.get(depot).unwrap().1.translation;
-            let approach = depot_approach_point(*pos, depot_tf, 3.0);
-            commands.entity(entity).insert(MoveTarget(approach));
+            let (_, depot_tf, _, _, depot_kind, depot_fp) = deposit_points.get(depot).unwrap();
+            let target =
+                building_worker_interaction_target(*pos, depot_tf, depot_fp.0, *depot_kind);
+            commands.entity(entity).insert(MoveTarget(target.position));
             return UnitState::ReturningToDeposit { depot, gather_node };
         }
         commands.entity(entity).remove::<MoveTarget>();
@@ -728,11 +778,24 @@ fn return_to_depot_or_wait(
 fn find_nearest_node(
     pos: &Vec3,
     range: f32,
-    all_nodes: &Query<(Entity, &Transform), (With<ResourceNode>, Without<Unit>)>,
-    node_data_q: &Query<(&Transform, &mut ResourceNode), Without<Unit>>,
+    all_nodes: &Query<
+        (Entity, &Transform, Option<&YardResourceNode>),
+        (With<ResourceNode>, Without<Unit>),
+    >,
+    node_data_q: &Query<(&Transform, &mut ResourceNode, Option<&YardResourceNode>), Without<Unit>>,
     faction: Option<&Faction>,
     deposit_points: Option<
-        &Query<(Entity, &Transform, &BuildingState, &Faction), (With<DepositPoint>, Without<Unit>)>,
+        &Query<
+            (
+                Entity,
+                &Transform,
+                &BuildingState,
+                &Faction,
+                &EntityKind,
+                &BuildingFootprint,
+            ),
+            (With<DepositPoint>, Without<Unit>),
+        >,
     >,
     inventories: Option<
         &Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>,
@@ -740,14 +803,17 @@ fn find_nearest_node(
 ) -> Option<Entity> {
     let mut closest_dist = f32::MAX;
     let mut closest_node = None;
-    for (node_entity, node_tf) in all_nodes {
+    for (node_entity, node_tf, yard_tag) in all_nodes {
+        if yard_tag.is_some() {
+            continue;
+        }
         let dist = pos.distance(node_tf.translation);
         if dist >= range || dist >= closest_dist {
             continue;
         }
         // When depot info is available, skip resource types with no accepting depot
         if let (Some(f), Some(dp)) = (faction, deposit_points) {
-            if let Ok((_, node_data)) = node_data_q.get(node_entity) {
+            if let Ok((_, node_data, _)) = node_data_q.get(node_entity) {
                 if find_nearest_deposit_for(pos, f, Some(node_data.resource_type), dp, inventories)
                     .is_none()
                 {
@@ -875,7 +941,14 @@ pub(super) fn find_nearest_deposit_for(
     faction: &Faction,
     resource_type: Option<ResourceType>,
     deposit_points: &Query<
-        (Entity, &Transform, &BuildingState, &Faction),
+        (
+            Entity,
+            &Transform,
+            &BuildingState,
+            &Faction,
+            &EntityKind,
+            &BuildingFootprint,
+        ),
         (With<DepositPoint>, Without<Unit>),
     >,
     inventories: Option<
@@ -884,7 +957,7 @@ pub(super) fn find_nearest_deposit_for(
 ) -> Option<Entity> {
     let mut closest_dist = f32::MAX;
     let mut closest = None;
-    for (entity, tf, state, depot_faction) in deposit_points {
+    for (entity, tf, state, depot_faction, _, _) in deposit_points {
         if *state != BuildingState::Complete || depot_faction != faction {
             continue;
         }
@@ -907,4 +980,27 @@ pub(super) fn find_nearest_deposit_for(
         }
     }
     closest
+}
+
+pub(super) fn building_worker_interaction_target(
+    worker_pos: Vec3,
+    building_tf: &Transform,
+    footprint: f32,
+    kind: EntityKind,
+) -> WorkerInteractionTarget {
+    if kind == EntityKind::Sawmill {
+        let rotation_y = crate::simulation::buildings::rotation_y_from_quat(building_tf.rotation);
+        return WorkerInteractionTarget {
+            position: crate::simulation::buildings::sawmill_yard_center(
+                building_tf.translation,
+                rotation_y,
+            ),
+            arrive_radius: 2.5,
+        };
+    }
+
+    WorkerInteractionTarget {
+        position: depot_approach_point(worker_pos, building_tf.translation, footprint),
+        arrive_radius: 2.5,
+    }
 }

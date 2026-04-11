@@ -986,18 +986,29 @@ fn extract_ttp_animations(
         let mut graph = AnimationGraph::new();
         let mut node_indices = HashMap::new();
 
+        let mut missing_clips: Vec<&str> = Vec::new();
         for (clip_name, anim_state) in &clip_mapping {
             if let Some(clip_handle) = gltf.named_animations.get(*clip_name) {
                 let node = graph.add_clip(clip_handle.clone(), 1.0, graph.root);
                 node_indices.insert(*anim_state, node);
+            } else {
+                missing_clips.push(clip_name);
             }
+        }
+
+        if !missing_clips.is_empty() {
+            warn!(
+                "{:?}: missing animation clips {:?} (available: {:?})",
+                kind,
+                missing_clips,
+                gltf.named_animations.keys().collect::<Vec<_>>()
+            );
         }
 
         if node_indices.is_empty() {
             warn!(
-                "No animations found for {:?}, named_animations keys: {:?}",
+                "No animations found for {:?} — unit will have no animations!",
                 kind,
-                gltf.named_animations.keys().collect::<Vec<_>>()
             );
             continue;
         }
@@ -1018,6 +1029,10 @@ fn extract_ttp_animations(
         node_indices: assets.node_indices.clone(),
     });
 
+    for (kind, anim_data) in &data {
+        let states: Vec<_> = anim_data.node_indices.keys().collect();
+        info!("  {:?}: {} animations {:?}", kind, states.len(), states);
+    }
     info!(
         "TTP animation registry ready: {} unit types, legacy={}",
         data.len(),

@@ -78,6 +78,15 @@ pub enum UnitState {
     HoldPosition,
 }
 
+impl UnitState {
+    pub fn assigned_processor_building(&self) -> Option<Entity> {
+        match self {
+            Self::AssignedGathering { building, .. } => Some(*building),
+            _ => None,
+        }
+    }
+}
+
 /// A task waiting in a unit's queue (shift+click).
 #[derive(Clone, Debug)]
 pub enum QueuedTask {
@@ -87,7 +96,6 @@ pub enum QueuedTask {
     Gather(Entity),
     Build(Entity),
     Patrol(Vec3),
-    AssignToProcessor(Entity),
     HoldPosition,
 }
 

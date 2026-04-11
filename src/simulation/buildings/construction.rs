@@ -178,6 +178,9 @@ pub fn try_queue_build_order_authoritative(
         super::cleanup_worker_assignment(commands, worker_entity, w_state);
     }
 
+    // Clear any stale combat order so resolve_combat_intents doesn't overwrite MoveTarget
+    crate::simulation::combat::reset_combat_state(commands, worker_entity);
+
     commands
         .entity(worker_entity)
         .remove::<MoveTarget>()

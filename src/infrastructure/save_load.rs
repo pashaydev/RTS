@@ -1801,6 +1801,7 @@ pub fn restore_config_from_save(config: &mut GameSetupConfig, save: &SaveData) {
     config.map_size = match saved.map_size.as_str() {
         "Small" => MapSize::Small,
         "Large" => MapSize::Large,
+        "ExtraLarge" => MapSize::ExtraLarge,
         _ => MapSize::Medium,
     };
     config.resource_density = match saved.resource_density.as_str() {

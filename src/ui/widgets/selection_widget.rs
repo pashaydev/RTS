@@ -709,11 +709,24 @@ fn rebuild_selection_panel(
                 .id();
             commands.entity(source_picker).add_child(source_row);
 
-            for (entity, kind, display_name, _, _, _, _, _, inventory, _) in &selected_units {
+            let mut sorted_units: Vec<_> = selected_units
+                .iter()
+                .filter(|(_, _, _, _, _, _, _, _, inventory, _)| {
+                    inventory.map(|inv| inv.capacity).unwrap_or(0) > 0
+                })
+                .collect();
+            sorted_units.sort_by(|(_, kind_a, name_a, ..), (_, kind_b, name_b, ..)| {
+                let label_a = name_a
+                    .map(|n| n.0.clone())
+                    .unwrap_or_else(|| kind_a.display_name().to_string());
+                let label_b = name_b
+                    .map(|n| n.0.clone())
+                    .unwrap_or_else(|| kind_b.display_name().to_string());
+                label_a.cmp(&label_b)
+            });
+
+            for (entity, kind, display_name, _, _, _, _, _, inventory, _) in sorted_units {
                 let capacity = inventory.map(|inv| inv.capacity).unwrap_or(0);
-                if capacity == 0 {
-                    continue;
-                }
                 let is_focused = focused_unit == entity;
                 let label = display_name
                     .map(|name| name.0.clone())

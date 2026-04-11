@@ -346,7 +346,8 @@ pub(crate) fn handle_selector_clicks(
                 config.map_size = match selector.index {
                     0 => MapSize::Small,
                     1 => MapSize::Medium,
-                    _ => MapSize::Large,
+                    2 => MapSize::Large,
+                    _ => MapSize::ExtraLarge,
                 };
             }
             SelectorField::ResourceDensity => {

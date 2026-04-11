@@ -681,6 +681,36 @@ pub fn handle_toggle_auto_attack(
 
 // ── Assign/Unassign worker to processor building ──
 
+fn processor_assignment_priority(
+    kind: EntityKind,
+    state: UnitState,
+    source: TaskSource,
+    carrying: &Carrying,
+    queue: &TaskQueue,
+    assignment: Option<&BuildingAssignment>,
+) -> Option<u8> {
+    if kind != EntityKind::Worker {
+        return None;
+    }
+    if assignment.is_some() || carrying.amount > 0 {
+        return None;
+    }
+    if source == TaskSource::Manual || queue.current.is_some() || !queue.queue.is_empty() {
+        return None;
+    }
+
+    match state {
+        UnitState::Idle => Some(0),
+        UnitState::Gathering(_)
+        | UnitState::Moving(_)
+        | UnitState::ReturningToDeposit { .. }
+        | UnitState::Depositing { .. }
+        | UnitState::WaitingForStorage { .. }
+        | UnitState::WaitingForDepot { .. } => Some(1),
+        _ => None,
+    }
+}
+
 pub fn handle_assign_worker_button(
     mut commands: Commands,
     interactions: Query<&Interaction, (Changed<Interaction>, With<AssignWorkerButton>)>,
@@ -688,13 +718,28 @@ pub fn handle_assign_worker_button(
         (Entity, &ResourceProcessor, &Transform, Option<&SawmillYard>),
         (With<Building>, With<Selected>),
     >,
-    mut idle_workers: Query<
-        (Entity, &UnitState, &Faction, &mut Transform),
-        (With<Unit>, With<GatherSpeed>, Without<Building>),
-    >,
+    mut worker_queries: ParamSet<(
+        Query<
+            (
+                Entity,
+                &EntityKind,
+                &UnitState,
+                &Faction,
+                &TaskSource,
+                &Carrying,
+                &TaskQueue,
+                Option<&BuildingAssignment>,
+                &Transform,
+            ),
+            (With<Unit>, With<GatherSpeed>, Without<Building>),
+        >,
+        Query<&mut Transform, (With<Unit>, With<GatherSpeed>, Without<Building>)>,
+        Query<&mut TaskQueue, With<Unit>>,
+    )>,
     assigned_workers_q: Query<&AssignedWorkers>,
     active_player: Res<ActivePlayer>,
     height_map: Res<crate::world::ground::HeightMap>,
+    time: Res<Time>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -721,39 +766,73 @@ pub fn handle_assign_worker_button(
                 None
             };
 
-            let slots_available = 1; // Assign one worker per click
-            let mut assigned = 0;
-            for (worker_entity, state, faction, mut worker_tf) in &mut idle_workers {
+            let mut best: Option<(Entity, u8, f32)> = None;
+            for (
+                worker_entity,
+                kind,
+                state,
+                faction,
+                source,
+                carrying,
+                queue,
+                assignment,
+                worker_tf,
+            ) in worker_queries.p0().iter()
+            {
                 if *faction != active_player.0 {
                     continue;
                 }
-                if *state != UnitState::Idle {
+                let Some(priority) = processor_assignment_priority(
+                    *kind,
+                    *state,
+                    *source,
+                    carrying,
+                    queue,
+                    assignment,
+                ) else {
                     continue;
+                };
+                let dist = worker_tf.translation.distance(building_tf.translation);
+                let dominated = best.map_or(false, |(_, best_priority, best_dist)| {
+                    priority > best_priority || (priority == best_priority && dist >= best_dist)
+                });
+                if !dominated {
+                    best = Some((worker_entity, priority, dist));
                 }
-                if assigned >= slots_available {
-                    break;
-                }
-                crate::simulation::resources::assign_worker_to_processor(
-                    &mut commands,
-                    worker_entity,
-                    building_entity,
-                    building_tf.translation,
-                    TaskSource::Manual,
-                );
+            }
 
-                // Teleport worker inside the fence for sawmills
-                if let Some(center) = yard_center {
-                    let slot_idx = current_count + assigned;
+            let Some((worker_entity, _, _)) = best else {
+                continue;
+            };
+
+            clear_combat_intent(&mut commands, worker_entity, time.elapsed_secs_f64());
+            commands
+                .entity(worker_entity)
+                .remove::<AttackTarget>()
+                .remove::<ManualIdleSince>();
+            if let Ok(mut queue) = worker_queries.p2().get_mut(worker_entity) {
+                queue.clear();
+            }
+
+            crate::simulation::resources::assign_worker_to_processor(
+                &mut commands,
+                worker_entity,
+                building_entity,
+                building_tf.translation,
+                TaskSource::Manual,
+            );
+
+            // Teleport worker inside the fence for sawmills
+            if let Some(center) = yard_center {
+                if let Ok(mut worker_tf) = worker_queries.p1().get_mut(worker_entity) {
                     let slot_offset = crate::simulation::buildings::SAWMILL_TREE_SLOTS
-                        .get(slot_idx)
+                        .get(current_count)
                         .copied()
                         .unwrap_or(Vec3::ZERO);
-                    let target_pos = center + slot_offset * 0.5; // offset slightly from tree
+                    let target_pos = center + slot_offset * 0.5;
                     let ground_y = height_map.sample(target_pos.x, target_pos.z);
                     worker_tf.translation = Vec3::new(target_pos.x, ground_y, target_pos.z);
                 }
-
-                assigned += 1;
             }
         }
     }

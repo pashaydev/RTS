@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use super::fonts::{self, UiFonts};
 use super::interactions::{UiClickEvent, UiInteractPhase, UiInteractState};
+use super::hud::WidgetGridArea;
 use crate::types::AppState;
 use crate::ui::theme::{self, Theme};
 
@@ -715,15 +716,20 @@ pub fn handle_widget_scroll(
 
 pub fn spawn_grid_overlay(
     mut commands: Commands,
+    grid_area_q: Query<Entity, With<WidgetGridArea>>,
     existing: Query<Entity, With<GridOverlay>>,
 ) {
     if !existing.is_empty() {
         return;
     }
 
+    let Ok(grid_area) = grid_area_q.single() else {
+        return;
+    };
+
     let grid_color = theme::GRID_LINE;
 
-    commands
+    let overlay = commands
         .spawn((
             GridOverlay,
             DespawnOnExit(AppState::InGame),
@@ -770,7 +776,10 @@ pub fn spawn_grid_overlay(
                     BackgroundColor(grid_color),
                 ));
             }
-        });
+        })
+        .id();
+
+    commands.entity(grid_area).add_child(overlay);
 }
 
 pub fn toggle_grid_overlay(
@@ -796,11 +805,11 @@ fn pixel_to_grid_slot(
     px_y: f32,
     px_w: f32,
     px_h: f32,
-    win_w: f32,
-    win_h: f32,
+    grid_w: f32,
+    grid_h: f32,
 ) -> GridSlot {
-    let cell_w = win_w / GRID_COLS;
-    let cell_h = win_h / GRID_ROWS;
+    let cell_w = (grid_w / GRID_COLS).max(1.0);
+    let cell_h = (grid_h / GRID_ROWS).max(1.0);
 
     let col = (px_x / cell_w).round().clamp(0.0, 11.0) as u8;
     let row = (px_y / cell_h).round().clamp(0.0, 11.0) as u8;
@@ -808,6 +817,18 @@ fn pixel_to_grid_slot(
     let row_span = (px_h / cell_h).round().clamp(1.0, (12 - row) as f32) as u8;
 
     GridSlot::new(col, row, col_span, row_span)
+}
+
+fn grid_area_size(grid_area: &ComputedNode) -> Vec2 {
+    grid_area.size() * grid_area.inverse_scale_factor()
+}
+
+fn resolved_px(value: Val, total: f32) -> f32 {
+    match value {
+        Val::Px(px) => px,
+        Val::Percent(percent) => percent / 100.0 * total,
+        _ => 0.0,
+    }
 }
 
 // ── Drag & Resize Systems ──
@@ -821,9 +842,10 @@ pub fn handle_widget_drag(
     mut registry: ResMut<WidgetRegistry>,
     mut grid_active: ResMut<GridInteractionActive>,
     interactions: Query<(&Interaction, &WidgetDragHandle)>,
+    grid_area_q: Query<&ComputedNode, With<WidgetGridArea>>,
     mut widget_nodes: Query<(&mut Node, &mut ZIndex, &Widget, &ComputedNode), With<Widget>>,
 ) {
-    let Ok(window) = windows.single() else {
+    let (Ok(window), Ok(grid_area)) = (windows.single(), grid_area_q.single()) else {
         return;
     };
     let Some(cursor_raw) = window.cursor_position() else {
@@ -831,37 +853,26 @@ pub fn handle_widget_drag(
     };
     let scale = ui_scale.0.max(0.001);
     let cursor = cursor_raw / scale;
+    let grid_size = grid_area_size(grid_area);
 
     // Snap on release (before clearing active_widget)
     if mouse.just_released(MouseButton::Left) {
         if let Some(widget_entity) = drag_state.active_widget {
             if let Ok((mut node, _, widget, computed)) = widget_nodes.get_mut(widget_entity) {
-                let win_w = window.width() / scale;
-                let win_h = window.height() / scale;
                 let inv_scale = computed.inverse_scale_factor();
 
-                let px_x = match node.left {
-                    Val::Px(x) => x,
-                    Val::Percent(p) => p / 100.0 * win_w,
-                    _ => 0.0,
-                };
-                let px_y = match node.top {
-                    Val::Px(y) => y,
-                    Val::Percent(p) => p / 100.0 * win_h,
-                    _ => 0.0,
-                };
+                let px_x = resolved_px(node.left, grid_size.x);
+                let px_y = resolved_px(node.top, grid_size.y);
                 let px_w = match node.width {
-                    Val::Px(w) => w,
-                    Val::Percent(p) => p / 100.0 * win_w,
-                    _ => computed.size().x * inv_scale,
+                    Val::Auto => computed.size().x * inv_scale,
+                    value => resolved_px(value, grid_size.x),
                 };
                 let px_h = match node.height {
-                    Val::Px(h) => h,
-                    Val::Percent(p) => p / 100.0 * win_h,
-                    _ => computed.size().y * inv_scale,
+                    Val::Auto => computed.size().y * inv_scale,
+                    value => resolved_px(value, grid_size.y),
                 };
 
-                let slot = pixel_to_grid_slot(px_x, px_y, px_w, px_h, win_w, win_h);
+                let slot = pixel_to_grid_slot(px_x, px_y, px_w, px_h, grid_size.x, grid_size.y);
                 let snapped = grid_to_style(&slot);
                 node.left = snapped.left;
                 node.top = snapped.top;
@@ -892,21 +903,8 @@ pub fn handle_widget_drag(
                     drag_state.start_cursor = cursor;
                     grid_active.0 = true;
 
-                    let win_w = window.width();
-                    let win_h = window.height();
-                    let win_w = win_w / scale;
-                    let win_h = win_h / scale;
-
-                    let start_x = match node.left {
-                        Val::Px(x) => x,
-                        Val::Percent(p) => p / 100.0 * win_w,
-                        _ => 0.0,
-                    };
-                    let start_y = match node.top {
-                        Val::Px(y) => y,
-                        Val::Percent(p) => p / 100.0 * win_h,
-                        _ => 0.0,
-                    };
+                    let start_x = resolved_px(node.left, grid_size.x);
+                    let start_y = resolved_px(node.top, grid_size.y);
                     drag_state.start_pos = Vec2::new(start_x, start_y);
                 }
                 break;
@@ -917,9 +915,12 @@ pub fn handle_widget_drag(
     if mouse.pressed(MouseButton::Left) {
         if let Some(widget_entity) = drag_state.active_widget {
             let delta = cursor - drag_state.start_cursor;
-            if let Ok((mut node, _, _, _)) = widget_nodes.get_mut(widget_entity) {
-                node.left = Val::Px(drag_state.start_pos.x + delta.x);
-                node.top = Val::Px(drag_state.start_pos.y + delta.y);
+            if let Ok((mut node, _, _, computed)) = widget_nodes.get_mut(widget_entity) {
+                let size = computed.size() * computed.inverse_scale_factor();
+                let max_x = (grid_size.x - size.x).max(0.0);
+                let max_y = (grid_size.y - size.y).max(0.0);
+                node.left = Val::Px((drag_state.start_pos.x + delta.x).clamp(0.0, max_x));
+                node.top = Val::Px((drag_state.start_pos.y + delta.y).clamp(0.0, max_y));
             }
         }
     }
@@ -934,13 +935,14 @@ pub fn handle_widget_resize(
     mut registry: ResMut<WidgetRegistry>,
     mut grid_active: ResMut<GridInteractionActive>,
     interactions: Query<(&Interaction, &WidgetResizeHandle)>,
+    grid_area_q: Query<&ComputedNode, With<WidgetGridArea>>,
     mut widget_nodes: Query<(&mut Node, &ComputedNode, &mut ZIndex, &Widget), With<Widget>>,
 ) {
     // Resize only works in edit mode
     if edit_state.active.is_none() && resize_state.active_widget.is_none() {
         return;
     }
-    let Ok(window) = windows.single() else {
+    let (Ok(window), Ok(grid_area)) = (windows.single(), grid_area_q.single()) else {
         return;
     };
     let Some(cursor_raw) = window.cursor_position() else {
@@ -948,37 +950,26 @@ pub fn handle_widget_resize(
     };
     let scale = ui_scale.0.max(0.001);
     let cursor = cursor_raw / scale;
+    let grid_size = grid_area_size(grid_area);
 
     // Snap on release
     if mouse.just_released(MouseButton::Left) {
         if let Some(widget_entity) = resize_state.active_widget {
             if let Ok((mut node, computed, _, widget)) = widget_nodes.get_mut(widget_entity) {
-                let win_w = window.width() / scale;
-                let win_h = window.height() / scale;
                 let inv_scale = computed.inverse_scale_factor();
 
-                let px_x = match node.left {
-                    Val::Px(x) => x,
-                    Val::Percent(p) => p / 100.0 * win_w,
-                    _ => 0.0,
-                };
-                let px_y = match node.top {
-                    Val::Px(y) => y,
-                    Val::Percent(p) => p / 100.0 * win_h,
-                    _ => 0.0,
-                };
+                let px_x = resolved_px(node.left, grid_size.x);
+                let px_y = resolved_px(node.top, grid_size.y);
                 let px_w = match node.width {
-                    Val::Px(w) => w,
-                    Val::Percent(p) => p / 100.0 * win_w,
-                    _ => computed.size().x * inv_scale,
+                    Val::Auto => computed.size().x * inv_scale,
+                    value => resolved_px(value, grid_size.x),
                 };
                 let px_h = match node.height {
-                    Val::Px(h) => h,
-                    Val::Percent(p) => p / 100.0 * win_h,
-                    _ => computed.size().y * inv_scale,
+                    Val::Auto => computed.size().y * inv_scale,
+                    value => resolved_px(value, grid_size.y),
                 };
 
-                let slot = pixel_to_grid_slot(px_x, px_y, px_w, px_h, win_w, win_h);
+                let slot = pixel_to_grid_slot(px_x, px_y, px_w, px_h, grid_size.x, grid_size.y);
                 let snapped = grid_to_style(&slot);
                 node.left = snapped.left;
                 node.top = snapped.top;
@@ -999,19 +990,8 @@ pub fn handle_widget_resize(
                     *z_index = ZIndex(registry.top_z);
 
                     let inv_scale = computed.inverse_scale_factor();
-                    let win_w = window.width() / scale;
-                    let win_h = window.height() / scale;
-
-                    let start_x = match node.left {
-                        Val::Px(x) => x,
-                        Val::Percent(p) => p / 100.0 * win_w,
-                        _ => 0.0,
-                    };
-                    let start_y = match node.top {
-                        Val::Px(y) => y,
-                        Val::Percent(p) => p / 100.0 * win_h,
-                        _ => 0.0,
-                    };
+                    let start_x = resolved_px(node.left, grid_size.x);
+                    let start_y = resolved_px(node.top, grid_size.y);
 
                     resize_state.active_widget = Some(handle.widget);
                     resize_state.direction = handle.direction;
@@ -1032,6 +1012,8 @@ pub fn handle_widget_resize(
                 let dir = resize_state.direction;
                 let (mut x, mut y) = (resize_state.start_pos.x, resize_state.start_pos.y);
                 let (mut w, mut h) = (resize_state.start_size.x, resize_state.start_size.y);
+                let min_w = 120.0;
+                let min_h = 70.0;
 
                 let resizes_left = matches!(
                     dir,
@@ -1053,21 +1035,26 @@ pub fn handle_widget_resize(
                 );
 
                 if resizes_right {
-                    w = (w + delta.x).max(120.0);
+                    w = (w + delta.x).max(min_w);
                 }
                 if resizes_bottom {
-                    h = (h + delta.y).max(70.0);
+                    h = (h + delta.y).max(min_h);
                 }
                 if resizes_left {
-                    let new_w = (w - delta.x).max(120.0);
+                    let new_w = (w - delta.x).max(min_w);
                     x += w - new_w;
                     w = new_w;
                 }
                 if resizes_top {
-                    let new_h = (h - delta.y).max(70.0);
+                    let new_h = (h - delta.y).max(min_h);
                     y += h - new_h;
                     h = new_h;
                 }
+
+                w = w.min(grid_size.x).max(min_w.min(grid_size.x));
+                h = h.min(grid_size.y).max(min_h.min(grid_size.y));
+                x = x.clamp(0.0, (grid_size.x - w).max(0.0));
+                y = y.clamp(0.0, (grid_size.y - h).max(0.0));
 
                 node.left = Val::Px(x);
                 node.top = Val::Px(y);

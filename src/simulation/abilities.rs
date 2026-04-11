@@ -2,6 +2,7 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
 use crate::blueprints::EntityKind;
+use crate::simulation::combat::apply_damage;
 use crate::types::*;
 use crate::world::spatial::SpatialHashGrid;
 
@@ -42,6 +43,7 @@ fn tick_ability_cooldowns(time: Res<Time>, mut units: Query<&mut UnitAbilities>)
 fn process_ability_casts(
     mut commands: Commands,
     time: Res<Time>,
+    tuning: Res<CombatTuning>,
     spatial_grid: Res<SpatialHashGrid>,
     teams: Res<TeamConfig>,
     vfx_assets: Option<Res<VfxAssets>>,
@@ -59,11 +61,14 @@ fn process_ability_casts(
             &mut Health,
             Option<&ArmorType>,
             Option<&EntityKind>,
+            Option<&mut ReservedIncomingDamage>,
         ),
         Without<CastingAbility>,
     >,
     factions: Query<&Faction>,
 ) {
+    let now = time.elapsed_secs_f64();
+    let mem = tuning.damage_memory_secs;
     let Some(vfx) = vfx_assets else { return };
 
     for (caster_entity, mut casting, caster_tf, faction, _caster_kind) in &mut casters {
@@ -121,15 +126,20 @@ fn process_ability_casts(
                         .map(|(e, _)| *e);
 
                     if let Some(target_e) = projectile_target {
+                        let spawn_pos = caster_tf.translation + Vec3::Y * 1.0;
+                        let dir = (target - spawn_pos).normalize_or_zero();
+                        let speed = 12.0;
                         commands.spawn((
                             Projectile {
                                 source: caster_entity,
                                 target: target_e,
-                                speed: 12.0,
+                                velocity: dir * speed,
+                                speed,
                                 damage: 20.0,
                                 damage_type: DamageType::Magic,
                                 fx_kind: CombatFxKind::Arcane,
                                 impact_scale: 1.2,
+                                lifetime_secs: (target - spawn_pos).length() / speed + 0.5,
                                 orient_to_velocity: false,
                             },
                             AoeSplash {
@@ -149,6 +159,7 @@ fn process_ability_casts(
                             &mut commands,
                             &spatial_grid,
                             &teams,
+                            caster_entity,
                             faction,
                             target,
                             4.0,
@@ -159,6 +170,8 @@ fn process_ability_casts(
                             &factions,
                             &vfx,
                             &mut materials,
+                            now,
+                            mem,
                         );
                     }
                 }
@@ -178,11 +191,21 @@ fn process_ability_casts(
                     if !teams.is_hostile(faction, target_f) {
                         continue;
                     }
-                    if let Ok((_, mut health, opt_armor, _)) = targets_health.get_mut(*target_e) {
-                        let multiplier = opt_armor
-                            .map(|a| DamageType::Magic.multiplier_vs(*a))
-                            .unwrap_or(1.0);
-                        health.current -= 15.0 * multiplier;
+                    if let Ok((_, mut health, opt_armor, _, opt_reserved)) =
+                        targets_health.get_mut(*target_e)
+                    {
+                        apply_damage(
+                            &mut commands,
+                            *target_e,
+                            Some(caster_entity),
+                            15.0,
+                            DamageType::Magic,
+                            &mut health,
+                            opt_armor.copied(),
+                            opt_reserved.map(|r| r.into_inner()),
+                            now,
+                            mem,
+                        );
                     }
                     // Apply slow
                     commands.entity(*target_e).insert(StatusEffects {
@@ -220,7 +243,7 @@ fn process_ability_casts(
             AbilityId::PriestHeal => {
                 // Heal a friendly unit
                 if let Some(target_e) = target_entity {
-                    if let Ok((target_tf, mut health, _, _)) = targets_health.get_mut(target_e) {
+                    if let Ok((target_tf, mut health, _, _, _)) = targets_health.get_mut(target_e) {
                         health.current = (health.current + 40.0).min(health.max);
 
                         // Green heal VFX
@@ -252,17 +275,25 @@ fn process_ability_casts(
             AbilityId::PriestHolySmite => {
                 // Direct damage, bonus to undead
                 if let Some(target_e) = target_entity {
-                    if let Ok((target_tf, mut health, opt_armor, opt_kind)) =
+                    if let Ok((target_tf, mut health, opt_armor, opt_kind, opt_reserved)) =
                         targets_health.get_mut(target_e)
                     {
                         let is_undead = opt_kind.map_or(false, |k| {
                             matches!(k, EntityKind::Skeleton | EntityKind::SkeletonMinion)
                         });
                         let base_damage = if is_undead { 50.0 } else { 25.0 };
-                        let multiplier = opt_armor
-                            .map(|a| DamageType::Magic.multiplier_vs(*a))
-                            .unwrap_or(1.0);
-                        health.current -= base_damage * multiplier;
+                        apply_damage(
+                            &mut commands,
+                            target_e,
+                            Some(caster_entity),
+                            base_damage,
+                            DamageType::Magic,
+                            &mut health,
+                            opt_armor.copied(),
+                            opt_reserved.map(|r| r.into_inner()),
+                            now,
+                            mem,
+                        );
 
                         // Golden smite VFX
                         let smite_mat = materials.add(StandardMaterial {
@@ -304,6 +335,7 @@ fn aoe_damage_at(
     commands: &mut Commands,
     spatial_grid: &SpatialHashGrid,
     teams: &TeamConfig,
+    caster_entity: Entity,
     caster_faction: &Faction,
     center: Vec3,
     radius: f32,
@@ -316,12 +348,15 @@ fn aoe_damage_at(
             &mut Health,
             Option<&ArmorType>,
             Option<&EntityKind>,
+            Option<&mut ReservedIncomingDamage>,
         ),
         Without<CastingAbility>,
     >,
     factions: &Query<&Faction>,
     vfx: &VfxAssets,
     materials: &mut Assets<StandardMaterial>,
+    now_secs: f64,
+    damage_memory_secs: f32,
 ) {
     let nearby = spatial_grid.query_radius(center, radius);
     for (target_e, target_pos) in &nearby {
@@ -331,17 +366,25 @@ fn aoe_damage_at(
         if !teams.is_hostile(caster_faction, target_f) {
             continue;
         }
-        if let Ok((_, mut health, opt_armor, _)) = targets.get_mut(*target_e) {
+        if let Ok((_, mut health, opt_armor, _, opt_reserved)) = targets.get_mut(*target_e) {
             let dist = (center - *target_pos).length();
             let dmg_mult = if falloff {
                 (1.0 - dist / radius).max(0.3)
             } else {
                 1.0
             };
-            let armor_mult = opt_armor
-                .map(|a| damage_type.multiplier_vs(*a))
-                .unwrap_or(1.0);
-            health.current -= damage * dmg_mult * armor_mult;
+            apply_damage(
+                commands,
+                *target_e,
+                Some(caster_entity),
+                damage * dmg_mult,
+                damage_type,
+                &mut health,
+                opt_armor.copied(),
+                opt_reserved.map(|r| r.into_inner()),
+                now_secs,
+                damage_memory_secs,
+            );
         }
     }
 
@@ -370,18 +413,30 @@ fn aoe_damage_at(
 
 /// Apply status effects: slow modifies speed, stun blocks actions, burning does DoT.
 fn apply_status_effects(
+    mut commands: Commands,
     time: Res<Time>,
-    mut units: Query<(&mut StatusEffects, Option<&mut Health>)>,
+    mut units: Query<(Entity, &mut StatusEffects, Option<&mut Health>)>,
 ) {
     let dt = time.delta_secs();
-    for (mut effects, mut opt_health) in &mut units {
+    for (entity, mut effects, mut opt_health) in &mut units {
         for effect in &mut effects.effects {
             effect.remaining -= dt;
 
-            // Burning DoT
+            // Burning DoT — sourceless (no tracked caster on StatusEffect).
             if effect.kind == StatusEffectKind::Burning {
                 if let Some(ref mut health) = opt_health {
-                    health.current -= effect.strength * dt;
+                    apply_damage(
+                        &mut commands,
+                        entity,
+                        None,
+                        effect.strength * dt,
+                        DamageType::Magic,
+                        health,
+                        None,
+                        None,
+                        0.0,
+                        0.0,
+                    );
                 }
             }
         }

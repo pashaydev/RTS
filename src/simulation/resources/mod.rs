@@ -102,7 +102,9 @@ impl Plugin for ResourcesPlugin {
                 FixedUpdate,
                 (
                     processing::processor_worker_visual_system,
-                    processing::auto_assign_workers_system,
+                    processing::reconcile_processor_assignments,
+                    processing::enforce_processor_worker_limit,
+                    processing::lock_assigned_workers_from_user_interaction,
                     spawning::resource_respawn_system,
                     spawning::grow_resource_system,
                     workers::update_resource_popups,

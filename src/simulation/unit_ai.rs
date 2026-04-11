@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use std::f32::consts::TAU;
 
-use crate::blueprints::{EntityKind, IsRanged};
+use crate::blueprints::EntityKind;
 use crate::simulation::buildings::is_wall_like_kind;
 use crate::simulation::combat::{
     apply_auto_attack_intent, apply_auto_move_intent, apply_manual_attack_intent,
@@ -190,7 +190,7 @@ fn decision_priority_system(
         &ArmorType,
         Option<&ThreatValue>,
         Option<&ReservedIncomingDamage>,
-        Option<&IsRanged>,
+        Option<&AttackProfile>,
         Option<&TacticalRole>,
     )>,
     mut batch_offset: Local<usize>,
@@ -305,7 +305,6 @@ fn decision_priority_system(
                     tf.translation,
                     now,
                 );
-                *state = UnitState::Attacking(recent_damage.attacker);
                 *source = TaskSource::Auto;
                 commands.entity(entity).remove::<ManualIdleSince>();
                 continue;
@@ -390,7 +389,6 @@ fn decision_priority_system(
                             tf.translation,
                             now,
                         );
-                        *state = UnitState::Attacking(lock.target);
                         *source = TaskSource::Auto;
                     }
                     continue;
@@ -413,7 +411,6 @@ fn decision_priority_system(
                                 engagement.anchor,
                                 now,
                             );
-                            *state = UnitState::Attacking(target);
                             *source = TaskSource::Auto;
                         }
                         continue;
@@ -450,7 +447,7 @@ fn decision_priority_system(
 
                 // Use scored targeting if profile available, else fall back to distance
                 if let Some(profile) = opt_targeting_profile {
-                    let Ok((t_health, t_armor, t_threat, t_reserved, t_is_ranged, t_role)) =
+                    let Ok((t_health, t_armor, t_threat, t_reserved, t_profile, t_role)) =
                         target_data.get(*target_entity)
                     else {
                         continue;
@@ -470,7 +467,7 @@ fn decision_priority_system(
                     }) {
                         // Tactical role modifiers
                         let role = opt_tactical_role.copied().unwrap_or_default();
-                        let target_is_ranged = t_is_ranged.is_some()
+                        let target_is_ranged = t_profile.map_or(false, |p| p.is_ranged())
                             || matches!(
                                 t_role,
                                 Some(TacticalRole::RangedKiter | TacticalRole::Healer)
@@ -564,7 +561,6 @@ fn decision_priority_system(
                     continue;
                 }
                 apply_auto_attack_intent(&mut commands, entity, target, tf.translation, now);
-                *state = UnitState::Attacking(target);
                 *source = TaskSource::Auto;
             } else if matches!(
                 combat_intent,
@@ -638,7 +634,6 @@ fn leash_return_system(
     }
 }
 
-/// When a unit is Idle and has queued tasks, pop the next task and set UnitState accordingly.
 pub fn task_queue_advance_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -654,8 +649,8 @@ pub fn task_queue_advance_system(
         With<Unit>,
     >,
     transforms: Query<&Transform>,
-    processors: Query<(&ResourceProcessor, &BuildingState, &Faction), With<Building>>,
-    assigned_workers_q: Query<&AssignedWorkers>,
+    _processors: Query<(&ResourceProcessor, &BuildingState, &Faction), With<Building>>,
+    _assigned_workers_q: Query<&AssignedWorkers>,
     net_role: Res<NetRole>,
     active_player: Res<ActivePlayer>,
 ) {
@@ -680,7 +675,6 @@ pub fn task_queue_advance_system(
                 commands.entity(entity).insert(MoveTarget(pos));
             }
             QueuedTask::AttackMove(pos) => {
-                *state = UnitState::AttackMoving(pos);
                 apply_manual_attack_move_intent(
                     &mut commands,
                     entity,
@@ -690,7 +684,6 @@ pub fn task_queue_advance_system(
                 commands.entity(entity).insert(MoveTarget(pos));
             }
             QueuedTask::Attack(target) => {
-                *state = UnitState::Attacking(target);
                 apply_manual_attack_intent(&mut commands, entity, target, time.elapsed_secs_f64());
             }
             QueuedTask::Gather(node) => {
@@ -721,44 +714,12 @@ pub fn task_queue_advance_system(
                     commands.entity(entity).insert(MoveTarget(pos));
                 }
             }
-            QueuedTask::AssignToProcessor(building) => {
-                clear_combat_intent(&mut commands, entity, time.elapsed_secs_f64());
-                // Check if building has capacity
-                let can_assign = if let Ok((proc, bstate, _)) = processors.get(building) {
-                    if *bstate == BuildingState::Complete {
-                        let current = assigned_workers_q
-                            .get(building)
-                            .map(|aw| aw.workers.len())
-                            .unwrap_or(0);
-                        current < proc.max_workers as usize
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-
-                if can_assign {
-                    let building_pos = transforms
-                        .get(building)
-                        .map(|t| t.translation)
-                        .unwrap_or(Vec3::ZERO);
-                    crate::simulation::resources::assign_worker_to_processor(
-                        &mut commands,
-                        entity,
-                        building,
-                        building_pos,
-                        TaskSource::Manual,
-                    );
-                }
-            }
             QueuedTask::HoldPosition => {
                 apply_manual_hold_intent(&mut commands, entity, time.elapsed_secs_f64());
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
                     .remove::<AttackTarget>();
-                *state = UnitState::HoldPosition;
             }
         }
     }
@@ -829,14 +790,22 @@ pub fn unit_state_executor_system(
 
         match *state {
             UnitState::Idle => {
-                // Remove stale targets
+                // Remove stale targets and always clear combat intent so
+                // resolve_combat_intents doesn't re-insert a MoveTarget.
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
                     .remove::<AttackTarget>()
                     .remove::<ChaseTimer>();
-                if matches!(*source, TaskSource::Auto) {
-                    reset_combat_state(&mut commands, entity);
+                reset_combat_state(&mut commands, entity);
+                // Transition source Manual → Auto once we're confirmed idle.
+                // The Moving→Idle path deliberately keeps source=Manual for
+                // one tick to guard against same-tick auto-reassignment; by
+                // the time we reach here on the next tick, ManualIdleSince
+                // (inserted via deferred commands) is in place and the grace
+                // period in worker_ai / decision_priority will protect us.
+                if *source == TaskSource::Manual {
+                    *source = TaskSource::Auto;
                 }
             }
 
@@ -932,15 +901,25 @@ pub fn unit_state_executor_system(
                 if move_target.is_none() {
                     let was_manual = *source == TaskSource::Manual;
                     *state = UnitState::Idle;
-                    *source = TaskSource::Auto;
                     task_queue.current = None;
+                    // Always clear combat intent/order so resolve_combat_intents
+                    // doesn't re-insert MoveTarget after we've arrived.
+                    reset_combat_state(&mut commands, entity);
                     if was_manual {
-                        // Grace period: prevent AI from immediately reassigning
+                        // Keep source as Manual for this tick so that
+                        // worker_ai_system / decision_priority_system (which
+                        // may run later in the same FixedUpdate) skip this
+                        // unit.  ManualIdleSince is a deferred command and
+                        // won't be visible until the next tick — if we set
+                        // source to Auto now, those systems would
+                        // immediately auto-reassign the unit.
+                        // The Idle handler sets source to Auto on the next
+                        // tick once ManualIdleSince is confirmed present.
                         commands
                             .entity(entity)
                             .insert(ManualIdleSince(time.elapsed_secs_f64()));
                     } else {
-                        reset_combat_state(&mut commands, entity);
+                        *source = TaskSource::Auto;
                     }
                 } else {
                     // Keep MoveTarget synced
@@ -962,7 +941,6 @@ pub fn unit_state_executor_system(
                     match task_queue.current.as_ref().map(|t| &t.task) {
                         Some(QueuedTask::AttackMove(dest)) => {
                             let dest = *dest;
-                            *state = UnitState::AttackMoving(dest);
                             commands.entity(entity).insert(MoveTarget(dest));
                             apply_manual_attack_move_intent(
                                 &mut commands,
@@ -1016,7 +994,6 @@ pub fn unit_state_executor_system(
                                         tf.translation,
                                         time.elapsed_secs_f64(),
                                     );
-                                    *state = UnitState::Attacking(new_target);
                                     *source = TaskSource::Auto;
                                     found_new_target = true;
                                 }

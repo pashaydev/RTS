@@ -255,9 +255,6 @@ pub fn execute_input_command(
                 if let Some(&target_ecs) = net_map.to_ecs.get(target_id) {
                     for &eid in &input.entity_ids {
                         if let Some(&ecs_entity) = net_map.to_ecs.get(&eid) {
-                            if let Ok(mut state) = unit_states.get_mut(ecs_entity) {
-                                *state = UnitState::Attacking(target_ecs);
-                            }
                             apply_manual_attack_intent(
                                 commands, ecs_entity, target_ecs, issue_time,
                             );
@@ -338,9 +335,6 @@ pub fn execute_input_command(
                 let pos = Vec3::new(target[0], target[1], target[2]);
                 for &eid in &input.entity_ids {
                     if let Some(&ecs_entity) = net_map.to_ecs.get(&eid) {
-                        if let Ok(mut state) = unit_states.get_mut(ecs_entity) {
-                            *state = UnitState::AttackMoving(pos);
-                        }
                         apply_manual_attack_move_intent(commands, ecs_entity, pos, issue_time);
                         commands
                             .entity(ecs_entity)
@@ -361,9 +355,6 @@ pub fn execute_input_command(
             InputCommand::HoldPosition => {
                 for &eid in &input.entity_ids {
                     if let Some(&ecs_entity) = net_map.to_ecs.get(&eid) {
-                        if let Ok(mut state) = unit_states.get_mut(ecs_entity) {
-                            *state = UnitState::HoldPosition;
-                        }
                         apply_manual_hold_intent(commands, ecs_entity, issue_time);
                         commands
                             .entity(ecs_entity)

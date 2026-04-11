@@ -52,6 +52,11 @@ pub fn apply_manual_move_intent(
     let mut ec = commands.entity(entity);
     ec.insert(TaskSource::Manual)
         .insert(CombatIntent::Move(destination))
+        .insert(CombatOrder::new(
+            CombatGoal::Move(destination),
+            OrderSource::Manual,
+            issue_time,
+        ))
         .insert(BufferedCommand {
             kind: BufferedCommandKind::Move(destination),
             issue_time,
@@ -73,6 +78,11 @@ pub fn apply_manual_attack_intent(
     let mut ec = commands.entity(entity);
     ec.insert(TaskSource::Manual)
         .insert(CombatIntent::Attack(target, IntentSource::Manual))
+        .insert(CombatOrder::new(
+            CombatGoal::Attack(target),
+            OrderSource::Manual,
+            issue_time,
+        ))
         .insert(BufferedCommand {
             kind: BufferedCommandKind::Attack(target),
             issue_time,
@@ -105,6 +115,14 @@ pub fn apply_manual_attack_move_intent(
     let mut ec = commands.entity(entity);
     ec.insert(TaskSource::Manual)
         .insert(CombatIntent::AttackMove(destination, IntentSource::Manual))
+        .insert(
+            CombatOrder::new(
+                CombatGoal::AttackMove(destination),
+                OrderSource::Manual,
+                issue_time,
+            )
+            .with_anchor(destination),
+        )
         .insert(BufferedCommand {
             kind: BufferedCommandKind::AttackMove(destination),
             issue_time,
@@ -128,6 +146,11 @@ pub fn apply_manual_hold_intent(commands: &mut Commands, entity: Entity, issue_t
     let mut ec = commands.entity(entity);
     ec.insert(TaskSource::Manual)
         .insert(CombatIntent::Hold)
+        .insert(CombatOrder::new(
+            CombatGoal::Hold,
+            OrderSource::Manual,
+            issue_time,
+        ))
         .insert(BufferedCommand {
             kind: BufferedCommandKind::Hold,
             issue_time,
@@ -150,6 +173,11 @@ pub fn apply_manual_hold_intent(commands: &mut Commands, entity: Entity, issue_t
 pub fn clear_combat_intent(commands: &mut Commands, entity: Entity, issue_time: f64) {
     let mut ec = commands.entity(entity);
     ec.insert(CombatIntent::None)
+        .insert(CombatOrder::new(
+            CombatGoal::Stop,
+            OrderSource::Manual,
+            issue_time,
+        ))
         .insert(BufferedCommand {
             kind: BufferedCommandKind::Stop,
             issue_time,
@@ -166,6 +194,7 @@ pub fn reset_combat_state(commands: &mut Commands, entity: Entity) {
     commands
         .entity(entity)
         .insert(CombatIntent::None)
+        .insert(CombatOrder::new(CombatGoal::Stop, OrderSource::Auto, 0.0))
         .remove::<BufferedCommand>()
         .remove::<CombatTargetLock>()
         .remove::<Engagement>()
@@ -179,6 +208,11 @@ pub fn apply_auto_move_intent(commands: &mut Commands, entity: Entity, destinati
         .entity(entity)
         .insert(TaskSource::Auto)
         .insert(CombatIntent::Move(destination))
+        .insert(CombatOrder::new(
+            CombatGoal::Move(destination),
+            OrderSource::Auto,
+            0.0,
+        ))
         .remove::<BufferedCommand>()
         .remove::<CombatTargetLock>()
         .remove::<Engagement>()
@@ -198,6 +232,10 @@ pub fn apply_auto_attack_intent(
         .entity(entity)
         .insert(TaskSource::Auto)
         .insert(CombatIntent::Attack(target, IntentSource::Auto))
+        .insert(
+            CombatOrder::new(CombatGoal::Attack(target), OrderSource::Auto, issue_time)
+                .with_anchor(anchor),
+        )
         .insert(CombatTargetLock {
             target,
             locked_until: issue_time + DEFAULT_AUTO_TARGET_LOCK_SECS,

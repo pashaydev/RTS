@@ -423,9 +423,7 @@ pub fn spawn_from_blueprint_with_faction(
         if let Some(aggro) = combat.aggro_range {
             entity_cmds.insert(AggroRange(aggro));
         }
-        if combat.is_ranged {
-            entity_cmds.insert(IsRanged);
-        }
+        // `IsRanged` marker removed — ranged-ness is derived from `AttackProfile.projectile_speed`.
     } else {
         // Buildings without combat stats still need armor type + threat value for targeting
         entity_cmds.insert((kind.armor_type(), default_threat_value(kind)));

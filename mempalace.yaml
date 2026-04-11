@@ -1,0 +1,55 @@
+wing: rts
+rooms:
+- name: scripts
+  description: Files from tools/
+  keywords:
+  - scripts
+  - tools
+- name: configuration
+  description: Files from config/
+  keywords:
+  - configuration
+  - config
+- name: target
+  description: Files from target/
+  keywords:
+  - target
+  - target
+- name: game_state
+  description: Files from game_state/
+  keywords:
+  - game_state
+  - game_state
+- name: documentation
+  description: Files from docs/
+  keywords:
+  - documentation
+  - docs
+- name: logs
+  description: Files from logs/
+  keywords:
+  - logs
+  - logs
+- name: design
+  description: Files from assets/
+  keywords:
+  - design
+  - assets
+- name: src
+  description: Files from src/
+  keywords:
+  - src
+  - src
+- name: backend
+  description: Files from models/
+  keywords:
+  - backend
+  - models
+- name: frontend
+  description: Files from ui/
+  keywords:
+  - frontend
+  - ui
+- name: general
+  description: Files that don't fit other rooms
+  keywords: []

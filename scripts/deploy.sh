@@ -2,12 +2,15 @@
 set -euo pipefail
 
 # Unified deployment script for the RTS game.
-# Usage: ./scripts/deploy.sh [--all | --windows-only | --fly-only | --help]
+# Usage: ./scripts/deploy.sh [--all | --windows-only | --fly-only] [--patch | --minor | --major]
 #
 # Flags:
 #   --all            Build Windows bundle AND deploy web to Fly.io (default)
 #   --windows-only   Only build the Windows distribution zip
 #   --fly-only       Only deploy the web version to Fly.io
+#   --patch          Increment patch version before deploy (default)
+#   --minor          Increment minor version before deploy
+#   --major          Increment major version before deploy
 #   --help           Show this help message
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -21,18 +24,92 @@ usage() {
 # --- Parse arguments ---
 DO_WINDOWS=true
 DO_FLY=true
+VERSION_BUMP="patch"
+TARGET_SELECTED=false
 
-case "${1:-}" in
-    --all)           DO_WINDOWS=true;  DO_FLY=true  ;;
-    --windows-only)  DO_WINDOWS=true;  DO_FLY=false ;;
-    --fly-only)      DO_WINDOWS=false; DO_FLY=true  ;;
-    --help|-h)       usage ;;
-    "")              ;;  # default: --all
-    *)
-        echo "Unknown flag: $1"
-        usage
-        ;;
-esac
+for arg in "$@"; do
+    case "$arg" in
+        --all)
+            if [ "$TARGET_SELECTED" = true ]; then
+                echo "ERROR: only one deployment target flag can be used"
+                exit 1
+            fi
+            DO_WINDOWS=true
+            DO_FLY=true
+            TARGET_SELECTED=true
+            ;;
+        --windows-only)
+            if [ "$TARGET_SELECTED" = true ]; then
+                echo "ERROR: only one deployment target flag can be used"
+                exit 1
+            fi
+            DO_WINDOWS=true
+            DO_FLY=false
+            TARGET_SELECTED=true
+            ;;
+        --fly-only)
+            if [ "$TARGET_SELECTED" = true ]; then
+                echo "ERROR: only one deployment target flag can be used"
+                exit 1
+            fi
+            DO_WINDOWS=false
+            DO_FLY=true
+            TARGET_SELECTED=true
+            ;;
+        --patch)
+            VERSION_BUMP="patch"
+            ;;
+        --minor)
+            VERSION_BUMP="minor"
+            ;;
+        --major)
+            VERSION_BUMP="major"
+            ;;
+        --help|-h)
+            usage
+            ;;
+        *)
+            echo "Unknown flag: $arg"
+            usage
+            ;;
+    esac
+done
+
+bump_version() {
+    local manifest="$1"
+    local bump="$2"
+    local current
+    current="$(sed -nE 's/^version = "([0-9]+)\.([0-9]+)\.([0-9]+)"$/\1.\2.\3/p' "$manifest" | head -n1)"
+
+    if [ -z "$current" ]; then
+        echo "ERROR: failed to read version from $manifest"
+        exit 1
+    fi
+
+    IFS=. read -r major minor patch <<< "$current"
+    case "$bump" in
+        patch)
+            patch=$((patch + 1))
+            ;;
+        minor)
+            minor=$((minor + 1))
+            patch=0
+            ;;
+        major)
+            major=$((major + 1))
+            minor=0
+            patch=0
+            ;;
+        *)
+            echo "ERROR: unsupported version bump type: $bump"
+            exit 1
+            ;;
+    esac
+
+    local next_version="${major}.${minor}.${patch}"
+    perl -0pi -e 's/^version = "\Q'"$current"'\E"$/version = "'"$next_version"'"/m' "$manifest"
+    echo "$next_version"
+}
 
 # --- Dependency checks ---
 check_tool() {
@@ -69,11 +146,19 @@ if [ "$DO_FLY" = true ]; then
     fi
 fi
 
+# --- Version bump ---
+MANIFEST="$ROOT/Cargo.toml"
+NEW_VERSION="$(bump_version "$MANIFEST" "$VERSION_BUMP")"
+echo "==> Version bumped to $NEW_VERSION ($VERSION_BUMP)"
+
 # --- Count steps ---
-TOTAL=0
+TOTAL=1
 [ "$DO_WINDOWS" = true ] && TOTAL=$((TOTAL + 1))
 [ "$DO_FLY" = true ]     && TOTAL=$((TOTAL + 1))
 STEP=0
+
+STEP=$((STEP + 1))
+echo "==> [$STEP/$TOTAL] Updated package version to $NEW_VERSION"
 
 # --- Step: Windows build ---
 if [ "$DO_WINDOWS" = true ]; then
@@ -102,4 +187,5 @@ fi
 if [ "$DO_FLY" = true ]; then
     echo "    Web:      https://rts-game.fly.dev"
 fi
+echo "    Version:  $NEW_VERSION"
 echo ""

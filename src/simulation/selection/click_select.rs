@@ -152,6 +152,7 @@ pub(crate) fn handle_click_select(
         Query<Entity, (With<Selected>, With<Unit>)>,
         Query<&GlobalTransform, With<Unit>>,
     ),
+    assigned_workers: Query<(), With<BuildingAssignment>>,
     flags: (
         Res<MinimapInteraction>,
         Res<UiClickedThisFrame>,
@@ -232,6 +233,9 @@ pub(crate) fn handle_click_select(
             inspected.entity = None;
 
             for entity in units.iter() {
+                if assigned_workers.contains(entity) {
+                    continue;
+                }
                 // Only select units of the active faction
                 if let Ok(f) = faction_q.get(entity) {
                     if *f != active_player.0 {
@@ -289,6 +293,7 @@ pub(crate) fn handle_click_select(
             &mobs,
             &resource_nodes,
             &pickups,
+            &assigned_workers,
             &height_map,
             skip,
         );
@@ -344,6 +349,9 @@ pub(crate) fn handle_click_select(
                                 return;
                             };
                             for entity in units.iter() {
+                                if assigned_workers.contains(entity) {
+                                    continue;
+                                }
                                 if let Ok(f) = faction_q.get(entity) {
                                     if *f != active_player.0 {
                                         continue;

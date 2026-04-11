@@ -14,6 +14,12 @@ pub struct Building;
 #[derive(Component)]
 pub struct BuildingFootprint(pub f32);
 
+#[derive(Clone, Copy, Debug)]
+pub struct WorkerInteractionTarget {
+    pub position: Vec3,
+    pub arrive_radius: f32,
+}
+
 /// Approximate total height of a building above terrain (for AABB picking).
 #[derive(Component)]
 pub struct BuildingHeight(pub f32);

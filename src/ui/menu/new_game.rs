@@ -455,10 +455,6 @@ fn spawn_world_settings_panel(
         ResourceDensity::Normal => 1,
         ResourceDensity::Dense => 2,
     };
-    let day_idx = DAY_CYCLE_OPTIONS
-        .iter()
-        .position(|&(v, _)| (v - config.day_cycle_secs).abs() < 1.0)
-        .unwrap_or(1);
     let start_idx = STARTING_RES_OPTIONS
         .iter()
         .position(|&(v, _)| (v - config.starting_resources_mult).abs() < 0.01)
@@ -498,8 +494,7 @@ fn spawn_world_settings_panel(
     spawn_reference_segmented_selector(
         commands,
         container,
-        &["SMALL", "MEDIUM", "LARGE"],
-        Some("EPIC"),
+        &["SMALL", "MEDIUM", "LARGE", "EPIC"],
         map_idx,
         SelectorField::MapSize,
         Some(2),
@@ -509,15 +504,11 @@ fn spawn_world_settings_panel(
     spawn_settings_group_label(commands, container, "RESOURCE DENSITY", theme);
     spawn_resource_density_block(commands, container, res_idx, theme);
 
-    // spawn_settings_group_label(commands, container, "TEMPORAL FLOW", theme);
-    // spawn_day_cycle_block(commands, container, day_idx, theme);
-
     spawn_settings_group_label(commands, container, "STARTING ALLOCATION", theme);
     spawn_reference_segmented_selector(
         commands,
         container,
         &["0.5X", "1.0X", "2.0X"],
-        None,
         start_idx,
         SelectorField::StartingRes,
         Some(5),
@@ -586,7 +577,6 @@ fn spawn_reference_segmented_selector(
     commands: &mut Commands,
     container: Entity,
     options: &[&str],
-    disabled_option: Option<&str>,
     selected: usize,
     field: SelectorField,
     nav_index: Option<usize>,
@@ -646,34 +636,6 @@ fn spawn_reference_segmented_selector(
                             } else {
                                 theme.colors.text_secondary.with_alpha(0.72)
                             }),
-                            Pickable::IGNORE,
-                        ));
-                    });
-            }
-
-            if let Some(option) = disabled_option {
-                parent
-                    .spawn((
-                        Node {
-                            min_width: Val::Px(68.0),
-                            height: Val::Px(34.0),
-                            justify_content: JustifyContent::Center,
-                            align_items: AlignItems::Center,
-                            padding: UiRect::horizontal(Val::Px(10.0)),
-                            border: UiRect::all(Val::Px(1.0)),
-                            ..default()
-                        },
-                        BackgroundColor(theme.colors.bg_menu.with_alpha(0.04)),
-                        BorderColor::all(theme.colors.separator.with_alpha(0.25)),
-                    ))
-                    .with_children(|btn| {
-                        btn.spawn((
-                            Text::new(option),
-                            TextFont {
-                                font_size: 8.0,
-                                ..default()
-                            },
-                            TextColor(theme.colors.text_disabled.with_alpha(0.5)),
                             Pickable::IGNORE,
                         ));
                     });
@@ -823,173 +785,6 @@ fn spawn_resource_density_block(
                             });
                     }
                 });
-        })
-        .id();
-    commands.entity(container).add_child(entity);
-}
-
-fn spawn_day_cycle_block(
-    commands: &mut Commands,
-    container: Entity,
-    selected: usize,
-    theme: &Theme,
-) {
-    let labels: Vec<&str> = DAY_CYCLE_OPTIONS.iter().map(|&(_, label)| label).collect();
-    let current = labels.get(selected).copied().unwrap_or("10min");
-    let current_title = format!("{} FULL CYCLE", current.to_uppercase());
-    let day_cycle_seconds = DAY_CYCLE_OPTIONS
-        .get(selected)
-        .map(|(secs, _)| *secs as u32)
-        .unwrap_or(600);
-    let phase_shift = day_cycle_seconds / 2;
-    let header_detail = format!("DAY {}S · NIGHT {}S", phase_shift, phase_shift);
-
-    let entity = commands
-        .spawn((
-            Node {
-                width: Val::Percent(100.0),
-                flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(8.0),
-                padding: UiRect::bottom(Val::Px(6.0)),
-                ..default()
-            },
-            BorderColor::all(Color::NONE),
-            NavFocusable(4),
-        ))
-        .with_children(|parent| {
-            parent
-                .spawn((
-                    Node {
-                        width: Val::Percent(100.0),
-                        height: Val::Px(48.0),
-                        justify_content: JustifyContent::SpaceBetween,
-                        align_items: AlignItems::Center,
-                        padding: UiRect::axes(Val::Px(12.0), Val::Px(0.0)),
-                        border: UiRect::left(Val::Px(2.0)),
-                        ..default()
-                    },
-                    BackgroundColor(theme.colors.bg_menu.with_alpha(0.52)),
-                    BorderColor::all(theme.colors.accent.with_alpha(0.9)),
-                ))
-                .with_children(|row| {
-                    row
-                        .spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(10.0),
-                            ..default()
-                        })
-                        .with_children(|left| {
-                            left.spawn((
-                                Text::new("+"),
-                                TextFont {
-                                    font_size: 12.0,
-                                    ..default()
-                                },
-                                TextColor(theme.colors.accent),
-                            ));
-                            left.spawn((
-                                Text::new(&current_title),
-                                TextFont {
-                                    font_size: 11.0,
-                                    ..default()
-                                },
-                                TextColor(theme.colors.text_primary),
-                            ));
-                        });
-
-                    row
-                        .spawn(Node {
-                            flex_direction: FlexDirection::Row,
-                            align_items: AlignItems::Center,
-                            column_gap: Val::Px(8.0),
-                            ..default()
-                        })
-                        .with_children(|right| {
-                            right.spawn((
-                                Text::new(&header_detail),
-                                TextFont {
-                                    font_size: 8.0,
-                                    ..default()
-                                },
-                                TextColor(theme.colors.text_disabled.with_alpha(0.9)),
-                            ));
-                            right.spawn((
-                                Node {
-                                    width: Val::Px(10.0),
-                                    height: Val::Px(10.0),
-                                    ..default()
-                                },
-                                BackgroundColor(theme.colors.accent.with_alpha(0.75)),
-                            ));
-                        });
-                });
-
-            parent
-                .spawn(Node {
-                    flex_direction: FlexDirection::Row,
-                    column_gap: Val::Px(8.0),
-                    ..default()
-                })
-                .with_children(|buttons| {
-                    for (i, label) in labels.iter().enumerate() {
-                        let active = i == selected;
-                        buttons
-                            .spawn((
-                                MenuSelector {
-                                    field: SelectorField::DayCycle,
-                                    index: i,
-                                },
-                                Button,
-                                Node {
-                                    min_width: Val::Px(62.0),
-                                    height: Val::Px(26.0),
-                                    justify_content: JustifyContent::Center,
-                                    align_items: AlignItems::Center,
-                                    padding: UiRect::horizontal(Val::Px(10.0)),
-                                    border: UiRect::all(Val::Px(1.0)),
-                                    ..default()
-                                },
-                                BackgroundColor(if active {
-                                    theme.colors.accent.with_alpha(0.14)
-                                } else {
-                                    theme.colors.bg_menu.with_alpha(0.08)
-                                }),
-                                BorderColor::all(if active {
-                                    theme.colors.accent.with_alpha(0.7)
-                                } else {
-                                    theme.colors.separator.with_alpha(0.55)
-                                }),
-                            ))
-                            .with_children(|btn| {
-                                btn.spawn((
-                                    Text::new(label.to_uppercase()),
-                                    TextFont {
-                                        font_size: 8.0,
-                                        ..default()
-                                    },
-                                    TextColor(if active {
-                                        theme.colors.text_primary
-                                    } else {
-                                        theme.colors.text_secondary.with_alpha(0.7)
-                                    }),
-                                    Pickable::IGNORE,
-                                ));
-                            });
-                    }
-                });
-
-            parent.spawn((
-                Text::new(format!(
-                    "FULL ROTATION: {} SECONDS. SHORTER CYCLES SHIFT LIGHTING FASTER.",
-                    day_cycle_seconds
-                )),
-                TextFont {
-                    font_size: 8.0,
-                    ..default()
-                },
-                TextColor(theme.colors.text_disabled.with_alpha(0.75)),
-            ));
         })
         .id();
     commands.entity(container).add_child(entity);

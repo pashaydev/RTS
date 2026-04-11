@@ -170,6 +170,7 @@ pub fn pick_for_click(
     mobs: &Query<Entity, With<Mob>>,
     resource_nodes: &Query<Entity, With<ResourceNode>>,
     pickups: &Query<Entity, With<ItemPickup>>,
+    assigned_workers: &Query<(), With<BuildingAssignment>>,
     height_map: &HeightMap,
     skip_entity: Option<Entity>,
 ) -> Option<PickResult> {
@@ -177,6 +178,9 @@ pub fn pick_for_click(
 
     for (entity, gt, pick_r, inherited_vis) in pickables {
         if !inherited_vis.get() {
+            continue;
+        }
+        if assigned_workers.contains(entity) {
             continue;
         }
         let is_unit = units.contains(entity);
@@ -310,6 +314,7 @@ pub(crate) fn update_hover(
     mobs: Query<Entity, With<Mob>>,
     resource_nodes: Query<Entity, With<ResourceNode>>,
     pickups: Query<Entity, With<ItemPickup>>,
+    assigned_workers: Query<(), With<BuildingAssignment>>,
     hovered: Query<Entity, With<Hovered>>,
     placement: Res<BuildingPlacementState>,
     ui_interactions: Query<&Interaction, With<Node>>,
@@ -356,6 +361,7 @@ pub(crate) fn update_hover(
         &mobs,
         &resource_nodes,
         &pickups,
+        &assigned_workers,
         &height_map,
         None, // no skip for hover
     ) {

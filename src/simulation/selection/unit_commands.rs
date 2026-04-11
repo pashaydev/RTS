@@ -42,7 +42,7 @@ pub(crate) fn handle_right_click_move(
     pickables: Query<(Entity, &GlobalTransform, &PickRadius, &InheritedVisibility)>,
     target_queries: (
         Query<Entity, With<Mob>>,
-        Query<Entity, With<ResourceNode>>,
+        Query<Entity, (With<ResourceNode>, Without<YardResourceNode>)>,
         Query<(Entity, &GlobalTransform), (With<Building>, With<ConstructionProgress>)>,
         Query<(Entity, &ResourceProcessor, &BuildingState, &Faction), With<Building>>,
         Query<Entity, With<ItemPickup>>,
@@ -80,7 +80,7 @@ pub(crate) fn handle_right_click_move(
     let (camera_q, windows) = viewport;
     let (mobs, resource_nodes, construction_q, processor_buildings, pickups) = target_queries;
     let (other_units, other_buildings) = enemy_detect;
-    let (assigned_workers_q, building_aabb_q, height_map, graphics) = picking_extra;
+    let (_assigned_workers_q, building_aabb_q, height_map, graphics) = picking_extra;
     let (minimap_interaction, ui_clicked, ui_press, mut sfx) =
         ui_flags;
     let (
@@ -130,7 +130,6 @@ pub(crate) fn handle_right_click_move(
         AttackEnemy,     // enemy unit or mob
         GatherResource,  // resource node (workers)
         AssistBuild,     // construction site (workers)
-        AssignProcessor, // processor building (workers)
         MoveToAlly,      // allied building — just move near it
     }
 
@@ -179,7 +178,7 @@ pub(crate) fn handle_right_click_move(
                 if teams.is_hostile(&active_player.0, proc_faction) {
                     Some(RClickAction::AttackEnemy)
                 } else {
-                    Some(RClickAction::AssignProcessor)
+                    Some(RClickAction::MoveToAlly)
                 }
             } else {
                 None
@@ -234,11 +233,6 @@ pub(crate) fn handle_right_click_move(
         } else if let Some(h) = close_hits
             .iter()
             .find(|h| h.action == RClickAction::AssistBuild)
-        {
-            Some((h.entity, h.action))
-        } else if let Some(h) = close_hits
-            .iter()
-            .find(|h| h.action == RClickAction::AssignProcessor)
         {
             Some((h.entity, h.action))
         } else if let Some(h) = close_hits
@@ -398,79 +392,6 @@ pub(crate) fn handle_right_click_move(
                     kind: SfxKind::UnitAttack,
                     position: None,
                 });
-            }
-            RClickAction::AssignProcessor => {
-                if let Ok((_, processor, state, proc_faction)) =
-                    processor_buildings.get(target_entity)
-                {
-                    if *state == BuildingState::Complete
-                        && *proc_faction == active_player.0
-                        && processor.max_workers > 0
-                    {
-                        let current_count = assigned_workers_q
-                            .get(target_entity)
-                            .map(|aw| aw.workers.len())
-                            .unwrap_or(0);
-                        let mut assigned = 0;
-                        for (entity, kind) in &units_vec {
-                            if *kind == EntityKind::Worker
-                                && current_count + assigned < processor.max_workers as usize
-                            {
-                                if shift {
-                                    enqueue_task(
-                                        &mut task_queues,
-                                        &mut next_task_id,
-                                        *entity,
-                                        QueuedTask::AssignToProcessor(target_entity),
-                                    );
-                                } else {
-                                    if pickables.get(target_entity).is_ok() {
-                                        clear_combat_intent(
-                                            &mut commands,
-                                            *entity,
-                                            time.elapsed_secs_f64(),
-                                        );
-                                        commands.entity(*entity).remove::<AttackTarget>();
-                                        let building_pos = all_transforms
-                                            .get(target_entity)
-                                            .map(|t| t.translation())
-                                            .unwrap_or(Vec3::ZERO);
-                                        crate::simulation::resources::assign_worker_to_processor(
-                                            &mut commands,
-                                            *entity,
-                                            target_entity,
-                                            building_pos,
-                                            TaskSource::Manual,
-                                        );
-                                        set_current_task(
-                                            &mut task_queues,
-                                            &mut next_task_id,
-                                            *entity,
-                                            QueuedTask::AssignToProcessor(target_entity),
-                                        );
-                                    }
-                                }
-                                assigned += 1;
-                            } else if let Ok(gt) =
-                                pickables.get(target_entity).map(|(_, gt, _, _)| gt)
-                            {
-                                apply_manual_move_intent(
-                                    &mut commands,
-                                    *entity,
-                                    gt.translation(),
-                                    time.elapsed_secs_f64(),
-                                );
-                                commands
-                                    .entity(*entity)
-                                    .remove::<AttackTarget>()
-                                    .insert(MoveTarget(gt.translation()))
-                                    .insert(UnitState::Moving(gt.translation()))
-                                    .insert(TaskSource::Manual)
-                                .remove::<ManualIdleSince>();
-                            }
-                        }
-                    }
-                }
             }
             RClickAction::AssistBuild => {
                 let construction_pos = pickables

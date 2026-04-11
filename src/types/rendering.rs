@@ -261,11 +261,13 @@ pub struct FogOverlay;
 pub struct Projectile {
     pub source: Entity,
     pub target: Entity,
+    pub velocity: Vec3,
     pub speed: f32,
     pub damage: f32,
     pub damage_type: DamageType,
     pub fx_kind: CombatFxKind,
     pub impact_scale: f32,
+    pub lifetime_secs: f32,
     /// When true, the projectile rotates to face its travel direction (arrows/bolts).
     pub orient_to_velocity: bool,
 }
@@ -414,7 +416,7 @@ pub struct GrassChunkLod {
 }
 
 /// Distance² threshold where grass switches from full to reduced density.
-pub const GRASS_LOD_SWITCH_SQ: f32 = 75.0 * 75.0;
+pub const GRASS_LOD_SWITCH_SQ: f32 = 120.0 * 120.0;
 
 #[derive(Resource, Default)]
 pub struct GrassChunkMap(pub HashMap<(i32, i32), Entity>);
@@ -444,7 +446,7 @@ impl Default for GrassDebugSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            spacing: 0.15,
+            spacing: 0.106,
             row_step_factor: 0.86,
             jitter: 0.4,
             density_threshold: 0.51,

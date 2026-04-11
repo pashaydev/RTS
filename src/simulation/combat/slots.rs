@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use crate::blueprints::IsRanged;
 use crate::types::*;
 
 use super::{attack_surface_distance, CombatBudgetState, CombatCoreSet};
@@ -22,10 +21,16 @@ impl Plugin for CombatSlotsPlugin {
 }
 
 fn intended_attack_target(
+    order: Option<&CombatOrder>,
     engagement: Option<&Engagement>,
     intent: Option<&CombatIntent>,
     target_lock: Option<&CombatTargetLock>,
 ) -> Option<Entity> {
+    if let Some(order) = order {
+        if let CombatGoal::Attack(target) = order.goal {
+            return Some(target);
+        }
+    }
     if let Some(engagement) = engagement {
         if let Some(target) = engagement.target {
             return Some(target);
@@ -58,13 +63,14 @@ fn cleanup_stale_slot_claims(
     attackers: Query<(
         Entity,
         &SlotClaim,
+        Option<&CombatOrder>,
         Option<&Engagement>,
         Option<&CombatIntent>,
         Option<&CombatTargetLock>,
     )>,
 ) {
-    for (entity, claim, engagement, intent, lock) in &attackers {
-        let intended = intended_attack_target(engagement, intent, lock);
+    for (entity, claim, order, engagement, intent, lock) in &attackers {
+        let intended = intended_attack_target(order, engagement, intent, lock);
         if intended != Some(claim.target) || !all_entities.contains(claim.target) {
             commands.entity(entity).remove::<SlotClaim>();
         }
@@ -83,6 +89,8 @@ fn assign_melee_slot_claims(
             &Transform,
             &AttackRange,
             Option<&AttackTiming>,
+            Option<&AttackProfile>,
+            Option<&CombatOrder>,
             Option<&Engagement>,
             Option<&CombatIntent>,
             Option<&CombatTargetLock>,
@@ -91,7 +99,6 @@ fn assign_melee_slot_claims(
         ),
         (
             Or<(With<Unit>, With<Mob>)>,
-            Without<IsRanged>,
             Without<AttackWindup>,
             Without<AttackRecovery>,
         ),
@@ -102,8 +109,14 @@ fn assign_melee_slot_claims(
     let now = time.elapsed_secs_f64();
     let mut per_target: HashMap<Entity, Vec<(Entity, Vec3, f32, Option<u16>)>> = HashMap::new();
 
-    for (entity, tf, range, timing, engagement, intent, lock, claim, contact) in &attackers {
-        let Some(target) = intended_attack_target(engagement, intent, lock) else {
+    for (entity, tf, range, timing, profile, order, engagement, intent, lock, claim, contact) in
+        &attackers
+    {
+        // Melee-only system: skip ranged attackers (they don't claim melee slots).
+        if profile.map_or(false, |p| p.is_ranged()) {
+            continue;
+        }
+        let Some(target) = intended_attack_target(order, engagement, intent, lock) else {
             continue;
         };
         if contact.is_some_and(|contact| contact.target == target && now < contact.sticky_until) {

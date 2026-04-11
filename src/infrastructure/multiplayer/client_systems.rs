@@ -429,8 +429,14 @@ pub fn client_apply_state_sync(
         }
         if let Some(ref net_state) = snap.unit_state {
             if let Some(new_state) = net_to_ecs_unit_state(net_state, &net_map) {
+                let assignment_building = new_state.assigned_processor_building();
                 if let Ok(mut state) = unit_states.get_mut(ecs_entity) {
                     *state = new_state;
+                }
+                if let Some(building) = assignment_building {
+                    commands.entity(ecs_entity).insert(BuildingAssignment(building));
+                } else {
+                    commands.entity(ecs_entity).remove::<BuildingAssignment>();
                 }
             }
         }

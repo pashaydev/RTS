@@ -436,7 +436,7 @@ fn spawn_fog_overlay(
             let src_iz = (iz * FOG_OVERLAY_VERTEX_STRIDE).min(grid_size - 1);
             let x = -half_map + src_ix as f32 * step;
             let z = -half_map + src_iz as f32 * step;
-            let y = height_map.sample(x, z) + 1.5;
+            let y = height_map.sample(x, z) + 4.0;
             positions.push([x, y, z]);
             normals.push([0.0, 1.0, 0.0]);
             uvs.push([

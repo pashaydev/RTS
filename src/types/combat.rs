@@ -49,6 +49,94 @@ pub enum CombatIntent {
     Hold,
 }
 
+// ---------------------------------------------------------------------------
+// 4b. CombatOrder / CombatGoal / OrderSource — future unified state (Step 3/4)
+// ---------------------------------------------------------------------------
+//
+// `CombatOrder` is the forward-looking unified entry-state component. It is
+// written by every order-entry path (manual clicks, auto-aggro, ability casts,
+// damage retaliation) and is intended to replace `CombatIntent` + `Engagement`
+// + `CombatTargetLock` once the pipeline migrates to read it directly (Step 4).
+//
+// For now it is *mirrored* alongside the legacy components so that:
+//   - downstream combat systems continue to work unchanged
+//   - save_load can migrate incrementally
+//   - Step 4 can start reading `CombatOrder` without churning entry-sites again
+
+/// What a unit is ordered to do.
+#[derive(Clone, Copy, PartialEq, Debug, Default)]
+pub enum CombatGoal {
+    #[default]
+    Stop,
+    Move(Vec3),
+    Attack(Entity),
+    AttackMove(Vec3),
+    Hold,
+}
+
+/// Priority/origin of a `CombatOrder`. Used to unify the manual-vs-auto rules
+/// (chase timeouts, grace windows, lock TTLs) that are currently duplicated
+/// across `unit_ai.rs`, `intents.rs`, and `combat/core.rs`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum OrderSource {
+    /// Direct player command. Highest priority; cannot be preempted by auto.
+    Manual,
+    /// Autonomous AI decision (idle scan, squad coordination, mob aggro).
+    #[default]
+    Auto,
+    /// Reflexive retaliation to incoming damage. Priority sits between Auto and Manual.
+    Retaliate,
+    /// Triggered by ability casts (e.g. Knight Charge locking a target).
+    Ability,
+}
+
+impl OrderSource {
+    /// Upper bound on how long this order is allowed to chase a fleeing target
+    /// before giving up. Replaces the manual-10s / auto-6s hard-coded branch
+    /// in `core.rs` approach logic.
+    pub fn chase_timeout_secs(self) -> f32 {
+        match self {
+            OrderSource::Manual => 10.0,
+            OrderSource::Retaliate => 8.0,
+            OrderSource::Ability => 6.0,
+            OrderSource::Auto => 6.0,
+        }
+    }
+}
+
+/// Unified combat order. Set by every order-entry site; consumed by the
+/// combat pipeline (post Step 4). Until Step 4 lands this is mirrored alongside
+/// the legacy `CombatIntent` / `Engagement` / `CombatTargetLock` components.
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct CombatOrder {
+    pub goal: CombatGoal,
+    pub source: OrderSource,
+    /// Origin anchor for leashing (AttackMove destination, Hold position,
+    /// mob camp center, auto-aggro start point).
+    pub anchor: Option<Vec3>,
+    /// Wall-clock time this order was issued. Used for grace windows and
+    /// staleness checks.
+    pub issued_at: f64,
+}
+
+impl CombatOrder {
+    #[inline]
+    pub fn new(goal: CombatGoal, source: OrderSource, issued_at: f64) -> Self {
+        Self {
+            goal,
+            source,
+            anchor: None,
+            issued_at,
+        }
+    }
+
+    #[inline]
+    pub fn with_anchor(mut self, anchor: Vec3) -> Self {
+        self.anchor = Some(anchor);
+        self
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum EngageMode {
     #[default]
@@ -503,6 +591,15 @@ pub struct AttackProfile {
     pub projectile_speed: f32,
     pub projectile_scale: f32,
     pub impact_scale: f32,
+}
+
+impl AttackProfile {
+    /// A unit is considered ranged when it fires a projectile (i.e. has a projectile speed).
+    /// This is the single source of truth — the legacy `IsRanged` marker component is derived from here.
+    #[inline]
+    pub fn is_ranged(&self) -> bool {
+        self.projectile_speed > 0.0
+    }
 }
 
 // ---------------------------------------------------------------------------

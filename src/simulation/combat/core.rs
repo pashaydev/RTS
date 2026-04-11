@@ -1,7 +1,7 @@
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
-use crate::blueprints::{EntityKind, IsRanged};
+use crate::blueprints::EntityKind;
 use crate::types::*;
 use crate::simulation::items::{ItemKind, SpawnItemPickup, UnitInventory};
 use crate::simulation::items::vfx::{ItemVfxTrigger, ItemVfxTriggerKind};
@@ -10,6 +10,7 @@ use crate::simulation::mobs::CampItemDrops;
 use crate::world::spatial::{SpatialHashGrid, WallSpatialGrid};
 
 use super::{slot_anchor, CombatBudgetState};
+use super::damage::apply_damage;
 
 pub struct CombatPlugin;
 
@@ -52,17 +53,38 @@ impl Plugin for CombatPlugin {
                 handle_death.in_set(CombatCoreSet::Cleanup),
                 emit_item_death_vfx.in_set(CombatCoreSet::Cleanup),
                 tick_dying.in_set(CombatCoreSet::Cleanup),
+                sync_display_state
+                    .in_set(CombatCoreSet::Cleanup)
+                    .after(handle_death),
             )
                 .run_if(in_state(AppState::InGame)),
         );
     }
 }
 
+/// Resolve the unit's current attack target.
+///
+/// Primary source is `CombatOrder` (canonical entry state). Legacy
+/// `Engagement`/`CombatIntent`/`CombatTargetLock` are consulted only as a
+/// fallback for entities without a `CombatOrder` yet — e.g. loaded from a
+/// pre-CombatOrder save, or runtime-mutated engagement state during
+/// AttackMove target acquisition.
 fn intended_attack_target(
+    order: Option<&CombatOrder>,
     engagement: Option<&Engagement>,
     intent: Option<&CombatIntent>,
     target_lock: Option<&CombatTargetLock>,
 ) -> Option<Entity> {
+    if let Some(order) = order {
+        match order.goal {
+            CombatGoal::Attack(target) => return Some(target),
+            CombatGoal::AttackMove(_) | CombatGoal::Hold => {
+                // For AttackMove/Hold, the target is acquired at runtime by scan
+                // logic and stored on Engagement/CombatTargetLock. Fall through.
+            }
+            CombatGoal::Move(_) | CombatGoal::Stop => return None,
+        }
+    }
     if let Some(engagement) = engagement {
         if let Some(target) = engagement.target {
             return Some(target);
@@ -85,14 +107,15 @@ fn resolve_combat_intents(
         (
             Entity,
             Option<&Faction>,
+            Option<&CombatOrder>,
             Option<&Engagement>,
             Option<&CombatIntent>,
             Option<&CombatTargetLock>,
-            Option<&mut UnitState>,
             Option<&AttackTarget>,
             Option<&MoveTarget>,
             Option<&AttackWindup>,
             Option<&AttackRecovery>,
+            Option<&UnitState>,
         ),
         Or<(With<Unit>, With<Mob>)>,
     >,
@@ -100,23 +123,40 @@ fn resolve_combat_intents(
     for (
         entity,
         faction,
+        order,
         engagement,
         intent,
         target_lock,
-        opt_state,
         attack_target,
         move_target,
         windup,
         _recovery,
+        unit_state,
     ) in &mut actors
     {
         if net_role.as_ref() == &NetRole::Client && faction.is_some_and(|f| *f != active_player.0) {
             continue;
         }
 
+        // Skip non-combat states — these own their own MoveTarget management.
+        if let Some(state) = unit_state {
+            match state {
+                UnitState::Building(_)
+                | UnitState::MovingToBuild(_)
+                | UnitState::MovingToPlot(_)
+                | UnitState::AssignedGathering { .. }
+                | UnitState::Depositing { .. }
+                | UnitState::ReturningToDeposit { .. }
+                | UnitState::WaitingForStorage { .. }
+                | UnitState::WaitingForDepot { .. }
+                | UnitState::Gathering(_) => continue,
+                _ => {}
+            }
+        }
+
         // Windup is the true commit point. Recovery should still accept the next move/order.
         let committed = windup.is_some();
-        let desired_target = intended_attack_target(engagement, intent, target_lock)
+        let desired_target = intended_attack_target(order, engagement, intent, target_lock)
             .filter(|target| all_entities.contains(*target));
 
         if let Some(target) = desired_target {
@@ -126,23 +166,41 @@ fn resolve_combat_intents(
                     .entity(entity)
                     .insert(AttackTarget(target))
                     .remove::<MoveTarget>();
-                // Hold intent: keep HoldPosition state (attack in place, don't chase)
-                let is_hold = matches!(intent, Some(CombatIntent::Hold));
-                if let Some(mut state) = opt_state {
-                    if !is_hold {
-                        *state = UnitState::Attacking(target);
-                    }
-                    // HoldPosition stays — unit fires without moving
-                }
             }
             continue;
         }
 
-        let engage_mode = engagement.map(|e| e.mode);
-        let fallback_intent = intent.copied().unwrap_or_default();
-        match engage_mode {
-            Some(EngageMode::AttackMove) => {
-                let destination = engagement.map(|e| e.anchor).unwrap_or(Vec3::ZERO);
+        // Prefer CombatGoal when present, fall back to legacy Engagement::mode / CombatIntent.
+        enum Dispatch {
+            Move(Vec3),
+            AttackMove(Vec3),
+            Hold,
+            Stop,
+            None,
+        }
+        let dispatch = match order.map(|o| o.goal) {
+            Some(CombatGoal::Move(dest)) => Dispatch::Move(dest),
+            Some(CombatGoal::AttackMove(dest)) => Dispatch::AttackMove(dest),
+            Some(CombatGoal::Hold) => Dispatch::Hold,
+            Some(CombatGoal::Stop) => Dispatch::Stop,
+            Some(CombatGoal::Attack(_)) => Dispatch::None, // handled above by desired_target path
+            None => match engagement.map(|e| e.mode) {
+                Some(EngageMode::AttackMove) => {
+                    let dest = engagement.map(|e| e.anchor).unwrap_or(Vec3::ZERO);
+                    Dispatch::AttackMove(dest)
+                }
+                Some(EngageMode::Hold) => Dispatch::Hold,
+                _ => match intent.copied().unwrap_or_default() {
+                    CombatIntent::Move(dest) => Dispatch::Move(dest),
+                    CombatIntent::AttackMove(dest, _) => Dispatch::AttackMove(dest),
+                    CombatIntent::Hold => Dispatch::Hold,
+                    CombatIntent::None => Dispatch::Stop,
+                    CombatIntent::Attack(_, _) => Dispatch::None,
+                },
+            },
+        };
+        match dispatch {
+            Dispatch::AttackMove(destination) => {
                 if attack_target.is_some() && !committed {
                     commands
                         .entity(entity)
@@ -154,92 +212,37 @@ fn resolve_combat_intents(
                 {
                     commands.entity(entity).insert(MoveTarget(destination));
                 }
-                if let Some(mut state) = opt_state {
-                    if !matches!(*state, UnitState::AttackMoving(dest) if dest.distance(destination) <= 0.1)
-                        && !committed
-                    {
-                        *state = UnitState::AttackMoving(destination);
-                    }
-                }
             }
-            Some(EngageMode::Hold) => {
+            Dispatch::Hold => {
                 if !committed {
                     commands
                         .entity(entity)
                         .remove::<MoveTarget>()
                         .remove::<ChaseTimer>();
-                    if let Some(mut state) = opt_state {
-                        *state = UnitState::HoldPosition;
-                    }
                 }
             }
-            _ => match fallback_intent {
-                CombatIntent::Move(destination) => {
-                    if attack_target.is_some() && !committed {
-                        commands
-                            .entity(entity)
-                            .remove::<AttackTarget>()
-                            .remove::<ChaseTimer>();
-                    }
-                    if !committed
-                        && move_target.map_or(true, |current| current.0.distance(destination) > 0.6)
-                    {
-                        commands.entity(entity).insert(MoveTarget(destination));
-                    }
-                    if let Some(mut state) = opt_state {
-                        if !matches!(*state, UnitState::Moving(dest) if dest.distance(destination) <= 0.1)
-                            && !committed
-                        {
-                            *state = UnitState::Moving(destination);
-                        }
-                    }
+            Dispatch::Move(destination) => {
+                if attack_target.is_some() && !committed {
+                    commands
+                        .entity(entity)
+                        .remove::<AttackTarget>()
+                        .remove::<ChaseTimer>();
                 }
-                CombatIntent::AttackMove(destination, _) => {
-                    if attack_target.is_some() && !committed {
-                        commands
-                            .entity(entity)
-                            .remove::<AttackTarget>()
-                            .remove::<ChaseTimer>();
-                    }
-                    if !committed
-                        && move_target.map_or(true, |current| current.0.distance(destination) > 0.6)
-                    {
-                        commands.entity(entity).insert(MoveTarget(destination));
-                    }
-                    if let Some(mut state) = opt_state {
-                        if !matches!(*state, UnitState::AttackMoving(dest) if dest.distance(destination) <= 0.1)
-                            && !committed
-                        {
-                            *state = UnitState::AttackMoving(destination);
-                        }
-                    }
+                if !committed
+                    && move_target.map_or(true, |current| current.0.distance(destination) > 0.6)
+                {
+                    commands.entity(entity).insert(MoveTarget(destination));
                 }
-                CombatIntent::Hold => {
-                    if !committed {
-                        commands
-                            .entity(entity)
-                            .remove::<MoveTarget>()
-                            .remove::<ChaseTimer>();
-                        if let Some(mut state) = opt_state {
-                            *state = UnitState::HoldPosition;
-                        }
-                    }
+            }
+            Dispatch::Stop => {
+                if attack_target.is_some() && !committed {
+                    commands
+                        .entity(entity)
+                        .remove::<AttackTarget>()
+                        .remove::<ChaseTimer>();
                 }
-                CombatIntent::None => {
-                    if attack_target.is_some() && !committed {
-                        commands
-                            .entity(entity)
-                            .remove::<AttackTarget>()
-                            .remove::<ChaseTimer>();
-                        if let Some(mut state) = opt_state {
-                            if matches!(*state, UnitState::Attacking(_)) {
-                                *state = UnitState::Idle;
-                            }
-                        }
-                    }
-                }
-                CombatIntent::Attack(_, _) => {}
-            },
+            }
+            Dispatch::None => {}
         }
     }
 }
@@ -353,7 +356,18 @@ fn explode_props(
                 continue;
             }
 
-            health.current -= prop.damage * falloff;
+            apply_damage(
+                &mut commands,
+                target_entity,
+                None,
+                prop.damage * falloff,
+                DamageType::SiegeDmg,
+                &mut health,
+                None,
+                None,
+                0.0,
+                0.0,
+            );
             if dist > 0.05 {
                 let push = Vec3::new(offset.x, 0.0, offset.z).normalize_or_zero() * falloff * 0.9;
                 target_tf.translation += push;
@@ -378,7 +392,7 @@ pub fn approach_attack_target(
             &AttackTarget,
             &AttackRange,
             Option<&AttackTiming>,
-            Option<&IsRanged>,
+            Option<&AttackProfile>,
             &Faction,
             (
                 Option<&mut UnitState>,
@@ -393,6 +407,7 @@ pub fn approach_attack_target(
                 Option<&mut CombatTargetLock>,
                 Option<&SlotClaim>,
                 Option<&MeleeContact>,
+                Option<&CombatOrder>,
             ),
         ),
         Or<(With<Unit>, With<Mob>)>,
@@ -425,7 +440,7 @@ pub fn approach_attack_target(
         attack_target,
         range,
         attack_timing,
-        is_ranged,
+        opt_profile,
         faction,
         (opt_state, current_move_target, windup, recovery),
         (
@@ -435,6 +450,7 @@ pub fn approach_attack_target(
             opt_target_lock,
             slot_claim,
             opt_melee_contact,
+            opt_order,
         ),
     ) in &mut attackers
     {
@@ -493,11 +509,6 @@ pub fn approach_attack_target(
                     commands
                         .entity(attacker_entity)
                         .insert(AttackTarget(wall_entity));
-                    if let Some(mut state) = opt_state {
-                        if matches!(*state, UnitState::Attacking(_)) {
-                            *state = UnitState::Attacking(wall_entity);
-                        }
-                    }
                     let source = if opt_task_source
                         .map_or(false, |task_source| *task_source == TaskSource::Manual)
                     {
@@ -540,6 +551,7 @@ pub fn approach_attack_target(
         let surface_dist =
             attack_surface_distance(tf.translation, target_tf.translation, target_radius);
         let in_band = is_in_attack_band(surface_dist, range.0, minimum_range, stay_tolerance);
+        let is_ranged_unit = opt_profile.map_or(false, |p| p.is_ranged());
 
         if !in_band {
             if opt_melee_contact.is_some() {
@@ -555,7 +567,7 @@ pub fn approach_attack_target(
             {
                 continue;
             }
-            let desired_pos = if is_ranged.is_none()
+            let desired_pos = if !is_ranged_unit
                 && slot_claim.is_some_and(|claim| claim.target == attack_target.0)
             {
                 let claim = slot_claim.unwrap();
@@ -605,12 +617,18 @@ pub fn approach_attack_target(
                     continue;
                 }
             } else {
-                // Start chase timer
-                let max_secs = if opt_task_source.map_or(false, |s| *s == TaskSource::Manual) {
-                    10.0
-                } else {
-                    6.0
-                };
+                // Start chase timer — unified via OrderSource::chase_timeout_secs().
+                // Falls back to TaskSource for entities that haven't had a CombatOrder
+                // written yet (e.g. loaded from a pre-CombatOrder save).
+                let max_secs = opt_order.map(|o| o.source.chase_timeout_secs()).unwrap_or_else(
+                    || {
+                        if opt_task_source.map_or(false, |s| *s == TaskSource::Manual) {
+                            10.0
+                        } else {
+                            6.0
+                        }
+                    },
+                );
                 commands.entity(attacker_entity).insert(ChaseTimer {
                     elapsed: 0.0,
                     max_secs,
@@ -626,7 +644,7 @@ pub fn approach_attack_target(
                 engagement.status = EngageStatus::InBand;
                 engagement.last_confirmed_at = time.elapsed_secs_f64();
             }
-            if is_ranged.is_none() {
+            if !is_ranged_unit {
                 commands.entity(attacker_entity).insert(MeleeContact {
                     target: attack_target.0,
                     sticky_until: time.elapsed_secs_f64() + tuning.melee_contact_sticky_secs as f64,
@@ -636,7 +654,7 @@ pub fn approach_attack_target(
             }
 
             // Ranged kiting: if a melee enemy is dangerously close, retreat backward
-            if is_ranged.is_some()
+            if is_ranged_unit
                 && tactical_roles
                     .get(attacker_entity)
                     .ok()
@@ -799,7 +817,6 @@ fn resolve_attack_windups(
         &AttackDamage,
         &AttackRange,
         Option<&AttackTiming>,
-        Option<&IsRanged>,
         &Faction,
         Option<&DamageType>,
         Option<&mut Engagement>,
@@ -827,7 +844,6 @@ fn resolve_attack_windups(
         damage,
         range,
         attack_timing,
-        is_ranged,
         faction,
         opt_dmg_type,
         opt_engagement,
@@ -870,13 +886,7 @@ fn resolve_attack_windups(
             continue;
         }
 
-        // Compute damage multiplier from damage type vs armor type
-        let multiplier = match (opt_dmg_type, opt_armor) {
-            (Some(dmg_type), Some(armor_type)) => dmg_type.multiplier_vs(*armor_type),
-            _ => 1.0,
-        };
-
-        if is_ranged.is_some() {
+        if profile.is_ranged() {
             // Replace windup reservation with projectile-travel reservation
             if let Some(mut reserved) = opt_reserved {
                 reserved.reservations.retain(|(src, _, _)| *src != entity);
@@ -892,18 +902,21 @@ fn resolve_attack_windups(
                     proj_visual,
                     Some(crate::presentation::model_assets::ProjectileVisualKind::CatapultRock)
                 );
+            let spawn_pos = atk_tf.translation + Vec3::Y * 0.5;
+            let dir_to_target = (target_tf.translation - spawn_pos).normalize_or_zero();
+            let projectile_speed = profile.projectile_speed.max(8.0);
             let proj_component = Projectile {
                 source: entity,
                 target,
-                speed: profile.projectile_speed.max(8.0),
+                velocity: dir_to_target * projectile_speed,
+                speed: projectile_speed,
                 damage: damage.0,
                 damage_type: opt_dmg_type.copied().unwrap_or(DamageType::Melee),
                 fx_kind: *fx_kind,
                 impact_scale: profile.impact_scale,
+                lifetime_secs: surface_dist / projectile_speed + 0.35,
                 orient_to_velocity: orient,
             };
-            let spawn_pos = atk_tf.translation + Vec3::Y * 0.5;
-            let dir_to_target = (target_tf.translation - spawn_pos).normalize_or_zero();
             if let (Some(visual_kind), Some(ref proj_res)) = (proj_visual, &projectile_assets) {
                 let scene = proj_res.scene_for(visual_kind, entity.to_bits() as usize);
                 let proj_scale = match visual_kind {
@@ -948,18 +961,19 @@ fn resolve_attack_windups(
             );
         } else {
             // Melee: apply damage directly with multiplier + flash VFX
-            // Clear windup reservation — damage applied immediately
-            if let Some(mut reserved) = opt_reserved {
-                reserved.reservations.retain(|(src, _, _)| *src != entity);
-            }
             let charge_mult = opt_charge.map(|c| c.damage_mult).unwrap_or(1.0);
-            let dealt = damage.0 * multiplier * charge_mult;
-            health.current -= dealt;
-            commands.entity(target).insert(RecentCombatDamage {
-                attacker: entity,
-                observed_at: time.elapsed_secs_f64(),
-                expires_at: time.elapsed_secs_f64() + tuning.damage_memory_secs as f64,
-            });
+            let dealt = apply_damage(
+                &mut commands,
+                target,
+                Some(entity),
+                damage.0 * charge_mult,
+                opt_dmg_type.copied().unwrap_or(DamageType::Melee),
+                &mut health,
+                opt_armor.copied(),
+                opt_reserved.map(|r| r.into_inner()),
+                time.elapsed_secs_f64(),
+                tuning.damage_memory_secs,
+            );
             // Consume charge bonus after use
             if opt_charge.is_some() {
                 commands.entity(entity).remove::<ChargeBonus>();
@@ -1637,6 +1651,120 @@ fn emit_item_death_vfx(
                     });
                 }
                 _ => {}
+            }
+        }
+    }
+}
+
+/// Derives the combat-related variants of `UnitState` from the canonical
+/// entry-state components (`CombatOrder` + `AttackTarget` + `MoveTarget`).
+///
+/// After Step 5 of the combat refactor, this is the *only* place that writes
+/// `UnitState::{Attacking, AttackMoving, HoldPosition, Moving, Idle}` for
+/// combat-related transitions. Non-combat states (`Gathering`, `Building`,
+/// `AssignedGathering`, etc.) own their own transitions and are left alone.
+///
+/// Priority order (first matching wins):
+///   1. `AttackTarget` present and order is not `Hold` → `Attacking(target)`
+///   2. `CombatGoal::Hold`                              → `HoldPosition`
+///   3. `CombatGoal::AttackMove(dest)`                  → `AttackMoving(dest)`
+///   4. `CombatGoal::Move(dest)` or lone `MoveTarget`   → `Moving(dest)`
+///   5. `CombatGoal::Stop` / no order                   → `Idle` (only if
+///                                                        currently a combat
+///                                                        variant)
+///
+/// Entities without a `CombatOrder` yet fall back to `CombatIntent` — this
+/// covers the one-tick gap between wall-redirect runtime mutation and the
+/// next entry-API write.
+fn sync_display_state(
+    mut actors: Query<
+        (
+            Option<&CombatOrder>,
+            Option<&CombatIntent>,
+            Option<&AttackTarget>,
+            Option<&MoveTarget>,
+            &mut UnitState,
+        ),
+        (Or<(With<Unit>, With<Mob>)>, Without<Dying>),
+    >,
+) {
+    for (order, intent, attack_target, move_target, mut state) in &mut actors {
+        // Never override non-combat states — they own their own transitions.
+        match *state {
+            UnitState::Building(_)
+            | UnitState::MovingToBuild(_)
+            | UnitState::MovingToPlot(_)
+            | UnitState::AssignedGathering { .. }
+            | UnitState::Depositing { .. }
+            | UnitState::ReturningToDeposit { .. }
+            | UnitState::WaitingForStorage { .. }
+            | UnitState::WaitingForDepot { .. }
+            | UnitState::Gathering(_)
+            | UnitState::Patrolling { .. } => continue,
+            _ => {}
+        }
+
+        // Canonical goal: CombatOrder first, fall back to legacy CombatIntent.
+        let goal = order.map(|o| o.goal).or_else(|| {
+            intent.map(|i| match *i {
+                CombatIntent::None => CombatGoal::Stop,
+                CombatIntent::Move(dest) => CombatGoal::Move(dest),
+                CombatIntent::Attack(target, _) => CombatGoal::Attack(target),
+                CombatIntent::AttackMove(dest, _) => CombatGoal::AttackMove(dest),
+                CombatIntent::Hold => CombatGoal::Hold,
+            })
+        });
+
+        // Priority 1: active target → Attacking (unless Hold, which fires in place).
+        if let Some(at) = attack_target {
+            if !matches!(goal, Some(CombatGoal::Hold)) {
+                let new_state = UnitState::Attacking(at.0);
+                if *state != new_state {
+                    *state = new_state;
+                }
+                continue;
+            }
+        }
+
+        match goal {
+            Some(CombatGoal::Hold) => {
+                if *state != UnitState::HoldPosition {
+                    *state = UnitState::HoldPosition;
+                }
+            }
+            Some(CombatGoal::AttackMove(dest)) => {
+                if !matches!(*state, UnitState::AttackMoving(d) if d.distance(dest) <= 0.1) {
+                    *state = UnitState::AttackMoving(dest);
+                }
+            }
+            Some(CombatGoal::Move(dest)) => {
+                if !matches!(*state, UnitState::Moving(d) if d.distance(dest) <= 0.1) {
+                    *state = UnitState::Moving(dest);
+                }
+            }
+            Some(CombatGoal::Attack(_)) => {
+                // Order wants an attack but the pipeline has not attached an
+                // AttackTarget yet (mid-acquisition). Leave display state alone.
+            }
+            Some(CombatGoal::Stop) | None => {
+                // Bare MoveTarget with no order: reflect it as Moving.
+                if order.is_none() && intent.is_none() {
+                    if let Some(mt) = move_target {
+                        if !matches!(*state, UnitState::Moving(d) if d.distance(mt.0) <= 0.1) {
+                            *state = UnitState::Moving(mt.0);
+                        }
+                        continue;
+                    }
+                }
+                // Drop combat variants to Idle; leave other non-combat alone.
+                if matches!(
+                    *state,
+                    UnitState::Attacking(_)
+                        | UnitState::AttackMoving(_)
+                        | UnitState::HoldPosition
+                ) {
+                    *state = UnitState::Idle;
+                }
             }
         }
     }

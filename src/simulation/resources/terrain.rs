@@ -689,13 +689,16 @@ fn sample_grass_density(
     biome_weight * patchiness * slope * shoreline
 }
 
-/// Deterministic hash-based jitter — independent per grid cell (no spatial correlation).
-fn sample_grass_offset_hashed(x: f32, z: f32, jitter: f32, seed: u64) -> (f32, f32) {
-    // Quantize to grid cell for deterministic hashing
-    let cx = (x * 10000.0) as i32;
-    let cz = (z * 10000.0) as i32;
-    let h1 = hash_cell(cx, cz, seed as u32 ^ 0x9E37_79B9) as f32 / u32::MAX as f32;
-    let h2 = hash_cell(cx, cz, seed as u32 ^ 0x517C_C1B7) as f32 / u32::MAX as f32;
+fn passes_grass_density_threshold(density: f32, threshold: f32) -> bool {
+    // Tiny backend-specific float differences around the threshold should not
+    // change whether a grass cell exists.
+    density + 1.0e-4 >= threshold
+}
+
+/// Deterministic hash-based jitter — independent per logical grass cell.
+fn sample_grass_offset_hashed(row: i32, col: i32, jitter: f32, seed: u64) -> (f32, f32) {
+    let h1 = hash_cell(row, col, seed as u32 ^ 0x9E37_79B9) as f32 / u32::MAX as f32;
+    let h2 = hash_cell(row, col, seed as u32 ^ 0x517C_C1B7) as f32 / u32::MAX as f32;
     ((h1 - 0.5) * 2.0 * jitter, (h2 - 0.5) * 2.0 * jitter)
 }
 
@@ -801,17 +804,27 @@ pub(super) fn rebuild_dense_grass(
         std::collections::HashMap::new();
 
     let mut count = 0u32;
-    let mut row_index = 0_i32;
-    let mut z = -half + row_step * 0.5;
-    while z < half - row_step * 0.5 {
+    let z_min = -half as f64 + row_step as f64 * 0.5;
+    let z_max = half as f64 - row_step as f64 * 0.5;
+    let row_count = (((z_max - z_min) / row_step as f64).floor() as i32 + 1).max(0);
+
+    for row_index in 0..row_count {
+        let z = (z_min + row_index as f64 * row_step as f64) as f32;
         let row_jitter = hash_row(row_index, map_seed.0) * spacing * 0.15;
         let row_shift = if row_index.rem_euclid(2) == 0 {
             0.0
         } else {
             spacing * 0.5
         } + row_jitter;
-        let mut x = -half + spacing * 0.5 + row_shift;
-        while x < half - spacing * 0.5 {
+        let x_min = -half as f64 + spacing as f64 * 0.5 + row_shift as f64;
+        let x_max = half as f64 - spacing as f64 * 0.5;
+        if x_min > x_max {
+            continue;
+        }
+
+        let col_count = (((x_max - x_min) / spacing as f64).floor() as i32 + 1).max(0);
+        for col_index in 0..col_count {
+            let x = (x_min + col_index as f64 * spacing as f64) as f32;
             let base_density = sample_grass_density(
                 &biome_map,
                 &height_map,
@@ -821,16 +834,15 @@ pub(super) fn rebuild_dense_grass(
                 x,
                 z,
             );
-            if base_density < grass_settings.density_threshold {
-                x += spacing;
+            if !passes_grass_density_threshold(base_density, grass_settings.density_threshold) {
                 continue;
             }
 
-            let (off_x, off_z) = sample_grass_offset_hashed(x, z, jitter, map_seed.0);
+            let (off_x, off_z) =
+                sample_grass_offset_hashed(row_index, col_index, jitter, map_seed.0);
             let jx = x + off_x;
             let jz = z + off_z;
             if is_in_mountain_border(jx, jz, half, border) {
-                x += spacing;
                 continue;
             }
 
@@ -843,14 +855,12 @@ pub(super) fn rebuild_dense_grass(
                 jx,
                 jz,
             );
-            if density < grass_settings.density_threshold {
-                x += spacing;
+            if !passes_grass_density_threshold(density, grass_settings.density_threshold) {
                 continue;
             }
 
             let biome = biome_map.get_biome(jx, jz);
             if grass_biome_weight(biome, &grass_settings) <= 0.0 {
-                x += spacing;
                 continue;
             }
 
@@ -860,7 +870,6 @@ pub(super) fn rebuild_dense_grass(
                 (dx * dx + dz * dz).sqrt() < spawn_clear_radius
             });
             if too_close {
-                x += spacing;
                 continue;
             }
 
@@ -872,7 +881,6 @@ pub(super) fn rebuild_dense_grass(
                     dx * dx + dz * dz < *clear_r2
                 });
             if inside_building_clear_area {
-                x += spacing;
                 continue;
             }
 
@@ -888,11 +896,7 @@ pub(super) fn rebuild_dense_grass(
                 .or_default()
                 .push((Vec3::new(jx, y, jz), scale, y_rot));
             count += 1;
-
-            x += spacing;
         }
-        row_index += 1;
-        z += row_step;
     }
 
     // Build merged meshes per chunk using shared helper — two LOD levels per chunk
@@ -985,24 +989,28 @@ pub fn reveal_explored_grass(
             *vis = Visibility::Inherited;
             continue;
         }
-        // Check if any cell in this chunk's bounds is explored
+        // Require a majority of sample points to be explored before revealing,
+        // otherwise a single explored cell at the edge leaks grass into fog.
         let x_start = chunk.chunk_x as f32 * step;
         let z_start = chunk.chunk_z as f32 * step;
 
-        let mut explored = false;
+        let mut explored_count = 0u32;
+        let mut total_count = 0u32;
         let mut sx = x_start;
-        while sx < x_start + step && !explored {
+        while sx < x_start + step {
             let mut sz = z_start;
-            while sz < z_start + step && !explored {
+            while sz < z_start + step {
+                total_count += 1;
                 if fog_map.is_explored(sx, sz) {
-                    explored = true;
+                    explored_count += 1;
                 }
                 sz += sample_step;
             }
             sx += sample_step;
         }
 
-        if explored {
+        // Reveal only when at least 40% of the chunk area is explored
+        if total_count > 0 && explored_count * 100 / total_count >= 40 {
             commands.entity(entity).insert(GrassRevealed);
             *vis = Visibility::Inherited;
         }

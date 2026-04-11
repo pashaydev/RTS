@@ -95,7 +95,7 @@ pub struct EntityLabelVisibility {
 impl Default for EntityLabelVisibility {
     fn default() -> Self {
         Self {
-            show_unit_labels: true,
+            show_unit_labels: false,
         }
     }
 }
@@ -630,4 +630,3 @@ pub struct MenuNavFocus {
 /// Controls hint row shown in menus.
 #[derive(Component)]
 pub struct ControlsHint;
-

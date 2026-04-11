@@ -411,11 +411,7 @@ fn hash_queued_task(task: &QueuedTask, hasher: &mut DefaultHasher) {
             5u8.hash(hasher);
             hash_vec3(*pos, hasher);
         }
-        QueuedTask::AssignToProcessor(entity) => {
-            6u8.hash(hasher);
-            entity.to_bits().hash(hasher);
-        }
-        QueuedTask::HoldPosition => 7u8.hash(hasher),
+        QueuedTask::HoldPosition => 6u8.hash(hasher),
     }
 }
 
@@ -880,10 +876,6 @@ fn format_task(
             )
         }
         QueuedTask::Patrol(pos) => format!("Patrol {}", format_position(*pos)),
-        QueuedTask::AssignToProcessor(target) => format!(
-            "Assign to {}",
-            format_target(*target, kind_lookup, resource_nodes)
-        ),
         QueuedTask::HoldPosition => "Hold position".to_string(),
     }
 }

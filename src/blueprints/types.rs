@@ -965,11 +965,6 @@ impl MeshKind {
     }
 }
 
-// ── IsRanged marker ──
-
-#[derive(Component)]
-pub struct IsRanged;
-
 // ── Blueprint ──
 
 #[derive(Clone, Debug)]
