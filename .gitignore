@@ -30,3 +30,6 @@ Thumbs.db
 *logs
 
 *.db
+trace.json
+mempalace.yaml
+entities.json

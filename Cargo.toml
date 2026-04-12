@@ -13,6 +13,8 @@ client = [
     "dep:noise",
     "dep:rand",
 ]
+tracy = ["bevy/trace_tracy"]
+tracy_memory = ["tracy", "bevy/trace_tracy_memory"]
 
 [[bin]]
 name = "rts"
@@ -61,6 +63,11 @@ opt-level = 2
 lto = "thin"
 codegen-units = 1
 strip = true
+
+[profile.profiling]
+inherits = "release"
+strip = false
+debug = 1
 
 [profile.wasm-release]
 inherits = "release"
