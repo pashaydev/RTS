@@ -205,32 +205,6 @@ pub(crate) struct LobbyPingTimer(pub Timer);
 
 // ── Constants ──
 
-pub(crate) const RANDOM_NAMES: &[&str] = &[
-    "Commander",
-    "General",
-    "Warlord",
-    "Captain",
-    "Marshal",
-    "Overlord",
-    "Strategist",
-    "Vanguard",
-    "Centurion",
-    "Paladin",
-    "Sentinel",
-    "Arbiter",
-    "Conqueror",
-    "Vindicator",
-    "Sovereign",
-    "Crusader",
-    "Phantom",
-    "Templar",
-    "Warmaster",
-    "Executor",
-    "Pathfinder",
-    "Nomad",
-    "Ironclad",
-    "Stormcaller",
-];
 pub(crate) const DAY_CYCLE_OPTIONS: &[(f32, &str)] =
     &[(300.0, "5min"), (600.0, "10min"), (1200.0, "20min")];
 pub(crate) const STARTING_RES_OPTIONS: &[(f32, &str)] = &[(0.5, "0.5x"), (1.0, "1x"), (2.0, "2x")];
@@ -270,6 +244,7 @@ impl Plugin for MenuPlugin {
             .init_resource::<helpers::SliderDragState>()
             .init_resource::<ConfirmPopupState>()
             .init_resource::<crate::types::AvailableResolutions>()
+            .init_resource::<systems::LastKnownPlayerName>()
             .configure_sets(
                 Update,
                 (
@@ -382,6 +357,7 @@ impl Plugin for MenuPlugin {
                     navigation::menu_nav_focus_visuals,
                     navigation::scroll_to_focused,
                     helpers::update_button_hints,
+                    systems::sync_slot_cards_to_config,
                 )
                     .in_set(MenuSet::Visuals),
             );

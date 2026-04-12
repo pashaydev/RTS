@@ -283,7 +283,7 @@ pub(crate) fn menu_nav_focus_visuals(
                 Val::Px(0.0),
                 Val::Px(0.0),
                 Val::Px(0.0),
-                Val::Px(10.0),
+                Val::Px(2.0),
             ),
         ));
 

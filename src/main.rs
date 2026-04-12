@@ -47,7 +47,7 @@ fn main() {
     );
 
     // Open database early so settings (graphics, audio) are loaded before window creation.
-    let (db, profile, graphics, audio_settings) = infrastructure::database::init_early();
+    let (db, profile, mut graphics, audio_settings) = infrastructure::database::init_early();
 
     // On WASM, use the browser viewport size so hover coordinates match from the start.
     // The DB-stored resolution is a desktop value that causes a mismatch until a resize event.
@@ -66,6 +66,7 @@ fn main() {
                 .and_then(|v| v.as_f64())
                 .unwrap_or(h as f64) as u32;
         }
+        graphics.resolution = (w, h);
         (w, h)
     };
     #[cfg(not(target_arch = "wasm32"))]

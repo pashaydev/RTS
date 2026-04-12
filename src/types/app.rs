@@ -1,8 +1,23 @@
 //! Core application types: state, game config, factions, graphics settings.
 
 use bevy::prelude::*;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+
+// ── Random Name Pool ──
+
+pub const COMMANDER_NAMES: &[&str] = &[
+    "Commander", "General", "Warlord", "Captain", "Marshal", "Overlord",
+    "Strategist", "Vanguard", "Centurion", "Paladin", "Sentinel", "Arbiter",
+    "Conqueror", "Vindicator", "Sovereign", "Crusader", "Phantom", "Templar",
+    "Warmaster", "Executor", "Pathfinder", "Nomad", "Ironclad", "Stormcaller",
+];
+
+pub fn random_commander_name() -> String {
+    let mut rng = rand::rng();
+    COMMANDER_NAMES[rng.random_range(0..COMMANDER_NAMES.len())].to_string()
+}
 
 // ── Map Seed ──
 
@@ -288,6 +303,8 @@ pub enum SlotOccupant {
 #[derive(Resource, Clone, Debug)]
 pub struct GameSetupConfig {
     pub player_name: String,
+    /// Display names for AI slots (randomized on creation).
+    pub ai_names: [String; 4],
     /// What occupies each faction slot (indexed 0=Player1, 1=Player2, 2=Player3, 3=Player4).
     pub slots: [SlotOccupant; 4],
     /// Which slot is the local human player (for single-player or multiplayer host).
@@ -304,7 +321,8 @@ pub struct GameSetupConfig {
 impl Default for GameSetupConfig {
     fn default() -> Self {
         Self {
-            player_name: "Commander".to_string(),
+            player_name: random_commander_name(),
+            ai_names: std::array::from_fn(|_| format!("AI {}", random_commander_name())),
             slots: [
                 SlotOccupant::Human,
                 SlotOccupant::Ai(AiDifficulty::Medium),

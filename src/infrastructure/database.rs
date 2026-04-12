@@ -71,7 +71,7 @@ impl Default for ActiveProfile {
     fn default() -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
-            name: "Commander".to_string(),
+            name: crate::types::random_commander_name(),
         }
     }
 }

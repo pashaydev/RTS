@@ -1,9 +1,12 @@
 use bevy::{
     pbr::{ExtendedMaterial, MaterialExtension, StandardMaterial},
     prelude::*,
+    render::alpha::AlphaMode,
     render::render_resource::{AsBindGroup, ShaderType},
     shader::ShaderRef,
 };
+
+use crate::types::rendering::GrassRenderSettings;
 
 const GRASS_SHADER_PATH: &str = "shaders/grass.wgsl";
 
@@ -40,25 +43,35 @@ pub struct GrassSettings {
     pub _pad2: f32,
 }
 
-impl Default for GrassSettings {
-    fn default() -> Self {
+impl GrassSettings {
+    pub fn from_render_settings(render: &GrassRenderSettings, time: f32) -> Self {
         Self {
-            time: 0.0,
-            wind_strength: 0.08,
-            wind_speed: 1.2,
-            random_lean: 0.35,
-            wind_direction: Vec4::new(1.0, 0.0, 0.6, 0.0),
-            base_color: Vec4::new(0.12, 0.28, 0.04, 1.0),
-            tip_color: Vec4::new(0.45, 0.65, 0.15, 1.0),
-            blade_width: 0.06,
-            blade_height: 2.5,
-            width_thicken: 1.5,
-            normal_up_bias: 0.4,
-            normal_blend_start: 40.0,
-            normal_blend_end: 120.0,
+            time,
+            wind_strength: render.wind_strength,
+            wind_speed: render.wind_speed,
+            random_lean: render.random_lean,
+            wind_direction: render.wind_direction,
+            base_color: render.base_color,
+            tip_color: render.tip_color,
+            blade_width: render.blade_width,
+            blade_height: render.blade_height,
+            width_thicken: render.width_thicken,
+            normal_up_bias: render.normal_up_bias,
+            normal_blend_start: render.normal_blend_start,
+            normal_blend_end: render.normal_blend_end,
             _pad1: 0.0,
             _pad2: 0.0,
         }
+    }
+
+    pub fn apply_render_settings(&mut self, render: &GrassRenderSettings, time: f32) {
+        *self = Self::from_render_settings(render, time);
+    }
+}
+
+impl Default for GrassSettings {
+    fn default() -> Self {
+        Self::from_render_settings(&GrassRenderSettings::default(), 0.0)
     }
 }
 
@@ -69,5 +82,25 @@ impl MaterialExtension for GrassExtension {
 
     fn fragment_shader() -> ShaderRef {
         GRASS_SHADER_PATH.into()
+    }
+
+    fn prepass_vertex_shader() -> ShaderRef {
+        GRASS_SHADER_PATH.into()
+    }
+
+    fn prepass_fragment_shader() -> ShaderRef {
+        GRASS_SHADER_PATH.into()
+    }
+
+    fn deferred_vertex_shader() -> ShaderRef {
+        GRASS_SHADER_PATH.into()
+    }
+
+    fn deferred_fragment_shader() -> ShaderRef {
+        GRASS_SHADER_PATH.into()
+    }
+
+    fn alpha_mode() -> Option<AlphaMode> {
+        Some(AlphaMode::Opaque)
     }
 }

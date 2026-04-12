@@ -169,7 +169,7 @@ pub(crate) fn handle_menu_buttons(
 
 /// Rebuild only the slot cards inside their wrapper, avoiding a full page rebuild
 /// (which would replay panel fade-in / section-divider animations).
-fn rebuild_slot_cards(
+pub(crate) fn rebuild_slot_cards(
     commands: &mut Commands,
     slots_q: &Query<(Entity, &Children), With<SlotCardsContainer>>,
     config: &GameSetupConfig,
@@ -251,6 +251,8 @@ pub(crate) fn handle_selector_clicks(
                         if let SlotOccupant::Ai(d) = config.slots[slot_idx] {
                             SlotOccupant::Ai(d)
                         } else {
+                            // Generate a fresh AI name when a slot becomes AI
+                            config.ai_names[slot_idx] = format!("AI {}", crate::types::random_commander_name());
                             new_occupant
                         }
                     } else {

@@ -11,65 +11,74 @@ use wasm_bindgen::JsCast;
 
 use crate::types::*;
 
-/// All 20 semantic roles mapped to the StoneCursorWenrexa sprites.
+/// All semantic roles mapped to the StoneCursorWenrexa sprites.
 ///
-/// The numeric index corresponds to `01.png..20.png`.
+/// Most roles still use their original asset number, but a few are remapped to
+/// better-fit sprites from the pack.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum CursorKind {
     #[default]
-    Default,          // 01
-    HoverFriendly,    // 02
-    HoverEnemy,       // 03
-    AttackMoveCursor, // 04
-    AttackTarget,     // 05
-    MoveReady,        // 06
-    Forbidden,        // 07
-    Diplomacy,        // 08 (loaded, unused)
-    DefaultDark,      // 09 (loaded, unused)
-    RallyHover,       // 10 (loaded, unused)
-    BoxSelect,        // 11
-    Repair,           // 12
-    Garrison,         // 13
-    AbilityTarget,    // 14
-    AttackMoveTarget, // 15
-    PatrolTarget,     // 16
-    Gather,           // 17
-    Wait,             // 18
-    PlaceInvalid,     // 19
-    Disabled,         // 20 (loaded, unused)
+    Default,
+    HoverFriendly,
+    HoverEnemy,
+    AttackMoveCursor,
+    AttackTarget,
+    MoveReady,
+    Forbidden,
+    Diplomacy,
+    DefaultDark,
+    RallyHover,
+    BoxSelect,
+    Repair,
+    Garrison,
+    AbilityTarget,
+    AttackMoveTarget,
+    PatrolTarget,
+    Gather,
+    Wait,
+    PlaceInvalid,
+    Disabled,
 }
 
 impl CursorKind {
     const COUNT: usize = 20;
 
     fn index(self) -> usize {
-        self as usize
+        self.sprite_number() - 1
+    }
+
+    fn sprite_number(self) -> usize {
+        match self {
+            CursorKind::Default => 1,
+            CursorKind::HoverFriendly => 2,
+            CursorKind::HoverEnemy => 3,
+            CursorKind::AttackMoveCursor => 15,
+            CursorKind::AttackTarget => 17,
+            CursorKind::MoveReady => 13,
+            CursorKind::Forbidden => 7,
+            CursorKind::Diplomacy => 8,
+            CursorKind::DefaultDark => 9,
+            CursorKind::RallyHover => 10,
+            CursorKind::BoxSelect => 11,
+            CursorKind::Repair => 12,
+            CursorKind::Garrison => 13,
+            CursorKind::AbilityTarget => 14,
+            CursorKind::AttackMoveTarget => 15,
+            CursorKind::PatrolTarget => 16,
+            CursorKind::Gather => 17,
+            CursorKind::Wait => 18,
+            CursorKind::PlaceInvalid => 19,
+            CursorKind::Disabled => 20,
+        }
     }
 
     /// Hotspot in texture pixels. Pointer arrows use the tip (~upper-left);
     /// centered compass/gear/icon cursors use the image center.
     fn hotspot(self) -> (u16, u16) {
-        match self {
-            CursorKind::Default
-            | CursorKind::HoverFriendly
-            | CursorKind::HoverEnemy
-            | CursorKind::AttackMoveCursor
-            | CursorKind::AttackTarget
-            | CursorKind::MoveReady
-            | CursorKind::Forbidden
-            | CursorKind::DefaultDark
-            | CursorKind::RallyHover
-            | CursorKind::Garrison
-            | CursorKind::PlaceInvalid => (4, 4),
-            CursorKind::BoxSelect
-            | CursorKind::AbilityTarget
-            | CursorKind::AttackMoveTarget
-            | CursorKind::PatrolTarget
-            | CursorKind::Diplomacy
-            | CursorKind::Repair
-            | CursorKind::Gather
-            | CursorKind::Wait
-            | CursorKind::Disabled => (16, 16),
+        match self.sprite_number() {
+            1 | 2 | 3 | 6 | 7 | 9 | 10 | 13 | 19 => (4, 4),
+            8 | 11 | 12 | 14 | 15 | 16 | 17 | 18 | 20 => (16, 16),
+            _ => (4, 4),
         }
     }
 }

@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 use bevy::window::Monitor;
 use bevy::window::PrimaryMonitor;
-use rand::Rng;
 
 use super::helpers::*;
 use crate::types::*;
@@ -597,7 +596,34 @@ pub(crate) fn update_selector_visuals(
     }
 }
 
-// Slot card rebuild is handled inline in handle_selector_clicks via rebuild_menu.
+/// Track the last known player name so we only rebuild slot cards when it actually changes.
+#[derive(Resource, Default)]
+pub(crate) struct LastKnownPlayerName(pub String);
+
+/// Rebuild slot cards when `GameSetupConfig.player_name` changes (e.g. text input edits).
+pub(crate) fn sync_slot_cards_to_config(
+    config: Res<GameSetupConfig>,
+    mut last_name: ResMut<LastKnownPlayerName>,
+    mut commands: Commands,
+    slots_container: Query<(Entity, &Children), With<SlotCardsContainer>>,
+    page: Res<MenuPage>,
+    lobby: Option<Res<crate::infrastructure::multiplayer::LobbyState>>,
+    theme: Res<Theme>,
+) {
+    if config.player_name == last_name.0 {
+        return;
+    }
+    last_name.0 = config.player_name.clone();
+    let is_multiplayer = matches!(*page, MenuPage::HostLobby | MenuPage::JoinLobby);
+    super::input::rebuild_slot_cards(
+        &mut commands,
+        &slots_container,
+        &config,
+        is_multiplayer,
+        lobby.as_ref().map(|l| l.players.as_slice()),
+        &theme,
+    );
+}
 
 // ── Randomize Seed ──
 
@@ -644,8 +670,7 @@ pub(crate) fn random_name_system(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        let mut rng = rand::rng();
-        let name = RANDOM_NAMES[rng.random_range(0..RANDOM_NAMES.len())].to_string();
+        let name = crate::types::random_commander_name();
         config.player_name = name.clone();
         profile.name = name.clone();
         db.update_profile_name(&profile.id, &name);

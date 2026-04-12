@@ -80,16 +80,6 @@ fn spawn_title_treatment(
             ..default()
         })
         .with_children(|parent| {
-            // "PROTOTYPE" — small gold subtitle
-            parent.spawn((
-                Text::new("P R O T O T Y P E"),
-                fonts::body_emphasis(fonts, 12.0),
-                TextColor(theme.colors.prestige.with_alpha(0.7)),
-                Node {
-                    margin: UiRect::bottom(Val::Px(4.0)),
-                    ..default()
-                },
-            ));
             // "RTS" — large bold gold
             parent.spawn((
                 Text::new("RTS"),

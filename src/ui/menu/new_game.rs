@@ -959,7 +959,7 @@ pub(crate) fn spawn_slot_card(
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| format!("Connected Player {}", slot_index + 1))
         }
-        SlotOccupant::Ai(_) => format!("AI Commander {}", slot_index + 1),
+        SlotOccupant::Ai(_) => config.ai_names[slot_index].clone(),
         SlotOccupant::Open => "Open Multiplayer Slot".to_string(),
         SlotOccupant::Closed => "Inactive Slot".to_string(),
     };

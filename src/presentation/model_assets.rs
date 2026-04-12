@@ -169,6 +169,7 @@ fn create_grass_instance_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<GrassMaterial>>,
+    render_settings: Res<GrassRenderSettings>,
 ) {
     let mesh = meshes.add(build_low_poly_grass_mesh());
     let material = materials.add(GrassMaterial {
@@ -181,7 +182,10 @@ fn create_grass_instance_assets(
             ..default()
         },
         extension: GrassExtension {
-            settings: crate::presentation::materials::grass::GrassSettings::default(),
+            settings: crate::presentation::materials::grass::GrassSettings::from_render_settings(
+                &render_settings,
+                0.0,
+            ),
         },
     });
     commands.insert_resource(GrassInstanceAssets { mesh, material });
@@ -195,20 +199,9 @@ fn update_grass_time(
 ) {
     if let Some(assets) = grass_assets {
         if let Some(mat) = materials.get_mut(&assets.material) {
-            let s = &mut mat.extension.settings;
-            s.time = time.elapsed_secs();
-            s.base_color = render_settings.base_color;
-            s.tip_color = render_settings.tip_color;
-            s.wind_strength = render_settings.wind_strength;
-            s.wind_speed = render_settings.wind_speed;
-            s.wind_direction = render_settings.wind_direction;
-            s.random_lean = render_settings.random_lean;
-            s.blade_width = render_settings.blade_width;
-            s.blade_height = render_settings.blade_height;
-            s.width_thicken = render_settings.width_thicken;
-            s.normal_up_bias = render_settings.normal_up_bias;
-            s.normal_blend_start = render_settings.normal_blend_start;
-            s.normal_blend_end = render_settings.normal_blend_end;
+            mat.extension
+                .settings
+                .apply_render_settings(&render_settings, time.elapsed_secs());
         }
     }
 }
