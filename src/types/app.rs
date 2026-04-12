@@ -50,6 +50,32 @@ pub enum GameFlowSet {
     Diagnostics,
 }
 
+/// Sub-stages nested under [`GameFlowSet::Simulation`]. Ordering inside a
+/// single tick runs top-to-bottom: Ai decides → Command validates → Movement
+/// integrates → Combat resolves → Economy ticks → Spatial refreshes indices.
+/// Systems may freely remain in `GameFlowSet::Simulation` without picking a
+/// sub-set; opt in when intra-tick ordering matters.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub enum SimSet {
+    Ai,
+    Command,
+    Movement,
+    Combat,
+    Economy,
+    Spatial,
+}
+
+/// Deterministic tick counter for the fixed-step simulation.
+///
+/// Incremented once per [`bevy::prelude::FixedUpdate`] tick. Sim systems that
+/// need a stable time source (replay/rollback, checksums, tick-indexed
+/// buffers) should read this instead of [`bevy::time::Time::elapsed`].
+#[derive(Resource, Default, Debug, Clone, Copy)]
+pub struct SimClock {
+    /// Number of fixed ticks executed since the game entered `InGame`.
+    pub tick: u64,
+}
+
 // ── Faction ──
 
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]

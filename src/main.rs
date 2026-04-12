@@ -14,7 +14,7 @@ use bevy::window::PresentMode;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::OutlinePlugin;
 
-use types::{AppState, GameFlowSet, GameSetupConfig};
+use types::{AppState, GameFlowSet, GameRng, GameSetupConfig, MapSeed, SimClock, SimSet};
 
 const GAMEPLAY_FIXED_HZ: f64 = 30.0;
 
@@ -167,6 +167,39 @@ fn main() {
             )
                 .chain(),
         )
+        .configure_sets(
+            Update,
+            (
+                SimSet::Ai,
+                SimSet::Command,
+                SimSet::Movement,
+                SimSet::Combat,
+                SimSet::Economy,
+                SimSet::Spatial,
+            )
+                .chain()
+                .in_set(GameFlowSet::Simulation),
+        )
+        .configure_sets(
+            FixedUpdate,
+            (
+                SimSet::Ai,
+                SimSet::Command,
+                SimSet::Movement,
+                SimSet::Combat,
+                SimSet::Economy,
+                SimSet::Spatial,
+            )
+                .chain()
+                .in_set(GameFlowSet::Simulation),
+        )
+        .insert_resource(SimClock::default())
+        .insert_resource(GameRng::default())
+        .add_systems(
+            FixedFirst,
+            advance_sim_clock.run_if(in_state(AppState::InGame)),
+        )
+        .add_systems(OnEnter(AppState::InGame), reseed_game_rng)
         .insert_resource(GameSetupConfig::default())
         .insert_resource(ui::theme::Theme::from_mode(graphics.theme_mode))
         .insert_resource(graphics)
@@ -190,4 +223,14 @@ fn cfg_outline_plugin() -> OutlinePlugin {
 #[cfg(target_arch = "wasm32")]
 fn cfg_outline_plugin() -> impl bevy::app::Plugin {
     |_app: &mut App| {}
+}
+
+fn advance_sim_clock(mut clock: ResMut<SimClock>) {
+    clock.tick = clock.tick.wrapping_add(1);
+}
+
+fn reseed_game_rng(map_seed: Option<Res<MapSeed>>, mut rng: ResMut<GameRng>) {
+    if let Some(seed) = map_seed {
+        rng.reseed(seed.0);
+    }
 }

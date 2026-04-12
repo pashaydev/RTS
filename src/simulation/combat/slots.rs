@@ -13,7 +13,7 @@ impl Plugin for CombatSlotsPlugin {
             FixedUpdate,
             (cleanup_stale_slot_claims, assign_melee_slot_claims)
                 .chain()
-                .in_set(GameFlowSet::Simulation)
+                .in_set(SimSet::Combat)
                 .before(CombatCoreSet::Approach)
                 .run_if(in_state(AppState::InGame)),
         );

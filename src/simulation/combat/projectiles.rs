@@ -10,10 +10,12 @@ pub struct CombatProjectilesPlugin;
 
 impl Plugin for CombatProjectilesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<ProjectileImpactEvent>().add_systems(
+        app.add_message::<ProjectileImpactEvent>()
+            .add_message::<DamageApplied>()
+            .add_systems(
             FixedUpdate,
             tick_projectiles
-                .in_set(GameFlowSet::Simulation)
+                .in_set(SimSet::Combat)
                 .run_if(in_state(AppState::InGame)),
         );
     }
@@ -26,6 +28,7 @@ fn tick_projectiles(
     net_role: Res<NetRole>,
     spatial_grid: Res<SpatialHashGrid>,
     mut impacts: MessageWriter<ProjectileImpactEvent>,
+    mut damage_events: MessageWriter<DamageApplied>,
     mut projectiles: Query<(Entity, &mut Transform, &mut Projectile, Option<&AoeSplash>)>,
     mut targets: Query<
         (
@@ -81,6 +84,13 @@ fn tick_projectiles(
                     now,
                     mem,
                 );
+                damage_events.write(DamageApplied {
+                    target: projectile.target,
+                    source: Some(projectile.source),
+                    amount: applied_damage,
+                    damage_type: projectile.damage_type,
+                    now_secs: now,
+                });
             }
 
             if let Some(aoe) = opt_aoe {
@@ -98,7 +108,7 @@ fn tick_projectiles(
                         } else {
                             1.0
                         };
-                        apply_damage(
+                        let splash_dealt = apply_damage(
                             &mut commands,
                             *splash_entity,
                             Some(projectile.source),
@@ -110,6 +120,13 @@ fn tick_projectiles(
                             now,
                             mem,
                         );
+                        damage_events.write(DamageApplied {
+                            target: *splash_entity,
+                            source: Some(projectile.source),
+                            amount: splash_dealt,
+                            damage_type: projectile.damage_type,
+                            now_secs: now,
+                        });
                     }
                 }
             }

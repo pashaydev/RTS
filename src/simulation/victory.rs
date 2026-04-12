@@ -14,19 +14,26 @@ pub struct VictoryPlugin;
 
 impl Plugin for VictoryPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(VictoryState::default()).add_systems(
-            Update,
-            (
-                init_faction_status_system,
-                update_faction_status_system,
-                check_winner_system,
-                record_match_system,
-                victory_ui_spawn_system,
-                victory_ui_button_system,
+        app.insert_resource(VictoryState::default())
+            .add_systems(
+                FixedUpdate,
+                (
+                    init_faction_status_system,
+                    update_faction_status_system,
+                    check_winner_system,
+                    record_match_system,
+                )
+                    .chain()
+                    .in_set(SimSet::Economy)
+                    .run_if(in_state(AppState::InGame)),
             )
-                .chain()
-                .run_if(in_state(AppState::InGame)),
-        );
+            .add_systems(
+                Update,
+                (victory_ui_spawn_system, victory_ui_button_system)
+                    .chain()
+                    .in_set(GameFlowSet::Ui)
+                    .run_if(in_state(AppState::InGame)),
+            );
     }
 }
 

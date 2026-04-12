@@ -140,7 +140,11 @@ The codebase is organized into six domain-driven PluginGroups, plus shared types
 ```
 src/
 ├── types/            Shared game types (app state, economy, combat, units, buildings, AI, UI, rendering)
+│                       core.rs is the leaf primitives module; rng.rs hosts the
+│                       seeded `GameRng` used by the deterministic sim path.
 ├── blueprints/       Entity definitions, spawn logic, visual cache
+│                       asset.rs is the scaffold for the RON-backed blueprint
+│                       loader that will replace the hard-coded registry.
 ├── world/            WorldPlugins — terrain, environment, spatial indexing
 │   ├── ground/         Procedural terrain generation, biomes, borders, water
 │   ├── fog.rs          Fog of war
@@ -152,7 +156,11 @@ src/
 │   ├── units.rs        Unit spawning, movement, stances
 │   ├── buildings/      Construction, training, upgrades, placement, walls
 │   ├── combat/         Damage, intents, budget, engagement slots
+│                         Emits `DamageApplied` messages at every damage
+│                         chokepoint for observability and replication.
 │   ├── resources/      Gathering, processing, worker assignment, trees
+│                         worker_fsm.rs owns the canonical assign / unassign
+│                         entry points for the worker state machine.
 │   ├── selection/      Click/box selection, unit commands
 │   ├── ai/             AI strategy, economy, military, tactics
 │   ├── items/          Loot, equipment, VFX
@@ -176,6 +184,8 @@ src/
 │   ├── database.rs     SQLite profiles, match history, ELO, settings
 │   ├── save_load.rs    Game save/restore
 │   ├── multiplayer/    WebRTC transport, host/client systems, replication, debug tap
+│                         replication.rs hosts the `Replicated` trait + registry
+│                         scaffold targeted by the per-component sync rewrite.
 │   ├── net_bridge.rs   Network ID assignment and ECS/network mapping
 │   ├── logging.rs      Session logging
 │   ├── audio.rs        Sound effects and music

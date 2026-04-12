@@ -74,6 +74,10 @@ All multiplayer modules live under `src/infrastructure/multiplayer/`:
 - `client::receive`: drains inbox and stages server messages into pending resources.
 - `client::apply`: mutates ECS from staged baseline/delta data.
 - `client::interpolation`: visual smoothing only.
+- `replication`: scaffold for the upcoming per-component replication registry
+  (`Replicated` trait, `ReplicationRegistry` resource, `App::replicate::<T>()`
+  extension). Not yet wired into the live broadcast loop — see *Known Remaining
+  Work* below.
 
 The multiplayer menu UI lives under `src/ui/menu/multiplayer/`.
 
@@ -683,6 +687,24 @@ ELO is updated after each recorded match. For single-player, opponent rating is 
 
 - **TURN relay**: Configure a TURN server for symmetric NAT traversal (currently STUN-only)
 - **Message batching**: Wire `PendingServerFrame` to batch all host broadcast systems into a single `ServerFrame` per tick (`ServerFrame` type and `PendingServerFrame` resource exist but aren't used yet)
+- **Replication registry cutover**: Replace the hand-rolled `Option<&T>` tuple
+  query in `host_broadcast_state_sync` with the `Replicated` trait + registry
+  scaffold in `replication.rs`. Steps: implement `Replicated` for `Health`,
+  `UnitState`, `MoveTarget`, `AttackTarget`, `Carrying`, `UnitStance`; replace
+  `EntitySnapshot`'s per-field `Option` soup with a `Vec<ComponentDelta>`;
+  rewrite the broadcast loop to iterate the registry; move client applier
+  logic into matching per-component handlers. Adding a new replicated
+  component should then cost one `app.replicate::<T>()` call instead of four
+  edits.
+- **Deterministic sim foundation**: `SimClock` (tick counter, advanced in
+  `FixedFirst`) and `GameRng` (seeded `StdRng`, auto-reseeded from `MapSeed` on
+  `OnEnter(InGame)`) are in place. Follow-up: replace `rand::random` /
+  `thread_rng` in `src/simulation/` and `src/world/` with `GameRng`, swap
+  replicated `HashMap`s (`PreviousSnapshots`, spatial cell iteration,
+  `TeamConfig`) for `BTreeMap`/`IndexMap`, and add a feature-gated
+  `sim_checksum_system` that hashes `(tick, sorted entity states)` each
+  N ticks and compares host ↔ client to surface desyncs. This is the
+  prerequisite for replays and rollback/prediction.
 - **Client prediction**: Prediction buffer + server seq stamping + reconciliation loop (currently fire-and-forget, 1 RTT visual delay)
 - **Reconnect UI**: Client-side auto-retry flow (detect disconnect → reconnect with `Reconnect { session_token }`) — host-side grace period + tokens are done
 - **Full baseline coverage**: Extend `WorldBaseline` or add a true full-world bootstrap message for entity/unit/building state on late join and reconnect
@@ -701,6 +723,7 @@ ELO is updated after each recorded match. For single-player, opponent rating is 
 | `src/infrastructure/multiplayer/server/input.rs` | Server-side input/command handling re-exports |
 | `src/infrastructure/multiplayer/server/replication.rs` | Server-side replication/broadcast re-exports |
 | `src/infrastructure/multiplayer/host_systems.rs` | Host command execution, snapshot building, delta sync, neutral baseline/delta emission, reconnect grace |
+| `src/infrastructure/multiplayer/replication.rs` | `Replicated` trait, `ReplicationRegistry` resource, `App::replicate::<T>()` extension — scaffold for the per-component replication rewrite |
 | `src/infrastructure/multiplayer/client/receive.rs` | Client receive/staging re-exports |
 | `src/infrastructure/multiplayer/client/apply.rs` | Client apply-system re-exports |
 | `src/infrastructure/multiplayer/client/interpolation.rs` | Client interpolation re-exports |

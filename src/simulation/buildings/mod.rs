@@ -38,7 +38,7 @@ impl Plugin for BuildingsPlugin {
             .add_systems(
                 FixedUpdate,
                 environment::sync_obstacle_grid
-                    .in_set(GameFlowSet::Simulation)
+                    .in_set(SimSet::Spatial)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
@@ -76,7 +76,7 @@ impl Plugin for BuildingsPlugin {
                     training::update_completed_buildings_tracker,
                 )
                     .chain()
-                    .in_set(GameFlowSet::Simulation)
+                    .in_set(SimSet::Command)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
@@ -95,7 +95,7 @@ impl Plugin for BuildingsPlugin {
                     environment::sync_environment_to_terrain_changes,
                     environment::clear_vegetation_around_buildings,
                 )
-                    .in_set(GameFlowSet::Simulation)
+                    .in_set(SimSet::Economy)
                     .run_if(in_state(AppState::InGame)),
             );
     }

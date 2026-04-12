@@ -14,8 +14,10 @@ pub struct AgesPlugin;
 impl Plugin for AgesPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(FactionAges::default()).add_systems(
-            Update,
-            age_research_system.run_if(in_state(AppState::InGame)),
+            FixedUpdate,
+            age_research_system
+                .in_set(SimSet::Economy)
+                .run_if(in_state(AppState::InGame)),
         );
     }
 }

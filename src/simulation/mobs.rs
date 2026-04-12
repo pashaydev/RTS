@@ -26,7 +26,7 @@ impl Plugin for MobsPlugin {
             FixedUpdate,
             (mob_patrol, mob_aggro, mob_leash)
                 .chain()
-                .in_set(GameFlowSet::Simulation)
+                .in_set(SimSet::Ai)
                 .before(CombatCoreSet::Approach)
                 .run_if(in_state(AppState::InGame)),
         );

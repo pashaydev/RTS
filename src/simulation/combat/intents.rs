@@ -37,7 +37,7 @@ impl Plugin for CombatIntentsPlugin {
             .add_systems(
                 FixedUpdate,
                 cleanup_expired_combat_state
-                    .in_set(GameFlowSet::Simulation)
+                    .in_set(SimSet::Command)
                     .run_if(in_state(AppState::InGame)),
             );
     }

@@ -2,6 +2,7 @@ mod processing;
 mod spawning;
 pub(crate) mod terrain;
 mod trees;
+mod worker_fsm;
 mod workers;
 
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
@@ -60,7 +61,7 @@ impl Plugin for ResourcesPlugin {
                     spawning::deplete_resource_nodes,
                 )
                     .chain()
-                    .in_set(GameFlowSet::Simulation)
+                    .in_set(SimSet::Economy)
                     .in_set(OverlayLifecycleSet::Manage)
                     .run_if(in_state(AppState::InGame)),
             )
@@ -68,7 +69,7 @@ impl Plugin for ResourcesPlugin {
                 FixedUpdate,
                 (drain_carried_from_workers, update_carry_visuals)
                     .chain()
-                    .in_set(GameFlowSet::Simulation)
+                    .in_set(SimSet::Economy)
                     .after(spawning::deplete_resource_nodes)
                     .run_if(in_state(AppState::InGame)),
             )
@@ -83,7 +84,7 @@ impl Plugin for ResourcesPlugin {
                     trees::grow_saplings_system,
                     trees::grow_trees_system,
                 )
-                    .in_set(GameFlowSet::Simulation)
+                    .in_set(SimSet::Economy)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
@@ -109,7 +110,7 @@ impl Plugin for ResourcesPlugin {
                     spawning::grow_resource_system,
                     workers::update_resource_popups,
                 )
-                    .in_set(GameFlowSet::Simulation)
+                    .in_set(SimSet::Economy)
                     .in_set(OverlayLifecycleSet::Manage)
                     .run_if(in_state(AppState::InGame)),
             )

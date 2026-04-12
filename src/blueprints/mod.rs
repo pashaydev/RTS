@@ -1,3 +1,4 @@
+pub mod asset;
 mod plugin;
 mod registry;
 mod spawn;

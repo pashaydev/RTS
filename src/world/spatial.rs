@@ -120,6 +120,48 @@ impl SpatialHashGrid {
         results
     }
 
+    /// Radius query with a caller-supplied predicate evaluated per candidate.
+    ///
+    /// Intended as the back-end for faction-filtered targeting, perception,
+    /// and aura queries — callers look up the faction (or any other tag)
+    /// for each candidate via a sidecar [`bevy::ecs::system::Query`] and
+    /// keep or skip it. Using this helper instead of iterating a raw
+    /// `Query<&Transform, With<…>>` avoids an O(N) scan per targeting
+    /// system and is the canonical entry point for Pass 8-style spatial
+    /// migrations.
+    pub fn collect_radius_filter<F>(
+        &self,
+        pos: Vec3,
+        radius: f32,
+        out: &mut Vec<(Entity, Vec3)>,
+        mut keep: F,
+    ) where
+        F: FnMut(Entity) -> bool,
+    {
+        out.clear();
+        let radius_sq = radius * radius;
+        let min_x = ((pos.x - radius) * self.inv_cell_size).floor() as i32;
+        let max_x = ((pos.x + radius) * self.inv_cell_size).floor() as i32;
+        let min_z = ((pos.z - radius) * self.inv_cell_size).floor() as i32;
+        let max_z = ((pos.z + radius) * self.inv_cell_size).floor() as i32;
+        for cx in min_x..=max_x {
+            for cz in min_z..=max_z {
+                if let Some(entries) = self.cells.get(&IVec2::new(cx, cz)) {
+                    for &(entity, epos) in entries {
+                        let dx = epos.x - pos.x;
+                        let dz = epos.z - pos.z;
+                        if dx * dx + dz * dz > radius_sq {
+                            continue;
+                        }
+                        if keep(entity) {
+                            out.push((entity, epos));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn collect_radius_limited(
         &self,
         pos: Vec3,

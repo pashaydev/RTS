@@ -35,19 +35,19 @@ impl Plugin for AiPlugin {
             .add_systems(
                 FixedUpdate,
                 strategy::ai_strategy_system
-                    .in_set(GameFlowSet::Simulation)
+                    .in_set(SimSet::Ai)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 FixedUpdate,
                 economy::ai_economy_system
-                    .in_set(GameFlowSet::Simulation)
+                    .in_set(SimSet::Ai)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 FixedUpdate,
                 (military::ai_military_system, tactical::ai_tactical_system)
-                    .in_set(GameFlowSet::Simulation)
+                    .in_set(SimSet::Ai)
                     .run_if(in_state(AppState::InGame)),
             )
             .add_systems(

@@ -668,6 +668,22 @@ pub struct MeleeContact {
     pub sticky_until: f64,
 }
 
+/// Emitted whenever damage is actually applied to a target.
+///
+/// Single source-of-truth observable for post-damage systems (replication,
+/// combat stats, sound/UI feedback, AI threat tracking). Producers that
+/// mutate `Health` directly should instead call through
+/// [`crate::simulation::combat::apply_damage`], which is the canonical
+/// choke point, and emit this message alongside it.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct DamageApplied {
+    pub target: Entity,
+    pub source: Option<Entity>,
+    pub amount: f32,
+    pub damage_type: DamageType,
+    pub now_secs: f64,
+}
+
 #[derive(Message, Clone, Copy, Debug)]
 pub struct ProjectileImpactEvent {
     pub position: Vec3,

@@ -580,44 +580,7 @@ pub(super) fn reconcile_processor_assignments(
     }
 }
 
-pub fn assign_worker_to_processor(
-    commands: &mut Commands,
-    worker: Entity,
-    building: Entity,
-    building_pos: Vec3,
-    source: TaskSource,
-) {
-    crate::simulation::buildings::add_assigned_worker(commands, building, worker);
-    commands
-        .entity(worker)
-        .insert(UnitState::AssignedGathering {
-            building,
-            phase: AssignedPhase::SeekingNode,
-        })
-        .insert(source)
-        .insert(BuildingAssignment(building))
-        .insert(MoveTarget(building_pos))
-        .remove::<Selected>()
-        .remove::<Hovered>()
-        .remove::<AttackTarget>();
-}
-
-pub fn unassign_worker_from_processor(
-    commands: &mut Commands,
-    worker: Entity,
-    building: Option<Entity>,
-) {
-    if let Some(building) = building {
-        crate::simulation::buildings::remove_assigned_worker(commands, building, worker);
-    }
-    commands
-        .entity(worker)
-        .insert(UnitState::Idle)
-        .insert(TaskSource::Auto)
-        .remove::<BuildingAssignment>()
-        .remove::<MoveTarget>()
-        .remove::<AttackTarget>();
-}
+pub use super::worker_fsm::{assign_worker_to_processor, unassign_worker_from_processor};
 
 /// Safety net: eject excess workers when a building has more assigned than max_workers.
 /// This handles deferred-command races where multiple systems assign workers in the same frame.

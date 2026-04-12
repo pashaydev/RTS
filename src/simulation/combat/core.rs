@@ -37,7 +37,7 @@ impl Plugin for CombatPlugin {
                 CombatCoreSet::Cleanup,
             )
                 .chain()
-                .in_set(GameFlowSet::Simulation),
+                .in_set(SimSet::Combat),
         );
         app.add_systems(
             FixedUpdate,
@@ -809,6 +809,7 @@ fn resolve_attack_windups(
     projectile_assets: Option<Res<crate::presentation::model_assets::ProjectileModelAssets>>,
     net_role: Res<NetRole>,
     active_player: Res<ActivePlayer>,
+    mut damage_events: MessageWriter<DamageApplied>,
     mut attackers: Query<(
         Entity,
         &Transform,
@@ -962,18 +963,27 @@ fn resolve_attack_windups(
         } else {
             // Melee: apply damage directly with multiplier + flash VFX
             let charge_mult = opt_charge.map(|c| c.damage_mult).unwrap_or(1.0);
+            let melee_type = opt_dmg_type.copied().unwrap_or(DamageType::Melee);
+            let now = time.elapsed_secs_f64();
             let dealt = apply_damage(
                 &mut commands,
                 target,
                 Some(entity),
                 damage.0 * charge_mult,
-                opt_dmg_type.copied().unwrap_or(DamageType::Melee),
+                melee_type,
                 &mut health,
                 opt_armor.copied(),
                 opt_reserved.map(|r| r.into_inner()),
-                time.elapsed_secs_f64(),
+                now,
                 tuning.damage_memory_secs,
             );
+            damage_events.write(DamageApplied {
+                target,
+                source: Some(entity),
+                amount: dealt,
+                damage_type: melee_type,
+                now_secs: now,
+            });
             // Consume charge bonus after use
             if opt_charge.is_some() {
                 commands.entity(entity).remove::<ChargeBonus>();

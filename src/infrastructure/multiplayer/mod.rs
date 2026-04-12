@@ -8,6 +8,7 @@ pub mod client_systems;
 pub mod debug_tap;
 pub mod host_systems;
 pub mod matchbox_transport;
+pub mod replication;
 pub mod server;
 pub mod transport;
 

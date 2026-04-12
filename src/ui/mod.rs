@@ -17,18 +17,37 @@ pub use widgets::{
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
 
-/// UI plugin group that composes all UI sub-plugins.
+/// UI plugin group composing all UI sub-plugins.
 ///
-/// Each widget is a self-contained plugin that registers its own
-/// resources, spawn system, and update systems.
+/// Three-way split by lifecycle:
+///
+/// - **Shared** ([`core::UiCorePlugin`]): framework, theme, interactions,
+///   animations, tooltips, mode — runs in every [`crate::types::AppState`]
+///   because both the main menu and the in-game HUD depend on it.
+/// - **Menu** ([`menu::MenuPlugin`]): title, options, new-game, pause,
+///   multiplayer lobby — gated on [`crate::types::AppState::MainMenu`].
+///   Gating is applied per-system inside `menu::MenuPlugin` so the plugin
+///   set stays composable.
+/// - **Runtime** ([`widgets::WidgetsPlugin`], [`attention::AttentionPlugin`]):
+///   resources header, actions, selection, production queue, army overview,
+///   tech tree, event log, hints, notifications — gated on
+///   [`crate::types::AppState::InGame`], again per-system inside the
+///   widget plugins.
+///
+/// Each sub-plugin already owns its own state gating; this comment documents
+/// the invariant so future work can add plugin-level `configure_sets` with
+/// state run_if once Bevy exposes that cleanly for `PluginGroup`s.
 pub struct UiPlugin;
 
 impl PluginGroup for UiPlugin {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
+            // Shared (runs in every state).
             .add(core::UiCorePlugin)
+            // In-game runtime widgets (self-gated on InGame).
             .add(widgets::WidgetsPlugin)
             .add(attention::AttentionPlugin)
+            // Main menu (self-gated on MainMenu).
             .add(menu::MenuPlugin)
     }
 }
