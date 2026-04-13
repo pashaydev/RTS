@@ -630,26 +630,34 @@ pub(crate) fn sync_slot_cards_to_config(
 pub(crate) fn randomize_seed_system(
     interactions: Query<&Interaction, (Changed<Interaction>, With<RandomizeSeedButton>)>,
     mut config: ResMut<GameSetupConfig>,
-    mut seed_displays: Query<&mut Text, With<SeedDisplay>>,
+    mut seed_inputs: Query<&mut TextInputField, With<SeedInput>>,
 ) {
+    let mut pressed = false;
     for interaction in &interactions {
-        if *interaction != Interaction::Pressed {
-            continue;
+        if *interaction == Interaction::Pressed {
+            pressed = true;
         }
-        if config.map_seed == 0 {
-            config.map_seed = rand::random::<u64>();
-        } else {
-            config.map_seed = 0;
-        }
+    }
+    if !pressed {
+        return;
+    }
+
+    if config.map_seed == 0 {
+        config.map_seed = rand::random::<u64>();
+    } else {
+        config.map_seed = 0;
     }
 
     let seed_text = if config.map_seed == 0 {
-        "Random".to_string()
+        String::new()
     } else {
         format!("{}", config.map_seed)
     };
-    for mut text in &mut seed_displays {
-        **text = seed_text.clone();
+
+    for mut field in &mut seed_inputs {
+        field.value = seed_text.clone();
+        field.cursor_pos = seed_text.len();
+        field.selection_anchor = None;
     }
 }
 

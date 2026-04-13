@@ -797,7 +797,7 @@ fn spawn_seed_block(
     theme: &Theme,
 ) {
     let seed_text = if config.map_seed == 0 {
-        "RANDOM".to_string()
+        String::new()
     } else {
         format!("{}", config.map_seed)
     };
@@ -823,6 +823,14 @@ fn spawn_seed_block(
                 })
                 .with_children(|row| {
                     row.spawn((
+                        SeedInput,
+                        TextInputField {
+                            value: seed_text.clone(),
+                            cursor_pos: seed_text.len(),
+                            selection_anchor: None,
+                            max_len: 20,
+                        },
+                        Button,
                         Node {
                             flex_grow: 1.0,
                             height: Val::Px(40.0),
@@ -835,16 +843,10 @@ fn spawn_seed_block(
                         BackgroundColor(theme.colors.bg_menu.with_alpha(0.78)),
                         BorderColor::all(theme.colors.separator.with_alpha(0.8)),
                     ))
-                    .with_children(|field| {
-                        field.spawn((
-                            SeedDisplay,
-                            Text::new(seed_text),
-                            TextFont {
-                                font_size: 13.0,
-                                ..default()
-                            },
-                            TextColor(theme.colors.text_primary),
-                        ));
+                    .with_children(|input| {
+                        crate::ui::core::text_input::spawn_text_input_children(
+                            input, &seed_text, theme,
+                        );
                     });
 
                     row.spawn((
@@ -877,7 +879,7 @@ fn spawn_seed_block(
                 });
 
             parent.spawn((
-                Text::new("UNIQUE IDENTIFIER FOR PROCEDURAL THEATER GENERATION"),
+                Text::new("TYPE A SEED OR LEAVE EMPTY FOR RANDOM — PRESS R TO ROLL"),
                 TextFont {
                     font_size: 6.5,
                     ..default()

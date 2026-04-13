@@ -77,6 +77,24 @@ fn fbm3(p: vec2<f32>) -> f32 {
     return val;
 }
 
+fn triplanar_weights(normal: vec3<f32>) -> vec3<f32> {
+    let blend = pow(abs(normal), vec3<f32>(6.0));
+    return blend / max(dot(blend, vec3<f32>(1.0, 1.0, 1.0)), 0.0001);
+}
+
+fn triplanar_sample(
+    tex: texture_2d<f32>,
+    tex_sampler: sampler,
+    world_pos: vec3<f32>,
+    blend_weights: vec3<f32>,
+    scale: f32,
+) -> vec3<f32> {
+    let sample_x = textureSample(tex, tex_sampler, world_pos.zy * scale).rgb;
+    let sample_y = textureSample(tex, tex_sampler, world_pos.xz * scale).rgb;
+    let sample_z = textureSample(tex, tex_sampler, world_pos.xy * scale).rgb;
+    return sample_x * blend_weights.x + sample_y * blend_weights.y + sample_z * blend_weights.z;
+}
+
 // ── Fragment shader ──
 
 @fragment
@@ -88,13 +106,13 @@ fn fragment(
     let world_pos = in.world_position.xyz;
     let vertex_color = in.color;
     let normal = normalize(in.world_normal);
+    let tri_weights = triplanar_weights(normal);
 
-    // ── Tiled texture sampling in world space ──
-    let tile_uv = world_pos.xz * settings.tile_scale;
-    let tex_grass = textureSample(grass_texture, grass_sampler, tile_uv).rgb;
-    let tex_rock  = textureSample(rock_texture,  rock_sampler,  tile_uv).rgb;
-    let tex_sand  = textureSample(sand_texture,  sand_sampler,  tile_uv).rgb;
-    let tex_snow  = textureSample(snow_texture,  snow_sampler,  tile_uv).rgb;
+    // ── Terrain texture sampling ──
+    let tex_grass = triplanar_sample(grass_texture, grass_sampler, world_pos, tri_weights, settings.tile_scale);
+    let tex_rock  = triplanar_sample(rock_texture, rock_sampler, world_pos, tri_weights, settings.tile_scale);
+    let tex_sand  = triplanar_sample(sand_texture, sand_sampler, world_pos, tri_weights, settings.tile_scale);
+    let tex_snow  = triplanar_sample(snow_texture, snow_sampler, world_pos, tri_weights, settings.tile_scale);
     // WebGPU requires implicit-derivative texture sampling to happen in uniform control flow.
     // Pre-sample the floor textures before any data-dependent branches.
     let floor_uv = world_pos.xz * 0.3;

@@ -1,3 +1,4 @@
+use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::tasks::ComputeTaskPool;
@@ -21,6 +22,11 @@ pub struct TerrainTextures {
     pub floor: Handle<Image>,
 }
 
+#[derive(Resource, Default)]
+pub struct TerrainTextureSamplerState {
+    configured: bool,
+}
+
 pub fn load_terrain_textures(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.insert_resource(TerrainTextures {
         grass: asset_server.load("textures/terrain/grass.png"),
@@ -29,6 +35,44 @@ pub fn load_terrain_textures(mut commands: Commands, asset_server: Res<AssetServ
         snow: asset_server.load("textures/terrain/snow.png"),
         floor: asset_server.load("textures/floor_stone.png"),
     });
+    commands.insert_resource(TerrainTextureSamplerState::default());
+}
+
+pub fn configure_terrain_texture_samplers(
+    terrain_textures: Res<TerrainTextures>,
+    mut sampler_state: ResMut<TerrainTextureSamplerState>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if sampler_state.configured {
+        return;
+    }
+
+    let handles = [
+        &terrain_textures.grass,
+        &terrain_textures.rock,
+        &terrain_textures.sand,
+        &terrain_textures.snow,
+        &terrain_textures.floor,
+    ];
+
+    if handles.iter().any(|handle| images.get(*handle).is_none()) {
+        return;
+    }
+
+    for handle in handles {
+        let Some(image) = images.get_mut(handle) else {
+            return;
+        };
+
+        let mut sampler = ImageSamplerDescriptor::linear();
+        sampler.address_mode_u = ImageAddressMode::Repeat;
+        sampler.address_mode_v = ImageAddressMode::Repeat;
+        sampler.address_mode_w = ImageAddressMode::Repeat;
+        sampler.set_anisotropic_filter(8);
+        image.sampler = ImageSampler::Descriptor(sampler);
+    }
+
+    sampler_state.configured = true;
 }
 
 pub fn spawn_ground(

@@ -123,6 +123,7 @@ pub fn text_input_system(
         &Interaction,
         Option<&TextInputFocused>,
         Option<&crate::ui::menu::SessionCodeInput>,
+        Option<&crate::ui::menu::helpers::SeedInput>,
     )>,
     mut commands: Commands,
     mut config: ResMut<GameSetupConfig>,
@@ -144,7 +145,7 @@ pub fn text_input_system(
     }
 
     if let Some(clicked) = clicked_entity {
-        for (entity, _, _, focused, _) in &inputs {
+        for (entity, _, _, focused, _, _) in &inputs {
             if entity == clicked {
                 if focused.is_none() {
                     commands.entity(entity).insert(TextInputFocused);
@@ -166,13 +167,19 @@ pub fn text_input_system(
     #[cfg(target_arch = "wasm32")]
     {
         if let Some(clip) = clipboard_read() {
-            for (_entity, mut field, _, focused, is_session_code) in &mut inputs {
+            for (_entity, mut field, _, focused, is_session_code, is_seed_input) in &mut inputs {
                 if focused.is_none() {
                     continue;
                 }
                 field.delete_selection();
-                insert_text_at_cursor(&mut field, &clip);
-                if is_session_code.is_none() {
+                if is_seed_input.is_some() {
+                    let digits: String = clip.chars().filter(|c| c.is_ascii_digit()).collect();
+                    insert_text_at_cursor(&mut field, &digits);
+                    config.map_seed = field.value.parse::<u64>().unwrap_or(0);
+                } else {
+                    insert_text_at_cursor(&mut field, &clip);
+                }
+                if is_session_code.is_none() && is_seed_input.is_none() {
                     config.player_name = field.value.clone();
                     profile.name = field.value.clone();
                     db.update_profile_name(&profile.id, &profile.name);
@@ -207,7 +214,7 @@ pub fn text_input_system(
         keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight)
     };
 
-    for (_entity, mut field, _, focused, is_session_code) in &mut inputs {
+    for (_entity, mut field, _, focused, is_session_code, is_seed_input) in &mut inputs {
         if focused.is_none() {
             continue;
         }
@@ -355,6 +362,9 @@ pub fn text_input_system(
                             if ch.is_control() {
                                 continue;
                             }
+                            if is_seed_input.is_some() && !ch.is_ascii_digit() {
+                                continue;
+                            }
                             if field.value.len() >= field.max_len {
                                 break;
                             }
@@ -362,9 +372,9 @@ pub fn text_input_system(
                             let pos = field.cursor_pos;
                             field.value.insert(pos, ch);
                             field.cursor_pos += 1;
+                            changed = true;
                         }
-                        changed = true;
-                    } else if event.key_code == KeyCode::Space {
+                    } else if is_seed_input.is_none() && event.key_code == KeyCode::Space {
                         if field.value.len() < field.max_len {
                             field.delete_selection();
                             let pos = field.cursor_pos;
@@ -378,7 +388,9 @@ pub fn text_input_system(
         }
 
         if changed {
-            if is_session_code.is_none() {
+            if is_seed_input.is_some() {
+                config.map_seed = field.value.parse::<u64>().unwrap_or(0);
+            } else if is_session_code.is_none() {
                 config.player_name = field.value.clone();
                 profile.name = field.value.clone();
                 db.update_profile_name(&profile.id, &profile.name);

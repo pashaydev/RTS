@@ -35,7 +35,7 @@ pub use terrain_updates::{
 #[allow(unused_imports)]
 pub use water::WaterPlane;
 
-use generation::load_terrain_textures;
+use generation::{configure_terrain_texture_samplers, load_terrain_textures};
 use terrain_updates::{enqueue_building_terrain_updates, process_terrain_shape_update_queue};
 use water::{patch_water_fog_textures, update_water_time};
 
@@ -55,6 +55,7 @@ impl Plugin for GroundPlugin {
             OnEnter(AppState::InGame),
             (resolve_map_seed, spawn_ground, spawn_mountain_border).chain(),
         )
+        .add_systems(Update, configure_terrain_texture_samplers)
         .add_systems(
             Update,
             (update_water_time, patch_water_fog_textures).run_if(in_state(AppState::InGame)),

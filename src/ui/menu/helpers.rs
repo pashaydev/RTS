@@ -51,7 +51,7 @@ pub enum SelectorField {
 pub struct SelectedOption;
 
 #[derive(Component)]
-pub struct SeedDisplay;
+pub struct SeedInput;
 
 /// Small hint text shown below a button to explain disabled state.
 #[derive(Component)]
