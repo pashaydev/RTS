@@ -631,7 +631,10 @@ fn camera_zoom_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     scroll_consumed: Res<crate::ui::core::framework::ScrollConsumedByWidget>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    widget_q: Query<(&ComputedNode, &UiGlobalTransform), With<crate::ui::core::framework::Widget>>,
+    widget_q: Query<
+        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility),
+        With<crate::ui::core::framework::Widget>,
+    >,
     time: Res<Time>,
     mut query: Query<&mut RtsCamera>,
     debug_mode: Res<FrustumDebugMode>,
@@ -649,9 +652,9 @@ fn camera_zoom_input(
         .ok()
         .and_then(|window| window.physical_cursor_position())
         .is_some_and(|cursor_phys| {
-            widget_q
-                .iter()
-                .any(|(computed, ui_tf)| computed.contains_point(*ui_tf, cursor_phys))
+            widget_q.iter().any(|(computed, ui_tf, vis)| {
+                vis.get() && computed.contains_point(*ui_tf, cursor_phys)
+            })
         });
 
     for ev in scroll_events.read() {

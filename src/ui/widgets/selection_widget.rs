@@ -1336,7 +1336,6 @@ fn spawn_inventory_warning(
                 padding: UiRect::axes(Val::Px(10.0), Val::Px(7.0)),
                 margin: UiRect::bottom(Val::Px(6.0)),
                 border: BORDER_1,
-                // border_radius: RADIUS_XL,
                 ..default()
             },
             BackgroundColor(theme.colors.warning.with_alpha(0.12)),
@@ -1364,7 +1363,7 @@ fn label_visibility_presentation(
         (
             theme.colors.accent,
             "On (L)",
-            crate::ui::theme::TEXT_PRIMARY,
+            theme.colors.bg_menu,
             "Ambient labels are visible for units on screen.",
         )
     } else {

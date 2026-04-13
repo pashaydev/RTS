@@ -677,7 +677,12 @@ pub fn handle_widget_scroll(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut scroll_consumed: ResMut<ScrollConsumedByWidget>,
     mut scroll_q: Query<
-        (&mut ScrollPosition, &ComputedNode, &UiGlobalTransform),
+        (
+            &mut ScrollPosition,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &InheritedVisibility,
+        ),
         With<WidgetContent>,
     >,
 ) {
@@ -702,8 +707,8 @@ pub fn handle_widget_scroll(
         return;
     };
 
-    for (mut scroll_pos, computed, ui_tf) in &mut scroll_q {
-        if computed.contains_point(*ui_tf, cursor_phys) {
+    for (mut scroll_pos, computed, ui_tf, vis) in &mut scroll_q {
+        if vis.get() && computed.contains_point(*ui_tf, cursor_phys) {
             let max_scroll = (computed.content_size().y - computed.size().y).max(0.0)
                 * computed.inverse_scale_factor();
             scroll_pos.y = (scroll_pos.y + dy).clamp(0.0, max_scroll);
