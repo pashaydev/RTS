@@ -22,10 +22,22 @@ struct MinimapTexture {
     handle: Handle<Image>,
     base_pixels: Vec<[u8; 4]>,
     scratch_pixels: Vec<[u8; 4]>,
+    /// Persistent post-fog-blend buffer. Only the row stripe corresponding
+    /// to `stripe_cursor` is re-blended each refresh; the rest is carried
+    /// over from prior ticks so fog updates visibly at `MINIMAP_REFRESH_HZ /
+    /// MINIMAP_BLEND_STRIPES`, while entity dots still draw at full rate on
+    /// top of the fresh copy.
+    blended_pixels: Vec<[u8; 4]>,
+    stripe_cursor: u8,
     view_size: f32,
     view_half: f32,
     refresh_timer: Timer,
 }
+
+/// Number of stripes the fog-blend pass is split into. 2 → each tick blends
+/// half the rows, halving per-tick cost at the expense of fog-edge staleness
+/// of up to one refresh interval (~250 ms at 4 Hz).
+const MINIMAP_BLEND_STRIPES: u8 = 2;
 
 #[derive(Resource, Default)]
 pub struct MinimapInteraction {
@@ -187,10 +199,13 @@ fn setup_minimap(
     image.sampler = ImageSampler::nearest();
     let handle = images.add(image);
 
+    let pixel_count = MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE;
     commands.insert_resource(MinimapTexture {
         handle: handle.clone(),
+        blended_pixels: base_pixels.clone(),
         base_pixels,
-        scratch_pixels: vec![[0u8; 4]; MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE],
+        scratch_pixels: vec![[0u8; 4]; pixel_count],
+        stripe_cursor: 0,
         view_size,
         view_half,
         refresh_timer: Timer::from_seconds(1.0 / MINIMAP_REFRESH_HZ, TimerMode::Repeating),
@@ -280,19 +295,28 @@ fn update_minimap_texture(
         return;
     };
 
-    // Work with a pixel buffer for convenience
-    let (base_pixels, buf) = {
+    // Work with a pixel buffer for convenience.
+    // `buf` starts from the persisted blended output of the previous tick, so
+    // stripes not re-blended this frame keep their prior fog state. We then
+    // re-blend only the current stripe's rows on top, and finally draw
+    // entities/camera into `buf` (which does NOT persist back to
+    // `blended_pixels` — entities redraw each tick).
+    let stripe_cursor = minimap_tex.stripe_cursor;
+    minimap_tex.stripe_cursor = (stripe_cursor + 1) % MINIMAP_BLEND_STRIPES;
+    let stripe = stripe_cursor as usize;
+    let stripes = MINIMAP_BLEND_STRIPES as usize;
+    let (base_pixels, blended, buf) = {
         let tex = &mut *minimap_tex;
-        (&tex.base_pixels, &mut tex.scratch_pixels)
+        (&tex.base_pixels, &mut tex.blended_pixels, &mut tex.scratch_pixels)
     };
-    buf.copy_from_slice(base_pixels);
+    buf.copy_from_slice(blended);
 
     // Apply fog of war with color blending (matching in-game fog aesthetic).
     // Uses a pre-computed index cache to avoid per-pixel coordinate math.
+    let pixel_count = MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE;
     if !fog_settings.reveal_all {
         if let Some(ref fog) = fog_map {
             // Rebuild index cache if fog grid changed or not yet built.
-            let pixel_count = MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE;
             if fog_idx_cache.indices.len() != pixel_count
                 || fog_idx_cache.fog_grid_size != fog.grid_size
             {
@@ -322,7 +346,12 @@ fn update_minimap_texture(
             let fog_color: [f32; 3] = [0.02, 0.02, 0.06];
             let explored_tint: [f32; 3] = [0.12, 0.10, 0.18];
 
-            for i in 0..pixel_count {
+            // Only re-blend the row stripe whose row index matches the cursor:
+            // `row % stripes == stripe`.
+            for py in (stripe..MINIMAP_TEX_SIZE).step_by(stripes) {
+                let row_start = py * MINIMAP_TEX_SIZE;
+                let row_end = row_start + MINIMAP_TEX_SIZE;
+                for i in row_start..row_end {
                 let fog_idx = fog_idx_cache.indices[i];
                 let vis = if fog_idx != usize::MAX {
                     let v = fog.display[fog_idx];
@@ -338,12 +367,12 @@ fn update_minimap_texture(
                 };
 
                 let base = [
-                    buf[i][0] as f32 / 255.0,
-                    buf[i][1] as f32 / 255.0,
-                    buf[i][2] as f32 / 255.0,
+                    base_pixels[i][0] as f32 / 255.0,
+                    base_pixels[i][1] as f32 / 255.0,
+                    base_pixels[i][2] as f32 / 255.0,
                 ];
 
-                let blended = if vis < 0.01 {
+                let out = if vis < 0.01 {
                     let t = 0.05;
                     [
                         base[0] * t + fog_color[0] * (1.0 - t),
@@ -381,11 +410,19 @@ fn update_minimap_texture(
                     ]
                 };
 
-                buf[i][0] = (blended[0] * 255.0).clamp(0.0, 255.0) as u8;
-                buf[i][1] = (blended[1] * 255.0).clamp(0.0, 255.0) as u8;
-                buf[i][2] = (blended[2] * 255.0).clamp(0.0, 255.0) as u8;
+                let r = (out[0] * 255.0).clamp(0.0, 255.0) as u8;
+                let g = (out[1] * 255.0).clamp(0.0, 255.0) as u8;
+                let b = (out[2] * 255.0).clamp(0.0, 255.0) as u8;
+                let a = base_pixels[i][3];
+                blended[i] = [r, g, b, a];
+                buf[i] = [r, g, b, a];
+                }
             }
         }
+    } else {
+        // reveal_all: no fog blend — just copy base pixels straight through.
+        buf.copy_from_slice(base_pixels);
+        blended.copy_from_slice(base_pixels);
     }
 
     // Draw resource nodes (yellow, only if fog-visible)

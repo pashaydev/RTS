@@ -47,11 +47,9 @@ cargo build --release --target aarch64-apple-darwin
 # Start Tracy GUI first, click "Connect"
 tracy-capture -o trace.tracy
 # Then run:
-cargo run --profile profiling --features tracy
-
+cargo run --features tracy
 # For memory allocation tracking too:
-cargo run --profile profiling --features tracy_memory
-
+cargo run --features tracy_memory
 # Play for a bit, then close the game. Convert and view:
 tracy-import-chrome trace.tracy > trace.json
 # Open trace.json at https://ui.perfetto.dev/

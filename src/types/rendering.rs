@@ -446,7 +446,7 @@ impl Default for GrassDebugSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            spacing: 0.106,
+            spacing: 0.35,
             row_step_factor: 0.86,
             jitter: 0.4,
             density_threshold: 0.51,

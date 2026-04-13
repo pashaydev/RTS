@@ -947,12 +947,19 @@ fn fog_hide_entities(
         ),
         (With<Building>, Without<FogHideable>, Without<Unit>),
     >,
+    mut prev_reveal_all: Local<Option<bool>>,
 ) {
     if !fog_settings.enable_entity_hiding {
         return;
     }
 
     if fog_settings.reveal_all {
+        // Only run the reveal-all sweep once on transition into reveal_all.
+        // Afterwards nothing changes until it flips back, so skip the work.
+        if *prev_reveal_all == Some(true) {
+            return;
+        }
+        *prev_reveal_all = Some(true);
         // When fog is disabled, restore visibility — but skip frustum-culled entities
         // so we don't override the culling system's Visibility::Hidden.
         for (_, mut vis, _, is_culled, cull_reason) in hideables.iter_mut() {
@@ -987,6 +994,7 @@ fn fog_hide_entities(
         }
         return;
     }
+    *prev_reveal_all = Some(false);
 
     // FogHideable logic (mobs, objects, decorations, mountains, vfx)
     for (tf, mut vis, hideable, is_culled, cull_reason) in hideables.iter_mut() {

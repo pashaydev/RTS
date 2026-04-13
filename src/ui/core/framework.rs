@@ -196,10 +196,10 @@ impl Default for WidgetRegistry {
     fn default() -> Self {
         let mut slots = HashMap::new();
         slots.insert(WidgetId::ArmyOverview, GridSlot::new(0, 0, 1, 2));
-        slots.insert(WidgetId::GroupHotkeys, GridSlot::new(0, 4, 2, 3));
+        slots.insert(WidgetId::GroupHotkeys, GridSlot::new(0, 5, 1, 2));
         slots.insert(WidgetId::Selection, GridSlot::new(0, 7, 2, 5));
         slots.insert(WidgetId::Actions, GridSlot::new(2, 7, 2, 5));
-        slots.insert(WidgetId::ProductionQueue, GridSlot::new(7, 7, 2, 5));
+        slots.insert(WidgetId::ProductionQueue, GridSlot::new(8, 9, 1, 3));
         slots.insert(WidgetId::Minimap, GridSlot::new(9, 7, 3, 5));
         slots.insert(WidgetId::EventLog, GridSlot::new(10, 0, 2, 2));
         slots.insert(WidgetId::TechTree, GridSlot::new(3, 3, 6, 6));
@@ -213,7 +213,7 @@ impl Default for WidgetRegistry {
         visibility.insert(WidgetId::ProductionQueue, true);
         visibility.insert(WidgetId::TechTree, false);
         visibility.insert(WidgetId::GroupHotkeys, true);
-        visibility.insert(WidgetId::EventLog, true);
+        visibility.insert(WidgetId::EventLog, false);
         visibility.insert(WidgetId::Debug, false);
 
         Self {

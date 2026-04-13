@@ -6,8 +6,6 @@ use crate::ui::theme::{self, Theme};
 
 pub fn show_action_tooltips(
     mut commands: Commands,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    ui_scale: Res<UiScale>,
     theme: Res<Theme>,
     triggers: Query<(Entity, &Interaction, &ActionTooltipTrigger), Changed<Interaction>>,
     existing_tooltips: Query<(Entity, &ActionTooltip)>,
@@ -21,32 +19,25 @@ pub fn show_action_tooltips(
                     continue;
                 }
 
-                // Estimate height based on line count for positioning
-                let line_count = trigger.text.split('\n').filter(|l| !l.is_empty()).count();
-                let estimated_h = 20.0 + line_count as f32 * 18.0;
-                let (left, top) = tooltip_anchor_under_cursor(
-                    windows.single().ok(),
-                    ui_scale.0,
-                    176.0,
-                    estimated_h,
-                );
-
+                // Spawn hidden; the position system places it next frame once
+                // its real laid-out size is known, then reveals it. This avoids
+                // the "appear at estimated spot, then jump" flicker.
                 commands
                     .spawn((
                         ActionTooltip { owner: entity },
                         Pickable::IGNORE,
                         Node {
                             position_type: PositionType::Absolute,
-                            left: Val::Px(left),
-                            top: Val::Px(top),
+                            left: Val::Px(-9999.0),
+                            top: Val::Px(-9999.0),
                             flex_direction: FlexDirection::Column,
                             padding: UiRect::all(Val::Px(6.0)),
                             row_gap: Val::Px(1.0),
-                            // border_radius: BorderRadius::all(Val::Px(5.0)),
                             border: UiRect::all(Val::Px(1.0)),
                             width: Val::Px(176.0),
                             ..default()
                         },
+                        Visibility::Hidden,
                         BackgroundColor(theme::TOOLTIP_BG),
                         BorderColor::all(theme::TOOLTIP_BORDER),
                         BoxShadow::new(
@@ -77,7 +68,8 @@ pub fn show_action_tooltips(
 pub fn update_action_tooltip_positions(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui_scale: Res<UiScale>,
-    mut tooltips: Query<(&mut Node, &ComputedNode), With<ActionTooltip>>,
+    triggers: Query<(&ComputedNode, &UiGlobalTransform), With<ActionTooltipTrigger>>,
+    mut tooltips: Query<(&mut Node, &ComputedNode, &mut Visibility, &ActionTooltip)>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -86,12 +78,51 @@ pub fn update_action_tooltip_positions(
         return;
     }
 
-    for (mut node, computed) in &mut tooltips {
-        let actual_h = computed.size().y / ui_scale.0.max(0.001);
-        let h = if actual_h > 1.0 { actual_h } else { 160.0 };
-        let (left, top) = tooltip_anchor_under_cursor(Some(window), ui_scale.0, 176.0, h);
+    let scale_factor = window.scale_factor();
+    let ui_scale_v = ui_scale.0.max(0.001);
+    // physical-px → Val::Px (logical UI) units
+    let to_ui = 1.0 / (scale_factor * ui_scale_v);
+    let ui_w = window.width() / ui_scale_v;
+    let ui_h = window.height() / ui_scale_v;
+    let screen_padding = 6.0;
+    let gap = 8.0;
+
+    for (mut node, tt_computed, mut vis, tt) in &mut tooltips {
+        let Ok((trig_computed, trig_tf)) = triggers.get(tt.owner) else {
+            continue;
+        };
+
+        let tt_size_phys = tt_computed.size();
+        if tt_size_phys.x < 1.0 || tt_size_phys.y < 1.0 {
+            // Layout hasn't measured the tooltip yet — keep it hidden one more frame.
+            *vis = Visibility::Hidden;
+            continue;
+        }
+        let tt_w = tt_size_phys.x * to_ui;
+        let tt_h = tt_size_phys.y * to_ui;
+
+        let trig_size = trig_computed.size() * to_ui;
+        let trig_center_x = trig_tf.translation.x * to_ui;
+        let trig_center_y = trig_tf.translation.y * to_ui;
+        let trig_top = trig_center_y - trig_size.y * 0.5;
+        let trig_bottom = trig_center_y + trig_size.y * 0.5;
+
+        // Anchor centered horizontally on the trigger card, clamped to viewport.
+        let left = (trig_center_x - tt_w * 0.5)
+            .clamp(screen_padding, (ui_w - tt_w - screen_padding).max(screen_padding));
+
+        // Prefer above the card (action bar lives at the bottom of the screen),
+        // fall back below only if there isn't enough room.
+        let above_top = trig_top - gap - tt_h;
+        let top = if above_top >= screen_padding {
+            above_top
+        } else {
+            (trig_bottom + gap).min((ui_h - tt_h - screen_padding).max(screen_padding))
+        };
+
         node.left = Val::Px(left);
         node.top = Val::Px(top);
+        *vis = Visibility::Inherited;
     }
 }
 
@@ -110,43 +141,6 @@ pub fn cleanup_action_tooltips(
             commands.entity(tooltip_entity).try_despawn();
         }
     }
-}
-
-fn tooltip_anchor_under_cursor(
-    window: Option<&Window>,
-    ui_scale: f32,
-    tooltip_w: f32,
-    tooltip_h: f32,
-) -> (f32, f32) {
-    let scale = ui_scale.max(0.001);
-    let Some(window) = window else {
-        return (6.0, 6.0);
-    };
-    let Some(cursor) = window.cursor_position() else {
-        return (6.0, 6.0);
-    };
-
-    let ui_w = window.width() / scale;
-    let ui_h = window.height() / scale;
-    let cx = cursor.x / scale;
-    let cy = cursor.y / scale;
-    let screen_padding = 6.0;
-    let cursor_gap = 16.0;
-
-    let left = (cx - tooltip_w * 0.5)
-        .clamp(screen_padding, (ui_w - tooltip_w - screen_padding).max(screen_padding));
-
-    // Keep the tooltip off the cursor. If there's no room below, flip it above instead of
-    // clamping it into the cursor position, which causes hover/despawn flicker on tall tooltips.
-    let below_top = cy + cursor_gap;
-    let below_fits = below_top + tooltip_h <= ui_h - screen_padding;
-    let top = if below_fits {
-        below_top
-    } else {
-        (cy - cursor_gap - tooltip_h).max(screen_padding)
-    };
-
-    (left, top)
 }
 
 fn spawn_tooltip_content(tt: &mut ChildSpawnerCommands, text: &str, theme: &Theme) {

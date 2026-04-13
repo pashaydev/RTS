@@ -464,6 +464,7 @@ pub const GRASS_CHUNK_SIZE: f32 = 128.0;
 // ── Shared vertex-merge helpers for chunk instancing ──
 
 /// Source mesh data extracted from a GLTF primitive for CPU vertex merging.
+#[derive(Clone)]
 struct SourceMeshData {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
@@ -735,6 +736,40 @@ fn sample_grass_rotation(rotation_noise: &Fbm<Perlin>, x: f32, z: f32) -> f32 {
     n * std::f32::consts::TAU
 }
 
+/// Per-frame row budget for incremental grass rebuild. Each row touches
+/// thousands of grid cells with noise + biome lookups, so even a modest
+/// budget can blow through a frame on Large maps.
+const GRASS_REBUILD_ROWS_PER_FRAME: i32 = 4;
+/// Per-frame chunk budget for the finalize phase — each chunk builds two
+/// merged meshes and can touch tens of thousands of vertices.
+const GRASS_FINALIZE_CHUNKS_PER_FRAME: usize = 2;
+
+pub(super) struct GrassRebuildCursor {
+    src: SourceMeshData,
+    macro_noise: Fbm<Perlin>,
+    micro_noise: Fbm<Perlin>,
+    rotation_noise: Fbm<Perlin>,
+    rng: StdRng,
+    spacing: f32,
+    half: f32,
+    border: BorderSettings,
+    row_step: f32,
+    jitter: f32,
+    inv_chunk: f32,
+    spawn_clear_radius: f32,
+    spawn_positions: Vec<(Faction, (f32, f32))>,
+    building_clear_areas: Vec<(f32, f32, f32, f32)>,
+    z_min: f64,
+    row_count: i32,
+    row_index: i32,
+    chunk_instances: std::collections::HashMap<(i32, i32), Vec<(Vec3, f32, f32)>>,
+    count: u32,
+    /// Drained chunks pending finalize. Populated when row iteration
+    /// finishes; consumed a few per frame in the finalize phase.
+    pending_chunks: Vec<((i32, i32), Vec<(Vec3, f32, f32)>)>,
+    finalized_chunk_map: Option<GrassChunkMap>,
+}
+
 pub(super) fn rebuild_dense_grass(
     mut commands: Commands,
     grass_assets: Res<GrassInstanceAssets>,
@@ -747,89 +782,124 @@ pub(super) fn rebuild_dense_grass(
     buildings: Query<(&Transform, &BuildingFootprint), With<Building>>,
     grass_chunks: Query<Entity, With<GrassChunk>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    mut cursor: Local<Option<GrassRebuildCursor>>,
 ) {
-    if !grass_rebuild.dirty {
-        return;
+    // If a rebuild is requested (dirty) while another rebuild is in progress,
+    // abort the in-progress cursor so we restart from scratch. Without this,
+    // toggling grass settings mid-rebuild would be ignored until the previous
+    // rebuild finishes — notably, disabling grass while the initial rebuild
+    // was still running would keep spawning chunks and leave grass visible.
+    if grass_rebuild.dirty && cursor.is_some() {
+        *cursor = None;
     }
 
-    for entity in &grass_chunks {
-        commands.entity(entity).despawn();
-    }
+    // ── Phase 1: begin ──
+    if cursor.is_none() {
+        if !grass_rebuild.dirty {
+            return;
+        }
 
-    let mut chunk_map = GrassChunkMap::default();
-    grass_rebuild.chunk_count = 0;
-    grass_rebuild.instance_count = 0;
+        for entity in &grass_chunks {
+            commands.entity(entity).despawn();
+        }
 
-    if !grass_settings.enabled {
-        commands.insert_resource(chunk_map);
+        grass_rebuild.chunk_count = 0;
+        grass_rebuild.instance_count = 0;
+
+        if !grass_settings.enabled {
+            commands.insert_resource(GrassChunkMap::default());
+            grass_rebuild.dirty = false;
+            return;
+        }
+
+        let Some(source_mesh) = meshes.get(&grass_assets.mesh) else {
+            // Mesh not loaded yet — leave dirty, try again next frame.
+            return;
+        };
+        let Some(src) = SourceMeshData::from_mesh(source_mesh) else {
+            warn!("Grass source mesh has no positions");
+            grass_rebuild.dirty = false;
+            return;
+        };
+
+        let spacing = grass_settings.spacing;
+        let half = height_map.half_map;
+        let border = BorderSettings::from_map_size(height_map.map_size);
+        let row_step = spacing * grass_settings.row_step_factor;
+        let jitter = grass_settings.jitter.min(spacing * 0.48);
+        let building_clear_areas: Vec<(f32, f32, f32, f32)> = buildings
+            .iter()
+            .map(|(transform, footprint)| {
+                (
+                    transform.translation.x,
+                    transform.translation.z,
+                    footprint.0 + 2.0,
+                    (footprint.0 + 2.0).powi(2),
+                )
+            })
+            .collect();
+
+        let z_min = -half as f64 + row_step as f64 * 0.5;
+        let z_max = half as f64 - row_step as f64 * 0.5;
+        let row_count = (((z_max - z_min) / row_step as f64).floor() as i32 + 1).max(0);
+
+        *cursor = Some(GrassRebuildCursor {
+            src,
+            macro_noise: Fbm::<Perlin>::new((map_seed.0 >> 8) as u32).set_octaves(3),
+            micro_noise: Fbm::<Perlin>::new((map_seed.0 >> 28) as u32 ^ 0x5F37_59DF)
+                .set_octaves(2),
+            rotation_noise: Fbm::<Perlin>::new((map_seed.0 >> 18) as u32 ^ 0x85EB_CA6B)
+                .set_octaves(2),
+            rng: StdRng::seed_from_u64(map_seed.0.wrapping_add(5000)),
+            spacing,
+            half,
+            border,
+            row_step,
+            jitter,
+            inv_chunk: 1.0 / GRASS_CHUNK_SIZE,
+            spawn_clear_radius: 30.0,
+            spawn_positions: config.spawn_positions(map_seed.0),
+            building_clear_areas,
+            z_min,
+            row_count,
+            row_index: 0,
+            chunk_instances: std::collections::HashMap::new(),
+            count: 0,
+            pending_chunks: Vec::new(),
+            finalized_chunk_map: None,
+        });
+        // Cursor now owns the rebuild — clear the dirty flag so subsequent
+        // frames don't abort the in-progress cursor via the restart guard
+        // above. Any new toggle after this point will re-set dirty and
+        // legitimately trigger an abort.
         grass_rebuild.dirty = false;
-        return;
     }
 
-    let Some(source_mesh) = meshes.get(&grass_assets.mesh) else {
-        return;
-    };
-    let Some(src) = SourceMeshData::from_mesh(source_mesh) else {
-        warn!("Grass source mesh has no positions");
-        return;
-    };
-
-    let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(5000));
-    let macro_noise = Fbm::<Perlin>::new((map_seed.0 >> 8) as u32).set_octaves(3);
-    let micro_noise = Fbm::<Perlin>::new((map_seed.0 >> 28) as u32 ^ 0x5F37_59DF).set_octaves(2);
-    let rotation_noise =
-        Fbm::<Perlin>::new((map_seed.0 >> 18) as u32 ^ 0x85EB_CA6B).set_octaves(2);
-    let spacing = grass_settings.spacing;
-    let half = height_map.half_map;
-    let border = BorderSettings::from_map_size(height_map.map_size);
-    let spawn_positions = config.spawn_positions(map_seed.0);
-    let spawn_clear_radius = 30.0_f32;
-    let row_step = spacing * grass_settings.row_step_factor;
-    let jitter = grass_settings.jitter.min(spacing * 0.48);
-    let building_clear_areas: Vec<(f32, f32, f32, f32)> = buildings
-        .iter()
-        .map(|(transform, footprint)| {
-            (
-                transform.translation.x,
-                transform.translation.z,
-                footprint.0 + 2.0,
-                (footprint.0 + 2.0).powi(2),
-            )
-        })
-        .collect();
-
-    // Collect grass instances into chunk buckets
-    let inv_chunk = 1.0 / GRASS_CHUNK_SIZE;
-    let mut chunk_instances: std::collections::HashMap<(i32, i32), Vec<(Vec3, f32, f32)>> =
-        std::collections::HashMap::new();
-
-    let mut count = 0u32;
-    let z_min = -half as f64 + row_step as f64 * 0.5;
-    let z_max = half as f64 - row_step as f64 * 0.5;
-    let row_count = (((z_max - z_min) / row_step as f64).floor() as i32 + 1).max(0);
-
-    for row_index in 0..row_count {
-        let z = (z_min + row_index as f64 * row_step as f64) as f32;
-        let row_jitter = hash_row(row_index, map_seed.0) * spacing * 0.15;
+    // ── Phase 2: tick ──
+    let c = cursor.as_mut().unwrap();
+    let end_row = (c.row_index + GRASS_REBUILD_ROWS_PER_FRAME).min(c.row_count);
+    for row_index in c.row_index..end_row {
+        let z = (c.z_min + row_index as f64 * c.row_step as f64) as f32;
+        let row_jitter = hash_row(row_index, map_seed.0) * c.spacing * 0.15;
         let row_shift = if row_index.rem_euclid(2) == 0 {
             0.0
         } else {
-            spacing * 0.5
+            c.spacing * 0.5
         } + row_jitter;
-        let x_min = -half as f64 + spacing as f64 * 0.5 + row_shift as f64;
-        let x_max = half as f64 - spacing as f64 * 0.5;
+        let x_min = -c.half as f64 + c.spacing as f64 * 0.5 + row_shift as f64;
+        let x_max = c.half as f64 - c.spacing as f64 * 0.5;
         if x_min > x_max {
             continue;
         }
 
-        let col_count = (((x_max - x_min) / spacing as f64).floor() as i32 + 1).max(0);
+        let col_count = (((x_max - x_min) / c.spacing as f64).floor() as i32 + 1).max(0);
         for col_index in 0..col_count {
-            let x = (x_min + col_index as f64 * spacing as f64) as f32;
+            let x = (x_min + col_index as f64 * c.spacing as f64) as f32;
             let base_density = sample_grass_density(
                 &biome_map,
                 &height_map,
-                &macro_noise,
-                &micro_noise,
+                &c.macro_noise,
+                &c.micro_noise,
                 &grass_settings,
                 x,
                 z,
@@ -839,18 +909,18 @@ pub(super) fn rebuild_dense_grass(
             }
 
             let (off_x, off_z) =
-                sample_grass_offset_hashed(row_index, col_index, jitter, map_seed.0);
+                sample_grass_offset_hashed(row_index, col_index, c.jitter, map_seed.0);
             let jx = x + off_x;
             let jz = z + off_z;
-            if is_in_mountain_border(jx, jz, half, border) {
+            if is_in_mountain_border(jx, jz, c.half, c.border) {
                 continue;
             }
 
             let density = sample_grass_density(
                 &biome_map,
                 &height_map,
-                &macro_noise,
-                &micro_noise,
+                &c.macro_noise,
+                &c.micro_noise,
                 &grass_settings,
                 jx,
                 jz,
@@ -864,58 +934,73 @@ pub(super) fn rebuild_dense_grass(
                 continue;
             }
 
-            let too_close = spawn_positions.iter().any(|(_, (sx, sz))| {
+            let too_close = c.spawn_positions.iter().any(|(_, (sx, sz))| {
                 let dx = jx - *sx;
                 let dz = jz - *sz;
-                (dx * dx + dz * dz).sqrt() < spawn_clear_radius
+                (dx * dx + dz * dz).sqrt() < c.spawn_clear_radius
             });
             if too_close {
                 continue;
             }
 
-            let inside_building_clear_area = building_clear_areas
-                .iter()
-                .any(|(bx, bz, _clear_radius, clear_r2)| {
-                    let dx = jx - *bx;
-                    let dz = jz - *bz;
-                    dx * dx + dz * dz < *clear_r2
-                });
+            let inside_building_clear_area =
+                c.building_clear_areas
+                    .iter()
+                    .any(|(bx, bz, _clear_radius, clear_r2)| {
+                        let dx = jx - *bx;
+                        let dz = jz - *bz;
+                        dx * dx + dz * dz < *clear_r2
+                    });
             if inside_building_clear_area {
                 continue;
             }
 
             let y = terrain_translation(&height_map, jx, jz, 0.0).y;
-            let scale = rng.random_range(grass_settings.scale_min..=grass_settings.scale_max)
+            let scale = c
+                .rng
+                .random_range(grass_settings.scale_min..=grass_settings.scale_max)
                 * (0.88 + density * 0.16);
-            let y_rot = sample_grass_rotation(&rotation_noise, jx, jz);
+            let y_rot = sample_grass_rotation(&c.rotation_noise, jx, jz);
 
-            let cx = (jx * inv_chunk).floor() as i32;
-            let cz = (jz * inv_chunk).floor() as i32;
-            chunk_instances
+            let cx = (jx * c.inv_chunk).floor() as i32;
+            let cz = (jz * c.inv_chunk).floor() as i32;
+            c.chunk_instances
                 .entry((cx, cz))
                 .or_default()
                 .push((Vec3::new(jx, y, jz), scale, y_rot));
-            count += 1;
+            c.count += 1;
         }
     }
+    c.row_index = end_row;
 
-    // Build merged meshes per chunk using shared helper — two LOD levels per chunk
-    let chunk_count = chunk_instances.len();
+    // Not done yet — resume next frame.
+    if c.row_index < c.row_count {
+        return;
+    }
 
-    for ((cx, cz), instances) in chunk_instances {
+    // ── Phase 3: finalize (chunked) ──
+    // First time we reach here, drain chunk_instances into a pending queue
+    // and initialize the output chunk map.
+    if c.finalized_chunk_map.is_none() {
+        c.pending_chunks = c.chunk_instances.drain().collect();
+        c.finalized_chunk_map = Some(GrassChunkMap::default());
+    }
+
+    let processed =
+        GRASS_FINALIZE_CHUNKS_PER_FRAME.min(c.pending_chunks.len());
+    for _ in 0..processed {
+        let ((cx, cz), instances) = c.pending_chunks.pop().unwrap();
         let chunk_center_x = (cx as f32 + 0.5) * GRASS_CHUNK_SIZE;
         let chunk_center_z = (cz as f32 + 0.5) * GRASS_CHUNK_SIZE;
 
-        // LOD 0: full density
         let mut mesh_full =
-            merge_grass_instances_into_mesh(&src, &instances, grass_settings.lean_strength);
-        // LOD 1: every 3rd instance (⅓ density)
+            merge_grass_instances_into_mesh(&c.src, &instances, grass_settings.lean_strength);
         let reduced: Vec<_> = instances.iter().step_by(3).copied().collect();
         let mut mesh_reduced =
-            merge_grass_instances_into_mesh(&src, &reduced, grass_settings.lean_strength);
+            merge_grass_instances_into_mesh(&c.src, &reduced, grass_settings.lean_strength);
 
         let mut stripped_empty = false;
-        for (bx, bz, clear_radius, clear_r2) in &building_clear_areas {
+        for (bx, bz, clear_radius, clear_r2) in &c.building_clear_areas {
             let half_extent = GRASS_CHUNK_SIZE * 0.5 + *clear_radius;
             if (chunk_center_x - *bx).abs() > half_extent
                 || (chunk_center_z - *bz).abs() > half_extent
@@ -953,25 +1038,31 @@ pub(super) fn rebuild_dense_grass(
                 NotShadowCaster,
                 CullingBounds::with_offset(
                     GRASS_CHUNK_SIZE * 0.71,
-                    Vec3::new(
-                        chunk_center_x,
-                        0.0,
-                        chunk_center_z,
-                    ),
+                    Vec3::new(chunk_center_x, 0.0, chunk_center_z),
                 ),
             ))
             .id();
-        chunk_map.0.insert((cx, cz), entity);
+        if let Some(map) = c.finalized_chunk_map.as_mut() {
+            map.0.insert((cx, cz), entity);
+        }
     }
 
+    // Still have pending chunks — resume next frame.
+    if !c.pending_chunks.is_empty() {
+        return;
+    }
+
+    // All done — publish results and clear cursor.
+    let finished = cursor.take().unwrap();
+    let chunk_map = finished.finalized_chunk_map.unwrap_or_default();
     let rebuilt_chunk_count = chunk_map.0.len();
     commands.insert_resource(chunk_map);
     grass_rebuild.chunk_count = rebuilt_chunk_count;
-    grass_rebuild.instance_count = count;
+    grass_rebuild.instance_count = finished.count;
     grass_rebuild.dirty = false;
     info!(
         "Spawned {} grass instances merged into {} chunks",
-        count, chunk_count
+        finished.count, rebuilt_chunk_count
     );
 }
 

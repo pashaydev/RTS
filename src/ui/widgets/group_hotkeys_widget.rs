@@ -103,10 +103,32 @@ pub fn update_group_hotkeys_widget(
     unit_kinds: Query<&EntityKind, With<Unit>>,
     registry: Res<super::widget_framework::WidgetRegistry>,
     selected: Query<Entity, (With<Unit>, With<Selected>)>,
+    mut last_selection_hash: Local<u64>,
+    mut last_built: Local<bool>,
 ) {
     use super::widget_framework::WidgetId;
 
     if !registry.is_visible(WidgetId::GroupHotkeys) {
+        return;
+    }
+
+    // Compute a cheap order-independent hash of the current selection so we
+    // only rebuild when it actually changes. ControlGroups + ControlGroupState
+    // change detection covers slot membership / active group; theme/icons are
+    // refreshed by their own change-detection mechanisms.
+    let selected_set: Vec<Entity> = selected.iter().collect();
+    let selection_hash: u64 = selected_set
+        .iter()
+        .map(|e| e.to_bits())
+        .fold(0u64, |acc, b| acc ^ b);
+
+    let dirty = !*last_built
+        || control_groups.is_changed()
+        || group_state.is_changed()
+        || registry.is_changed()
+        || *last_selection_hash != selection_hash;
+
+    if !dirty {
         return;
     }
 
@@ -115,14 +137,15 @@ pub fn update_group_hotkeys_widget(
     else {
         return;
     };
+    *last_selection_hash = selection_hash;
+    *last_built = true;
 
     // Clear existing
     for entity in &existing {
         commands.entity(entity).try_despawn();
     }
 
-    let has_selection = !selected.is_empty();
-    let selected_set: Vec<Entity> = selected.iter().collect();
+    let has_selection = !selected_set.is_empty();
 
     let root = commands
         .spawn((

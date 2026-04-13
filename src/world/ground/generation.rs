@@ -1,5 +1,6 @@
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
+use bevy::tasks::ComputeTaskPool;
 
 use crate::types::{
     Biome, BiomeMap, CullingBounds, GameSetupConfig, GameWorld, Ground, MapSeed,
@@ -47,31 +48,52 @@ pub fn spawn_ground(
     let step = actual_map_size / (actual_grid_size - 1) as f32;
     let eps = 0.5_f32;
 
-    let mut positions = Vec::with_capacity(actual_grid_size * actual_grid_size);
-    let mut normals = Vec::with_capacity(actual_grid_size * actual_grid_size);
-    let mut uvs = Vec::with_capacity(actual_grid_size * actual_grid_size);
-    let mut biome_data = Vec::with_capacity(actual_grid_size * actual_grid_size);
+    // Parallel vertex pass: each row is an independent task operating on a
+    // disjoint slice of each output buffer. Every noise lookup is a pure
+    // function of (x, z), so the only sharing is the read-only `noise`.
+    let cell_count = actual_grid_size * actual_grid_size;
+    let mut positions: Vec<[f32; 3]> = vec![[0.0; 3]; cell_count];
+    let mut normals: Vec<[f32; 3]> = vec![[0.0; 3]; cell_count];
+    let mut uvs: Vec<[f32; 2]> = vec![[0.0; 2]; cell_count];
+    let mut biome_data: Vec<Biome> = vec![Biome::Grassland; cell_count];
 
-    for iz in 0..actual_grid_size {
-        for ix in 0..actual_grid_size {
-            let x = -actual_half_map + ix as f32 * step;
-            let z = -actual_half_map + iz as f32 * step;
-            let y = noise.terrain_height(x, z, actual_half_map);
+    {
+        let noise_ref = &noise;
+        let row_stride = actual_grid_size;
+        let inv_last = 1.0 / (actual_grid_size - 1) as f32;
+        let pos_rows = positions.chunks_mut(row_stride);
+        let nrm_rows = normals.chunks_mut(row_stride);
+        let uv_rows = uvs.chunks_mut(row_stride);
+        let bio_rows = biome_data.chunks_mut(row_stride);
 
-            biome_data.push(noise.biome_at(x, z, actual_half_map));
-            positions.push([x, y, z]);
-            uvs.push([
-                ix as f32 / (actual_grid_size - 1) as f32,
-                iz as f32 / (actual_grid_size - 1) as f32,
-            ]);
+        ComputeTaskPool::get().scope(|s| {
+            for (iz, (((pos_row, nrm_row), uv_row), bio_row)) in pos_rows
+                .zip(nrm_rows)
+                .zip(uv_rows)
+                .zip(bio_rows)
+                .enumerate()
+            {
+                s.spawn(async move {
+                    let z = -actual_half_map + iz as f32 * step;
+                    let v = iz as f32 * inv_last;
+                    for ix in 0..actual_grid_size {
+                        let x = -actual_half_map + ix as f32 * step;
+                        let y = noise_ref.terrain_height(x, z, actual_half_map);
 
-            let h_l = noise.terrain_height(x - eps, z, actual_half_map);
-            let h_r = noise.terrain_height(x + eps, z, actual_half_map);
-            let h_d = noise.terrain_height(x, z - eps, actual_half_map);
-            let h_u = noise.terrain_height(x, z + eps, actual_half_map);
-            let normal = Vec3::new(h_l - h_r, 2.0 * eps, h_d - h_u).normalize();
-            normals.push(normal.to_array());
-        }
+                        bio_row[ix] = noise_ref.biome_at(x, z, actual_half_map);
+                        pos_row[ix] = [x, y, z];
+                        uv_row[ix] = [ix as f32 * inv_last, v];
+
+                        let h_l = noise_ref.terrain_height(x - eps, z, actual_half_map);
+                        let h_r = noise_ref.terrain_height(x + eps, z, actual_half_map);
+                        let h_d = noise_ref.terrain_height(x, z - eps, actual_half_map);
+                        let h_u = noise_ref.terrain_height(x, z + eps, actual_half_map);
+                        let normal = Vec3::new(h_l - h_r, 2.0 * eps, h_d - h_u).normalize();
+                        nrm_row[ix] = normal.to_array();
+                    }
+                });
+            }
+        });
     }
 
     let grid_heights: Vec<f32> = positions.iter().map(|position| position[1]).collect();
@@ -82,21 +104,34 @@ pub fn spawn_ground(
         actual_half_map,
     );
 
-    let mut colors = Vec::with_capacity(actual_grid_size * actual_grid_size);
-    for iz in 0..actual_grid_size {
-        for ix in 0..actual_grid_size {
-            let x = -actual_half_map + ix as f32 * step;
-            let z = -actual_half_map + iz as f32 * step;
-            colors.push(blended_biome_color_patched(
-                &noise,
-                &biome_data,
-                actual_grid_size,
-                x,
-                z,
-                actual_half_map,
-                step,
-            ));
-        }
+    // Parallel biome-color pass: reads only `noise` and `biome_data` (now
+    // finalized above), so rows can be filled in parallel.
+    let mut colors: Vec<[f32; 4]> = vec![[0.0; 4]; cell_count];
+    {
+        let noise_ref = &noise;
+        let biome_ref: &[Biome] = &biome_data;
+        let row_stride = actual_grid_size;
+        let col_rows = colors.chunks_mut(row_stride);
+
+        ComputeTaskPool::get().scope(|s| {
+            for (iz, col_row) in col_rows.enumerate() {
+                s.spawn(async move {
+                    let z = -actual_half_map + iz as f32 * step;
+                    for ix in 0..actual_grid_size {
+                        let x = -actual_half_map + ix as f32 * step;
+                        col_row[ix] = blended_biome_color_patched(
+                            noise_ref,
+                            biome_ref,
+                            actual_grid_size,
+                            x,
+                            z,
+                            actual_half_map,
+                            step,
+                        );
+                    }
+                });
+            }
+        });
     }
 
     let mut indices = Vec::with_capacity((actual_grid_size - 1) * (actual_grid_size - 1) * 6);

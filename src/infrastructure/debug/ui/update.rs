@@ -14,6 +14,7 @@ use crate::infrastructure::debug::ui::style::{
 use crate::world::lighting::DayCycle;
 
 pub fn update_debug_texts(
+    time: Res<Time>,
     tracker: Res<FpsTracker>,
     cycle: Res<DayCycle>,
     entities: Query<Entity>,
@@ -41,30 +42,44 @@ pub fn update_debug_texts(
             Without<DebugEntityCountText>,
         ),
     >,
+    mut fps_accum: Local<f32>,
+    mut count_accum: Local<f32>,
 ) {
-    if let Ok(mut t) = fps_q.single_mut() {
-        let warning = if tracker.fps >= 55.0 {
-            ""
-        } else if tracker.fps >= 30.0 {
-            " (!)"
-        } else {
-            " (!!)"
-        };
-        **t = format!(
-            "FPS: {:.0}  |  {:.1}ms{}",
-            tracker.fps, tracker.frame_time_ms, warning
-        );
+    // Throttle text updates so we don't reformat + mutate UI text every frame.
+    // FPS at 10 Hz is still smooth to read; entity count at 4 Hz hides the
+    // O(n) archetype walk driven by `entities.iter().count()`.
+    *fps_accum += time.delta_secs();
+    *count_accum += time.delta_secs();
+
+    if *fps_accum >= 0.1 {
+        *fps_accum = 0.0;
+        if let Ok(mut t) = fps_q.single_mut() {
+            let warning = if tracker.fps >= 55.0 {
+                ""
+            } else if tracker.fps >= 30.0 {
+                " (!)"
+            } else {
+                " (!!)"
+            };
+            **t = format!(
+                "FPS: {:.0}  |  {:.1}ms{}",
+                tracker.fps, tracker.frame_time_ms, warning
+            );
+        }
+
+        if let Ok(mut t) = day_q.single_mut() {
+            **t = format!(
+                "Day: {:.3} ({:?})  |  {:.0}s cycle",
+                cycle.time, cycle.phase, cycle.cycle_duration
+            );
+        }
     }
 
-    if let Ok(mut t) = ent_q.single_mut() {
-        **t = format!("Entities: {}", entities.iter().count());
-    }
-
-    if let Ok(mut t) = day_q.single_mut() {
-        **t = format!(
-            "Day: {:.3} ({:?})  |  {:.0}s cycle",
-            cycle.time, cycle.phase, cycle.cycle_duration
-        );
+    if *count_accum >= 0.25 {
+        *count_accum = 0.0;
+        if let Ok(mut t) = ent_q.single_mut() {
+            **t = format!("Entities: {}", entities.iter().count());
+        }
     }
 }
 
