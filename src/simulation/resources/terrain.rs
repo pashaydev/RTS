@@ -589,7 +589,12 @@ fn merge_grass_instances_into_mesh(
     mesh
 }
 
-fn strip_world_space_triangles_in_radius(mesh: &mut Mesh, cx: f32, cz: f32, radius_sq: f32) -> bool {
+fn strip_world_space_triangles_in_radius(
+    mesh: &mut Mesh,
+    cx: f32,
+    cz: f32,
+    radius_sq: f32,
+) -> bool {
     let positions: Vec<[f32; 3]> = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
         Some(bevy::mesh::VertexAttributeValues::Float32x3(v)) => v.clone(),
         _ => return false,
@@ -659,7 +664,11 @@ fn shoreline_grass_factor(biome_map: &BiomeMap, x: f32, z: f32) -> f32 {
     .into_iter()
     .any(|biome| matches!(biome, Biome::Water | Biome::Beach));
 
-    if near_water { 0.3 } else { 1.0 }
+    if near_water {
+        0.3
+    } else {
+        1.0
+    }
 }
 
 fn sample_grass_density(
@@ -679,10 +688,9 @@ fn sample_grass_density(
 
     let macro_patch =
         (macro_noise.get([x as f64 * 0.018, z as f64 * 0.018]) as f32 * 0.5 + 0.5).clamp(0.0, 1.0);
-    let micro_patch = (micro_noise.get([x as f64 * 0.075 + 83.0, z as f64 * 0.075 - 41.0]) as f32
-        * 0.5
-        + 0.5)
-        .clamp(0.0, 1.0);
+    let micro_patch =
+        (micro_noise.get([x as f64 * 0.075 + 83.0, z as f64 * 0.075 - 41.0]) as f32 * 0.5 + 0.5)
+            .clamp(0.0, 1.0);
     let patchiness = (macro_patch * 0.75 + micro_patch * 0.25).clamp(0.0, 1.0);
     let slope = terrain_slope_factor(height_map, x, z);
     let shoreline = shoreline_grass_factor(biome_map, x, z);
@@ -729,8 +737,7 @@ fn hash_row(row: i32, seed: u64) -> f32 {
 }
 
 fn sample_grass_rotation(rotation_noise: &Fbm<Perlin>, x: f32, z: f32) -> f32 {
-    let n = (rotation_noise.get([x as f64 * 0.17 - 11.0, z as f64 * 0.17 + 29.0]) as f32
-        * 0.5
+    let n = (rotation_noise.get([x as f64 * 0.17 - 11.0, z as f64 * 0.17 + 29.0]) as f32 * 0.5
         + 0.5)
         .clamp(0.0, 1.0);
     n * std::f32::consts::TAU
@@ -846,8 +853,7 @@ pub(super) fn rebuild_dense_grass(
         *cursor = Some(GrassRebuildCursor {
             src,
             macro_noise: Fbm::<Perlin>::new((map_seed.0 >> 8) as u32).set_octaves(3),
-            micro_noise: Fbm::<Perlin>::new((map_seed.0 >> 28) as u32 ^ 0x5F37_59DF)
-                .set_octaves(2),
+            micro_noise: Fbm::<Perlin>::new((map_seed.0 >> 28) as u32 ^ 0x5F37_59DF).set_octaves(2),
             rotation_noise: Fbm::<Perlin>::new((map_seed.0 >> 18) as u32 ^ 0x85EB_CA6B)
                 .set_octaves(2),
             rng: StdRng::seed_from_u64(map_seed.0.wrapping_add(5000)),
@@ -964,10 +970,11 @@ pub(super) fn rebuild_dense_grass(
 
             let cx = (jx * c.inv_chunk).floor() as i32;
             let cz = (jz * c.inv_chunk).floor() as i32;
-            c.chunk_instances
-                .entry((cx, cz))
-                .or_default()
-                .push((Vec3::new(jx, y, jz), scale, y_rot));
+            c.chunk_instances.entry((cx, cz)).or_default().push((
+                Vec3::new(jx, y, jz),
+                scale,
+                y_rot,
+            ));
             c.count += 1;
         }
     }
@@ -986,8 +993,7 @@ pub(super) fn rebuild_dense_grass(
         c.finalized_chunk_map = Some(GrassChunkMap::default());
     }
 
-    let processed =
-        GRASS_FINALIZE_CHUNKS_PER_FRAME.min(c.pending_chunks.len());
+    let processed = GRASS_FINALIZE_CHUNKS_PER_FRAME.min(c.pending_chunks.len());
     for _ in 0..processed {
         let ((cx, cz), instances) = c.pending_chunks.pop().unwrap();
         let chunk_center_x = (cx as f32 + 0.5) * GRASS_CHUNK_SIZE;

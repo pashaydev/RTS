@@ -275,7 +275,10 @@ pub fn update_tech_tree(
                 };
 
                 let upgrade_cost = format_cost(&upgrade.cost);
-                let upgrade_str = format!("L{}: {} | {:.0}s", target_level, upgrade_cost, upgrade.time_secs);
+                let upgrade_str = format!(
+                    "L{}: {} | {:.0}s",
+                    target_level, upgrade_cost, upgrade.time_secs
+                );
 
                 let upgrade_row = commands
                     .spawn(Node {
@@ -397,10 +400,7 @@ fn describe_level_bonus(bonus: &LevelBonus) -> String {
         } => {
             format!("+{:.0} range, +{:.0} damage", range_boost, damage_boost)
         }
-        LevelBonus::GatherAura {
-            speed_bonus,
-            range,
-        } => {
+        LevelBonus::GatherAura { speed_bonus, range } => {
             format!(
                 "Gather aura: +{:.0}% speed, {:.0} range",
                 speed_bonus * 100.0,

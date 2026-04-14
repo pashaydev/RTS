@@ -46,8 +46,8 @@ impl SessionLog {
         let base_dir = resolve_log_base_dir(base_dir);
         let started_at_unix_ms = now_unix_ms();
         let session_id = uuid::Uuid::new_v4().to_string();
-        let output_path = logs_dir(&base_dir)
-            .join(format!("session-{started_at_unix_ms}-{session_id}.json"));
+        let output_path =
+            logs_dir(&base_dir).join(format!("session-{started_at_unix_ms}-{session_id}.json"));
 
         Self {
             inner: Arc::new(Mutex::new(SessionLogState {

@@ -361,7 +361,12 @@ fn spawn_path_visualization(
             }
         }
 
-        // Build trace points: use NavPath waypoints if available, otherwise straight line
+        // Build trace points from NavPath waypoints. If the unit has no NavPath
+        // yet (path is pending/computing, or pathfinding failed) we deliberately
+        // skip drawing a straight-line fallback — that visual was misleading,
+        // since terrain or obstacles between A and B may force a detour.
+        // We still spawn the destination marker below so the user sees their click
+        // was acknowledged.
         let trace_points: Vec<Vec3> = if let Some(nav) = nav_path {
             let mut pts = vec![pos];
             for i in nav.current_index..nav.waypoints.len() {
@@ -369,7 +374,7 @@ fn spawn_path_visualization(
             }
             pts
         } else {
-            vec![pos, target]
+            Vec::new()
         };
 
         let total_dist: f32 = trace_points
@@ -382,26 +387,18 @@ fn spawn_path_visualization(
 
         let mut spawned_entities = Vec::new();
 
-        if total_dist < 0.8 {
-            commands.entity(entity).insert(PathVisEntities {
-                entities: spawned_entities,
-                last_pos: pos,
-                target,
+        // Spawn dashes only when we have an actual routed path and it is long enough.
+        if trace_points.len() >= 2 && total_dist >= 0.8 {
+            spawned_entities.extend(spawn_dashes_along_path(
+                &mut commands,
+                &path_assets,
+                &height_map,
+                entity,
+                &trace_points,
                 category,
-            });
-            continue;
+                1.0,
+            ));
         }
-
-        // Spawn dashes along the main path
-        spawned_entities.extend(spawn_dashes_along_path(
-            &mut commands,
-            &path_assets,
-            &height_map,
-            entity,
-            &trace_points,
-            category,
-            1.0,
-        ));
 
         // Spawn destination marker
         spawned_entities.extend(spawn_destination_marker(

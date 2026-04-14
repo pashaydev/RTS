@@ -1,11 +1,11 @@
 use bevy::prelude::*;
 
 use super::super::helpers::*;
-use crate::types::*;
 use crate::infrastructure::multiplayer::{LobbyState, LobbyStatus, NetRole};
-use crate::ui::theme::{Theme, TEXT_PRIMARY, SUCCESS, TEAM_COLORS};
+use crate::types::*;
 use crate::ui::core::components as ui_components;
 use crate::ui::fonts::{self, UiFonts};
+use crate::ui::theme::{Theme, SUCCESS, TEAM_COLORS, TEXT_PRIMARY};
 
 use super::super::new_game;
 use super::super::*;
@@ -233,7 +233,15 @@ pub(crate) fn spawn_host_lobby_page(
     commands.entity(container).add_child(slots_wrap);
 
     for i in 0..4 {
-        new_game::spawn_slot_card(commands, slots_wrap, i, config, true, Some(&lobby.players), theme);
+        new_game::spawn_slot_card(
+            commands,
+            slots_wrap,
+            i,
+            config,
+            true,
+            Some(&lobby.players),
+            theme,
+        );
     }
 
     // ── World Settings ──
@@ -674,7 +682,11 @@ pub(crate) fn spawn_join_lobby_page(
             .id();
         commands.entity(container).add_child(dc_btn);
     } else {
-        let label = if is_connecting { "CONNECTING..." } else { "CONNECT" };
+        let label = if is_connecting {
+            "CONNECTING..."
+        } else {
+            "CONNECT"
+        };
         let connect_btn = spawn_styled_button(
             commands,
             label,
@@ -685,10 +697,7 @@ pub(crate) fn spawn_join_lobby_page(
             theme,
         );
         // Disable when connecting or when session code is empty
-        let has_code = lobby
-            .client_session_code
-            .trim()
-            .len() > 0;
+        let has_code = lobby.client_session_code.trim().len() > 0;
         if is_connecting || !has_code {
             let reason = if is_connecting {
                 "Connecting to host...".to_string()

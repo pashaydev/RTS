@@ -4,8 +4,8 @@
 //! All public items are re-exported here so that `use crate::types::*` (or the
 //! backward-compatible `use crate::types::*`) gives access to everything.
 
-pub mod app;
 pub mod ai;
+pub mod app;
 pub mod buildings;
 pub mod combat;
 pub mod core;

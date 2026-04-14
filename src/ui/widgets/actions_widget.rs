@@ -93,6 +93,7 @@ impl Plugin for ActionsWidgetPlugin {
                     buttons::handle_cycle_stance_button,
                     buttons::handle_ability_button,
                     buttons::handle_formation_button,
+                    buttons::handle_prefer_resource_button,
                 )
                     .run_if(in_state(AppState::InGame))
                     .run_if(player_can_command),
@@ -100,9 +101,13 @@ impl Plugin for ActionsWidgetPlugin {
     }
 }
 
-widget_spawn_system!(spawn_actions_widget, WidgetId::Actions, |commands, content| {
-    commands.entity(content).insert(ActionBarInner);
-});
+widget_spawn_system!(
+    spawn_actions_widget,
+    WidgetId::Actions,
+    |commands, content| {
+        commands.entity(content).insert(ActionBarInner);
+    }
+);
 
 #[derive(Resource)]
 pub struct ActionBarLayoutRevision {
@@ -150,6 +155,7 @@ pub fn update_action_bar(
             Option<&Carrying>,
             Option<&CarryCapacity>,
             Option<&UnitState>,
+            Option<&PreferredResource>,
         ),
         (With<Unit>, With<Selected>),
     >,
@@ -208,6 +214,7 @@ pub fn update_action_bar(
         Local<usize>,
         Local<[u32; ResourceType::COUNT]>,
         Local<UnitCapStats>,
+        Local<Option<SelectedWorkerPreference>>,
     ),
     ui_state: (Res<IconAssets>, Res<RallyPointMode>),
     formation: Res<ActiveFormation>,
@@ -224,7 +231,8 @@ pub fn update_action_bar(
         children_q_readonly,
         layout_revision,
     ) = action_state;
-    let (mut last_queue_len, mut last_res_snapshot, mut last_unit_cap) = local_state;
+    let (mut last_queue_len, mut last_res_snapshot, mut last_unit_cap, mut last_worker_pref) =
+        local_state;
     let (icons, rally_mode) = ui_state;
 
     if !confirm_panels.is_empty() {
@@ -251,6 +259,14 @@ pub fn update_action_bar(
     );
     let unit_cap_changed = current_unit_cap != *last_unit_cap;
     *last_unit_cap = current_unit_cap;
+    let current_worker_pref = SelectedWorkerPreference::from_worker_prefs(
+        selected_units
+            .iter()
+            .filter(|(kind, ..)| **kind == EntityKind::Worker)
+            .map(|(_, _, _, _, pref)| pref.map(|pref| pref.0)),
+    );
+    let worker_pref_changed = current_worker_pref != *last_worker_pref;
+    *last_worker_pref = current_worker_pref;
     let layout_changed = layout_revision.is_changed();
 
     let current_queue_len = selected_buildings
@@ -269,6 +285,7 @@ pub fn update_action_bar(
         && !rally_changed
         && !resources_changed
         && !unit_cap_changed
+        && !worker_pref_changed
         && !layout_changed
     {
         return;
@@ -285,6 +302,7 @@ pub fn update_action_bar(
         && !founded_changed
         && !resources_changed
         && !unit_cap_changed
+        && !worker_pref_changed
         && !layout_changed
     {
         return;

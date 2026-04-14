@@ -5,9 +5,9 @@ use rand::Rng;
 
 use crate::blueprints::types::*;
 use crate::blueprints::EntityVisualCache;
+use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::types::*;
 use crate::world::ground::HeightMap;
-use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
 
 pub fn spawn_from_blueprint(
     commands: &mut Commands,

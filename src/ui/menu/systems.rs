@@ -3,10 +3,12 @@ use bevy::window::Monitor;
 use bevy::window::PrimaryMonitor;
 
 use super::helpers::*;
-use crate::types::*;
 use crate::infrastructure::database::{ActiveProfile, GameDatabase};
-use crate::ui::theme::{Theme, TEXT_PRIMARY, BG_ELEVATED, HIGHLIGHT, HIGHLIGHT_SUBTLE, TEAM_COLORS};
+use crate::types::*;
 use crate::ui::fonts::UiFonts;
+use crate::ui::theme::{
+    Theme, BG_ELEVATED, HIGHLIGHT, HIGHLIGHT_SUBTLE, TEAM_COLORS, TEXT_PRIMARY,
+};
 
 use super::multiplayer;
 use super::*;
@@ -131,10 +133,18 @@ fn dispatch_page(
 ) {
     match *page {
         MenuPage::Title => super::title::spawn_title_page(commands, container, root, fonts, theme),
-        MenuPage::NewGame => super::new_game::spawn_new_game_page(commands, container, config, fonts, theme),
-        MenuPage::Options => {
-            pages::spawn_options_page(commands, container, graphics, audio_settings, resolutions, fonts, theme)
+        MenuPage::NewGame => {
+            super::new_game::spawn_new_game_page(commands, container, config, fonts, theme)
         }
+        MenuPage::Options => pages::spawn_options_page(
+            commands,
+            container,
+            graphics,
+            audio_settings,
+            resolutions,
+            fonts,
+            theme,
+        ),
         MenuPage::Multiplayer => {
             multiplayer::spawn_multiplayer_page(commands, container, fonts, theme)
         }
@@ -148,9 +158,15 @@ fn dispatch_page(
                 commands, container, config, fonts, lobby, role, my_faction, theme,
             )
         }
-        MenuPage::LoadGame => {
-            pages::spawn_load_game_page(commands, container, fonts, theme, db, profile, asset_server)
-        }
+        MenuPage::LoadGame => pages::spawn_load_game_page(
+            commands,
+            container,
+            fonts,
+            theme,
+            db,
+            profile,
+            asset_server,
+        ),
     }
 }
 
@@ -282,7 +298,6 @@ pub(crate) fn rebuild_dirty_menu(
         &asset_server,
     );
 }
-
 
 // ��─ Menu Button Handler ──
 
@@ -700,7 +715,9 @@ pub(crate) fn random_name_system(
                             timestamp: 0.0,
                             player_name: name,
                         };
-                        crate::infrastructure::multiplayer::matchbox_transport::send_to_host(socket, &msg);
+                        crate::infrastructure::multiplayer::matchbox_transport::send_to_host(
+                            socket, &msg,
+                        );
                     }
                 }
                 NetRole::Host => {

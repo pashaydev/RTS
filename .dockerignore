@@ -173,3 +173,10 @@ assets/**
 !assets/audio/sfx/ui/*.ogg
 !assets/audio/sfx/units/
 !assets/audio/sfx/units/*.ogg
+!assets/models/
+!assets/models/Goblin.glb
+!assets/KayKit_Character_Animations/
+!assets/KayKit_Character_Animations/Animations/
+!assets/KayKit_Character_Animations/Animations/gltf/
+!assets/KayKit_Character_Animations/Animations/gltf/Rig_Medium/
+!assets/KayKit_Character_Animations/Animations/gltf/Rig_Medium/*.glb

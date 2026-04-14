@@ -5,12 +5,12 @@ use super::super::*;
 #[cfg(not(target_arch = "wasm32"))]
 use super::JoinDiscoveryScan;
 use super::{JoinTarget, PendingGameStart, DEFAULT_PORT, WEB_SESSION_WS_PATH_PREFIX};
-use crate::types::*;
 use crate::infrastructure::multiplayer::{
     self,
     matchbox_transport::{self, MatchboxInbox, PeerMap, SIGNALING_PORT},
     ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole,
 };
+use crate::types::*;
 
 // ── Network Cleanup ──
 
@@ -190,7 +190,10 @@ pub(crate) fn stop_client(commands: &mut Commands, _client_state: &Option<Res<Cl
 // ── Connect to Host ──
 
 pub(crate) fn connect_to_host_system(
-    interactions: Query<(&Interaction, &MenuButton), (Changed<Interaction>, Without<ButtonDisabled>)>,
+    interactions: Query<
+        (&Interaction, &MenuButton),
+        (Changed<Interaction>, Without<ButtonDisabled>),
+    >,
     text_inputs: Query<&TextInputField, With<SessionCodeInput>>,
     mut commands: Commands,
     mut lobby: ResMut<LobbyState>,

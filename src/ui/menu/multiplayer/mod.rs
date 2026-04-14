@@ -3,8 +3,8 @@ pub(crate) mod lobby;
 pub(crate) mod networking;
 pub(crate) mod pages;
 
-use crate::types::*;
 use crate::infrastructure::multiplayer::LobbyState;
+use crate::types::*;
 
 use bevy::prelude::*;
 
@@ -13,8 +13,9 @@ use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
 pub(crate) struct JoinDiscoveryScan {
-    pub(super) rx:
-        std::sync::Mutex<std::sync::mpsc::Receiver<Vec<crate::infrastructure::multiplayer::DiscoveredHost>>>,
+    pub(super) rx: std::sync::Mutex<
+        std::sync::mpsc::Receiver<Vec<crate::infrastructure::multiplayer::DiscoveredHost>>,
+    >,
 }
 
 #[allow(dead_code)]

@@ -4,11 +4,11 @@ use bevy::prelude::*;
 use std::collections::HashMap;
 
 use crate::blueprints::EntityKind;
+use crate::infrastructure::multiplayer::NetRole;
 use crate::types::{
     AppState, ExplosiveProp, Faction, GrowingResource, GrowingTree, MatureTree, ResourceNode,
     Sapling,
 };
-use crate::infrastructure::multiplayer::NetRole;
 
 // ── Core bridge types ────────────────────────────────────────────────────────
 

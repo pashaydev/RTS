@@ -411,10 +411,14 @@ pub fn text_input_system(
                         }
                         NetRole::Host => {
                             if let Some(ref mut lobby) = lobby {
-                                if let Some(host_player) = lobby.players.iter_mut().find(|p| p.is_host) {
+                                if let Some(host_player) =
+                                    lobby.players.iter_mut().find(|p| p.is_host)
+                                {
                                     host_player.name = field.value.clone();
                                 }
-                                commands.insert_resource(crate::ui::menu::multiplayer::PendingLobbyBroadcast);
+                                commands.insert_resource(
+                                    crate::ui::menu::multiplayer::PendingLobbyBroadcast,
+                                );
                             }
                         }
                         NetRole::Offline => {}

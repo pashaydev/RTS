@@ -3,20 +3,20 @@ pub mod messages;
 pub mod registry;
 pub mod vfx;
 
-use bevy::math::primitives::Rectangle;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
+use bevy::math::primitives::Rectangle;
 use bevy::prelude::*;
 use bevy::render::alpha::AlphaMode;
-use std::f32::consts::PI;
 use std::collections::HashSet;
+use std::f32::consts::PI;
 
 use crate::blueprints::EntityKind;
 use crate::simulation::combat::{apply_manual_move_intent, clear_combat_intent};
+use crate::simulation::selection::SelectionSet;
 use crate::types::{
     AllyNotifications, AllyNotifyKind, AppState, AttackTarget, Faction, GameFlowSet, Hovered,
     MoveTarget, PickRadius, RtsCamera, TaskSource, Unit, UnitState,
 };
-use crate::simulation::selection::SelectionSet;
 
 pub use components::*;
 pub use messages::*;
@@ -346,8 +346,7 @@ fn spawn_pickup_entities(
                 PickupAuraRing,
                 Mesh3d(pickup_visuals.ring_mesh.clone()),
                 MeshMaterial3d(ring_material),
-                Transform::from_xyz(0.0, -0.22, 0.0)
-                    .with_rotation(Quat::from_rotation_x(PI * 0.5)),
+                Transform::from_xyz(0.0, -0.22, 0.0).with_rotation(Quat::from_rotation_x(PI * 0.5)),
                 GlobalTransform::default(),
                 Visibility::Visible,
                 InheritedVisibility::default(),
@@ -363,8 +362,6 @@ fn spawn_pickup_entities(
         commands.entity(root).add_child(ring_child);
     }
 }
-
-
 
 fn pickup_failure_for_unit(
     pickup: &ItemPickup,
@@ -442,10 +439,7 @@ fn best_unit_to_approach(candidates: &[PickupCandidate]) -> Option<Entity> {
         .map(|candidate| candidate.entity)
 }
 
-fn can_pickup_if_close(
-    pickup: &ItemPickup,
-    inventory: &UnitInventory,
-) -> bool {
+fn can_pickup_if_close(pickup: &ItemPickup, inventory: &UnitInventory) -> bool {
     inventory_failure_for_item(pickup.item, inventory).is_none()
 }
 
@@ -570,13 +564,7 @@ fn collect_item_pickups(
             candidates.push(PickupCandidate {
                 entity: picker,
                 distance_sq: dx * dx + dz * dz,
-                failure: pickup_failure_for_unit(
-                    pickup,
-                    pickup_tf,
-                    radius,
-                    unit_tf,
-                    &inventory,
-                ),
+                failure: pickup_failure_for_unit(pickup, pickup_tf, radius, unit_tf, &inventory),
                 can_pick_if_close: can_pickup_if_close(pickup, &inventory),
             });
         }
@@ -605,18 +593,10 @@ fn collect_item_pickups(
                         continue;
                     };
                     // Project to ground level so pathfinding works correctly
-                    let ground_target = Vec3::new(
-                        pickup_tf.translation.x,
-                        0.0,
-                        pickup_tf.translation.z,
-                    );
+                    let ground_target =
+                        Vec3::new(pickup_tf.translation.x, 0.0, pickup_tf.translation.z);
                     clear_combat_intent(&mut commands, unit, 0.0);
-                    apply_manual_move_intent(
-                        &mut commands,
-                        unit,
-                        ground_target,
-                        0.0,
-                    );
+                    apply_manual_move_intent(&mut commands, unit, ground_target, 0.0);
                     commands.entity(unit).insert((
                         PendingItemPickup { pickup: msg.pickup },
                         MoveTarget(ground_target),
@@ -686,11 +666,8 @@ fn resolve_pending_item_pickups(
                 *source = TaskSource::Auto;
             }
             Some(ItemPickupFailureReason::TooFar) => {
-                let ground_target = Vec3::new(
-                    pickup_tf.translation.x,
-                    0.0,
-                    pickup_tf.translation.z,
-                );
+                let ground_target =
+                    Vec3::new(pickup_tf.translation.x, 0.0, pickup_tf.translation.z);
                 if move_target.map_or(true, |target| {
                     let dx = target.0.x - ground_target.x;
                     let dz = target.0.z - ground_target.z;
@@ -774,7 +751,9 @@ fn transfer_inventory_items(
             continue;
         }
         to_inventory.items.push(item);
-        changed.write(InventoryChanged { unit: msg.from_unit });
+        changed.write(InventoryChanged {
+            unit: msg.from_unit,
+        });
         changed.write(InventoryChanged { unit: msg.to_unit });
     }
 }
@@ -782,9 +761,30 @@ fn transfer_inventory_items(
 fn animate_pickup_visuals(
     time: Res<Time>,
     pickup_roots: Query<Has<Hovered>, With<ItemPickup>>,
-    mut backdrops: Query<(&ChildOf, &mut Transform), (With<PickupBackdrop>, Without<PickupStem>, Without<PickupAuraRing>)>,
-    mut stems: Query<(&ChildOf, &mut Transform), (With<PickupStem>, Without<PickupBackdrop>, Without<PickupAuraRing>)>,
-    mut rings: Query<(&ChildOf, &mut Transform), (With<PickupAuraRing>, Without<PickupBackdrop>, Without<PickupStem>)>,
+    mut backdrops: Query<
+        (&ChildOf, &mut Transform),
+        (
+            With<PickupBackdrop>,
+            Without<PickupStem>,
+            Without<PickupAuraRing>,
+        ),
+    >,
+    mut stems: Query<
+        (&ChildOf, &mut Transform),
+        (
+            With<PickupStem>,
+            Without<PickupBackdrop>,
+            Without<PickupAuraRing>,
+        ),
+    >,
+    mut rings: Query<
+        (&ChildOf, &mut Transform),
+        (
+            With<PickupAuraRing>,
+            Without<PickupBackdrop>,
+            Without<PickupStem>,
+        ),
+    >,
 ) {
     let t = time.elapsed_secs();
 
@@ -804,8 +804,7 @@ fn animate_pickup_visuals(
     for (parent, mut transform) in &mut rings {
         let is_hovered = pickup_roots.get(parent.parent()).unwrap_or(false);
         let ring_scale = if is_hovered { 1.18 } else { 1.0 };
-        transform.rotation =
-            Quat::from_rotation_y(-t * 0.9) * Quat::from_rotation_x(PI * 0.5);
+        transform.rotation = Quat::from_rotation_y(-t * 0.9) * Quat::from_rotation_x(PI * 0.5);
         transform.scale = Vec3::new(ring_scale, ring_scale, 1.0);
     }
 }
@@ -819,13 +818,16 @@ fn animate_pickup_bob(
     }
 }
 
-
 fn face_pickup_billboards(
     camera_q: Query<&GlobalTransform, With<RtsCamera>>,
     pickup_roots: Query<&GlobalTransform, With<ItemPickup>>,
     mut billboards: Query<
         (&ChildOf, &mut Transform, Has<PickupStem>),
-        Or<(With<PickupBillboard>, With<PickupBackdrop>, With<PickupStem>)>,
+        Or<(
+            With<PickupBillboard>,
+            With<PickupBackdrop>,
+            With<PickupStem>,
+        )>,
     >,
 ) {
     let Ok(camera_tf) = camera_q.single() else {

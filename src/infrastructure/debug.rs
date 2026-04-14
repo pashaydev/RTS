@@ -10,6 +10,8 @@ use bevy::light::cluster::{ClusterConfig, ClusterZConfig};
 use bevy::prelude::*;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
+use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
+use crate::simulation::items::{ItemKind, SpawnItemPickup, UnitInventory};
 use crate::types::{
     AiControlledFactions, AiFactionSettings, AllPlayerResources, AllyNotifications, AllyNotifyKind,
     AppState, AttackTarget, CullReason, Faction, FrustumCulled, FrustumDebugMode, GameFlowSet,
@@ -18,11 +20,9 @@ use crate::types::{
 };
 use crate::world::fog::FogTweakSettings;
 use crate::world::ground::HeightMap;
-use crate::simulation::items::{ItemKind, SpawnItemPickup, UnitInventory};
 use crate::world::lighting::{
     DayCycle, EntityClusterLight, EntityLightConfig, EntityLightGrid, LightingOverrides, SunLight,
 };
-use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::world::pathfinding::PathRequestQueue;
 use bevy::window::PrimaryWindow;
 pub use model::DebugTweaks;
@@ -565,8 +565,22 @@ fn register_grass_debug_tweaks(tweaks: &mut DebugTweaks, defaults: &GrassDebugSe
         1.5,
         0.01,
     );
-    tweaks.add_float(GRASS_FOLDER, "Scale Min", defaults.scale_min, 0.1, 3.0, 0.01);
-    tweaks.add_float(GRASS_FOLDER, "Scale Max", defaults.scale_max, 0.1, 3.0, 0.01);
+    tweaks.add_float(
+        GRASS_FOLDER,
+        "Scale Min",
+        defaults.scale_min,
+        0.1,
+        3.0,
+        0.01,
+    );
+    tweaks.add_float(
+        GRASS_FOLDER,
+        "Scale Max",
+        defaults.scale_max,
+        0.1,
+        3.0,
+        0.01,
+    );
     tweaks.add_float(
         GRASS_FOLDER,
         "Lean Strength",
@@ -1341,7 +1355,11 @@ fn sync_item_debug_tweaks(
     mut item_spawns: MessageWriter<SpawnItemPickup>,
 ) {
     let inventories: Vec<&UnitInventory> = selected_inventories.iter().collect();
-    tweaks.set_readonly_if_changed(ITEMS_SELECTED_FOLDER, "Units", &inventories.len().to_string());
+    tweaks.set_readonly_if_changed(
+        ITEMS_SELECTED_FOLDER,
+        "Units",
+        &inventories.len().to_string(),
+    );
 
     let total_capacity: usize = inventories
         .iter()

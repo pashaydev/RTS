@@ -7,9 +7,9 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
 
 use crate::types::*;
+use crate::ui::core::hud::MainHudRoot;
 use crate::world::fog::FogTweakSettings;
 use crate::world::ground::playable_half_map;
-use crate::ui::core::hud::MainHudRoot;
 
 const MINIMAP_TEX_SIZE: usize = 200;
 const MINIMAP_REFRESH_HZ: f32 = 4.0;
@@ -176,8 +176,7 @@ fn setup_minimap(
     let mut base_pixels = vec![[0u8; 4]; MINIMAP_TEX_SIZE * MINIMAP_TEX_SIZE];
     for py in 0..MINIMAP_TEX_SIZE {
         for px in 0..MINIMAP_TEX_SIZE {
-            let (wx, wz) =
-                minimap_to_world(px as f32 + 0.5, py as f32 + 0.5, view_size, view_half);
+            let (wx, wz) = minimap_to_world(px as f32 + 0.5, py as f32 + 0.5, view_size, view_half);
             let biome = biome_map.get_biome(wx, wz);
             base_pixels[py * MINIMAP_TEX_SIZE + px] = biome_color(biome);
         }
@@ -307,7 +306,11 @@ fn update_minimap_texture(
     let stripes = MINIMAP_BLEND_STRIPES as usize;
     let (base_pixels, blended, buf) = {
         let tex = &mut *minimap_tex;
-        (&tex.base_pixels, &mut tex.blended_pixels, &mut tex.scratch_pixels)
+        (
+            &tex.base_pixels,
+            &mut tex.blended_pixels,
+            &mut tex.scratch_pixels,
+        )
     };
     buf.copy_from_slice(blended);
 
@@ -324,13 +327,12 @@ fn update_minimap_texture(
                 fog_idx_cache.fog_grid_size = fog.grid_size;
                 for py in 0..MINIMAP_TEX_SIZE {
                     for px in 0..MINIMAP_TEX_SIZE {
-                        let (wx, wz) =
-                            minimap_to_world(
-                                px as f32 + 0.5,
-                                py as f32 + 0.5,
-                                view_size,
-                                view_half,
-                            );
+                        let (wx, wz) = minimap_to_world(
+                            px as f32 + 0.5,
+                            py as f32 + 0.5,
+                            view_size,
+                            view_half,
+                        );
                         let ix = ((wx + fog.half_map) / fog.step).round() as usize;
                         let iz = ((wz + fog.half_map) / fog.step).round() as usize;
                         let fog_idx = if ix < fog.grid_size && iz < fog.grid_size {
@@ -352,70 +354,70 @@ fn update_minimap_texture(
                 let row_start = py * MINIMAP_TEX_SIZE;
                 let row_end = row_start + MINIMAP_TEX_SIZE;
                 for i in row_start..row_end {
-                let fog_idx = fog_idx_cache.indices[i];
-                let vis = if fog_idx != usize::MAX {
-                    let v = fog.display[fog_idx];
-                    if v > 0.01 {
-                        0.5 + 0.5 * v
-                    } else if fog.explored[fog_idx] != 0 {
-                        0.5
+                    let fog_idx = fog_idx_cache.indices[i];
+                    let vis = if fog_idx != usize::MAX {
+                        let v = fog.display[fog_idx];
+                        if v > 0.01 {
+                            0.5 + 0.5 * v
+                        } else if fog.explored[fog_idx] != 0 {
+                            0.5
+                        } else {
+                            0.0
+                        }
                     } else {
                         0.0
-                    }
-                } else {
-                    0.0
-                };
+                    };
 
-                let base = [
-                    base_pixels[i][0] as f32 / 255.0,
-                    base_pixels[i][1] as f32 / 255.0,
-                    base_pixels[i][2] as f32 / 255.0,
-                ];
+                    let base = [
+                        base_pixels[i][0] as f32 / 255.0,
+                        base_pixels[i][1] as f32 / 255.0,
+                        base_pixels[i][2] as f32 / 255.0,
+                    ];
 
-                let out = if vis < 0.01 {
-                    let t = 0.05;
-                    [
-                        base[0] * t + fog_color[0] * (1.0 - t),
-                        base[1] * t + fog_color[1] * (1.0 - t),
-                        base[2] * t + fog_color[2] * (1.0 - t),
-                    ]
-                } else if vis < 0.6 {
-                    let t = vis / 0.6;
-                    let tinted = [
-                        base[0] * 0.4 + explored_tint[0] * 0.6,
-                        base[1] * 0.4 + explored_tint[1] * 0.6,
-                        base[2] * 0.4 + explored_tint[2] * 0.6,
-                    ];
-                    let near_fog = [
-                        base[0] * 0.2 + fog_color[0] * 0.8,
-                        base[1] * 0.2 + fog_color[1] * 0.8,
-                        base[2] * 0.2 + fog_color[2] * 0.8,
-                    ];
-                    [
-                        near_fog[0] + (tinted[0] - near_fog[0]) * t,
-                        near_fog[1] + (tinted[1] - near_fog[1]) * t,
-                        near_fog[2] + (tinted[2] - near_fog[2]) * t,
-                    ]
-                } else {
-                    let t = ((vis - 0.6) / 0.4).min(1.0);
-                    let tinted = [
-                        base[0] * 0.4 + explored_tint[0] * 0.6,
-                        base[1] * 0.4 + explored_tint[1] * 0.6,
-                        base[2] * 0.4 + explored_tint[2] * 0.6,
-                    ];
-                    [
-                        tinted[0] + (base[0] - tinted[0]) * t,
-                        tinted[1] + (base[1] - tinted[1]) * t,
-                        tinted[2] + (base[2] - tinted[2]) * t,
-                    ]
-                };
+                    let out = if vis < 0.01 {
+                        let t = 0.05;
+                        [
+                            base[0] * t + fog_color[0] * (1.0 - t),
+                            base[1] * t + fog_color[1] * (1.0 - t),
+                            base[2] * t + fog_color[2] * (1.0 - t),
+                        ]
+                    } else if vis < 0.6 {
+                        let t = vis / 0.6;
+                        let tinted = [
+                            base[0] * 0.4 + explored_tint[0] * 0.6,
+                            base[1] * 0.4 + explored_tint[1] * 0.6,
+                            base[2] * 0.4 + explored_tint[2] * 0.6,
+                        ];
+                        let near_fog = [
+                            base[0] * 0.2 + fog_color[0] * 0.8,
+                            base[1] * 0.2 + fog_color[1] * 0.8,
+                            base[2] * 0.2 + fog_color[2] * 0.8,
+                        ];
+                        [
+                            near_fog[0] + (tinted[0] - near_fog[0]) * t,
+                            near_fog[1] + (tinted[1] - near_fog[1]) * t,
+                            near_fog[2] + (tinted[2] - near_fog[2]) * t,
+                        ]
+                    } else {
+                        let t = ((vis - 0.6) / 0.4).min(1.0);
+                        let tinted = [
+                            base[0] * 0.4 + explored_tint[0] * 0.6,
+                            base[1] * 0.4 + explored_tint[1] * 0.6,
+                            base[2] * 0.4 + explored_tint[2] * 0.6,
+                        ];
+                        [
+                            tinted[0] + (base[0] - tinted[0]) * t,
+                            tinted[1] + (base[1] - tinted[1]) * t,
+                            tinted[2] + (base[2] - tinted[2]) * t,
+                        ]
+                    };
 
-                let r = (out[0] * 255.0).clamp(0.0, 255.0) as u8;
-                let g = (out[1] * 255.0).clamp(0.0, 255.0) as u8;
-                let b = (out[2] * 255.0).clamp(0.0, 255.0) as u8;
-                let a = base_pixels[i][3];
-                blended[i] = [r, g, b, a];
-                buf[i] = [r, g, b, a];
+                    let r = (out[0] * 255.0).clamp(0.0, 255.0) as u8;
+                    let g = (out[1] * 255.0).clamp(0.0, 255.0) as u8;
+                    let b = (out[2] * 255.0).clamp(0.0, 255.0) as u8;
+                    let a = base_pixels[i][3];
+                    blended[i] = [r, g, b, a];
+                    buf[i] = [r, g, b, a];
                 }
             }
         }

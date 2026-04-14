@@ -1,12 +1,12 @@
+use bevy::ecs::system::SystemParam;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
-use bevy::ecs::system::SystemParam;
 
-use crate::infrastructure::audio::{PlaySfx, SfxKind};
+use super::{emit_carrying_delta, CarryingDelta};
 use crate::blueprints::EntityKind;
+use crate::infrastructure::audio::{PlaySfx, SfxKind};
 use crate::types::*;
 use crate::ui::theme;
-use super::{emit_carrying_delta, CarryingDelta};
 
 #[derive(SystemParam)]
 pub(super) struct WorkerAiParams<'w, 's> {
@@ -32,6 +32,7 @@ pub(super) struct WorkerAiParams<'w, 's> {
             Option<&'static MoveTarget>,
             &'static mut TaskQueue,
             Option<&'static ManualIdleSince>,
+            Option<&'static PreferredResource>,
         ),
         With<Unit>,
     >,
@@ -67,19 +68,32 @@ pub(super) struct WorkerAiParams<'w, 's> {
     all_nodes: Query<
         'w,
         's,
-        (Entity, &'static Transform, Option<&'static YardResourceNode>),
+        (
+            Entity,
+            &'static Transform,
+            Option<&'static YardResourceNode>,
+        ),
         (With<ResourceNode>, Without<Unit>),
     >,
     construction_sites: Query<
         'w,
         's,
-        (Entity, &'static Transform, &'static BuildingState, &'static Faction),
+        (
+            Entity,
+            &'static Transform,
+            &'static BuildingState,
+            &'static Faction,
+        ),
         (With<Building>, Without<Unit>, Without<ResourceNode>),
     >,
     storage_auras: Query<
         'w,
         's,
-        (&'static Transform, &'static StorageAura, &'static BuildingState),
+        (
+            &'static Transform,
+            &'static StorageAura,
+            &'static BuildingState,
+        ),
         With<Building>,
     >,
     carry_deltas: bevy::ecs::message::MessageWriter<'w, CarryingDelta>,
@@ -115,6 +129,7 @@ pub(super) fn worker_ai_system(
         _move_target,
         mut task_queue,
         manual_idle_since,
+        preferred_resource,
     ) in &mut params.workers
     {
         // Clients only simulate their local faction's worker logic.
@@ -191,6 +206,18 @@ pub(super) fn worker_ai_system(
                 }
                 if let Some(site) = closest_site {
                     *state = UnitState::MovingToBuild(site);
+                } else if let Some(node) = preferred_resource.and_then(|pref| {
+                    find_nearest_node_of_type(
+                        &tf.translation,
+                        pref.0,
+                        &params.all_nodes,
+                        &params.nodes,
+                        worker_faction,
+                        &params.deposit_points,
+                        &params.inventories,
+                    )
+                }) {
+                    *state = UnitState::Gathering(node);
                 } else if let Some(node) = find_nearest_node(
                     &tf.translation,
                     auto_scan_range,
@@ -210,7 +237,9 @@ pub(super) fn worker_ai_system(
                     let auto_build_range = 20.0;
                     let mut closest_site = None;
                     let mut closest_site_dist = f32::MAX;
-                    for (site_entity, site_tf, site_state, site_faction) in &params.construction_sites {
+                    for (site_entity, site_tf, site_state, site_faction) in
+                        &params.construction_sites
+                    {
                         if *site_state != BuildingState::UnderConstruction
                             || site_faction != worker_faction
                         {
@@ -319,8 +348,10 @@ pub(super) fn worker_ai_system(
 
                 // Frame-rate independent gather tick (with storage aura + per-resource modifier).
                 let unit_weight = rt.weight();
-                let aura_bonus =
-                    crate::simulation::buildings::storage_aura_bonus(tf.translation, &params.storage_auras);
+                let aura_bonus = crate::simulation::buildings::storage_aura_bonus(
+                    tf.translation,
+                    &params.storage_auras,
+                );
                 let effective_speed = speed.0 * (1.0 + aura_bonus) * rt.gather_rate_multiplier();
                 gather_accumulator.0 += effective_speed * time.delta_secs();
                 let mut amount = gather_accumulator.0.floor() as u32;
@@ -396,7 +427,8 @@ pub(super) fn worker_ai_system(
 
             UnitState::ReturningToDeposit { depot, gather_node } => {
                 // Check depot still exists
-                let Ok((_, depot_tf, _, _, depot_kind, depot_fp)) = params.deposit_points.get(depot)
+                let Ok((_, depot_tf, _, _, depot_kind, depot_fp)) =
+                    params.deposit_points.get(depot)
                 else {
                     commands.entity(entity).remove::<MoveTarget>();
                     let new_state = return_to_depot_or_wait(
@@ -470,7 +502,10 @@ pub(super) fn worker_ai_system(
                     }
 
                     // Add deposited amount to global resources
-                    params.all_resources.get_mut(worker_faction).add(rt, deposited);
+                    params
+                        .all_resources
+                        .get_mut(worker_faction)
+                        .add(rt, deposited);
                     deposit_info = Some((rt, deposited));
 
                     // Update carrying with leftover
@@ -537,16 +572,16 @@ pub(super) fn worker_ai_system(
 
                 // Return to gather node if it still has resources
                 if let Some(gn) = gather_node {
-                        if let Ok((_, node_data, yard_tag)) = params.nodes.get(gn) {
-                            if yard_tag.is_some() {
-                                *state = UnitState::Idle;
-                                *source = TaskSource::Auto;
-                                task_queue.current = None;
-                                continue;
-                            }
-                            if node_data.amount_remaining > 0 {
-                                *state = UnitState::Gathering(gn);
-                                continue;
+                    if let Ok((_, node_data, yard_tag)) = params.nodes.get(gn) {
+                        if yard_tag.is_some() {
+                            *state = UnitState::Idle;
+                            *source = TaskSource::Auto;
+                            task_queue.current = None;
+                            continue;
+                        }
+                        if node_data.amount_remaining > 0 {
+                            *state = UnitState::Gathering(gn);
+                            continue;
                         }
                     }
                 }
@@ -592,7 +627,9 @@ pub(super) fn worker_ai_system(
                 // Try a different depot that accepts our resource type and has space
                 let mut best_depot = None;
                 let mut best_dist = f32::MAX;
-                for (dp_entity, dp_tf, dp_state, dp_faction, _dp_kind, _dp_fp) in &params.deposit_points {
+                for (dp_entity, dp_tf, dp_state, dp_faction, _dp_kind, _dp_fp) in
+                    &params.deposit_points
+                {
                     if dp_faction != worker_faction || *dp_state != BuildingState::Complete {
                         continue;
                     }
@@ -657,7 +694,12 @@ pub(super) fn worker_ai_system(
 }
 
 /// Spawn a floating "+N" resource popup UI node at a world position.
-pub(super) fn spawn_resource_popup(commands: &mut Commands, world_pos: Vec3, rt: ResourceType, amount: u32) {
+pub(super) fn spawn_resource_popup(
+    commands: &mut Commands,
+    world_pos: Vec3,
+    rt: ResourceType,
+    amount: u32,
+) {
     let color = rt.carry_color();
     let srgba = color.to_srgba();
     commands.spawn((
@@ -823,6 +865,65 @@ fn find_nearest_node(
         }
         closest_dist = dist;
         closest_node = Some(node_entity);
+    }
+    closest_node
+}
+
+/// Unbounded scan for the nearest node of a specific resource type, filtered
+/// to types with an accepting depot. Used by workers with `PreferredResource`.
+fn find_nearest_node_of_type(
+    pos: &Vec3,
+    target: ResourceType,
+    all_nodes: &Query<
+        (Entity, &Transform, Option<&YardResourceNode>),
+        (With<ResourceNode>, Without<Unit>),
+    >,
+    node_data_q: &Query<(&Transform, &mut ResourceNode, Option<&YardResourceNode>), Without<Unit>>,
+    faction: &Faction,
+    deposit_points: &Query<
+        (
+            Entity,
+            &Transform,
+            &BuildingState,
+            &Faction,
+            &EntityKind,
+            &BuildingFootprint,
+        ),
+        (With<DepositPoint>, Without<Unit>),
+    >,
+    inventories: &Query<
+        (&Transform, Option<&mut StorageInventory>),
+        (With<DepositPoint>, Without<Unit>),
+    >,
+) -> Option<Entity> {
+    let mut closest_dist = f32::MAX;
+    let mut closest_node = None;
+    for (node_entity, node_tf, yard_tag) in all_nodes {
+        if yard_tag.is_some() {
+            continue;
+        }
+        let Ok((_, node_data, _)) = node_data_q.get(node_entity) else {
+            continue;
+        };
+        if node_data.resource_type != target || node_data.amount_remaining == 0 {
+            continue;
+        }
+        if find_nearest_deposit_for(
+            pos,
+            faction,
+            Some(target),
+            deposit_points,
+            Some(inventories),
+        )
+        .is_none()
+        {
+            continue;
+        }
+        let dist = pos.distance(node_tf.translation);
+        if dist < closest_dist {
+            closest_dist = dist;
+            closest_node = Some(node_entity);
+        }
     }
     closest_node
 }

@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use super::core::framework::{WidgetId, WidgetRegistry};
 use super::core::interactions::UiClickEvent;
 use crate::types::AppState;
-use crate::ui::theme::{self, Theme};
 use crate::ui::fonts::{self, UiFonts};
+use crate::ui::theme::{self, Theme};
 
 pub struct WidgetToolbarPlugin;
 

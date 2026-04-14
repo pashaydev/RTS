@@ -4,12 +4,12 @@ use bevy::window::PrimaryWindow;
 
 use crate::blueprints::EntityKind;
 use crate::presentation::camera;
-use crate::types::*;
-use crate::world::fog::FogTweakSettings;
 use crate::simulation::items::{ItemPickup, ItemPickupLabel};
 use crate::simulation::selection::SelectionSet;
-use crate::ui::theme::Theme;
+use crate::types::*;
 use crate::ui::fonts;
+use crate::ui::theme::Theme;
+use crate::world::fog::FogTweakSettings;
 use std::collections::{HashMap, HashSet};
 
 // ══════════════════════════════════════════════════════════════════════
@@ -301,7 +301,9 @@ impl LabelRect {
     }
 
     fn anchor_point(self, anchor: Vec2) -> Vec2 {
-        let x = anchor.x.clamp(self.min.x + 6.0, self.min.x + self.size.x - 6.0);
+        let x = anchor
+            .x
+            .clamp(self.min.x + 6.0, self.min.x + self.size.x - 6.0);
         if anchor.y <= self.center().y {
             Vec2::new(x, self.min.y)
         } else {
@@ -477,7 +479,13 @@ fn collect_candidates(
             Option<&ItemPickupLabel>,
         ),
         (
-            Or<(With<Unit>, With<Building>, With<Mob>, With<ResourceNode>, With<ItemPickup>)>,
+            Or<(
+                With<Unit>,
+                With<Building>,
+                With<Mob>,
+                With<ResourceNode>,
+                With<ItemPickup>,
+            )>,
             Without<FrustumCulled>,
         ),
     >,
@@ -489,7 +497,17 @@ fn collect_candidates(
 ) -> Vec<RawCandidate> {
     let mut candidates = Vec::new();
 
-    for (entity, gt, kind_opt, faction_opt, health_opt, level_opt, resource_opt, pickup_label_opt) in entities_q {
+    for (
+        entity,
+        gt,
+        kind_opt,
+        faction_opt,
+        health_opt,
+        level_opt,
+        resource_opt,
+        pickup_label_opt,
+    ) in entities_q
+    {
         let world_pos = gt.translation();
         let distance = cam_pos.distance(world_pos);
 
@@ -502,7 +520,8 @@ fn collect_candidates(
         let is_pickup = pickup_label_opt.is_some();
 
         // Units & mobs: show ambient labels only if toggle is on
-        if (is_unit || is_mob) && !label_visibility.show_unit_labels && !is_hovered && !is_selected {
+        if (is_unit || is_mob) && !label_visibility.show_unit_labels && !is_hovered && !is_selected
+        {
             continue;
         }
 
@@ -589,7 +608,11 @@ fn collect_candidates(
             }
             n
         } else if let Some(rn) = resource_opt {
-            format!("{} ({})", rn.resource_type.display_name(), rn.amount_remaining)
+            format!(
+                "{} ({})",
+                rn.resource_type.display_name(),
+                rn.amount_remaining
+            )
         } else {
             continue;
         };
@@ -608,7 +631,11 @@ fn collect_candidates(
             Some(pickup_label.extra.clone())
         } else if let Some(rn) = resource_opt {
             if kind_opt.is_some() {
-                Some(format!("{}: {}", rn.resource_type.display_name(), rn.amount_remaining))
+                Some(format!(
+                    "{}: {}",
+                    rn.resource_type.display_name(),
+                    rn.amount_remaining
+                ))
             } else {
                 None
             }
@@ -657,9 +684,7 @@ fn extract_focus_and_ambient(
     let mut ambient = Vec::new();
 
     for c in candidates {
-        let is_focus = c.is_hovered
-            || (c.is_selected && selection_count <= 1)
-            || (!c.is_unit); // non-units that passed filtering are already hover/select
+        let is_focus = c.is_hovered || (c.is_selected && selection_count <= 1) || (!c.is_unit); // non-units that passed filtering are already hover/select
 
         if is_focus {
             let priority = if c.is_selected {
@@ -724,8 +749,10 @@ fn update_clusters(
     // For each bucket, try to match to existing clusters or create new ones
     for (_key, bucket_entities) in &buckets {
         let entity_set: HashSet<Entity> = bucket_entities.iter().map(|c| c.entity).collect();
-        let entity_positions: HashMap<Entity, Vec3> =
-            bucket_entities.iter().map(|c| (c.entity, c.world_pos)).collect();
+        let entity_positions: HashMap<Entity, Vec3> = bucket_entities
+            .iter()
+            .map(|c| (c.entity, c.world_pos))
+            .collect();
 
         // Find existing clusters that overlap with this bucket
         let mut matched_clusters: Vec<u64> = Vec::new();
@@ -741,8 +768,11 @@ fn update_clusters(
                 && existing.faction_priority == bucket_entities[0].faction_priority
             {
                 // How many of this cluster's old members are still in the bucket?
-                let overlap: HashSet<Entity> =
-                    existing.members.intersection(&entity_set).copied().collect();
+                let overlap: HashSet<Entity> = existing
+                    .members
+                    .intersection(&entity_set)
+                    .copied()
+                    .collect();
                 if !overlap.is_empty() {
                     matched_clusters.push(cid);
                     for e in &overlap {
@@ -1019,7 +1049,11 @@ fn layout_intents(
             .unwrap_or(default_size);
 
         let projected_pos = Vec2::new(label_origin.x - size.x * 0.5, label_origin.y);
-        let previous_pos = layout_cache.entries.get(&key).map(|c| c.pos).unwrap_or(projected_pos);
+        let previous_pos = layout_cache
+            .entries
+            .get(&key)
+            .map(|c| c.pos)
+            .unwrap_or(projected_pos);
         let desired_pos = previous_pos.lerp(projected_pos, config.follow_strength);
 
         let resolved_target = find_best_label_slot(
@@ -1045,7 +1079,9 @@ fn layout_intents(
         let rect = LabelRect { min: pos, size };
         placed.push(rect);
         final_rects.insert(key, rect);
-        layout_cache.entries.insert(key, CachedLabelPlacement { pos, size });
+        layout_cache
+            .entries
+            .insert(key, CachedLabelPlacement { pos, size });
     }
 
     // Prune stale cache entries
@@ -1091,7 +1127,13 @@ fn entity_label_system(
             Option<&ItemPickupLabel>,
         ),
         (
-            Or<(With<Unit>, With<Building>, With<Mob>, With<ResourceNode>, With<ItemPickup>)>,
+            Or<(
+                With<Unit>,
+                With<Building>,
+                With<Mob>,
+                With<ResourceNode>,
+                With<ItemPickup>,
+            )>,
             Without<FrustumCulled>,
         ),
     >,

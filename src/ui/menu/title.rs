@@ -4,9 +4,9 @@ use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 
 use crate::types::*;
-use crate::ui::theme::{Theme, BG_ELEVATED, TEXT_PRIMARY};
 use crate::ui::core::components as ui_components;
 use crate::ui::core::fonts::{self, UiFonts};
+use crate::ui::theme::{Theme, BG_ELEVATED, TEXT_PRIMARY};
 
 use super::{MenuAction, MenuButton, MenuStatusBar};
 
@@ -40,14 +40,8 @@ pub(crate) fn spawn_title_page(
     .iter()
     .enumerate()
     {
-        let btn = spawn_accent_menu_button(
-            commands,
-            label,
-            MenuButton(*action),
-            Some(i),
-            fonts,
-            theme,
-        );
+        let btn =
+            spawn_accent_menu_button(commands, label, MenuButton(*action), Some(i), fonts, theme);
         commands.entity(container).add_child(btn);
     }
 
@@ -287,11 +281,7 @@ pub(crate) fn spawn_status_bar(
     commands.entity(root).add_child(bar);
 }
 
-fn spawn_status_icon(
-    parent: &mut ChildSpawnerCommands,
-    icon_handle: Handle<Image>,
-    theme: &Theme,
-) {
+fn spawn_status_icon(parent: &mut ChildSpawnerCommands, icon_handle: Handle<Image>, theme: &Theme) {
     parent
         .spawn((
             Node {

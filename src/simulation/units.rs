@@ -4,9 +4,9 @@ use std::collections::HashSet;
 use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache,
 };
+use crate::presentation::model_assets::UnitModelAssets;
 use crate::types::*;
 use crate::world::ground::HeightMap;
-use crate::presentation::model_assets::UnitModelAssets;
 use crate::world::pathfinding::{NavDirect, NavGrid, NavPath, NavPending};
 use crate::world::spatial::{SpatialHashGrid, WallSpatialGrid};
 use std::f32::consts::PI;
@@ -26,7 +26,9 @@ impl Plugin for UnitsPlugin {
                 OnEnter(AppState::InGame),
                 spawn_all_players
                     .after(crate::world::ground::spawn_ground)
-                    .run_if(not(resource_exists::<crate::infrastructure::save_load::PendingLoad>)),
+                    .run_if(not(resource_exists::<
+                        crate::infrastructure::save_load::PendingLoad,
+                    >)),
             )
             .add_systems(
                 Update,
@@ -248,9 +250,21 @@ fn steer_avoidance(
     let building_avoidance_radius = 1.5; // extra margin beyond footprint
     let building_strength = 15.0;
 
-    for (entity, mut transform, move_target, unit_state, attack_target, building_assignment, faction, mut just_arrived) in &mut units {
+    for (
+        entity,
+        mut transform,
+        move_target,
+        unit_state,
+        attack_target,
+        building_assignment,
+        faction,
+        mut just_arrived,
+    ) in &mut units
+    {
         // Client: only apply avoidance to local player's units; remote units positioned by state sync
-        if *net_role == crate::infrastructure::multiplayer::NetRole::Client && *faction != active_player.0 {
+        if *net_role == crate::infrastructure::multiplayer::NetRole::Client
+            && *faction != active_player.0
+        {
             continue;
         }
 
@@ -304,7 +318,11 @@ fn steer_avoidance(
             let co_moving_factor = if let Some(my_target) = move_target {
                 if let Ok(other_target) = move_targets.get(*other_e) {
                     let target_dist = my_target.0.distance(other_target.0);
-                    if target_dist < 8.0 { 0.3 } else { 1.0 }
+                    if target_dist < 8.0 {
+                        0.3
+                    } else {
+                        1.0
+                    }
                 } else {
                     1.0
                 }
@@ -404,11 +422,14 @@ fn steer_avoidance(
                 }
 
                 wall_grid.collect_radius(pos, 3.0, &mut nearby_walls);
-                if nearby_walls.iter().any(|(_wall_entity, wall_pos, wall_fp, _wall_faction)| {
-                    let a = Vec2::new(pos.x, pos.z);
-                    let b = Vec2::new(wall_pos.x, wall_pos.z);
-                    a.distance(b) < wall_fp + 0.6
-                }) {
+                if nearby_walls
+                    .iter()
+                    .any(|(_wall_entity, wall_pos, wall_fp, _wall_faction)| {
+                        let a = Vec2::new(pos.x, pos.z);
+                        let b = Vec2::new(wall_pos.x, wall_pos.z);
+                        a.distance(b) < wall_fp + 0.6
+                    })
+                {
                     return true;
                 }
 
@@ -493,7 +514,9 @@ fn move_units(
     ) in &mut query
     {
         // Client: only move local player's units; remote units are positioned by state sync
-        if *net_role == crate::infrastructure::multiplayer::NetRole::Client && *faction != active_player.0 {
+        if *net_role == crate::infrastructure::multiplayer::NetRole::Client
+            && *faction != active_player.0
+        {
             continue;
         }
         // Stunned units cannot move
@@ -622,10 +645,12 @@ fn move_units(
             // Also relax when following a computed NavPath — the pathfinder already
             // validated the route, so per-step grid checks near cell boundaries
             // should not block progress.
-            let current_blocked = nav_grid
+            let current_blocked = nav_grid.as_ref().is_some_and(|grid| {
+                !grid.is_world_passable(transform.translation.x, transform.translation.z)
+            });
+            let has_nav_path = nav_path
                 .as_ref()
-                .is_some_and(|grid| !grid.is_world_passable(transform.translation.x, transform.translation.z));
-            let has_nav_path = nav_path.as_ref().is_some_and(|n| n.current_index < n.waypoints.len());
+                .is_some_and(|n| n.current_index < n.waypoints.len());
 
             // Wall collision check helper
             let mut is_blocked = |pos: Vec3| -> bool {
@@ -683,7 +708,9 @@ fn snap_units_to_terrain(
 ) {
     for (mut transform, kind, faction) in &mut units {
         // Client: only snap local player's units; remote units get correct Y from state sync
-        if *net_role == crate::infrastructure::multiplayer::NetRole::Client && *faction != active_player.0 {
+        if *net_role == crate::infrastructure::multiplayer::NetRole::Client
+            && *faction != active_player.0
+        {
             continue;
         }
         transform.translation.y = height_map

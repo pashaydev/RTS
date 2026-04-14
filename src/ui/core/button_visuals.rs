@@ -85,7 +85,13 @@ pub fn animated_button_chrome_system(
                 *border = BorderColor::all(Color::srgba(0.3, 0.3, 0.3, 0.1));
             }
             if let Some(mut shadow) = shadow {
-                *shadow = BoxShadow::new(Color::NONE, Val::Px(0.0), Val::Px(0.0), Val::Px(0.0), Val::Px(0.0));
+                *shadow = BoxShadow::new(
+                    Color::NONE,
+                    Val::Px(0.0),
+                    Val::Px(0.0),
+                    Val::Px(0.0),
+                    Val::Px(0.0),
+                );
             }
             continue;
         }
@@ -178,85 +184,87 @@ pub fn animated_button_hover_system(
             if !is_selected {
                 match style {
                     ButtonStyle::Filled => anim.bg_target = [0.12, 0.12, 0.12, 0.0],
-                    ButtonStyle::Ghost | ButtonStyle::Destructive => anim.bg_target = [0.0, 0.0, 0.0, 0.0],
+                    ButtonStyle::Ghost | ButtonStyle::Destructive => {
+                        anim.bg_target = [0.0, 0.0, 0.0, 0.0]
+                    }
                     ButtonStyle::Accent => anim.bg_target = [0.06, 0.06, 0.07, 0.5],
                 }
             }
         } else {
-        match state.phase {
-            UiInteractPhase::Hovered => {
-                anim.scale_target = 1.02;
-                anim.lift_target = 1.5;
-                // Don't override bg_target for selected buttons — their color is
-                // managed by update_selector_visuals to keep the accent highlight.
-                if !is_selected {
-                    match style {
-                        ButtonStyle::Filled => {
-                            anim.bg_target = [0.30, 0.35, 0.45, 0.25];
+            match state.phase {
+                UiInteractPhase::Hovered => {
+                    anim.scale_target = 1.02;
+                    anim.lift_target = 1.5;
+                    // Don't override bg_target for selected buttons — their color is
+                    // managed by update_selector_visuals to keep the accent highlight.
+                    if !is_selected {
+                        match style {
+                            ButtonStyle::Filled => {
+                                anim.bg_target = [0.30, 0.35, 0.45, 0.25];
+                            }
+                            ButtonStyle::Ghost => {
+                                anim.bg_target = [0.29, 0.62, 1.0, 0.10];
+                            }
+                            ButtonStyle::Destructive => {
+                                anim.bg_target = [0.80, 0.27, 0.27, 0.10];
+                            }
+                            ButtonStyle::Accent => {
+                                anim.bg_target = [0.12, 0.12, 0.14, 0.85];
+                            }
                         }
-                        ButtonStyle::Ghost => {
-                            anim.bg_target = [0.29, 0.62, 1.0, 0.10];
+                    }
+                }
+                UiInteractPhase::Pressed => {
+                    anim.scale_target = 0.97 + 0.02 * state.hold_progress;
+                    anim.lift_target = 0.0;
+                    if !is_selected {
+                        match style {
+                            ButtonStyle::Filled => {
+                                anim.bg_target = [
+                                    lerp(0.35, 0.40, state.hold_progress),
+                                    lerp(0.45, 0.50, state.hold_progress),
+                                    lerp(0.60, 0.65, state.hold_progress),
+                                    0.35,
+                                ];
+                            }
+                            ButtonStyle::Ghost => {
+                                anim.bg_target =
+                                    [0.29, 0.62, 1.0, lerp(0.18, 0.28, state.hold_progress)];
+                            }
+                            ButtonStyle::Destructive => {
+                                anim.bg_target =
+                                    [0.80, 0.27, 0.27, lerp(0.18, 0.28, state.hold_progress)];
+                            }
+                            ButtonStyle::Accent => {
+                                anim.bg_target = [
+                                    lerp(0.10, 0.14, state.hold_progress),
+                                    lerp(0.10, 0.13, state.hold_progress),
+                                    lerp(0.12, 0.16, state.hold_progress),
+                                    0.90,
+                                ];
+                            }
                         }
-                        ButtonStyle::Destructive => {
-                            anim.bg_target = [0.80, 0.27, 0.27, 0.10];
-                        }
-                        ButtonStyle::Accent => {
-                            anim.bg_target = [0.12, 0.12, 0.14, 0.85];
+                    }
+                }
+                UiInteractPhase::Idle | UiInteractPhase::Disabled => {
+                    anim.scale_target = 1.0 + 0.025 * state.click_flash;
+                    anim.lift_target = 1.5 * state.click_flash;
+                    // Don't override bg_target for selected buttons.
+                    if !is_selected {
+                        match style {
+                            ButtonStyle::Filled => {
+                                anim.bg_target = [0.15, 0.15, 0.15, 0.0];
+                            }
+                            ButtonStyle::Ghost | ButtonStyle::Destructive => {
+                                anim.bg_target = [0.0, 0.0, 0.0, 0.0];
+                            }
+                            ButtonStyle::Accent => {
+                                anim.bg_target = [0.08, 0.08, 0.09, 0.75];
+                            }
                         }
                     }
                 }
             }
-            UiInteractPhase::Pressed => {
-                anim.scale_target = 0.97 + 0.02 * state.hold_progress;
-                anim.lift_target = 0.0;
-                if !is_selected {
-                    match style {
-                        ButtonStyle::Filled => {
-                            anim.bg_target = [
-                                lerp(0.35, 0.40, state.hold_progress),
-                                lerp(0.45, 0.50, state.hold_progress),
-                                lerp(0.60, 0.65, state.hold_progress),
-                                0.35,
-                            ];
-                        }
-                        ButtonStyle::Ghost => {
-                            anim.bg_target =
-                                [0.29, 0.62, 1.0, lerp(0.18, 0.28, state.hold_progress)];
-                        }
-                        ButtonStyle::Destructive => {
-                            anim.bg_target =
-                                [0.80, 0.27, 0.27, lerp(0.18, 0.28, state.hold_progress)];
-                        }
-                        ButtonStyle::Accent => {
-                            anim.bg_target = [
-                                lerp(0.10, 0.14, state.hold_progress),
-                                lerp(0.10, 0.13, state.hold_progress),
-                                lerp(0.12, 0.16, state.hold_progress),
-                                0.90,
-                            ];
-                        }
-                    }
-                }
-            }
-            UiInteractPhase::Idle | UiInteractPhase::Disabled => {
-                anim.scale_target = 1.0 + 0.025 * state.click_flash;
-                anim.lift_target = 1.5 * state.click_flash;
-                // Don't override bg_target for selected buttons.
-                if !is_selected {
-                    match style {
-                        ButtonStyle::Filled => {
-                            anim.bg_target = [0.15, 0.15, 0.15, 0.0];
-                        }
-                        ButtonStyle::Ghost | ButtonStyle::Destructive => {
-                            anim.bg_target = [0.0, 0.0, 0.0, 0.0];
-                        }
-                        ButtonStyle::Accent => {
-                            anim.bg_target = [0.08, 0.08, 0.09, 0.75];
-                        }
-                    }
-                }
-            }
-        }
         } // end else (not disabled)
 
         for i in 0..4 {

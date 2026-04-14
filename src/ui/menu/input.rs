@@ -6,11 +6,11 @@ use super::multiplayer;
 #[cfg(not(target_arch = "wasm32"))]
 use super::multiplayer::start_hosting;
 use super::*;
-use crate::types::*;
 use crate::infrastructure::database::{ActiveProfile, GameDatabase};
 use crate::infrastructure::multiplayer::{ClientNetState, HostNetState, LobbyState};
-use crate::ui::theme::Theme;
+use crate::types::*;
 use crate::ui::core::interactions::UiClickEvent;
+use crate::ui::theme::Theme;
 
 // ── Button Clicks ──
 
@@ -139,11 +139,17 @@ pub(crate) fn handle_menu_buttons(
             }
             MenuAction::LoadSave(save_id) => {
                 if let Some(blob) = db.load_save(save_id) {
-                    match rmp_serde::from_slice::<crate::infrastructure::save_load::SaveData>(&blob) {
+                    match rmp_serde::from_slice::<crate::infrastructure::save_load::SaveData>(&blob)
+                    {
                         Ok(save_data) => {
                             info!("Loading save id={save_id}");
-                            crate::infrastructure::save_load::restore_config_from_save(&mut config, &save_data);
-                            commands.insert_resource(crate::infrastructure::save_load::PendingLoad { save_data });
+                            crate::infrastructure::save_load::restore_config_from_save(
+                                &mut config,
+                                &save_data,
+                            );
+                            commands.insert_resource(
+                                crate::infrastructure::save_load::PendingLoad { save_data },
+                            );
                             next_state.set(AppState::InGame);
                         }
                         Err(e) => {
@@ -182,7 +188,15 @@ pub(crate) fn rebuild_slot_cards(
             commands.entity(child).try_despawn();
         }
         for i in 0..4 {
-            super::new_game::spawn_slot_card(commands, container, i, config, is_multiplayer, lobby_players, theme);
+            super::new_game::spawn_slot_card(
+                commands,
+                container,
+                i,
+                config,
+                is_multiplayer,
+                lobby_players,
+                theme,
+            );
         }
     }
 }
@@ -252,7 +266,8 @@ pub(crate) fn handle_selector_clicks(
                             SlotOccupant::Ai(d)
                         } else {
                             // Generate a fresh AI name when a slot becomes AI
-                            config.ai_names[slot_idx] = format!("AI {}", crate::types::random_commander_name());
+                            config.ai_names[slot_idx] =
+                                format!("AI {}", crate::types::random_commander_name());
                             new_occupant
                         }
                     } else {

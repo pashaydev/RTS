@@ -12,9 +12,9 @@ pub mod tooltips;
 
 use bevy::prelude::*;
 
-use crate::types::*;
 use crate::infrastructure::database::GameDatabase;
 use crate::simulation::selection::SelectionSet;
+use crate::types::*;
 
 pub struct UiCorePlugin;
 
@@ -177,7 +177,10 @@ impl Plugin for UiCorePlugin {
     }
 }
 
-fn load_widget_layout_from_db(db: Res<GameDatabase>, mut registry: ResMut<framework::WidgetRegistry>) {
+fn load_widget_layout_from_db(
+    db: Res<GameDatabase>,
+    mut registry: ResMut<framework::WidgetRegistry>,
+) {
     if let Some(saved) = db.load_settings_blob::<framework::WidgetRegistry>("widget_layout") {
         *registry = saved;
     }

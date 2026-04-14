@@ -2,15 +2,15 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
 use crate::blueprints::EntityKind;
-use crate::types::*;
-use crate::simulation::items::{ItemKind, SpawnItemPickup, UnitInventory};
-use crate::simulation::items::vfx::{ItemVfxTrigger, ItemVfxTriggerKind};
 use crate::infrastructure::multiplayer::NetRole;
+use crate::simulation::items::vfx::{ItemVfxTrigger, ItemVfxTriggerKind};
+use crate::simulation::items::{ItemKind, SpawnItemPickup, UnitInventory};
 use crate::simulation::mobs::CampItemDrops;
+use crate::types::*;
 use crate::world::spatial::{SpatialHashGrid, WallSpatialGrid};
 
-use super::{slot_anchor, CombatBudgetState};
 use super::damage::apply_damage;
+use super::{slot_anchor, CombatBudgetState};
 
 pub struct CombatPlugin;
 
@@ -533,8 +533,9 @@ pub fn approach_attack_target(
                     if let Some(mut engagement) = opt_engagement {
                         engagement.target = Some(wall_entity);
                         engagement.last_confirmed_at = time.elapsed_secs_f64();
-                        engagement.persistence_until =
-                            engagement.persistence_until.max(time.elapsed_secs_f64() + 0.5);
+                        engagement.persistence_until = engagement
+                            .persistence_until
+                            .max(time.elapsed_secs_f64() + 0.5);
                         engagement.status = EngageStatus::Approaching;
                     }
                     continue;
@@ -545,7 +546,12 @@ pub fn approach_attack_target(
         // ── Distance check (2D only — ignore terrain height) ──
         let stay_tolerance = opt_engagement
             .as_ref()
-            .is_some_and(|engagement| matches!(engagement.status, EngageStatus::InBand | EngageStatus::Windup | EngageStatus::Recovery))
+            .is_some_and(|engagement| {
+                matches!(
+                    engagement.status,
+                    EngageStatus::InBand | EngageStatus::Windup | EngageStatus::Recovery
+                )
+            })
             .then_some(tuning.range_stay_buffer)
             .unwrap_or(0.15);
         let surface_dist =
@@ -620,15 +626,15 @@ pub fn approach_attack_target(
                 // Start chase timer — unified via OrderSource::chase_timeout_secs().
                 // Falls back to TaskSource for entities that haven't had a CombatOrder
                 // written yet (e.g. loaded from a pre-CombatOrder save).
-                let max_secs = opt_order.map(|o| o.source.chase_timeout_secs()).unwrap_or_else(
-                    || {
+                let max_secs = opt_order
+                    .map(|o| o.source.chase_timeout_secs())
+                    .unwrap_or_else(|| {
                         if opt_task_source.map_or(false, |s| *s == TaskSource::Manual) {
                             10.0
                         } else {
                             6.0
                         }
-                    },
-                );
+                    });
                 commands.entity(attacker_entity).insert(ChaseTimer {
                     elapsed: 0.0,
                     max_secs,
@@ -676,11 +682,9 @@ pub fn approach_attack_target(
                         continue;
                     }
                     // Only kite from melee enemies (non-ranged, hostile)
-                    if tactical_roles
-                        .get(*nearby_entity)
-                        .ok()
-                        .is_some_and(|r| *r == TacticalRole::RangedKiter || *r == TacticalRole::SiegeSupport)
-                    {
+                    if tactical_roles.get(*nearby_entity).ok().is_some_and(|r| {
+                        *r == TacticalRole::RangedKiter || *r == TacticalRole::SiegeSupport
+                    }) {
                         continue; // Not a melee threat
                     }
                     let Some(nearby_faction) = factions.get(*nearby_entity).ok() else {
@@ -704,8 +708,7 @@ pub fn approach_attack_target(
                         tf.translation.z - closest_melee_pos.z,
                     );
                     let dir = away.normalize_or_zero();
-                    let retreat_pos = tf.translation
-                        + Vec3::new(dir.x, 0.0, dir.y) * 4.0;
+                    let retreat_pos = tf.translation + Vec3::new(dir.x, 0.0, dir.y) * 4.0;
                     commands
                         .entity(attacker_entity)
                         .insert(MoveTarget(retreat_pos));
@@ -863,7 +866,9 @@ fn resolve_attack_windups(
         }
 
         let target = windup.target;
-        let Ok((target_tf, mut health, opt_armor, opt_reserved, opt_existing_recoil)) = healths.get_mut(target) else {
+        let Ok((target_tf, mut health, opt_armor, opt_reserved, opt_existing_recoil)) =
+            healths.get_mut(target)
+        else {
             commands.entity(entity).remove::<AttackWindup>();
             commands.entity(entity).insert(AttackRecovery {
                 remaining_secs: profile.recovery_secs,
@@ -895,8 +900,8 @@ fn resolve_attack_windups(
                 reserved.reservations.push((entity, damage.0, travel_ttl));
             }
             // Ranged: spawn projectile (carries damage_type for on-hit multiplier)
-            let proj_visual =
-                opt_entity_kind.and_then(|k| crate::presentation::model_assets::projectile_visual_for(*k));
+            let proj_visual = opt_entity_kind
+                .and_then(|k| crate::presentation::model_assets::projectile_visual_for(*k));
             let use_model = proj_visual.is_some() && projectile_assets.is_some();
             let orient = use_model
                 && !matches!(
@@ -1253,7 +1258,11 @@ fn handle_death(
                     } else {
                         idx as f32 / drop_table.items.len() as f32 * std::f32::consts::TAU
                     };
-                    let radius = if drop_table.items.len() == 1 { 0.0 } else { 0.9 };
+                    let radius = if drop_table.items.len() == 1 {
+                        0.0
+                    } else {
+                        0.9
+                    };
                     item_pickup_spawns.write(SpawnItemPickup {
                         item,
                         position: transform.translation
@@ -1287,7 +1296,8 @@ fn handle_death(
             }
         }
 
-        for (attacker_entity, attack_target, opt_patrol, opt_engagement) in &mut attackers_with_target
+        for (attacker_entity, attack_target, opt_patrol, opt_engagement) in
+            &mut attackers_with_target
         {
             if attack_target.0 == *dead_entity {
                 let preserve_engagement_mode = opt_engagement.as_ref().is_some_and(|engagement| {
@@ -1319,7 +1329,11 @@ fn handle_death(
 
         // If a worker dies while assigned to a processor, remove it from AssignedWorkers
         if let Some(UnitState::AssignedGathering { building, .. }) = opt_unit_state {
-            crate::simulation::buildings::remove_assigned_worker(&mut commands, *building, *dead_entity);
+            crate::simulation::buildings::remove_assigned_worker(
+                &mut commands,
+                *building,
+                *dead_entity,
+            );
         }
 
         // If a building dies with assigned workers, eject them all
@@ -1519,13 +1533,16 @@ fn tick_damage_reservations(time: Res<Time>, mut query: Query<&mut ReservedIncom
 fn emit_item_combat_vfx(
     mut vfx_writer: MessageWriter<ItemVfxTrigger>,
     // Units that just got hit (have HitReaction with freshly added timer)
-    hit_targets: Query<
-        (Entity, &Transform, &UnitInventory, &HitReaction),
-        Changed<HitReaction>,
-    >,
+    hit_targets: Query<(Entity, &Transform, &UnitInventory, &HitReaction), Changed<HitReaction>>,
     // Attackers with active lunge (just landed a hit)
     hit_attackers: Query<
-        (Entity, &Transform, &UnitInventory, &AttackLunge, &AttackTarget),
+        (
+            Entity,
+            &Transform,
+            &UnitInventory,
+            &AttackLunge,
+            &AttackTarget,
+        ),
         Changed<AttackLunge>,
     >,
     target_transforms: Query<&Transform>,
@@ -1630,10 +1647,7 @@ fn emit_item_death_vfx(
 ) {
     for dead_entity in &dying_q {
         // Find the killer: who was targeting this entity
-        let Some((killer_entity, _)) = attacker_q
-            .iter()
-            .find(|(_, at)| at.0 == dead_entity)
-        else {
+        let Some((killer_entity, _)) = attacker_q.iter().find(|(_, at)| at.0 == dead_entity) else {
             continue;
         };
         let Ok((killer_tf, inventory)) = inventory_q.get(killer_entity) else {
@@ -1769,9 +1783,7 @@ fn sync_display_state(
                 // Drop combat variants to Idle; leave other non-combat alone.
                 if matches!(
                     *state,
-                    UnitState::Attacking(_)
-                        | UnitState::AttackMoving(_)
-                        | UnitState::HoldPosition
+                    UnitState::Attacking(_) | UnitState::AttackMoving(_) | UnitState::HoldPosition
                 ) {
                     *state = UnitState::Idle;
                 }

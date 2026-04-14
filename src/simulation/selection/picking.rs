@@ -3,10 +3,10 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::presentation::camera;
-use crate::types::*;
-use crate::world::ground::HeightMap;
 use crate::presentation::materials::hover::{HoverRingMaterial, HoverRingSettings};
 use crate::simulation::items::ItemPickup;
+use crate::types::*;
+use crate::world::ground::HeightMap;
 
 // ── Ray-sphere intersection ──
 
@@ -238,11 +238,17 @@ pub fn pick_for_click(
     // dense clusters, with ray distance as a secondary factor and type priority
     // as a final tiebreaker.
 
-    let min_ray = hits.iter().map(|h| h.ray_dist).fold(f32::INFINITY, f32::min);
+    let min_ray = hits
+        .iter()
+        .map(|h| h.ray_dist)
+        .fold(f32::INFINITY, f32::min);
     let max_ray = hits.iter().map(|h| h.ray_dist).fold(0.0_f32, f32::max);
     let ray_range = (max_ray - min_ray).max(0.01);
 
-    let min_screen = hits.iter().map(|h| h.screen_dist).fold(f32::INFINITY, f32::min);
+    let min_screen = hits
+        .iter()
+        .map(|h| h.screen_dist)
+        .fold(f32::INFINITY, f32::min);
     let max_screen = hits.iter().map(|h| h.screen_dist).fold(0.0_f32, f32::max);
     let screen_range = (max_screen - min_screen).max(0.01);
 
@@ -266,11 +272,19 @@ pub fn pick_for_click(
         let score_a = screen_score(a.screen_dist, min_screen, screen_range)
             + ray_score(a.ray_dist, min_ray, ray_range)
             + type_priority(a)
-            + if Some(a.entity) == skip_entity { 100.0 } else { 0.0 };
+            + if Some(a.entity) == skip_entity {
+                100.0
+            } else {
+                0.0
+            };
         let score_b = screen_score(b.screen_dist, min_screen, screen_range)
             + ray_score(b.ray_dist, min_ray, ray_range)
             + type_priority(b)
-            + if Some(b.entity) == skip_entity { 100.0 } else { 0.0 };
+            + if Some(b.entity) == skip_entity {
+                100.0
+            } else {
+                0.0
+            };
         score_a
             .partial_cmp(&score_b)
             .unwrap_or(std::cmp::Ordering::Equal)

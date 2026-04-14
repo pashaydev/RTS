@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 
 use super::helpers::*;
-use crate::types::*;
 use crate::infrastructure::database::{ActiveProfile, GameDatabase, SaveEntry};
-use crate::ui::theme::Theme;
+use crate::types::*;
 use crate::ui::fonts::UiFonts;
+use crate::ui::theme::Theme;
 
 #[allow(unused_imports)]
 use super::*;
@@ -93,7 +93,8 @@ pub(crate) fn spawn_load_game_page(
         let load_icon: Handle<Image> = asset_server.load("icons/load.png");
 
         for (i, save) in saves.iter().enumerate() {
-            let row = spawn_save_entry_row(commands, save, i, fonts, theme, &trash_icon, &load_icon);
+            let row =
+                spawn_save_entry_row(commands, save, i, fonts, theme, &trash_icon, &load_icon);
             commands.entity(list_container).add_child(row);
         }
     }
@@ -223,25 +224,12 @@ fn spawn_save_entry_row(
     commands.entity(row).add_child(map_col);
 
     // Elapsed time column
-    let time_col = spawn_labeled_column(
-        commands,
-        "ELAPSED TIME",
-        &elapsed_str,
-        fonts,
-        theme,
-        120.0,
-    );
+    let time_col =
+        spawn_labeled_column(commands, "ELAPSED TIME", &elapsed_str, fonts, theme, 120.0);
     commands.entity(row).add_child(time_col);
 
     // Timestamp column
-    let ts_col = spawn_labeled_column(
-        commands,
-        "TIMESTAMP",
-        &save.created_at,
-        fonts,
-        theme,
-        140.0,
-    );
+    let ts_col = spawn_labeled_column(commands, "TIMESTAMP", &save.created_at, fonts, theme, 140.0);
     commands.entity(row).add_child(ts_col);
 
     // Delete button (trash icon)
@@ -281,7 +269,14 @@ fn spawn_save_entry_row(
         .spawn((
             MenuButton(MenuAction::LoadSave(save.id)),
             Button,
-            ButtonAnimState::new(theme.colors.accent.with_alpha(0.2).to_srgba().to_f32_array()),
+            ButtonAnimState::new(
+                theme
+                    .colors
+                    .accent
+                    .with_alpha(0.2)
+                    .to_srgba()
+                    .to_f32_array(),
+            ),
             ButtonStyle::Filled,
             NavFocusable(index),
             Node {

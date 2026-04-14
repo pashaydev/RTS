@@ -13,11 +13,11 @@ impl Plugin for CombatProjectilesPlugin {
         app.add_message::<ProjectileImpactEvent>()
             .add_message::<DamageApplied>()
             .add_systems(
-            FixedUpdate,
-            tick_projectiles
-                .in_set(SimSet::Combat)
-                .run_if(in_state(AppState::InGame)),
-        );
+                FixedUpdate,
+                tick_projectiles
+                    .in_set(SimSet::Combat)
+                    .run_if(in_state(AppState::InGame)),
+            );
     }
 }
 
@@ -67,7 +67,8 @@ fn tick_projectiles(
             let applied_damage;
 
             {
-                let Ok((_, mut health, opt_armor, opt_reserved)) = targets.get_mut(projectile.target)
+                let Ok((_, mut health, opt_armor, opt_reserved)) =
+                    targets.get_mut(projectile.target)
                 else {
                     commands.entity(proj_entity).try_despawn();
                     continue;

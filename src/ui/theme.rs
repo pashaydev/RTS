@@ -9,7 +9,7 @@ use bevy::prelude::*;
 )]
 pub enum ThemeMode {
     #[default]
-    Dark,  // "Iron"
+    Dark, // "Iron"
     Light, // "Parchment"
 }
 
@@ -20,10 +20,10 @@ pub enum ThemeMode {
 #[derive(Clone, Debug)]
 pub struct ColorPalette {
     // Backgrounds (The Material Hierarchy)
-    pub bg_panel: Color,     // Surface (The Desk)
-    pub bg_surface: Color,   // Surface Container (Bolted Plates)
-    pub bg_elevated: Color,  // Surface Container High (Raised Modules)
-    pub bg_recessed: Color,  // Surface Container Lowest (Etched Readouts)
+    pub bg_panel: Color,    // Surface (The Desk)
+    pub bg_surface: Color,  // Surface Container (Bolted Plates)
+    pub bg_elevated: Color, // Surface Container High (Raised Modules)
+    pub bg_recessed: Color, // Surface Container Lowest (Etched Readouts)
     pub bg_transparent: Color,
     pub bg_menu: Color,
 
@@ -91,24 +91,24 @@ impl ColorPalette {
     pub fn dark() -> Self {
         Self {
             // Backgrounds: Deep Charcoal "Iron"
-            bg_panel: Color::srgb(0.07, 0.08, 0.09),    // #121416
-            bg_surface: Color::srgb(0.10, 0.11, 0.12),  // #1a1d1f
+            bg_panel: Color::srgb(0.07, 0.08, 0.09), // #121416
+            bg_surface: Color::srgb(0.10, 0.11, 0.12), // #1a1d1f
             bg_elevated: Color::srgb(0.14, 0.15, 0.16), // #23272a
             bg_recessed: Color::srgb(0.04, 0.04, 0.05), // #0a0b0c
             bg_transparent: Color::srgba(0.0, 0.0, 0.0, 0.0),
             bg_menu: Color::srgb(0.05, 0.05, 0.06),
 
             // Text: High contrast vs Teal/Gold
-            text_primary: Color::srgb(0.88, 0.91, 0.91),   // Authoritative Off-white
+            text_primary: Color::srgb(0.88, 0.91, 0.91), // Authoritative Off-white
             text_secondary: Color::srgb(0.67, 0.80, 0.80), // #accdcc (Teal)
-            text_disabled: Color::srgb(0.35, 0.38, 0.40),  // Weathered
+            text_disabled: Color::srgb(0.35, 0.38, 0.40), // Weathered
 
             // Accent / Status
-            accent: Color::srgb(0.67, 0.80, 0.80),      // Primary Teal
-            prestige: Color::srgb(0.91, 0.76, 0.46),    // Burnished Gold
-            destructive: Color::srgb(1.0, 0.71, 0.67),  // Soft Red Error
-            success: Color::srgb(0.55, 0.75, 0.55),     // Desaturated Green
-            warning: Color::srgb(0.91, 0.76, 0.46),     // Gold
+            accent: Color::srgb(0.67, 0.80, 0.80), // Primary Teal
+            prestige: Color::srgb(0.91, 0.76, 0.46), // Burnished Gold
+            destructive: Color::srgb(1.0, 0.71, 0.67), // Soft Red Error
+            success: Color::srgb(0.55, 0.75, 0.55), // Desaturated Green
+            warning: Color::srgb(0.91, 0.76, 0.46), // Gold
 
             // Borders: Etched into metal
             separator: Color::srgba(0.67, 0.80, 0.80, 0.1),
@@ -230,9 +230,15 @@ impl ColorPalette {
         }
     }
 
-    pub fn hp_high(&self) -> Color { self.accent } // Teal for safety
-    pub fn hp_mid(&self) -> Color { self.prestige } // Gold for warning
-    pub fn hp_low(&self) -> Color { self.destructive } // Red for danger
+    pub fn hp_high(&self) -> Color {
+        self.accent
+    } // Teal for safety
+    pub fn hp_mid(&self) -> Color {
+        self.prestige
+    } // Gold for warning
+    pub fn hp_low(&self) -> Color {
+        self.destructive
+    } // Red for danger
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -363,10 +369,10 @@ pub const STANCE_DEFENSIVE: Color = Color::srgb(0.3, 0.7, 0.3);
 pub const STANCE_AGGRESSIVE: Color = Color::srgb(0.9, 0.3, 0.2);
 
 // Team tier colors
-pub const TEAM_COLOR_1: Color = Color::srgb(0.9, 0.75, 0.2);   // Gold
-pub const TEAM_COLOR_2: Color = Color::srgb(0.2, 0.75, 0.85);  // Cyan
-pub const TEAM_COLOR_3: Color = Color::srgb(0.85, 0.3, 0.65);  // Pink
-pub const TEAM_COLOR_4: Color = Color::srgb(0.95, 0.5, 0.15);  // Orange
+pub const TEAM_COLOR_1: Color = Color::srgb(0.9, 0.75, 0.2); // Gold
+pub const TEAM_COLOR_2: Color = Color::srgb(0.2, 0.75, 0.85); // Cyan
+pub const TEAM_COLOR_3: Color = Color::srgb(0.85, 0.3, 0.65); // Pink
+pub const TEAM_COLOR_4: Color = Color::srgb(0.95, 0.5, 0.15); // Orange
 pub const TEAM_COLORS: [Color; 4] = [TEAM_COLOR_1, TEAM_COLOR_2, TEAM_COLOR_3, TEAM_COLOR_4];
 
 // Event log level colors

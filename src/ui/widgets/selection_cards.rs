@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use super::core::constants::*;
 use super::core::components as ui_components;
+use super::core::constants::*;
 use super::core::shared::spawn_hp_bar;
 use super::group_hotkeys_widget::{group_color, ControlGroups};
 use super::selection_widget::{
@@ -10,11 +10,11 @@ use super::selection_widget::{
     TransferInventoryItemButton, TransferTargetOption,
 };
 use crate::blueprints::EntityKind;
-use crate::types::*;
 use crate::simulation::items::{
     inferred_inventory_capacity, item_effect_requirement_message, ItemAssets, ItemKind,
     ItemRegistry, ItemRuntimeState, UnitInventory,
 };
+use crate::types::*;
 use crate::ui::theme::Theme;
 
 pub(super) fn spawn_friendly_detail_card(
@@ -206,14 +206,19 @@ pub(super) fn spawn_friendly_detail_card(
     );
 }
 
-pub(super) fn displayed_inventory_capacity(kind: EntityKind, inventory: Option<&UnitInventory>) -> usize {
+pub(super) fn displayed_inventory_capacity(
+    kind: EntityKind,
+    inventory: Option<&UnitInventory>,
+) -> usize {
     inventory
         .map(|inventory| inventory.capacity as usize)
         .unwrap_or_else(|| inferred_inventory_capacity(kind) as usize)
 }
 
 pub(super) fn displayed_inventory_items(inventory: Option<&UnitInventory>) -> &[ItemKind] {
-    inventory.map(|inventory| inventory.items.as_slice()).unwrap_or(&[])
+    inventory
+        .map(|inventory| inventory.items.as_slice())
+        .unwrap_or(&[])
 }
 
 pub(super) fn spawn_single_inventory_section(
@@ -237,13 +242,7 @@ pub(super) fn spawn_single_inventory_section(
     let focused_slot = inventory_ui
         .focused_slot
         .filter(|slot| inventory_ui.focused_unit == Some(unit) && *slot < capacity)
-        .or_else(|| {
-            if items.is_empty() {
-                None
-            } else {
-                Some(0)
-            }
-        });
+        .or_else(|| if items.is_empty() { None } else { Some(0) });
 
     let section = commands
         .spawn(Node {
@@ -572,9 +571,16 @@ pub(super) fn spawn_single_inventory_section(
                                 to_unit: target.unit,
                             },
                             ui_components::compact_button_node(10.0, 5.0),
-                            ui_components::ghost_button_chrome(theme, ui_components::UiTone::Neutral),
+                            ui_components::ghost_button_chrome(
+                                theme,
+                                ui_components::UiTone::Neutral,
+                            ),
                             ActionTooltipTrigger {
-                                text: format!("Transfer {} to {}", item.display_name(), target.label),
+                                text: format!(
+                                    "Transfer {} to {}",
+                                    item.display_name(),
+                                    target.label
+                                ),
                             },
                         ))
                         .with_children(|button| {
@@ -677,7 +683,10 @@ pub(super) fn spawn_multi_inventory_summary(
 
     commands.entity(section).with_children(|section| {
         section.spawn((
-            Text::new(format!("Squad Inventory {}/{}", total_filled, total_capacity)),
+            Text::new(format!(
+                "Squad Inventory {}/{}",
+                total_filled, total_capacity
+            )),
             TextFont {
                 font_size: theme.typography.body,
                 ..default()
@@ -701,7 +710,10 @@ pub(super) fn spawn_multi_inventory_summary(
     }
 
     let mut item_counts: Vec<(ItemKind, usize)> = counts.into_iter().collect();
-    item_counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.display_name().cmp(b.0.display_name())));
+    item_counts.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then_with(|| a.0.display_name().cmp(b.0.display_name()))
+    });
 
     let chip_row = commands
         .spawn(Node {

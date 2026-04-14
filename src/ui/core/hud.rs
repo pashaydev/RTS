@@ -8,7 +8,6 @@ use crate::ui::theme::{self, Theme};
 #[derive(Component)]
 pub struct UiRoot;
 
-
 #[derive(Component)]
 pub struct MainHudRoot;
 
@@ -269,7 +268,9 @@ pub fn update_ui_scale(
     let base_height = 720.0_f32;
     let auto = logical_height / base_height;
     // Use snapshot value while editing options, current value otherwise
-    let scale_value = snapshot.map(|s| s.graphics.ui_scale).unwrap_or(graphics.ui_scale);
+    let scale_value = snapshot
+        .map(|s| s.graphics.ui_scale)
+        .unwrap_or(graphics.ui_scale);
     let new_scale = auto * scale_value;
     if (ui_scale.0 - new_scale).abs() > 0.001 {
         ui_scale.0 = new_scale;

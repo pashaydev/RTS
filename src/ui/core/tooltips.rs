@@ -108,8 +108,10 @@ pub fn update_action_tooltip_positions(
         let trig_bottom = trig_center_y + trig_size.y * 0.5;
 
         // Anchor centered horizontally on the trigger card, clamped to viewport.
-        let left = (trig_center_x - tt_w * 0.5)
-            .clamp(screen_padding, (ui_w - tt_w - screen_padding).max(screen_padding));
+        let left = (trig_center_x - tt_w * 0.5).clamp(
+            screen_padding,
+            (ui_w - tt_w - screen_padding).max(screen_padding),
+        );
 
         // Prefer above the card (action bar lives at the bottom of the screen),
         // fall back below only if there isn't enough room.

@@ -13,6 +13,8 @@ use game_state::message::{
 use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache,
 };
+use crate::infrastructure::net_bridge::{EntityNetMap, NetworkId};
+use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::simulation::buildings::spawn_floor_grid_cells;
 use crate::types::*;
 use crate::world::ground::{
@@ -20,8 +22,6 @@ use crate::world::ground::{
     terrain_heights_hash, HeightMap, TerrainShapeSyncState, TerrainShapeUpdateQueue,
 };
 use crate::world::lighting::DayCycle;
-use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
-use crate::infrastructure::net_bridge::{EntityNetMap, NetworkId};
 
 use super::debug_tap;
 use super::host_systems::execute_input_command;
@@ -434,7 +434,9 @@ pub fn client_apply_state_sync(
                     *state = new_state;
                 }
                 if let Some(building) = assignment_building {
-                    commands.entity(ecs_entity).insert(BuildingAssignment(building));
+                    commands
+                        .entity(ecs_entity)
+                        .insert(BuildingAssignment(building));
                 } else {
                     commands.entity(ecs_entity).remove::<BuildingAssignment>();
                 }
@@ -631,8 +633,10 @@ pub fn client_apply_server_events(
                         Some(faction),
                     );
                     if let Some(vs) = victory_state.as_deref_mut() {
-                        vs.faction_status
-                            .insert(faction, crate::simulation::victory::FactionStatus::Eliminated);
+                        vs.faction_status.insert(
+                            faction,
+                            crate::simulation::victory::FactionStatus::Eliminated,
+                        );
                     }
                 }
             }
@@ -1036,8 +1040,8 @@ mod tests {
     use game_state::message::{ClientMessage, NetUnitState};
     use std::time::Duration;
 
-    use crate::types::{AppState, AssignedPhase};
     use crate::infrastructure::net_bridge::EntityNetMap;
+    use crate::types::{AppState, AssignedPhase};
     use crate::ui::event_log_widget::GameEventLog;
 
     #[test]
@@ -1164,7 +1168,9 @@ mod tests {
             &AppState::MainMenu
         );
         assert_eq!(app.world().resource::<GameEventLog>().entries.len(), 1);
-        let victory_state = app.world().resource::<crate::simulation::victory::VictoryState>();
+        let victory_state = app
+            .world()
+            .resource::<crate::simulation::victory::VictoryState>();
         assert!(!victory_state.game_over);
         assert!(!victory_state.overlay_spawned);
     }

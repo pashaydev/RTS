@@ -3,8 +3,8 @@ use bevy::prelude::*;
 use crate::blueprints::EntityKind;
 use crate::presentation::camera;
 use crate::types::*;
-use crate::world::fog::FogTweakSettings;
 use crate::ui::theme::{self, Theme};
+use crate::world::fog::FogTweakSettings;
 
 pub struct AttentionPlugin;
 

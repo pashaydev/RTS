@@ -340,8 +340,7 @@ impl ObstacleGrid {
                     continue;
                 }
                 let cell_world = WallGrid::grid_to_world(gx, gz);
-                let local =
-                    inv * Vec3::new(cell_world.x - center.x, 0.0, cell_world.z - center.z);
+                let local = inv * Vec3::new(cell_world.x - center.x, 0.0, cell_world.z - center.z);
                 if local.x.abs() < half_x && local.z.abs() < half_z {
                     return true;
                 }

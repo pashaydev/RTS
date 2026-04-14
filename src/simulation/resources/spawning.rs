@@ -210,7 +210,10 @@ fn random_model(rng: &mut impl Rng, models: &[Handle<Scene>]) -> Option<Handle<S
 }
 
 /// Pick a random tree model and return (scene_handle, base_scale).
-pub(super) fn random_tree(rng: &mut impl Rng, assets: &ModelAssets) -> Option<(Handle<Scene>, f32)> {
+pub(super) fn random_tree(
+    rng: &mut impl Rng,
+    assets: &ModelAssets,
+) -> Option<(Handle<Scene>, f32)> {
     if assets.trees.is_empty() {
         None
     } else {
@@ -488,6 +491,139 @@ pub(super) fn spawn_resource_nodes(
         x += spacing;
     }
 
+    // ── Minimum resource node enforcement ──
+    // Guarantee a minimum number of each resource type regardless of noise rolls.
+    // This mirrors ensure_all_biomes() but for resource placement.
+    let min_nodes: u32 = ((half * 2.0 / 500.0).powi(2) * 5.0).max(3.0) as u32;
+
+    let deficit_types: Vec<(ResourceType, u32, Handle<StandardMaterial>, f32)> = [
+        (ResourceType::Iron, 1000, node_mats.iron.clone(), 0.4),
+        (ResourceType::Copper, 500, node_mats.copper.clone(), 0.5),
+        (ResourceType::Stone, 175, node_mats.stone.clone(), 0.6),
+        (ResourceType::Oil, 800, node_mats.oil.clone(), 0.6),
+    ]
+    .into_iter()
+    .filter(|(rt, _, _, _)| {
+        let count = *resource_counts.get(rt).unwrap_or(&0);
+        count < min_nodes
+    })
+    .collect();
+
+    if !deficit_types.is_empty() {
+        // Collect candidate positions: grid cells that are valid spawn locations
+        let mut candidates: Vec<(f32, f32, Biome)> = Vec::new();
+        let scan_spacing = spacing * 2.0;
+        let mut sx = -half + 5.0;
+        while sx < half - 5.0 {
+            let mut sz = -half + 5.0;
+            while sz < half - 5.0 {
+                if is_in_mountain_border(sx, sz, half, border) {
+                    sz += scan_spacing;
+                    continue;
+                }
+                let mut too_close = false;
+                for &(_, (px, pz)) in &spawn_positions {
+                    if ((sx - px).powi(2) + (sz - pz).powi(2)).sqrt() < 22.0 {
+                        too_close = true;
+                        break;
+                    }
+                }
+                if !too_close {
+                    let biome = biome_map.get_biome(sx, sz);
+                    if !matches!(biome, Biome::Water | Biome::Mountain | Biome::Beach) {
+                        candidates.push((sx, sz, biome));
+                    }
+                }
+                sz += scan_spacing;
+            }
+            sx += scan_spacing;
+        }
+
+        for (rt, amount, mat, _half_h) in &deficit_types {
+            let current = *resource_counts.get(rt).unwrap_or(&0);
+            let needed = min_nodes - current;
+
+            // Prefer biomes that naturally produce this resource type
+            let preferred_biome = match rt {
+                ResourceType::Iron => Some(Biome::Wetland),
+                ResourceType::Copper => Some(Biome::Desert),
+                ResourceType::Stone => Some(Biome::Grassland),
+                ResourceType::Oil => None, // Water-edge only, just pick any open cell
+                _ => None,
+            };
+
+            // Sort candidates: preferred biome first, then shuffle within each group
+            let mut sorted_candidates = candidates.clone();
+            sorted_candidates.sort_by_key(|&(_, _, b)| if Some(b) == preferred_biome { 0 } else { 1 });
+
+            let mut spawned = 0u32;
+            for &(cx, cz, _) in &sorted_candidates {
+                if spawned >= needed {
+                    break;
+                }
+                // Avoid placing too close to an already-placed enforcement node
+                let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
+                let scale_factor = rng.random_range(0.8_f32..1.2);
+
+                if has_rock_models && *rt != ResourceType::Oil {
+                    let scene_handle = random_model(&mut rng, &model_assets.rocks).unwrap();
+                    commands.spawn((
+                        GameWorld,
+                        ResourceNode {
+                            resource_type: *rt,
+                            amount_remaining: *amount,
+                        },
+                        TerrainHeightOffset(0.0),
+                        FogHideable::Object,
+                        PickRadius(1.8 * scale_factor),
+                        SceneRoot(scene_handle),
+                        NotShadowCaster,
+                        Transform::from_translation(terrain_translation(
+                            &height_map, cx, cz, 0.0,
+                        ))
+                        .with_rotation(Quat::from_rotation_y(y_rotation))
+                        .with_scale(Vec3::splat(scale_factor)),
+                    ));
+                } else {
+                    // Oil or fallback: primitive mesh
+                    let mesh = if *rt == ResourceType::Oil {
+                        oil_mesh.clone()
+                    } else {
+                        ore_mesh.clone()
+                    };
+                    let half_h = if *rt == ResourceType::Oil { 0.6 } else { 0.4 };
+                    let y = terrain_translation(&height_map, cx, cz, half_h).y;
+                    commands.spawn((
+                        GameWorld,
+                        ResourceNode {
+                            resource_type: *rt,
+                            amount_remaining: *amount,
+                        },
+                        TerrainHeightOffset(half_h),
+                        FogHideable::Object,
+                        PickRadius(half_h * 1.5),
+                        Mesh3d(mesh),
+                        MeshMaterial3d(mat.clone()),
+                        NotShadowCaster,
+                        Transform::from_translation(Vec3::new(cx, y, cz)),
+                    ));
+                }
+                spawned += 1;
+            }
+
+            if spawned > 0 {
+                *resource_counts.entry(*rt).or_insert(0) += spawned;
+                warn!(
+                    "Enforced minimum: spawned {} extra {} nodes (had {}, need {})",
+                    spawned,
+                    rt.display_name(),
+                    current,
+                    min_nodes
+                );
+            }
+        }
+    }
+
     info!("Biome cell counts: {:?}", biome_counts);
     info!("Resource node counts: {:?}", resource_counts);
 }
@@ -496,15 +632,13 @@ pub(super) fn deplete_resource_nodes(
     mut commands: Commands,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     time: Res<Time>,
-    nodes: Query<
-        (
-            Entity,
-            &ResourceNode,
-            &Transform,
-            Option<&YardResourceNode>,
-            Option<&DepletionAnimation>,
-        ),
-    >,
+    nodes: Query<(
+        Entity,
+        &ResourceNode,
+        &Transform,
+        Option<&YardResourceNode>,
+        Option<&DepletionAnimation>,
+    )>,
 ) {
     for (entity, node, transform, yard_tag, depletion) in &nodes {
         if node.amount_remaining == 0 {

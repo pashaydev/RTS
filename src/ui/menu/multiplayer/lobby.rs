@@ -4,14 +4,14 @@ use bevy::prelude::*;
 use bevy_matchbox::prelude::*;
 use game_state::codec;
 
-use crate::types::*;
 use crate::infrastructure::multiplayer::{
     self,
     matchbox_transport::{self, MatchboxInbox, PeerMap},
     ClientNetState, HostNetState, LobbyPlayer, LobbyState, LobbyStatus, NetRole,
 };
-use crate::ui::theme::{Theme, SUCCESS};
+use crate::types::*;
 use crate::ui::core::text_input::{clipboard_read, clipboard_write};
+use crate::ui::theme::{Theme, SUCCESS};
 
 use super::super::*;
 use super::config::SerializableGameConfig;
@@ -665,7 +665,8 @@ pub(crate) fn update_web_client_url(
             .or_else(|| lobby.all_ips.first())
             .map(|(ip, _, _)| ip.as_str())
             .unwrap_or("127.0.0.1");
-        let http_port = DEFAULT_PORT + crate::infrastructure::multiplayer::transport::HTTP_PORT_OFFSET;
+        let http_port =
+            DEFAULT_PORT + crate::infrastructure::multiplayer::transport::HTTP_PORT_OFFSET;
         format!("Web clients: http://{}:{}", ip, http_port)
     } else {
         String::new()
@@ -917,10 +918,7 @@ pub(crate) fn lobby_ping_system(
 /// Dynamically enable/disable the CONNECT button based on session code input.
 pub(crate) fn sync_connect_button_state(
     inputs: Query<&TextInputField, With<SessionCodeInput>>,
-    mut connect_buttons: Query<
-        (Entity, Option<&ButtonDisabled>),
-        With<MenuButton>,
-    >,
+    mut connect_buttons: Query<(Entity, Option<&ButtonDisabled>), With<MenuButton>>,
     all_buttons: Query<&MenuButton>,
     lobby: Option<Res<LobbyState>>,
     mut commands: Commands,

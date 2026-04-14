@@ -4,10 +4,10 @@ mod unit_commands;
 
 use bevy::prelude::*;
 
-use crate::types::*;
 use crate::presentation::materials::hover::HoverRingMaterial;
 use crate::presentation::minimap::MinimapSet;
 use crate::simulation::orders;
+use crate::types::*;
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SelectionSet;

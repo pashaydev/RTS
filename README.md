@@ -38,8 +38,7 @@ PATH="/tmp:/opt/homebrew/opt/llvm/bin:$PATH" cargo xwin build --release --target
 
 ### MacOS
 ```sh
-rustup target add aarch64-apple-darwin
-cargo build --release --target aarch64-apple-darwin
+./scripts/build-macos.sh
 ```
 
 ### Debug
@@ -99,10 +98,12 @@ CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
 Build and deploy everything with a single command:
 
 ```sh
-./scripts/deploy.sh                        # bump patch + Windows build + Fly.io deploy
+./scripts/deploy.sh                        # bump patch + Windows build + macOS build + Fly.io deploy
 ./scripts/deploy.sh --windows-only         # bump patch + Windows zip only
+./scripts/deploy.sh --macos-only           # bump patch + macOS zip only
 ./scripts/deploy.sh --fly-only             # bump patch + Web deploy only
 ./scripts/deploy.sh --minor --windows-only # bump minor + Windows zip only
+./scripts/deploy.sh --minor --macos-only   # bump minor + macOS zip only
 ./scripts/deploy.sh --major --fly-only     # bump major + Web deploy only
 ```
 
@@ -111,6 +112,7 @@ Build and deploy everything with a single command:
 | Target  | Requirement |
 |---------|-------------|
 | Windows | `cargo install cargo-xwin` + LLVM (`/opt/homebrew/opt/llvm`) |
+| macOS   | `rustup target add aarch64-apple-darwin` (or set `MACOS_TARGET` to another Rust target triple) |
 | Web     | [flyctl](https://fly.io/docs/flyctl/install/) + `fly auth login` |
 
 ### Docker / Fly.io

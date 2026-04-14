@@ -46,13 +46,12 @@ impl Plugin for ResourcesPlugin {
                     mark_carried_totals_dirty,
                     (spawning::spawn_resource_nodes, terrain::spawn_decorations)
                         .after(crate::world::ground::spawn_ground)
-                        .run_if(not(resource_exists::<crate::infrastructure::save_load::PendingLoad>)),
+                        .run_if(not(resource_exists::<
+                            crate::infrastructure::save_load::PendingLoad,
+                        >)),
                 ),
             )
-            .add_systems(
-                FixedUpdate,
-                workers::worker_ai_system,
-            )
+            .add_systems(FixedUpdate, workers::worker_ai_system)
             .add_systems(
                 FixedUpdate,
                 (

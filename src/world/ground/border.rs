@@ -2,9 +2,7 @@ use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use rand::{Rng, SeedableRng};
 
-use crate::types::{
-    Decoration, FogHideable, GameSetupConfig, GameWorld, MapSeed, ModelAssets,
-};
+use crate::types::{Decoration, FogHideable, GameSetupConfig, GameWorld, MapSeed, ModelAssets};
 
 use super::data::{BorderSettings, HeightMap};
 

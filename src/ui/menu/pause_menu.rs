@@ -1,27 +1,29 @@
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
 
+use crate::infrastructure::multiplayer::{HostNetState, NetRole};
+use crate::infrastructure::net_bridge::EntityNetMap;
 use crate::simulation::ages::FactionAges;
 use crate::simulation::ai::types::AiState;
 use crate::simulation::ai::AiWorldSnapshot;
 use crate::simulation::combat::CombatBudgetState;
+use crate::simulation::victory::VictoryState;
 use crate::types::*;
-use crate::world::fog::{FogTextureUploadState, FogTextures, FogTweakSettings};
-use crate::world::ground::{TerrainShapeSyncState, TerrainShapeUpdateQueue, TerrainSurfaceDirtyQueue};
-use crate::infrastructure::multiplayer::{HostNetState, NetRole};
-use crate::infrastructure::net_bridge::EntityNetMap;
-use crate::world::pathfinding::{NavGrid, NavGridDirty, PathRequestQueue};
-use crate::world::spatial::{SpatialHashGrid, WallSpatialGrid};
-use crate::ui::theme::{self, Theme};
 use crate::ui::core::framework::{
     GridInteractionActive, WidgetDragState, WidgetEditState, WidgetRegistry, WidgetResizeState,
 };
 use crate::ui::core::interactions::UiClickEvent;
 use crate::ui::fonts::UiFonts;
+use crate::ui::theme::{self, Theme};
 use crate::ui::widgets::event_log_widget::{EventLogRenderState, GameEventLog};
 use crate::ui::widgets::group_hotkeys_widget::ControlGroups;
 use crate::ui::widgets::hints_widget::HintState;
-use crate::simulation::victory::VictoryState;
+use crate::world::fog::{FogTextureUploadState, FogTextures, FogTweakSettings};
+use crate::world::ground::{
+    TerrainShapeSyncState, TerrainShapeUpdateQueue, TerrainSurfaceDirtyQueue,
+};
+use crate::world::pathfinding::{NavGrid, NavGridDirty, PathRequestQueue};
+use crate::world::spatial::{SpatialHashGrid, WallSpatialGrid};
 
 /// Tracks keyboard focus index for pause menu navigation.
 #[derive(Resource, Default)]
@@ -558,7 +560,8 @@ fn handle_pause_buttons(
             }
             PauseAction::SaveGame => {
                 // Insert a trigger resource that save_load::handle_save_trigger picks up
-                commands.insert_resource(crate::infrastructure::save_load::SaveTrigger { label: None });
+                commands
+                    .insert_resource(crate::infrastructure::save_load::SaveTrigger { label: None });
                 // Close pause menu after save
                 *overlay = InGameOverlay::None;
                 for e in &pause_roots {

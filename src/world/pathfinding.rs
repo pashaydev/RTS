@@ -25,6 +25,11 @@ const NEW_PATH_REQUESTS_PER_FRAME: usize = 96;
 const DIRECT_MOVE_THRESHOLD: f32 = 3.0;
 /// Cost for cells near obstacles (soft margin — guides paths away but doesn't block)
 const OBSTACLE_MARGIN_COST: u8 = 40;
+/// Maximum height delta between two adjacent grid cells before they are treated as
+/// an unwalkable cliff. At NAV_GRID_STEP=2.5 this corresponds to ~36° (atan(1.8/2.5)).
+const MAX_STEP_HEIGHT_DELTA: f32 = 1.8;
+/// Height delta beyond which a slope starts incurring extra A* cost.
+const SLOPE_PENALTY_START: f32 = 0.6;
 
 // ── Components ──
 
@@ -62,6 +67,10 @@ pub struct NavGrid {
     /// Terrain-only base costs computed once at init. Used to quickly reset
     /// the grid before re-stamping buildings (avoids full biome/height recompute).
     terrain_base_costs: Vec<u8>,
+    /// Sampled terrain height per grid cell. Used by the height-aware
+    /// line-of-sight check so smoothing/direct moves don't cut across cliffs
+    /// that the rasterized cell passability missed.
+    pub heights: Vec<f32>,
     pub grid_size: usize,
     pub step: f32,
     pub half_map: f32,
@@ -191,9 +200,10 @@ fn handle_move_target_updates(
     for (entity, move_target, tracker) in movers {
         match move_target {
             Some(target) => {
-                let same_goal = tracker.as_ref().and_then(|tracker| tracker.last_goal).is_some_and(
-                    |previous| same_nav_goal(previous, target.0),
-                );
+                let same_goal = tracker
+                    .as_ref()
+                    .and_then(|tracker| tracker.last_goal)
+                    .is_some_and(|previous| same_nav_goal(previous, target.0));
                 if same_goal {
                     continue;
                 }
@@ -348,6 +358,17 @@ fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut comm
     let total = grid_size * grid_size;
 
     let mut costs = vec![1u8; total];
+    let mut heights = vec![0f32; total];
+
+    // First pass: sample heights at every cell so the slope test below can
+    // compare to neighbours without re-sampling the heightmap repeatedly.
+    for gz in 0..grid_size {
+        for gx in 0..grid_size {
+            let wx = gx as f32 * step - half_map;
+            let wz = gz as f32 * step - half_map;
+            heights[gz * grid_size + gx] = height_map.sample(wx, wz);
+        }
+    }
 
     // Mark terrain costs from biome and height
     for gz in 0..grid_size {
@@ -362,28 +383,40 @@ fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut comm
             }
 
             let biome = biome_map.get_biome(wx, wz);
-            let h = height_map.sample(wx, wz);
+            let h = heights[idx];
 
-            // Check slope to cardinal neighbors — if any neighbor has a height
-            // difference > max_slope per grid step, mark as impassable or very costly.
-            let max_slope = 4.0; // max height difference per step before impassable
-            let steep_slope = 2.5; // height diff that adds significant cost
+            // Check slope to all 8 neighbours. At NAV_GRID_STEP=2.5,
+            // MAX_STEP_HEIGHT_DELTA=1.8 corresponds to ~36° — anything steeper is a cliff.
+            let max_slope = MAX_STEP_HEIGHT_DELTA;
+            let steep_slope = 1.0; // height diff that starts adding noticeable cost
             let mut max_diff: f32 = 0.0;
-            if gx > 0 {
-                let nh = height_map.sample((gx - 1) as f32 * step - half_map, wz);
-                max_diff = max_diff.max((h - nh).abs());
-            }
-            if gx + 1 < grid_size {
-                let nh = height_map.sample((gx + 1) as f32 * step - half_map, wz);
-                max_diff = max_diff.max((h - nh).abs());
-            }
-            if gz > 0 {
-                let nh = height_map.sample(wx, (gz - 1) as f32 * step - half_map);
-                max_diff = max_diff.max((h - nh).abs());
-            }
-            if gz + 1 < grid_size {
-                let nh = height_map.sample(wx, (gz + 1) as f32 * step - half_map);
-                max_diff = max_diff.max((h - nh).abs());
+            // Sub-sample the midpoint between cells too, so cliffs that fall
+            // between grid nodes still register as impassable.
+            for dz in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    if dx == 0 && dz == 0 {
+                        continue;
+                    }
+                    let nx = gx as i32 + dx;
+                    let nz = gz as i32 + dz;
+                    if nx < 0 || nz < 0 || nx >= grid_size as i32 || nz >= grid_size as i32 {
+                        continue;
+                    }
+                    let nh = heights[nz as usize * grid_size + nx as usize];
+                    let diag_scale = if dx != 0 && dz != 0 { 1.4142 } else { 1.0 };
+                    let normalized = (h - nh).abs() / diag_scale;
+                    if normalized > max_diff {
+                        max_diff = normalized;
+                    }
+                    // Mid-point sub-sample (catches sub-grid cliffs)
+                    let mwx = wx + dx as f32 * step * 0.5;
+                    let mwz = wz + dz as f32 * step * 0.5;
+                    let mh = height_map.sample(mwx, mwz);
+                    let mid_diff = (h - mh).abs() * 2.0 / diag_scale;
+                    if mid_diff > max_diff {
+                        max_diff = mid_diff;
+                    }
+                }
             }
 
             if max_diff > max_slope {
@@ -421,6 +454,7 @@ fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut comm
     commands.insert_resource(NavGrid {
         costs,
         terrain_base_costs,
+        heights,
         grid_size,
         step,
         half_map,
@@ -575,7 +609,12 @@ fn queue_path_requests(
     mut request_ids: ResMut<PathRequestIds>,
     nav_grid: Res<NavGrid>,
     mut new_movers: Query<
-        (Entity, &Transform, &MoveTarget, Option<&mut NavRequestTracker>),
+        (
+            Entity,
+            &Transform,
+            &MoveTarget,
+            Option<&mut NavRequestTracker>,
+        ),
         (
             Or<(With<Unit>, With<Mob>)>,
             Without<NavPath>,
@@ -663,9 +702,9 @@ fn spawn_pathfinding_tasks(
         }
 
         if request.nav_revision != nav_grid.revision
-            || trackers
-                .get(request.entity)
-                .map_or(true, |tracker| tracker.latest_request_id != request.request_id)
+            || trackers.get(request.entity).map_or(true, |tracker| {
+                tracker.latest_request_id != request.request_id
+            })
         {
             commands.entity(request.entity).remove::<NavPending>();
             processed += 1;
@@ -858,7 +897,18 @@ pub fn find_path(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> Option<Vec<(f32
                 }
 
                 let base_cost = if dx != 0 && dz != 0 { 1414u32 } else { 1000u32 };
-                let edge_cost = base_cost + cell_cost as u32 * 10;
+                // Penalize traversal across height deltas. Anything above
+                // SLOPE_PENALTY_START scales linearly; above MAX_STEP_HEIGHT_DELTA
+                // we already rejected the cell as a cliff in build_nav_grid.
+                let h_here = nav_grid.heights[current];
+                let h_neigh = nav_grid.costs.get(ni).map(|_| nav_grid.heights[ni]).unwrap_or(h_here);
+                let dh = (h_neigh - h_here).abs();
+                let slope_penalty = if dh > SLOPE_PENALTY_START {
+                    ((dh - SLOPE_PENALTY_START) * 800.0) as u32
+                } else {
+                    0
+                };
+                let edge_cost = base_cost + cell_cost as u32 * 10 + slope_penalty;
                 let tentative_g = current_g.saturating_add(edge_cost);
 
                 if tentative_g < g_cost[ni] {
@@ -933,7 +983,10 @@ fn smooth_path(nav_grid: &NavGrid, path: &[usize]) -> Vec<usize> {
     smoothed
 }
 
-/// Bresenham-style line of sight check on the nav grid
+/// Bresenham-style line of sight check on the nav grid.
+/// Rejects when the segment crosses an impassable cell OR when consecutive
+/// cells along the segment have a height delta exceeding MAX_STEP_HEIGHT_DELTA
+/// (so smoothing and direct-walk shortcuts can't cut across cliffs).
 fn line_of_sight(nav_grid: &NavGrid, x0: usize, z0: usize, x1: usize, z1: usize) -> bool {
     let gs = nav_grid.grid_size;
     let dx = (x1 as i32 - x0 as i32).abs();
@@ -943,14 +996,21 @@ fn line_of_sight(nav_grid: &NavGrid, x0: usize, z0: usize, x1: usize, z1: usize)
     let mut err = dx - dz;
     let mut x = x0 as i32;
     let mut z = z0 as i32;
+    let mut prev_h = nav_grid.heights[z0 * gs + x0];
 
     loop {
         if x < 0 || z < 0 || x >= gs as i32 || z >= gs as i32 {
             return false;
         }
-        if nav_grid.costs[z as usize * gs + x as usize] == 0 {
+        let idx = z as usize * gs + x as usize;
+        if nav_grid.costs[idx] == 0 {
             return false;
         }
+        let cur_h = nav_grid.heights[idx];
+        if (cur_h - prev_h).abs() > MAX_STEP_HEIGHT_DELTA {
+            return false;
+        }
+        prev_h = cur_h;
         if x == x1 as i32 && z == z1 as i32 {
             return true;
         }

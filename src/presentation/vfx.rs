@@ -151,7 +151,8 @@ fn handle_projectile_impacts(
             FogHideable::Vfx,
             Mesh3d(vfx.sphere_mesh.clone()),
             MeshMaterial3d(impact_material),
-            Transform::from_translation(impact.position).with_scale(Vec3::splat(impact_scale * 0.3)),
+            Transform::from_translation(impact.position)
+                .with_scale(Vec3::splat(impact_scale * 0.3)),
             NotShadowCaster,
             NotShadowReceiver,
         ));
@@ -604,7 +605,8 @@ fn spawn_depletion_vfx(
                 for i in 0..count {
                     let frac = i as f32 / count as f32;
                     let angle = std::f32::consts::TAU * frac;
-                    let velocity = Vec3::new(angle.cos() * 0.8, 1.0 + frac * 0.5, angle.sin() * 0.8);
+                    let velocity =
+                        Vec3::new(angle.cos() * 0.8, 1.0 + frac * 0.5, angle.sin() * 0.8);
                     commands.spawn((
                         GatherParticle {
                             timer: Timer::from_seconds(0.5, TimerMode::Once),

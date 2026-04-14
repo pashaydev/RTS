@@ -2,12 +2,12 @@ use bevy::prelude::*;
 use rand::Rng;
 
 use crate::presentation::camera::InternalRenderTarget;
-use crate::types::*;
-use crate::world::ground::HeightMap;
 use crate::presentation::materials::tree_occlusion::{
     TreeOcclusionExtension, TreeOcclusionMaterial, TreeOcclusionMaterialCache,
     TreeOcclusionUniform, TREE_OCCLUSION_MAX_UNITS,
 };
+use crate::types::*;
+use crate::world::ground::HeightMap;
 
 use super::spawning::{random_tree, terrain_translation};
 
@@ -323,8 +323,7 @@ fn fix_alpha_recursive(
                 .remove::<MeshMaterial3d<StandardMaterial>>()
                 .insert(MeshMaterial3d(extended_handle.clone()));
 
-            if mat.base_color_texture.is_some()
-                && !leaf_mats.iter().any(|h| h == &extended_handle)
+            if mat.base_color_texture.is_some() && !leaf_mats.iter().any(|h| h == &extended_handle)
             {
                 leaf_mats.push(extended_handle);
             }

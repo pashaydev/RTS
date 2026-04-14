@@ -27,14 +27,20 @@ COPY src/ src/
 COPY game_state/ game_state/
 COPY index.html .trunk.toml ./
 
-# Copy only the asset subtrees needed by the web build.
+# Copy the runtime asset packs that Bevy loads dynamically in the browser.
+# Trunk copies the entire `/app/assets` tree into `dist`, so any pack omitted
+# here turns into an HTML fallback at runtime and surfaces as "invalid glTF".
 COPY assets/fonts/ assets/fonts/
 COPY assets/shaders/ assets/shaders/
 COPY assets/icons/ assets/icons/
-COPY assets/ToonyTinyPeople/ assets/ToonyTinyPeople/
 COPY assets/textures/ assets/textures/
 COPY assets/trees_compressed/ assets/trees_compressed/
 COPY assets/audio/ assets/audio/
+COPY assets/ToonyTinyPeople/ assets/ToonyTinyPeople/
+COPY assets/KayKit_Forest_Nature/ assets/KayKit_Forest_Nature/
+COPY assets/KayKit_Character_Animations/ assets/KayKit_Character_Animations/
+COPY assets/UltimateFantasyRTS/ assets/UltimateFantasyRTS/
+COPY assets/models/ assets/models/
 
 # Disable reference-types/externref to avoid browser failures in the
 # generated wasm-bindgen bootstrap on stricter WebAssembly runtimes.

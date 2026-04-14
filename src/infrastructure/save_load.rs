@@ -7,21 +7,23 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache};
+use crate::infrastructure::database::{ActiveProfile, GameDatabase};
+use crate::infrastructure::multiplayer::NetRole;
+use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::simulation::ai::types::{
     AiFactionBrain, AiState, AiTopState, BuildRequest, ResourceGoal, Squad, SquadRole,
     TacticalPosture, ThreatEntry, WallPlan,
 };
-use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache};
+use crate::simulation::items::{
+    ItemKind, ItemPickup, ItemRuntimeState, PickupCollectVfx, UnitInventory,
+};
+use crate::simulation::victory::{FactionStatus as VictFactionStatus, VictoryState};
 use crate::types::*;
-use crate::infrastructure::database::{ActiveProfile, GameDatabase};
-use crate::simulation::items::{ItemKind, ItemPickup, ItemRuntimeState, PickupCollectVfx, UnitInventory};
 use crate::ui::widgets::group_hotkeys_widget::ControlGroups;
 use crate::world::fog::FogTextureUploadState;
 use crate::world::ground::{HeightMap, TerrainShapeSyncState};
 use crate::world::lighting::{DayCycle, DayPhase};
-use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
-use crate::infrastructure::multiplayer::NetRole;
-use crate::simulation::victory::{FactionStatus as VictFactionStatus, VictoryState};
 
 use bevy::light::NotShadowCaster;
 use rand::Rng;
@@ -86,8 +88,7 @@ struct PendingFogRestore {
 }
 
 /// Deferred production state restoration — inserted on building entities during load.
-#[derive(Component)]
-#[derive(Resource)]
+#[derive(Component, Resource)]
 struct PendingLoadVisuals;
 
 #[derive(Component)]
@@ -1325,8 +1326,7 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                 status_effects: get!(entity, StatusEffects)
                     .map(|s| status_effect_to_saved(s))
                     .unwrap_or_default(),
-                veterancy_applied: get!(entity, VeterancyApplied)
-                    .map(|v| veterancy_to_u8(&v.0)),
+                veterancy_applied: get!(entity, VeterancyApplied).map(|v| veterancy_to_u8(&v.0)),
             }),
         });
     }
@@ -2031,9 +2031,8 @@ pub fn load_saved_game(
                             .resource_type
                             .map(|i| resource_type_from_index(i as usize)),
                     });
-                    commands.insert_resource(crate::simulation::resources::CarriedTotalsDirty(
-                        true,
-                    ));
+                    commands
+                        .insert_resource(crate::simulation::resources::CarriedTotalsDirty(true));
                 }
                 if let Some([cur, lvl]) = unit_data.experience {
                     commands.entity(e).insert(Experience {
@@ -2373,8 +2372,7 @@ pub fn load_saved_game(
                 e
             }
             SavedEntityType::ItemPickup(pickup_data) => {
-                let remaining =
-                    pickup_data.expires_at - save.elapsed_secs as f32;
+                let remaining = pickup_data.expires_at - save.elapsed_secs as f32;
                 if remaining <= 0.0 {
                     continue; // Already expired
                 }
@@ -2396,8 +2394,7 @@ pub fn load_saved_game(
             }
             SavedEntityType::GrowingResource(gr_data) => {
                 let rt = resource_type_from_index(gr_data.resource_type as usize);
-                let mut timer =
-                    Timer::from_seconds(gr_data.timer_duration, TimerMode::Once);
+                let mut timer = Timer::from_seconds(gr_data.timer_duration, TimerMode::Once);
                 timer.tick(std::time::Duration::from_secs_f32(gr_data.timer_elapsed));
                 let e = commands
                     .spawn((
@@ -2597,9 +2594,7 @@ pub fn load_saved_game(
     }
 
     // 12. Insert MatchStartTime so game clock continues from saved elapsed time
-    commands.insert_resource(MatchStartTime(
-        time.elapsed_secs_f64() - save.elapsed_secs,
-    ));
+    commands.insert_resource(MatchStartTime(time.elapsed_secs_f64() - save.elapsed_secs));
 
     // 13. Restore control groups
     if !save.control_groups.is_empty() {
@@ -2850,10 +2845,7 @@ fn restore_load_visuals(
             ));
         } else if matches!(
             rt,
-            ResourceType::Copper
-                | ResourceType::Iron
-                | ResourceType::Gold
-                | ResourceType::Stone
+            ResourceType::Copper | ResourceType::Iron | ResourceType::Gold | ResourceType::Stone
         ) && has_rock_models
         {
             let scene_handle =
@@ -2906,10 +2898,9 @@ fn restore_load_visuals(
         if has_tree_models {
             let idx = rng.random_range(0..model_assets.trees.len());
             let scene_handle = model_assets.trees[idx].clone();
-            commands.entity(entity).insert((
-                FogHideable::Object,
-                SceneRoot(scene_handle),
-            ));
+            commands
+                .entity(entity)
+                .insert((FogHideable::Object, SceneRoot(scene_handle)));
         }
     }
 
@@ -2918,10 +2909,9 @@ fn restore_load_visuals(
         if has_tree_models {
             let idx = rng.random_range(0..model_assets.trees.len());
             let scene_handle = model_assets.trees[idx].clone();
-            commands.entity(entity).insert((
-                FogHideable::Object,
-                SceneRoot(scene_handle),
-            ));
+            commands
+                .entity(entity)
+                .insert((FogHideable::Object, SceneRoot(scene_handle)));
         }
     }
 

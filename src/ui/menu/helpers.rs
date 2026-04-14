@@ -4,10 +4,10 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 
 use crate::types::*;
-use crate::ui::theme::{Theme, TEXT_PRIMARY, BG_ELEVATED, BG_SURFACE, HIGHLIGHT, HIGHLIGHT_SUBTLE};
 use crate::ui::core::components as ui_components;
 use crate::ui::core::fonts::{self, UiFonts};
 use crate::ui::core::text_input::{spawn_text_input_children, ScrollablePanel};
+use crate::ui::theme::{Theme, BG_ELEVATED, BG_SURFACE, HIGHLIGHT, HIGHLIGHT_SUBTLE, TEXT_PRIMARY};
 
 // ── Shared Components ──
 
@@ -129,11 +129,7 @@ pub fn spawn_styled_button(
 }
 
 /// Spawns a small hint text below a button (initially hidden).
-pub fn spawn_button_hint(
-    commands: &mut Commands,
-    container: Entity,
-    theme: &Theme,
-) -> Entity {
+pub fn spawn_button_hint(commands: &mut Commands, container: Entity, theme: &Theme) -> Entity {
     let hint = commands
         .spawn((
             ButtonHintText,
@@ -779,4 +775,3 @@ pub fn spawn_name_input_row(commands: &mut Commands, current_name: &str, theme: 
 }
 
 // ── Title Treatment ──
-

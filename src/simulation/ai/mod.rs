@@ -112,7 +112,10 @@ impl AiFactionDirty {
     }
 
     fn mark_buildings(&mut self, faction: Faction) {
-        self.per_faction.entry(faction).or_default().mark_buildings();
+        self.per_faction
+            .entry(faction)
+            .or_default()
+            .mark_buildings();
     }
 }
 
@@ -153,7 +156,12 @@ fn collect_ai_snapshot_dirty(
         (Entity, &Faction),
         (
             With<Unit>,
-            Or<(Added<Unit>, Changed<Faction>, Changed<Transform>, Changed<EntityKind>)>,
+            Or<(
+                Added<Unit>,
+                Changed<Faction>,
+                Changed<Transform>,
+                Changed<EntityKind>,
+            )>,
         ),
     >,
     changed_buildings: Query<
@@ -173,7 +181,11 @@ fn collect_ai_snapshot_dirty(
         Entity,
         (
             With<ResourceNode>,
-            Or<(Added<ResourceNode>, Changed<ResourceNode>, Changed<Transform>)>,
+            Or<(
+                Added<ResourceNode>,
+                Changed<ResourceNode>,
+                Changed<Transform>,
+            )>,
         ),
     >,
     mut removed_units: RemovedComponents<Unit>,
@@ -234,7 +246,13 @@ fn build_ai_world_snapshot(
     >,
 ) {
     if dirty.force_full {
-        rebuild_ai_world_snapshot_full(&mut snapshot, &mut index, &units_q, &buildings_q, &resource_nodes_q);
+        rebuild_ai_world_snapshot_full(
+            &mut snapshot,
+            &mut index,
+            &units_q,
+            &buildings_q,
+            &resource_nodes_q,
+        );
         dirty.per_faction.clear();
         dirty.resource_nodes = false;
         dirty.force_full = false;
@@ -252,13 +270,7 @@ fn build_ai_world_snapshot(
     }
 
     for faction in dirty_factions {
-        rebuild_faction_snapshot(
-            faction,
-            &mut snapshot,
-            &mut index,
-            &units_q,
-            &buildings_q,
-        );
+        rebuild_faction_snapshot(faction, &mut snapshot, &mut index, &units_q, &buildings_q);
         dirty.per_faction.remove(&faction);
     }
 
@@ -325,7 +337,9 @@ fn rebuild_faction_snapshot(
     >,
 ) {
     snapshot.factions.remove(&faction);
-    index.units.retain(|_, indexed_faction| *indexed_faction != faction);
+    index
+        .units
+        .retain(|_, indexed_faction| *indexed_faction != faction);
     index
         .buildings
         .retain(|_, indexed_faction| *indexed_faction != faction);
@@ -407,7 +421,9 @@ fn push_unit_snapshot(
         entry.worker_entities.push((entity, tf.translation));
     } else {
         entry.military_count += 1;
-        entry.military_entities.push((entity, *kind, tf.translation));
+        entry
+            .military_entities
+            .push((entity, *kind, tf.translation));
     }
 
     index.units.insert(entity, *faction);
@@ -533,7 +549,10 @@ fn validate_ai_snapshot_integrity(
             warn!("AI snapshot military count mismatch for {:?}", faction);
         }
         if snap.under_construction_count != counts.3 {
-            warn!("AI snapshot under-construction count mismatch for {:?}", faction);
+            warn!(
+                "AI snapshot under-construction count mismatch for {:?}",
+                faction
+            );
         }
     }
 }

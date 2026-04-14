@@ -1,5 +1,5 @@
-use crate::types::*;
 use crate::infrastructure::multiplayer::{LobbyPlayer, LobbyState};
+use crate::types::*;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub(crate) struct SeatAssignment {

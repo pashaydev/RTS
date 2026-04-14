@@ -8,18 +8,17 @@ mod water;
 use bevy::pbr::MaterialPlugin;
 use bevy::prelude::*;
 
-use crate::types::{AppState, GameFlowSet};
 use crate::presentation::materials::terrain::TerrainMaterial;
 use crate::presentation::materials::water::WaterMaterial;
+use crate::types::{AppState, GameFlowSet};
 
 #[allow(unused_imports)]
 pub use border::spawn_mountain_border;
 #[allow(unused_imports)]
 pub use data::{
     edge_distance_to_square, foundation_radii, is_in_mountain_border, playable_half_map,
-    BorderSettings, HeightMap,
-    TerrainShapeSyncState, TerrainShapeUpdateQueue, TerrainSurfaceDirtyArea,
-    TerrainSurfaceDirtyQueue, WATER_LEVEL,
+    BorderSettings, HeightMap, TerrainShapeSyncState, TerrainShapeUpdateQueue,
+    TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue, WATER_LEVEL,
 };
 #[allow(unused_imports)]
 pub use generation::spawn_ground;

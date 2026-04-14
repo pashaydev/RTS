@@ -1,13 +1,13 @@
 use bevy::prelude::*;
 
-use super::ResolutionRow;
 use super::resolution_index;
 use super::resolution_label;
+use super::ResolutionRow;
 use crate::types::*;
+use crate::ui::fonts::UiFonts;
 use crate::ui::menu::helpers::*;
 use crate::ui::menu::*;
 use crate::ui::theme::Theme;
-use crate::ui::fonts::UiFonts;
 
 // ── Options Page ──
 
@@ -271,7 +271,10 @@ pub(crate) fn spawn_options_page(
     let save_btn = spawn_styled_button(
         commands,
         "SAVE",
-        (MenuButton(MenuAction::ApplySettings), super::super::SaveSettingsButton),
+        (
+            MenuButton(MenuAction::ApplySettings),
+            super::super::SaveSettingsButton,
+        ),
         true,
         fonts,
         Some(15),

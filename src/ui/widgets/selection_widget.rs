@@ -1,23 +1,22 @@
 use bevy::prelude::*;
 
-use super::core::constants::*;
 use super::core::components as ui_components;
+use super::core::constants::*;
 use super::core::fonts::UiFonts;
 use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::hud::WidgetGridArea;
 use super::core::shared::hp_color;
 use super::group_hotkeys_widget::ControlGroups;
 use super::selection_cards::{
-    spawn_friendly_detail_card, spawn_building_detail_card, spawn_enemy_detail_card,
+    spawn_building_detail_card, spawn_enemy_detail_card, spawn_friendly_detail_card,
     spawn_multi_inventory_summary, spawn_single_inventory_section, spawn_unit_mini_card,
 };
 use crate::blueprints::EntityKind;
-use crate::types::*;
 use crate::simulation::items::{
-    InventoryChanged, ItemAssets, ItemPickupCollected,
-    ItemPickupFailed, ItemRuntimeState, ItemTransferFailed, ItemRegistry, RequestDropItem,
-    RequestTransferItem, UnitInventory,
+    InventoryChanged, ItemAssets, ItemPickupCollected, ItemPickupFailed, ItemRegistry,
+    ItemRuntimeState, ItemTransferFailed, RequestDropItem, RequestTransferItem, UnitInventory,
 };
+use crate::types::*;
 use crate::ui::theme::Theme;
 
 pub struct SelectionWidgetPlugin;
@@ -71,43 +70,43 @@ pub(super) struct SelectionInventoryUiState {
 impl Plugin for SelectionWidgetPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SelectionInventoryUiState>()
-        .add_systems(
-            Update,
-            spawn_selection_widget
-                .run_if(in_state(AppState::InGame))
-                .run_if(any_with_component::<WidgetGridArea>),
-        )
-        .add_systems(
-            Update,
-            (
-                maintain_selection_inventory_ui_state,
-                handle_item_inventory_feedback,
-                handle_inventory_focus_unit_click,
-                handle_inventory_slot_focus,
-                handle_drop_inventory_item_click,
-                handle_transfer_inventory_item_click,
+            .add_systems(
+                Update,
+                spawn_selection_widget
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(any_with_component::<WidgetGridArea>),
             )
-                .run_if(in_state(AppState::InGame)),
-        )
-        .add_systems(
-            Update,
-            rebuild_selection_panel.run_if(in_state(AppState::InGame)),
-        )
-        .add_systems(
-            Update,
-            update_label_visibility_footer.run_if(in_state(AppState::InGame)),
-        )
-        .add_systems(
-            Update,
-            (
-                update_hp_bars,
-                handle_unit_card_click,
-                handle_formation_preset_click,
-                handle_toggle_unit_labels_click,
-                clear_stale_inspected,
+            .add_systems(
+                Update,
+                (
+                    maintain_selection_inventory_ui_state,
+                    handle_item_inventory_feedback,
+                    handle_inventory_focus_unit_click,
+                    handle_inventory_slot_focus,
+                    handle_drop_inventory_item_click,
+                    handle_transfer_inventory_item_click,
+                )
+                    .run_if(in_state(AppState::InGame)),
             )
-                .run_if(in_state(AppState::InGame)),
-        );
+            .add_systems(
+                Update,
+                rebuild_selection_panel.run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                update_label_visibility_footer.run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                (
+                    update_hp_bars,
+                    handle_unit_card_click,
+                    handle_formation_preset_click,
+                    handle_toggle_unit_labels_click,
+                    clear_stale_inspected,
+                )
+                    .run_if(in_state(AppState::InGame)),
+            );
     }
 }
 
@@ -285,11 +284,7 @@ fn handle_item_inventory_feedback(
 
     for collected in pickup_collected.read() {
         if let Some(message) = collected.info_message {
-            next_warning = Some(format!(
-                "{}: {}",
-                collected.item.display_name(),
-                message
-            ));
+            next_warning = Some(format!("{}: {}", collected.item.display_name(), message));
         } else {
             clear_warning = true;
         }
@@ -345,7 +340,10 @@ fn maintain_selection_inventory_ui_state(
 }
 
 fn handle_inventory_focus_unit_click(
-    interactions: Query<(&Interaction, &InventoryFocusUnitButton), (Changed<Interaction>, With<Button>)>,
+    interactions: Query<
+        (&Interaction, &InventoryFocusUnitButton),
+        (Changed<Interaction>, With<Button>),
+    >,
     mut inventory_ui: ResMut<SelectionInventoryUiState>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
@@ -382,7 +380,10 @@ fn handle_inventory_slot_focus(
 }
 
 fn handle_drop_inventory_item_click(
-    interactions: Query<(&Interaction, &DropInventoryItemButton), (Changed<Interaction>, With<Button>)>,
+    interactions: Query<
+        (&Interaction, &DropInventoryItemButton),
+        (Changed<Interaction>, With<Button>),
+    >,
     mut drop_requests: MessageWriter<RequestDropItem>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
@@ -401,7 +402,10 @@ fn handle_drop_inventory_item_click(
 }
 
 fn handle_transfer_inventory_item_click(
-    interactions: Query<(&Interaction, &TransferInventoryItemButton), (Changed<Interaction>, With<Button>)>,
+    interactions: Query<
+        (&Interaction, &TransferInventoryItemButton),
+        (Changed<Interaction>, With<Button>),
+    >,
     mut transfer_requests: MessageWriter<RequestTransferItem>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
@@ -608,8 +612,7 @@ fn rebuild_selection_panel(
                 stance,
                 inventory,
                 runtime_state,
-            )) =
-                selected_units.iter().next()
+            )) = selected_units.iter().next()
             {
                 spawn_friendly_detail_card(
                     &mut commands,
@@ -731,7 +734,9 @@ fn rebuild_selection_panel(
                 let label = display_name
                     .map(|name| name.0.clone())
                     .unwrap_or_else(|| kind.display_name().to_string());
-                let filled = inventory.map(|inv| inv.items.len().min(inv.capacity as usize)).unwrap_or(0);
+                let filled = inventory
+                    .map(|inv| inv.items.len().min(inv.capacity as usize))
+                    .unwrap_or(0);
                 let button = commands
                     .spawn((
                         Button,
@@ -739,9 +744,15 @@ fn rebuild_selection_panel(
                         InventoryFocusUnitButton { unit: entity },
                         ui_components::compact_button_node(10.0, 5.0),
                         if is_focused {
-                            ui_components::filled_button_chrome(&theme, ui_components::UiTone::Accent)
+                            ui_components::filled_button_chrome(
+                                &theme,
+                                ui_components::UiTone::Accent,
+                            )
                         } else {
-                            ui_components::ghost_button_chrome(&theme, ui_components::UiTone::Neutral)
+                            ui_components::ghost_button_chrome(
+                                &theme,
+                                ui_components::UiTone::Neutral,
+                            )
                         },
                         ActionTooltipTrigger {
                             text: format!("Inspect {} inventory", label),
@@ -776,7 +787,9 @@ fn rebuild_selection_panel(
                 _stance,
                 inventory,
                 runtime_state,
-            )) = selected_units.iter().find(|(entity, _, _, _, _, _, _, _, _, _)| *entity == focused_unit)
+            )) = selected_units
+                .iter()
+                .find(|(entity, _, _, _, _, _, _, _, _, _)| *entity == focused_unit)
             {
                 spawn_single_inventory_section(
                     &mut commands,
@@ -890,11 +903,18 @@ fn rebuild_selection_panel(
                     Option<&ItemRuntimeState>,
                 )>,
             )> = Vec::new();
-            for (entity, kind, display_name, health, _, _, _, _, inventory, runtime) in &selected_units {
+            for (entity, kind, display_name, health, _, _, _, _, inventory, runtime) in
+                &selected_units
+            {
                 if let Some(group) = unit_groups.iter_mut().find(|(k, _)| *k == *kind) {
-                    group.1.push((entity, display_name, health, inventory, runtime));
+                    group
+                        .1
+                        .push((entity, display_name, health, inventory, runtime));
                 } else {
-                    unit_groups.push((*kind, vec![(entity, display_name, health, inventory, runtime)]));
+                    unit_groups.push((
+                        *kind,
+                        vec![(entity, display_name, health, inventory, runtime)],
+                    ));
                 }
             }
             for (_, entities) in &mut unit_groups {
@@ -1213,7 +1233,10 @@ fn transfer_targets_for_unit(
         let label = display_name
             .map(|name| name.0.clone())
             .unwrap_or_else(|| kind.display_name().to_string());
-        targets.push(TransferTargetOption { unit: entity, label });
+        targets.push(TransferTargetOption {
+            unit: entity,
+            label,
+        });
     }
     targets.sort_by(|a, b| a.label.cmp(&b.label));
     targets
@@ -1323,12 +1346,7 @@ fn spawn_selection_footer(
         .insert(ButtonAnimState::new(button_bg.to_srgba().to_f32_array()));
 }
 
-fn spawn_inventory_warning(
-    commands: &mut Commands,
-    parent: Entity,
-    warning: &str,
-    theme: &Theme,
-) {
+fn spawn_inventory_warning(commands: &mut Commands, parent: Entity, warning: &str, theme: &Theme) {
     let banner = commands
         .spawn((
             Node {

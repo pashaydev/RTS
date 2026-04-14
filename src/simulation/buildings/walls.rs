@@ -5,10 +5,12 @@ use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
 
-use crate::blueprints::{spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache};
+use crate::blueprints::{
+    spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache,
+};
+use crate::presentation::model_assets::{BuildingConstructionAssets, BuildingModelAssets};
 use crate::types::*;
 use crate::world::ground::HeightMap;
-use crate::presentation::model_assets::{BuildingConstructionAssets, BuildingModelAssets};
 
 use super::footprint_for_kind;
 

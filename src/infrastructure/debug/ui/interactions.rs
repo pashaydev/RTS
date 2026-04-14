@@ -1,13 +1,15 @@
 use bevy::prelude::*;
 
-use crate::types::UiPressActive;
 use crate::infrastructure::debug::config::save_debug_config;
 use crate::infrastructure::debug::model::{DebugTweaks, TweakValue};
-use crate::infrastructure::debug::state::{ActiveSlider, DebugButtonPressed, DebugPanelState, SaveConfigFeedback};
+use crate::infrastructure::debug::state::{
+    ActiveSlider, DebugButtonPressed, DebugPanelState, SaveConfigFeedback,
+};
 use crate::infrastructure::debug::ui::components::{
     DebugExpandButton, FolderHeader, SaveConfigButton, SaveConfigButtonText, TweakButton,
     TweakCycleEnum, TweakSlider, TweakToggle,
 };
+use crate::types::UiPressActive;
 
 pub fn initialize_debug_folder_defaults(
     tweaks: Res<DebugTweaks>,

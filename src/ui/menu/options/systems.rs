@@ -2,12 +2,12 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::window::{Monitor, PresentMode};
 
-use super::{ResolutionRow, resolution_index, resolution_label};
+use super::{resolution_index, resolution_label, ResolutionRow};
 use crate::types::*;
 use crate::ui::menu::helpers::*;
 use crate::ui::menu::{BRIGHTNESS_OPTIONS, UI_SCALE_OPTIONS};
-use crate::ui::theme::{TEXT_PRIMARY, BG_ELEVATED, TEXT_DISABLED, HIGHLIGHT, HIGHLIGHT_SUBTLE};
 use crate::ui::theme::Theme;
+use crate::ui::theme::{BG_ELEVATED, HIGHLIGHT, HIGHLIGHT_SUBTLE, TEXT_DISABLED, TEXT_PRIMARY};
 
 // ── Apply Settings ──
 
@@ -135,7 +135,11 @@ pub(crate) fn sync_resolution_arrow_selector(
         return;
     }
     let current_idx = resolution_index(&resolutions.0, graphics.resolution);
-    let (w, h) = resolutions.0.get(current_idx).copied().unwrap_or(graphics.resolution);
+    let (w, h) = resolutions
+        .0
+        .get(current_idx)
+        .copied()
+        .unwrap_or(graphics.resolution);
 
     // Update label text
     for (lbl, mut text) in &mut labels {

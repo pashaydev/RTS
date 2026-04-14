@@ -3,11 +3,9 @@ use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;
 use bevy::tasks::ComputeTaskPool;
 
-use crate::types::{
-    Biome, BiomeMap, CullingBounds, GameSetupConfig, GameWorld, Ground, MapSeed,
-};
 use crate::presentation::materials::terrain::{TerrainExtension, TerrainMaterial, TerrainSettings};
 use crate::presentation::materials::water::{WaterMaterial, WaterSettings};
+use crate::types::{Biome, BiomeMap, CullingBounds, GameSetupConfig, GameWorld, Ground, MapSeed};
 
 use super::data::{HeightMap, AMPLITUDE};
 use super::noise::{blended_biome_color_patched, TerrainNoise};

@@ -2,20 +2,20 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use game_state::message::{ClientMessage, InputCommand, PlayerInput, ServerMessage};
 
-use crate::infrastructure::audio::{PlaySfx, SfxKind};
 use crate::blueprints::{BlueprintRegistry, EntityKind};
+use crate::infrastructure::audio::{PlaySfx, SfxKind};
+use crate::infrastructure::multiplayer::host_systems::execute_input_command;
+use crate::infrastructure::multiplayer::{ClientNetState, HostNetState, NetRole};
+use crate::infrastructure::net_bridge::EntityNetMap;
 use crate::presentation::camera;
+use crate::presentation::minimap::MinimapInteraction;
 use crate::simulation::combat::{
     apply_manual_attack_intent, apply_manual_attack_move_intent, apply_manual_hold_intent,
     apply_manual_move_intent, clear_combat_intent,
 };
+use crate::simulation::items::ItemPickup;
 use crate::types::*;
 use crate::world::ground::HeightMap;
-use crate::presentation::minimap::MinimapInteraction;
-use crate::infrastructure::multiplayer::host_systems::execute_input_command;
-use crate::infrastructure::multiplayer::{ClientNetState, HostNetState, NetRole};
-use crate::infrastructure::net_bridge::EntityNetMap;
-use crate::simulation::items::ItemPickup;
 
 use super::picking::{ray_aabb_dist, ray_sphere_dist};
 use super::{clear_task_queue, enqueue_task, set_current_task};
@@ -81,8 +81,7 @@ pub(crate) fn handle_right_click_move(
     let (mobs, resource_nodes, construction_q, processor_buildings, pickups) = target_queries;
     let (other_units, other_buildings) = enemy_detect;
     let (_assigned_workers_q, building_aabb_q, height_map, graphics) = picking_extra;
-    let (minimap_interaction, ui_clicked, ui_press, mut sfx) =
-        ui_flags;
+    let (minimap_interaction, ui_clicked, ui_press, mut sfx) = ui_flags;
     let (
         net_role,
         client_net,
@@ -127,10 +126,10 @@ pub(crate) fn handle_right_click_move(
     // Contextual right-click action types
     #[derive(Clone, Copy, PartialEq)]
     enum RClickAction {
-        AttackEnemy,     // enemy unit or mob
-        GatherResource,  // resource node (workers)
-        AssistBuild,     // construction site (workers)
-        MoveToAlly,      // allied building — just move near it
+        AttackEnemy,    // enemy unit or mob
+        GatherResource, // resource node (workers)
+        AssistBuild,    // construction site (workers)
+        MoveToAlly,     // allied building — just move near it
     }
 
     // Find ALL hits and evaluate by depth + priority
@@ -334,7 +333,9 @@ pub(crate) fn handle_right_click_move(
                     input: input.clone(),
                 };
                 if let Some(ref mut socket) = matchbox_socket {
-                    crate::infrastructure::multiplayer::matchbox_transport::broadcast_reliable(socket, &relay);
+                    crate::infrastructure::multiplayer::matchbox_transport::broadcast_reliable(
+                        socket, &relay,
+                    );
                 }
 
                 // Execute locally through the same code path as client commands,
@@ -412,6 +413,7 @@ pub(crate) fn handle_right_click_move(
                                 .entity(*entity)
                                 .remove::<AttackTarget>()
                                 .remove::<MoveTarget>()
+                                .remove::<PreferredResource>()
                                 .insert(UnitState::MovingToBuild(target_entity))
                                 .insert(TaskSource::Manual)
                                 .remove::<ManualIdleSince>();
@@ -435,7 +437,7 @@ pub(crate) fn handle_right_click_move(
                             .insert(MoveTarget(pos))
                             .insert(UnitState::Moving(pos))
                             .insert(TaskSource::Manual)
-                                .remove::<ManualIdleSince>();
+                            .remove::<ManualIdleSince>();
                     }
                 }
             }
@@ -462,7 +464,7 @@ pub(crate) fn handle_right_click_move(
                                     .insert(MoveTarget(gt.translation()))
                                     .insert(UnitState::Gathering(target_entity))
                                     .insert(TaskSource::Manual)
-                                .remove::<ManualIdleSince>();
+                                    .remove::<ManualIdleSince>();
                                 set_current_task(
                                     &mut task_queues,
                                     &mut next_task_id,
@@ -484,7 +486,7 @@ pub(crate) fn handle_right_click_move(
                             .insert(MoveTarget(gt.translation()))
                             .insert(UnitState::Moving(gt.translation()))
                             .insert(TaskSource::Manual)
-                                .remove::<ManualIdleSince>();
+                            .remove::<ManualIdleSince>();
                     }
                 }
             }
@@ -571,6 +573,7 @@ pub(crate) fn handle_right_click_move(
                                 .entity(*entity)
                                 .remove::<AttackTarget>()
                                 .remove::<MoveTarget>()
+                                .remove::<PreferredResource>()
                                 .insert(UnitState::MovingToBuild(site_entity))
                                 .insert(TaskSource::Manual)
                                 .remove::<ManualIdleSince>();
@@ -594,7 +597,7 @@ pub(crate) fn handle_right_click_move(
                             .insert(MoveTarget(point))
                             .insert(UnitState::Moving(point))
                             .insert(TaskSource::Manual)
-                                .remove::<ManualIdleSince>();
+                            .remove::<ManualIdleSince>();
                     }
                 }
             } else {
@@ -622,7 +625,7 @@ pub(crate) fn handle_right_click_move(
                             .insert(MoveTarget(point))
                             .insert(UnitState::Moving(point))
                             .insert(TaskSource::Manual)
-                                .remove::<ManualIdleSince>();
+                            .remove::<ManualIdleSince>();
                         set_current_task(
                             &mut task_queues,
                             &mut next_task_id,
@@ -726,7 +729,9 @@ pub(crate) fn handle_unit_command_hotkeys(
         return;
     }
 
-    let has_selected = selected_units.iter().any(|(_, _, f, _)| *f == active_player.0);
+    let has_selected = selected_units
+        .iter()
+        .any(|(_, _, f, _)| *f == active_player.0);
 
     // Escape cancels command mode
     if keys.just_pressed(KeyCode::Escape) {
@@ -753,7 +758,7 @@ pub(crate) fn handle_unit_command_hotkeys(
                     .remove::<AttackTarget>()
                     .insert(UnitState::HoldPosition)
                     .insert(TaskSource::Manual)
-                                .remove::<ManualIdleSince>();
+                    .remove::<ManualIdleSince>();
                 set_current_task(
                     &mut task_queues,
                     &mut next_task_id,
@@ -778,7 +783,10 @@ pub(crate) fn handle_unit_command_hotkeys(
                         entity,
                         assignment.map(|assignment| assignment.0),
                     );
-                    commands.entity(entity).insert(grace);
+                    commands
+                        .entity(entity)
+                        .remove::<PreferredResource>()
+                        .insert(grace);
                 } else {
                     commands
                         .entity(entity)
@@ -941,7 +949,7 @@ pub(crate) fn handle_unit_command_hotkeys(
                         .insert(MoveTarget(dest))
                         .insert(UnitState::AttackMoving(dest))
                         .insert(TaskSource::Manual)
-                                .remove::<ManualIdleSince>();
+                        .remove::<ManualIdleSince>();
                     set_current_task(
                         &mut task_queues,
                         &mut next_task_id,
@@ -965,13 +973,14 @@ pub(crate) fn handle_unit_command_hotkeys(
                     commands
                         .entity(*entity)
                         .remove::<AttackTarget>()
+                        .remove::<PreferredResource>()
                         .insert(MoveTarget(point))
                         .insert(UnitState::Patrolling {
                             target: point,
                             origin: point,
                         })
                         .insert(TaskSource::Manual)
-                                .remove::<ManualIdleSince>();
+                        .remove::<ManualIdleSince>();
                     set_current_task(
                         &mut task_queues,
                         &mut next_task_id,

@@ -1,9 +1,9 @@
 pub(crate) mod helpers;
 pub(crate) mod input;
 pub(crate) mod multiplayer;
+mod navigation;
 pub(crate) mod new_game;
 pub(crate) mod options;
-mod navigation;
 mod pages;
 pub mod pause_menu;
 mod systems;
@@ -274,14 +274,8 @@ impl Plugin for MenuPlugin {
                 systems::apply_window_settings_on_menu_enter,
             )
             .add_systems(OnEnter(AppState::MainMenu), systems::spawn_menu)
-            .add_systems(
-                Update,
-                input::handle_menu_buttons.in_set(MenuSet::Input),
-            )
-            .add_systems(
-                Update,
-                input::handle_selector_clicks.in_set(MenuSet::Input),
-            )
+            .add_systems(Update, input::handle_menu_buttons.in_set(MenuSet::Input))
+            .add_systems(Update, input::handle_selector_clicks.in_set(MenuSet::Input))
             .add_systems(
                 Update,
                 (

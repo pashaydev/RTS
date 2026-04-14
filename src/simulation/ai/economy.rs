@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, ResourceCost};
+use crate::presentation::model_assets::BuildingModelAssets;
 use crate::simulation::buildings::{spawn_wall_line, start_upgrade};
 use crate::types::*;
 use crate::world::ground::HeightMap;
-use crate::presentation::model_assets::BuildingModelAssets;
 
 use super::helpers::*;
 use super::types::*;
@@ -55,7 +55,16 @@ pub fn ai_economy_system(
         Query<(&Faction, &ConstructionWorkers, &BuildingState), With<Building>>,
         Query<(&Faction, &EntityKind, &mut TrainingQueue), With<Building>>,
         Query<&BuildingFootprint>,
-        Query<(Entity, &Faction, &ResourceProcessor, &BuildingState, &Transform), With<Building>>,
+        Query<
+            (
+                Entity,
+                &Faction,
+                &ResourceProcessor,
+                &BuildingState,
+                &Transform,
+            ),
+            With<Building>,
+        >,
         Query<&AssignedWorkers>,
     ),
     obstacle_grid: Res<ObstacleGrid>,

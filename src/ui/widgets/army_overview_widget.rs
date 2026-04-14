@@ -57,7 +57,12 @@ struct UnitCount {
 
 fn count_player_units(
     units: &Query<
-        (&EntityKind, &Faction, Option<&UnitState>, Option<&BuildingAssignment>),
+        (
+            &EntityKind,
+            &Faction,
+            Option<&UnitState>,
+            Option<&BuildingAssignment>,
+        ),
         With<Unit>,
     >,
     faction: Faction,
@@ -158,7 +163,12 @@ fn update_army_overview(
     content_q: Query<Entity, With<WidgetContent>>,
     existing: Query<Entity, With<ArmyOverviewContent>>,
     units: Query<
-        (&EntityKind, &Faction, Option<&UnitState>, Option<&BuildingAssignment>),
+        (
+            &EntityKind,
+            &Faction,
+            Option<&UnitState>,
+            Option<&BuildingAssignment>,
+        ),
         With<Unit>,
     >,
     training_queues: Query<(&Faction, &TrainingQueue), With<Building>>,

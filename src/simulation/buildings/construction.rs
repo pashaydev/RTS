@@ -5,13 +5,13 @@ use std::time::Duration;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
-use crate::infrastructure::audio::{PlaySfx, SfxKind};
 use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache,
 };
+use crate::infrastructure::audio::{PlaySfx, SfxKind};
+use crate::presentation::model_assets::{BuildingConstructionAssets, BuildingModelAssets};
 use crate::types::*;
 use crate::world::ground::HeightMap;
-use crate::presentation::model_assets::{BuildingConstructionAssets, BuildingModelAssets};
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
 
@@ -333,21 +333,23 @@ pub(super) fn build_site_preparation_system(
         }
 
         let new_footprint = super::footprint_for_kind(prep.kind);
-        let blocked = existing_buildings.iter().any(|(building_tf, existing_fp, existing_kind)| {
-            if !super::blocks_construction_overlap(*existing_kind) {
-                return false;
-            }
-            super::building_blocks_area(
-                prep.kind,
-                prep.position,
-                prep.rotation_y,
-                new_footprint,
-                *existing_kind,
-                building_tf.translation,
-                super::rotation_y_from_quat(building_tf.rotation),
-                existing_fp.0,
-            )
-        });
+        let blocked = existing_buildings
+            .iter()
+            .any(|(building_tf, existing_fp, existing_kind)| {
+                if !super::blocks_construction_overlap(*existing_kind) {
+                    return false;
+                }
+                super::building_blocks_area(
+                    prep.kind,
+                    prep.position,
+                    prep.rotation_y,
+                    new_footprint,
+                    *existing_kind,
+                    building_tf.translation,
+                    super::rotation_y_from_quat(building_tf.rotation),
+                    existing_fp.0,
+                )
+            });
 
         if blocked {
             let bp = registry.get(prep.kind);

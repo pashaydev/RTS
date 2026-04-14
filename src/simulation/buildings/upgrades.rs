@@ -4,8 +4,8 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
-use crate::types::*;
 use crate::presentation::model_assets::BuildingModelAssets;
+use crate::types::*;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
 

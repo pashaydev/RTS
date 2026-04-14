@@ -8,10 +8,30 @@ use std::collections::{HashMap, HashSet};
 // ── Random Name Pool ──
 
 pub const COMMANDER_NAMES: &[&str] = &[
-    "Commander", "General", "Warlord", "Captain", "Marshal", "Overlord",
-    "Strategist", "Vanguard", "Centurion", "Paladin", "Sentinel", "Arbiter",
-    "Conqueror", "Vindicator", "Sovereign", "Crusader", "Phantom", "Templar",
-    "Warmaster", "Executor", "Pathfinder", "Nomad", "Ironclad", "Stormcaller",
+    "Commander",
+    "General",
+    "Warlord",
+    "Captain",
+    "Marshal",
+    "Overlord",
+    "Strategist",
+    "Vanguard",
+    "Centurion",
+    "Paladin",
+    "Sentinel",
+    "Arbiter",
+    "Conqueror",
+    "Vindicator",
+    "Sovereign",
+    "Crusader",
+    "Phantom",
+    "Templar",
+    "Warmaster",
+    "Executor",
+    "Pathfinder",
+    "Nomad",
+    "Ironclad",
+    "Stormcaller",
 ];
 
 pub fn random_commander_name() -> String {

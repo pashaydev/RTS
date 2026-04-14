@@ -6,12 +6,12 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::infrastructure::multiplayer::NetRole;
+use crate::simulation::victory::VictoryState;
 use crate::types::{
     ActivePlayer, AiDifficulty, AllPlayerResources, AppState, Faction, FactionStats,
     GameSetupConfig, GraphicsSettings, MatchStartTime, SlotOccupant,
 };
-use crate::infrastructure::multiplayer::NetRole;
-use crate::simulation::victory::VictoryState;
 
 // ── Plugin ──────────────────────────────────────────────────────────────────
 

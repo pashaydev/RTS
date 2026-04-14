@@ -9,12 +9,17 @@ macro_rules! widget_spawn_system {
             theme: Res<$crate::ui::theme::Theme>,
             grid_q: Query<Entity, Added<super::core::hud::WidgetGridArea>>,
         ) {
-            let Ok(grid_area) = grid_q.single() else { return; };
+            let Ok(grid_area) = grid_q.single() else {
+                return;
+            };
             super::core::framework::spawn_widget_frame(
-                &mut commands, grid_area, $widget_id,
+                &mut commands,
+                grid_area,
+                $widget_id,
                 registry.slots.get(&$widget_id).unwrap(),
                 registry.is_visible($widget_id),
-                &fonts, &theme,
+                &fonts,
+                &theme,
             );
         }
     };
@@ -26,12 +31,17 @@ macro_rules! widget_spawn_system {
             theme: Res<$crate::ui::theme::Theme>,
             grid_q: Query<Entity, Added<super::core::hud::WidgetGridArea>>,
         ) {
-            let Ok(grid_area) = grid_q.single() else { return; };
+            let Ok(grid_area) = grid_q.single() else {
+                return;
+            };
             let $content = super::core::framework::spawn_widget_frame(
-                &mut commands, grid_area, $widget_id,
+                &mut commands,
+                grid_area,
+                $widget_id,
                 registry.slots.get(&$widget_id).unwrap(),
                 registry.is_visible($widget_id),
-                &fonts, &theme,
+                &fonts,
+                &theme,
             );
             let $cmd = &mut commands;
             $body

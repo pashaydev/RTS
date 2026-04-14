@@ -181,10 +181,14 @@ pub fn first_missing_requirement(
 
 pub fn requirement_failure_message(req: ItemRequirement) -> &'static str {
     match req {
-        ItemRequirement::NotWorker => "Workers can carry this item, but only non-worker units gain its effect.",
+        ItemRequirement::NotWorker => {
+            "Workers can carry this item, but only non-worker units gain its effect."
+        }
         ItemRequirement::BowUser => "Only Archers and Scouts gain this bow's effect.",
         ItemRequirement::StaffUser => "Only Mages and Priests gain this staff's effect.",
-        ItemRequirement::SwordUser => "Only Soldiers, Tanks, Knights, and Cavalry gain this sword's effect.",
+        ItemRequirement::SwordUser => {
+            "Only Soldiers, Tanks, Knights, and Cavalry gain this sword's effect."
+        }
     }
 }
 

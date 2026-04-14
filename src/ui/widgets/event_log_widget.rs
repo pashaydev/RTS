@@ -20,8 +20,7 @@ impl Plugin for EventLogWidgetPlugin {
             )
             .add_systems(
                 Update,
-                (update_event_log, handle_event_log_click)
-                    .run_if(in_state(AppState::InGame)),
+                (update_event_log, handle_event_log_click).run_if(in_state(AppState::InGame)),
             );
     }
 }

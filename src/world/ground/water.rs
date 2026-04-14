@@ -3,10 +3,10 @@ use std::collections::{HashMap, VecDeque};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
+use crate::presentation::materials::water::WaterMaterial;
 use crate::types::RtsCamera;
 use crate::world::fog::FogTextures;
 use crate::world::lighting::SunLight;
-use crate::presentation::materials::water::WaterMaterial;
 
 use super::data::WATER_LEVEL;
 

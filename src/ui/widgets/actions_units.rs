@@ -15,6 +15,7 @@ pub(super) fn spawn_units_action_bar(
             Option<&Carrying>,
             Option<&CarryCapacity>,
             Option<&UnitState>,
+            Option<&PreferredResource>,
         ),
         (With<Unit>, With<Selected>),
     >,
@@ -32,6 +33,13 @@ pub(super) fn spawn_units_action_bar(
         .iter()
         .filter(|(k, ..)| **k == EntityKind::Worker)
         .count();
+
+    let current_pref = SelectedWorkerPreference::from_worker_prefs(
+        selected_units
+            .iter()
+            .filter(|(k, ..)| **k == EntityKind::Worker)
+            .map(|(_, _, _, _, pref)| pref.map(|p| p.0)),
+    );
 
     let label_text = if worker_count == unit_count && worker_count > 0 {
         format!(
@@ -60,7 +68,7 @@ pub(super) fn spawn_units_action_bar(
     commands.entity(container).add_child(label);
 
     if unit_count == 1 {
-        if let Some((kind, carrying, capacity, worker_state)) = selected_units.iter().next() {
+        if let Some((kind, carrying, capacity, worker_state, _)) = selected_units.iter().next() {
             if *kind == EntityKind::Worker {
                 if let (Some(carry), Some(cap)) = (carrying, capacity) {
                     if carry.amount > 0 {
@@ -242,7 +250,7 @@ pub(super) fn spawn_units_action_bar(
     let any_carrying = worker_count > 0
         && selected_units
             .iter()
-            .any(|(k, c, _, _)| *k == EntityKind::Worker && c.map_or(false, |c| c.amount > 0));
+            .any(|(k, c, _, _, _)| *k == EntityKind::Worker && c.map_or(false, |c| c.amount > 0));
     if any_carrying {
         let drop_btn = commands
             .spawn((
@@ -314,7 +322,7 @@ pub(super) fn spawn_units_action_bar(
     // --- Ability buttons (shown when a unit with abilities is selected) ---
     {
         let mut shown_abilities = std::collections::HashSet::new();
-        for (kind, _, _, _) in selected_units.iter() {
+        for (kind, _, _, _, _) in selected_units.iter() {
             let unit_abilities: Vec<AbilityId> = match *kind {
                 EntityKind::Knight => vec![AbilityId::KnightCharge],
                 EntityKind::Mage => vec![AbilityId::MageFireball, AbilityId::MageFrostNova],
@@ -397,6 +405,49 @@ pub(super) fn spawn_units_action_bar(
         }
     }
 
+    // "Prefer Resource" cycle button — workers only.
+    // Cycles through None → Wood → Copper → Iron → Gold → Oil → Stone → None.
+    // While set, idle auto-scan seeks that resource type across the whole map.
+    if worker_count > 0 && worker_count == unit_count {
+        let pref_label = match current_pref {
+            Some(SelectedWorkerPreference::Off) | None => "Prefer: Off (R)".to_string(),
+            Some(SelectedWorkerPreference::Single(rt)) => {
+                format!("Prefer: {} (R)", rt.display_name())
+            }
+            Some(SelectedWorkerPreference::Mixed) => "Prefer: Mixed (R)".to_string(),
+        };
+        let pref_btn = commands
+            .spawn((
+                Button,
+                PreferResourceButton,
+                ButtonAnimState::new([0.0, 0.0, 0.0, 0.0]),
+                ButtonStyle::Filled,
+                ActionTooltipTrigger {
+                    text: "Prefer Resource (R)\nCycles the target resource for all selected workers. While set, idle workers search the whole map for that type instead of the 20u local scan."
+                        .to_string(),
+                },
+                Node {
+                    margin: UiRect::top(Val::Px(6.0)),
+                    align_self: AlignSelf::FlexStart,
+                    padding: PAD_BUTTON,
+                    ..default()
+                },
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|btn| {
+                btn.spawn((
+                    Text::new(pref_label),
+                    TextFont {
+                        font_size: theme.typography.body,
+                        ..default()
+                    },
+                    TextColor(theme.colors.text_secondary),
+                ));
+            })
+            .id();
+        commands.entity(container).add_child(pref_btn);
+    }
+
     if worker_count > 0 && worker_count == unit_count {
         let scuttle_btn = commands
             .spawn((
@@ -427,3 +478,7 @@ pub(super) fn spawn_units_action_bar(
         commands.entity(container).add_child(scuttle_btn);
     }
 }
+
+/// Marker for the "Prefer Resource" cycle button on the worker action bar.
+#[derive(Component)]
+pub struct PreferResourceButton;

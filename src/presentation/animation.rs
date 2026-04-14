@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
 use crate::blueprints::EntityKind;
-use crate::types::*;
 use crate::presentation::model_assets::{ttp_anim_set, AnimationAssets, UnitAnimationRegistry};
+use crate::types::*;
 use crate::world::pathfinding::NavPath;
 
 const FIDGET_DURATION: f32 = 1.2;
@@ -119,6 +119,7 @@ fn discover_animation_players(
             AnimPlayerRef(player_entity),
             AnimationController {
                 current_state: AnimState::DeathB,
+                change_cooldown: 0.0,
             },
         ));
 
@@ -146,9 +147,37 @@ pub(crate) fn find_animation_player(
     None
 }
 
+/// Minimum time (seconds) between non-critical animation state changes.
+/// Prevents rapid oscillation at high frame rates (e.g. Walk↔Run flickering).
+const ANIM_CHANGE_COOLDOWN: f32 = 0.25;
+
+/// Walk→Run speed threshold (fraction of max speed).
+const RUN_THRESHOLD_UP: f32 = 0.6;
+/// Run→Walk speed threshold — lower than up-threshold to prevent oscillation.
+const RUN_THRESHOLD_DOWN: f32 = 0.45;
+
+/// Returns true if this state is critical (must transition instantly, ignoring cooldown).
+fn is_critical_state(state: AnimState) -> bool {
+    matches!(
+        state,
+        AnimState::DeathA
+            | AnimState::DeathB
+            | AnimState::Damage
+            | AnimState::AttackA
+            | AnimState::AttackB
+            | AnimState::CastA
+            | AnimState::CastB
+    )
+}
+
 /// Determine desired AnimState from entity state and transition if changed.
 /// Uses per-unit-type animation graphs from UnitAnimationRegistry.
+///
+/// Applies a cooldown between non-critical transitions (Idle/Walk/Run) to
+/// prevent rapid oscillation at high frame rates, and uses hysteresis for
+/// the Walk↔Run speed threshold.
 fn drive_animations(
+    time: Res<Time>,
     mut anim_controllers: Query<
         (
             Entity,
@@ -177,6 +206,8 @@ fn drive_animations(
     anim_graph_check: Query<(), With<AnimationGraphHandle>>,
     mut anim_players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
 ) {
+    let dt = time.delta_secs();
+
     for (
         anim_entity,
         mut controller,
@@ -195,6 +226,9 @@ fn drive_animations(
         opt_smoothing,
     ) in &mut anim_controllers
     {
+        // Tick cooldown
+        controller.change_cooldown = (controller.change_cooldown - dt).max(0.0);
+
         let patrol_kind = patrol_state.map(|p| p.state);
         let desired = if health.current <= 0.0 {
             // Randomize death variant based on entity index for variety
@@ -287,11 +321,16 @@ fn drive_animations(
                 AnimState::Walk
             }
         } else if move_target.is_some() {
-            // Pick Walk vs Run based on current speed relative to max speed
+            // Pick Walk vs Run with hysteresis to prevent oscillation
             let opt_unit_speed = unit_speeds.get(anim_entity).ok();
+            let threshold = if controller.current_state == AnimState::Run {
+                RUN_THRESHOLD_DOWN
+            } else {
+                RUN_THRESHOLD_UP
+            };
             let use_run = opt_smoothing
                 .zip(opt_unit_speed)
-                .map_or(false, |(sm, us)| sm.current_speed > us.0 * 0.55);
+                .map_or(false, |(sm, us)| sm.current_speed > us.0 * threshold);
             if use_run {
                 AnimState::Run
             } else {
@@ -311,7 +350,18 @@ fn drive_animations(
                 continue;
             }
 
+            // Critical states (death, attack, damage) bypass cooldown.
+            // Non-critical transitions (Idle/Walk/Run) respect cooldown to
+            // prevent rapid oscillation at high frame rates.
+            if !is_critical_state(desired)
+                && !is_critical_state(controller.current_state)
+                && controller.change_cooldown > 0.0
+            {
+                continue;
+            }
+
             controller.current_state = desired;
+            controller.change_cooldown = ANIM_CHANGE_COOLDOWN;
 
             // Look up node index from per-unit-type graph or legacy
             let node_idx = if let Some(ref reg) = registry {

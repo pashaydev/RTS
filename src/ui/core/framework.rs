@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use super::fonts::{self, UiFonts};
-use super::interactions::{UiClickEvent, UiInteractPhase, UiInteractState};
 use super::hud::WidgetGridArea;
+use super::interactions::{UiClickEvent, UiInteractPhase, UiInteractState};
 use crate::types::AppState;
 use crate::ui::theme::{self, Theme};
 
@@ -426,55 +426,95 @@ fn spawn_resize_handles(commands: &mut Commands, widget_entity: Entity, theme: &
 
     let directions = [
         // Edges
-        (ResizeDirection::Top, Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(0.0), top: Val::Px(0.0),
-            width: Val::Percent(100.0), height: edge_thickness,
-            ..default()
-        }),
-        (ResizeDirection::Bottom, Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(0.0), bottom: Val::Px(0.0),
-            width: Val::Percent(100.0), height: edge_thickness,
-            ..default()
-        }),
-        (ResizeDirection::Left, Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(0.0), top: Val::Px(0.0),
-            width: edge_thickness, height: Val::Percent(100.0),
-            ..default()
-        }),
-        (ResizeDirection::Right, Node {
-            position_type: PositionType::Absolute,
-            right: Val::Px(0.0), top: Val::Px(0.0),
-            width: edge_thickness, height: Val::Percent(100.0),
-            ..default()
-        }),
+        (
+            ResizeDirection::Top,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: edge_thickness,
+                ..default()
+            },
+        ),
+        (
+            ResizeDirection::Bottom,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                width: Val::Percent(100.0),
+                height: edge_thickness,
+                ..default()
+            },
+        ),
+        (
+            ResizeDirection::Left,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: edge_thickness,
+                height: Val::Percent(100.0),
+                ..default()
+            },
+        ),
+        (
+            ResizeDirection::Right,
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: edge_thickness,
+                height: Val::Percent(100.0),
+                ..default()
+            },
+        ),
         // Corners
-        (ResizeDirection::TopLeft, Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(0.0), top: Val::Px(0.0),
-            width: corner_size, height: corner_size,
-            ..default()
-        }),
-        (ResizeDirection::TopRight, Node {
-            position_type: PositionType::Absolute,
-            right: Val::Px(0.0), top: Val::Px(0.0),
-            width: corner_size, height: corner_size,
-            ..default()
-        }),
-        (ResizeDirection::BottomLeft, Node {
-            position_type: PositionType::Absolute,
-            left: Val::Px(0.0), bottom: Val::Px(0.0),
-            width: corner_size, height: corner_size,
-            ..default()
-        }),
-        (ResizeDirection::BottomRight, Node {
-            position_type: PositionType::Absolute,
-            right: Val::Px(0.0), bottom: Val::Px(0.0),
-            width: corner_size, height: corner_size,
-            ..default()
-        }),
+        (
+            ResizeDirection::TopLeft,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: corner_size,
+                height: corner_size,
+                ..default()
+            },
+        ),
+        (
+            ResizeDirection::TopRight,
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(0.0),
+                top: Val::Px(0.0),
+                width: corner_size,
+                height: corner_size,
+                ..default()
+            },
+        ),
+        (
+            ResizeDirection::BottomLeft,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                width: corner_size,
+                height: corner_size,
+                ..default()
+            },
+        ),
+        (
+            ResizeDirection::BottomRight,
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(0.0),
+                bottom: Val::Px(0.0),
+                width: corner_size,
+                height: corner_size,
+                ..default()
+            },
+        ),
     ];
 
     for (direction, node) in directions {
@@ -593,11 +633,7 @@ pub fn update_edit_mode_visuals(
         (Without<WidgetResizeHandle>, Without<WidgetEditButton>),
     >,
     mut resize_handles: Query<
-        (
-            &WidgetResizeHandle,
-            &mut Visibility,
-            &mut BackgroundColor,
-        ),
+        (&WidgetResizeHandle, &mut Visibility, &mut BackgroundColor),
         (Without<WidgetEditButton>, Without<WidgetCloseButton>),
     >,
 ) {
@@ -1026,7 +1062,9 @@ pub fn handle_widget_resize(
                 );
                 let resizes_right = matches!(
                     dir,
-                    ResizeDirection::Right | ResizeDirection::TopRight | ResizeDirection::BottomRight
+                    ResizeDirection::Right
+                        | ResizeDirection::TopRight
+                        | ResizeDirection::BottomRight
                 );
                 let resizes_top = matches!(
                     dir,

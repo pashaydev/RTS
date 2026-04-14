@@ -4,13 +4,14 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::blueprints::EntityKind;
-use crate::types::{
-    AnimState, AppState, AttentionIconAssets, DayCycleIconAssets, DecoGltfHandles, DecorationInstanceAssets,
-    GrassInstanceAssets, GrassRenderSettings, IconAssets, ModelAssets, TeamColor,
-};
 use crate::presentation::materials::grass::{GrassExtension, GrassMaterial};
 use crate::presentation::materials::tree_occlusion::{
     TreeOcclusionMaterial, TreeOcclusionMaterialCache, TreeOcclusionUniform,
+};
+use crate::types::{
+    AnimState, AppState, AttentionIconAssets, DayCycleIconAssets, DecoGltfHandles,
+    DecorationInstanceAssets, GrassInstanceAssets, GrassRenderSettings, IconAssets, ModelAssets,
+    TeamColor,
 };
 
 pub struct ModelAssetsPlugin;
@@ -114,10 +115,7 @@ impl Plugin for ModelAssetsPlugin {
             ))
             .add_systems(Startup, (load_model_assets, load_animation_assets))
             .add_systems(Startup, create_grass_instance_assets)
-            .add_systems(
-                Update,
-                update_grass_time.run_if(in_state(AppState::InGame)),
-            )
+            .add_systems(Update, update_grass_time.run_if(in_state(AppState::InGame)))
             .add_systems(
                 Update,
                 (
@@ -950,6 +948,7 @@ fn load_animation_assets(
 fn extract_ttp_animations(
     mut commands: Commands,
     ttp_handles: Res<TtpGltfHandles>,
+    asset_server: Res<AssetServer>,
     gltf_assets: Res<Assets<bevy::gltf::Gltf>>,
     mut graphs: ResMut<Assets<AnimationGraph>>,
     existing_registry: Option<Res<UnitAnimationRegistry>>,
@@ -959,17 +958,29 @@ fn extract_ttp_animations(
         return;
     }
 
-    // Wait until ALL TTP GLTFs are loaded
-    for handle in ttp_handles.units.values() {
-        if gltf_assets.get(handle).is_none() {
-            return;
+    // Wait until all TTP GLTFs are loaded or failed.
+    // Skip assets that failed to load so one missing file doesn't block
+    // the entire animation registry.
+    let mut failed_kinds = Vec::new();
+    for (kind, handle) in &ttp_handles.units {
+        match asset_server.get_load_state(handle.id()) {
+            Some(bevy::asset::LoadState::Failed(_)) => {
+                failed_kinds.push(*kind);
+            }
+            Some(bevy::asset::LoadState::Loaded) => {}
+            _ => return, // still loading, try next frame
         }
+    }
+    for kind in &failed_kinds {
+        warn!("Failed to load GLTF for {:?}, skipping animations", kind);
     }
 
     let mut data = HashMap::new();
 
     for (kind, handle) in &ttp_handles.units {
-        let gltf = gltf_assets.get(handle).unwrap();
+        let Some(gltf) = gltf_assets.get(handle) else {
+            continue; // failed to load
+        };
         let anim_set = match ttp_anim_set(*kind) {
             Some(s) => s,
             None => continue,
@@ -1177,9 +1188,7 @@ fn extract_gltf_all_primitives(
 
 // ── Team Color Texture Application ──
 
-use crate::types::{
-    BuildingSceneChild, Faction, FactionColors, TeamColorApplied, UnitSceneChild,
-};
+use crate::types::{BuildingSceneChild, Faction, FactionColors, TeamColorApplied, UnitSceneChild};
 
 /// Applies team-color textures to TTP scene meshes after they're instantiated.
 /// Walks the entity hierarchy to find StandardMaterial meshes and swaps the base_color_texture.

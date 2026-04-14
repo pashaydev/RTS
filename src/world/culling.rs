@@ -2,9 +2,9 @@ use bevy::camera::primitives::{Frustum, Sphere as FrustumSphere};
 use bevy::ecs::lifecycle::RemovedComponents;
 use bevy::prelude::*;
 
+use crate::presentation::materials::tree_occlusion::TreeOcclusionMaterial;
 use crate::types::*;
 use crate::world::ground::WaterPlane;
-use crate::presentation::materials::tree_occlusion::TreeOcclusionMaterial;
 
 /// System set for all culling systems. Fog-of-war ordering depends on this
 /// so that fog can override visibility after culling has finished.
@@ -247,7 +247,15 @@ fn distance_lod_system(
 /// Swap grass chunk meshes between full and reduced density based on camera distance.
 fn grass_lod_swap_system(
     camera_q: Query<&GlobalTransform, With<CullingSourceCamera>>,
-    mut grass_q: Query<(&mut Mesh3d, &GrassChunkLod, Option<&CullingBounds>, &GlobalTransform), With<GrassRevealed>>,
+    mut grass_q: Query<
+        (
+            &mut Mesh3d,
+            &GrassChunkLod,
+            Option<&CullingBounds>,
+            &GlobalTransform,
+        ),
+        With<GrassRevealed>,
+    >,
 ) {
     let Ok(cam_gtf) = camera_q.single() else {
         return;

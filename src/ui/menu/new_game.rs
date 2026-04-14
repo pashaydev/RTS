@@ -2,8 +2,8 @@ use bevy::prelude::*;
 
 use super::helpers::*;
 use crate::types::*;
-use crate::ui::theme::{Theme, TEAM_COLORS};
 use crate::ui::fonts::{self, UiFonts};
+use crate::ui::theme::{Theme, TEAM_COLORS};
 
 #[allow(unused_imports)]
 use super::*;
@@ -733,56 +733,55 @@ fn spawn_resource_density_block(
                 .with_children(|row| {
                     for (i, label) in ["SPARSE", "STANDARD", "DENSE"].iter().enumerate() {
                         let active = i == selected;
-                        row
-                            .spawn((
-                                MenuSelector {
-                                    field: SelectorField::ResourceDensity,
-                                    index: i,
-                                },
-                                Button,
+                        row.spawn((
+                            MenuSelector {
+                                field: SelectorField::ResourceDensity,
+                                index: i,
+                            },
+                            Button,
+                            Node {
+                                flex_direction: FlexDirection::Row,
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(6.0),
+                                ..default()
+                            },
+                            BackgroundColor(Color::NONE),
+                            BorderColor::all(Color::NONE),
+                        ))
+                        .with_children(|btn| {
+                            btn.spawn((
                                 Node {
-                                    flex_direction: FlexDirection::Row,
-                                    align_items: AlignItems::Center,
-                                    column_gap: Val::Px(6.0),
+                                    width: Val::Px(10.0),
+                                    height: Val::Px(10.0),
+                                    border: UiRect::all(Val::Px(1.0)),
                                     ..default()
                                 },
-                                BackgroundColor(Color::NONE),
-                                BorderColor::all(Color::NONE),
-                            ))
-                            .with_children(|btn| {
-                                btn.spawn((
-                                    Node {
-                                        width: Val::Px(10.0),
-                                        height: Val::Px(10.0),
-                                        border: UiRect::all(Val::Px(1.0)),
-                                        ..default()
-                                    },
-                                    BackgroundColor(if active {
-                                        theme.colors.accent
-                                    } else {
-                                        Color::NONE
-                                    }),
-                                    BorderColor::all(if active {
-                                        theme.colors.accent
-                                    } else {
-                                        theme.colors.text_secondary.with_alpha(0.6)
-                                    }),
-                                    Pickable::IGNORE,
-                                ));
-                                btn.spawn((
-                                    Text::new(*label),
-                                    TextFont {
-                                        font_size: 9.0,
-                                        ..default()
-                                    },
-                                    TextColor(if active {
-                                        theme.colors.text_primary
-                                    } else {
-                                        theme.colors.text_secondary.with_alpha(0.7)
-                                    }),
-                                    Pickable::IGNORE,
-                                ));
-                            });
+                                BackgroundColor(if active {
+                                    theme.colors.accent
+                                } else {
+                                    Color::NONE
+                                }),
+                                BorderColor::all(if active {
+                                    theme.colors.accent
+                                } else {
+                                    theme.colors.text_secondary.with_alpha(0.6)
+                                }),
+                                Pickable::IGNORE,
+                            ));
+                            btn.spawn((
+                                Text::new(*label),
+                                TextFont {
+                                    font_size: 9.0,
+                                    ..default()
+                                },
+                                TextColor(if active {
+                                    theme.colors.text_primary
+                                } else {
+                                    theme.colors.text_secondary.with_alpha(0.7)
+                                }),
+                                Pickable::IGNORE,
+                            ));
+                        });
                     }
                 });
         })
@@ -905,8 +904,9 @@ pub(crate) fn spawn_slot_card(
     theme: &Theme,
 ) {
     let slot = config.slots[slot_index];
-    let is_you =
-        is_multiplayer && slot_index == config.local_player_slot && matches!(slot, SlotOccupant::Human);
+    let is_you = is_multiplayer
+        && slot_index == config.local_player_slot
+        && matches!(slot, SlotOccupant::Human);
     let is_local = slot_index == config.local_player_slot && matches!(slot, SlotOccupant::Human);
 
     let (type_options, type_idx) = if is_multiplayer {
@@ -953,11 +953,7 @@ pub(crate) fn spawn_slot_card(
         SlotOccupant::Human => {
             let faction = Faction::PLAYERS[slot_index];
             lobby_players
-                .and_then(|players| {
-                    players
-                        .iter()
-                        .find(|p| p.connected && p.faction == faction)
-                })
+                .and_then(|players| players.iter().find(|p| p.connected && p.faction == faction))
                 .map(|p| p.name.clone())
                 .unwrap_or_else(|| format!("Connected Player {}", slot_index + 1))
         }
@@ -1142,13 +1138,13 @@ pub(crate) fn spawn_slot_card(
                                         font_size: 7.5,
                                         ..default()
                                     },
-                            TextColor(if active && *opt == "HUMAN" {
-                                Color::srgb(0.10, 0.18, 0.20)
-                            } else if active {
-                                Color::srgb(0.10, 0.16, 0.18)
-                            } else {
-                                theme.colors.text_disabled.with_alpha(0.48)
-                            }),
+                                    TextColor(if active && *opt == "HUMAN" {
+                                        Color::srgb(0.10, 0.18, 0.20)
+                                    } else if active {
+                                        Color::srgb(0.10, 0.16, 0.18)
+                                    } else {
+                                        theme.colors.text_disabled.with_alpha(0.48)
+                                    }),
                                     Pickable::IGNORE,
                                 ));
                             });

@@ -60,7 +60,9 @@ fn is_standard_aspect_ratio(w: u32, h: u32) -> bool {
         32.0 / 9.0,  // 3.556 — 5120x1440 (super ultrawide)
     ];
     // Allow ~3% tolerance to account for rounding after scale factor division
-    STANDARD_RATIOS.iter().any(|&std| (ratio - std).abs() / std < 0.03)
+    STANDARD_RATIOS
+        .iter()
+        .any(|&std| (ratio - std).abs() / std < 0.03)
 }
 
 // ── Marker for the resolution row (greyed out when fullscreen) ──

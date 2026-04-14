@@ -5,8 +5,8 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 
-use crate::types::*;
 use crate::presentation::materials::fog::{FogOfWarMaterial, FogSettings};
+use crate::types::*;
 use crate::world::ground::HeightMap;
 
 // ── Resources ──

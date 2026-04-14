@@ -4,9 +4,7 @@ use std::collections::HashMap;
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
 use crate::types::*;
 
-use super::workers::{
-    building_worker_interaction_target, spawn_deposit_vfx, spawn_resource_popup,
-};
+use super::workers::{building_worker_interaction_target, spawn_deposit_vfx, spawn_resource_popup};
 
 /// Resource processing buildings auto-harvest nearby nodes on a timer and deposit into player resources.
 pub(super) fn resource_processor_system(
@@ -305,7 +303,14 @@ pub(super) fn processor_worker_visual_system(
     net_role: Res<crate::infrastructure::multiplayer::NetRole>,
     active_player: Res<ActivePlayer>,
     mut workers: Query<
-        (Entity, &Transform, &mut UnitState, &mut Carrying, &Faction, Option<&MoveTarget>),
+        (
+            Entity,
+            &Transform,
+            &mut UnitState,
+            &mut Carrying,
+            &Faction,
+            Option<&MoveTarget>,
+        ),
         With<Unit>,
     >,
     processors: Query<
@@ -338,7 +343,9 @@ pub(super) fn processor_worker_visual_system(
 
     for (entity, tf, mut unit_state, _carrying, faction, move_target) in &mut workers {
         // Client: only drive local player's assigned workers; remote workers driven by host
-        if *net_role == crate::infrastructure::multiplayer::NetRole::Client && *faction != active_player.0 {
+        if *net_role == crate::infrastructure::multiplayer::NetRole::Client
+            && *faction != active_player.0
+        {
             continue;
         }
         // Check immutably first to avoid triggering Changed<UnitState> for non-assigned units
@@ -346,10 +353,7 @@ pub(super) fn processor_worker_visual_system(
             continue;
         };
         // Now access mutably — only workers that actually need phase updates trigger Changed
-        let UnitState::AssignedGathering {
-            ref mut phase, ..
-        } = *unit_state
-        else {
+        let UnitState::AssignedGathering { ref mut phase, .. } = *unit_state else {
             unreachable!()
         };
 
@@ -521,10 +525,19 @@ pub(super) fn processor_worker_visual_system(
 /// Assigned processor workers should not remain directly selectable or hoverable.
 pub(super) fn lock_assigned_workers_from_user_interaction(
     mut commands: Commands,
-    locked_workers: Query<Entity, (With<BuildingAssignment>, Or<(With<Selected>, With<Hovered>)>)>,
+    locked_workers: Query<
+        Entity,
+        (
+            With<BuildingAssignment>,
+            Or<(With<Selected>, With<Hovered>)>,
+        ),
+    >,
 ) {
     for entity in &locked_workers {
-        commands.entity(entity).remove::<Selected>().remove::<Hovered>();
+        commands
+            .entity(entity)
+            .remove::<Selected>()
+            .remove::<Hovered>();
     }
 }
 
@@ -536,7 +549,10 @@ pub(super) fn reconcile_processor_assignments(
     mut commands: Commands,
     processors: Query<Entity, (With<Building>, With<ResourceProcessor>)>,
     workers: Query<(Entity, &UnitState, Option<&BuildingAssignment>), With<Unit>>,
-    building_lists: Query<(Entity, Option<&AssignedWorkers>), (With<Building>, With<ResourceProcessor>)>,
+    building_lists: Query<
+        (Entity, Option<&AssignedWorkers>),
+        (With<Building>, With<ResourceProcessor>),
+    >,
 ) {
     let mut expected: HashMap<Entity, Vec<Entity>> = HashMap::new();
 
@@ -546,10 +562,14 @@ pub(super) fn reconcile_processor_assignments(
 
         match (state_building, assignment_building) {
             (Some(state_bld), Some(assignment_bld)) if state_bld != assignment_bld => {
-                commands.entity(worker).insert(BuildingAssignment(state_bld));
+                commands
+                    .entity(worker)
+                    .insert(BuildingAssignment(state_bld));
             }
             (Some(state_bld), None) => {
-                commands.entity(worker).insert(BuildingAssignment(state_bld));
+                commands
+                    .entity(worker)
+                    .insert(BuildingAssignment(state_bld));
             }
             (None, Some(_)) => {
                 commands.entity(worker).remove::<BuildingAssignment>();

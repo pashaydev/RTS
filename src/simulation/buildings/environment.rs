@@ -5,11 +5,11 @@ use bevy::prelude::*;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::types::*;
-use crate::world::ground::{playable_half_map, HeightMap, TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue};
-
-use super::{
-    rotate_local_xz, rotation_y_from_quat, sawmill_tree_slot_world, sawmill_yard_corners,
+use crate::world::ground::{
+    playable_half_map, HeightMap, TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
 };
+
+use super::{rotate_local_xz, rotation_y_from_quat, sawmill_tree_slot_world, sawmill_yard_corners};
 use crate::simulation::resources::terrain::GRASS_CHUNK_SIZE;
 
 #[derive(Component)]
@@ -573,13 +573,9 @@ pub(super) fn sawmill_yard_system(
                     .spawn((
                         Mesh3d(rail_meshes[i].clone()),
                         MeshMaterial3d(fence_mat.clone()),
-                        Transform::from_translation(Vec3::new(
-                            mid.x,
-                            ground_y + h,
-                            mid.z,
-                        ))
-                        .with_rotation(Quat::from_rotation_y(rotation_y + local_angle))
-                        .with_scale(Vec3::new(span / 4.0, 1.0, 1.0)),
+                        Transform::from_translation(Vec3::new(mid.x, ground_y + h, mid.z))
+                            .with_rotation(Quat::from_rotation_y(rotation_y + local_angle))
+                            .with_scale(Vec3::new(span / 4.0, 1.0, 1.0)),
                         NotShadowCaster,
                         NotShadowReceiver,
                         GameWorld,
@@ -695,7 +691,14 @@ fn spawn_mini_trees(
 
 pub(super) fn sync_sawmill_fence_pieces(
     height_map: Res<HeightMap>,
-    sawmills: Query<&Transform, (With<Building>, With<SawmillYard>, Without<SawmillFencePiece>)>,
+    sawmills: Query<
+        &Transform,
+        (
+            With<Building>,
+            With<SawmillYard>,
+            Without<SawmillFencePiece>,
+        ),
+    >,
     mut fence_pieces: Query<(&SawmillFencePiece, &mut Transform), Without<Building>>,
 ) {
     for (piece, mut transform) in &mut fence_pieces {
@@ -705,7 +708,8 @@ pub(super) fn sync_sawmill_fence_pieces(
         let rotation_y = rotation_y_from_quat(owner_tf.rotation);
         let world_anchor = owner_tf.translation + rotate_local_xz(piece.local_anchor, rotation_y);
         let ground_y = height_map.sample(world_anchor.x, world_anchor.z);
-        transform.translation = Vec3::new(world_anchor.x, ground_y + piece.y_offset, world_anchor.z);
+        transform.translation =
+            Vec3::new(world_anchor.x, ground_y + piece.y_offset, world_anchor.z);
         transform.rotation = Quat::from_rotation_y(rotation_y + piece.local_rotation_y);
     }
 }

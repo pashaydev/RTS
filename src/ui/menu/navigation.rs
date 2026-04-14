@@ -4,11 +4,11 @@ use bevy::prelude::*;
 use super::helpers::*;
 use super::multiplayer;
 use super::*;
-use crate::types::*;
 use crate::infrastructure::multiplayer::{ClientNetState, HostNetState};
-use crate::ui::theme::{Theme, HIGHLIGHT, HIGHLIGHT_SUBTLE};
+use crate::types::*;
 use crate::ui::core::interactions::UiClickEvent;
 use crate::ui::core::text_input::ScrollablePanel;
+use crate::ui::theme::{Theme, HIGHLIGHT, HIGHLIGHT_SUBTLE};
 
 pub(crate) fn menu_keyboard_nav(
     keyboard: Res<ButtonInput<KeyCode>>,

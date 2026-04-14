@@ -6,17 +6,19 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::infrastructure::audio::{PlaySfx, SfxKind};
 use crate::blueprints::{
     BlueprintRegistry, EntityCategory, EntityKind, EntityVisualCache, LevelBonus,
 };
+use crate::infrastructure::audio::{PlaySfx, SfxKind};
 use crate::presentation::camera;
+use crate::presentation::model_assets::{
+    BuildingConstructionAssets, BuildingModelAssets, UnitModelAssets,
+};
 use crate::types::*;
 use crate::world::ground::{
     apply_terrain_shape_op, foundation_radii, sync_ground_mesh_partial, HeightMap,
     TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
 };
-use crate::presentation::model_assets::{BuildingConstructionAssets, BuildingModelAssets, UnitModelAssets};
 use game_state::message::TerrainShapeOp;
 
 use super::{
@@ -383,13 +385,23 @@ pub(crate) fn update_placement_preview(
         Query<
             '_,
             '_,
-            (&'static Transform, &'static BuildingFootprint, &'static EntityKind),
+            (
+                &'static Transform,
+                &'static BuildingFootprint,
+                &'static EntityKind,
+            ),
             (With<Building>, Without<GhostBuilding>),
         >,
         Query<
             '_,
             '_,
-            (Entity, &'static Transform, &'static UnitState, &'static Faction, &'static EntityKind),
+            (
+                Entity,
+                &'static Transform,
+                &'static UnitState,
+                &'static Faction,
+                &'static EntityKind,
+            ),
             (
                 With<Unit>,
                 Without<GhostBuilding>,

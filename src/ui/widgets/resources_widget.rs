@@ -21,7 +21,11 @@ impl Plugin for ResourceHeaderBarPlugin {
         )
         .add_systems(
             Update,
-            (update_resource_texts, update_processed_resource_visibility, update_daycycle_indicator)
+            (
+                update_resource_texts,
+                update_processed_resource_visibility,
+                update_daycycle_indicator,
+            )
                 .run_if(in_state(AppState::InGame)),
         );
     }

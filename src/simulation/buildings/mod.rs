@@ -263,15 +263,32 @@ pub(crate) fn sawmill_yard_rect(building_pos: Vec3, rotation_y: f32) -> Oriented
 pub(crate) fn sawmill_yard_corners(building_pos: Vec3, rotation_y: f32) -> [Vec3; 4] {
     let center = sawmill_yard_center(building_pos, rotation_y);
     [
-        center + rotate_local_xz(Vec3::new(-SAWMILL_YARD_HALF_X, 0.0, -SAWMILL_YARD_HALF_Z), rotation_y),
-        center + rotate_local_xz(Vec3::new(SAWMILL_YARD_HALF_X, 0.0, -SAWMILL_YARD_HALF_Z), rotation_y),
-        center + rotate_local_xz(Vec3::new(SAWMILL_YARD_HALF_X, 0.0, SAWMILL_YARD_HALF_Z), rotation_y),
-        center + rotate_local_xz(Vec3::new(-SAWMILL_YARD_HALF_X, 0.0, SAWMILL_YARD_HALF_Z), rotation_y),
+        center
+            + rotate_local_xz(
+                Vec3::new(-SAWMILL_YARD_HALF_X, 0.0, -SAWMILL_YARD_HALF_Z),
+                rotation_y,
+            ),
+        center
+            + rotate_local_xz(
+                Vec3::new(SAWMILL_YARD_HALF_X, 0.0, -SAWMILL_YARD_HALF_Z),
+                rotation_y,
+            ),
+        center
+            + rotate_local_xz(
+                Vec3::new(SAWMILL_YARD_HALF_X, 0.0, SAWMILL_YARD_HALF_Z),
+                rotation_y,
+            ),
+        center
+            + rotate_local_xz(
+                Vec3::new(-SAWMILL_YARD_HALF_X, 0.0, SAWMILL_YARD_HALF_Z),
+                rotation_y,
+            ),
     ]
 }
 
 pub(crate) fn sawmill_tree_slot_world(building_pos: Vec3, rotation_y: f32, slot: usize) -> Vec3 {
-    sawmill_yard_center(building_pos, rotation_y) + rotate_local_xz(SAWMILL_TREE_SLOTS[slot], rotation_y)
+    sawmill_yard_center(building_pos, rotation_y)
+        + rotate_local_xz(SAWMILL_TREE_SLOTS[slot], rotation_y)
 }
 
 fn inverse_rotate_xz(v: Vec2, rotation_y: f32) -> Vec2 {
@@ -315,10 +332,18 @@ fn circle_intersects_oriented_rect(center: Vec2, radius: f32, rect: OrientedRect
 
 fn oriented_rects_intersect(a: OrientedRect, b: OrientedRect) -> bool {
     let axes = [
-        rotate_local_xz(Vec3::X, a.rotation_y).xz().normalize_or_zero(),
-        rotate_local_xz(Vec3::Z, a.rotation_y).xz().normalize_or_zero(),
-        rotate_local_xz(Vec3::X, b.rotation_y).xz().normalize_or_zero(),
-        rotate_local_xz(Vec3::Z, b.rotation_y).xz().normalize_or_zero(),
+        rotate_local_xz(Vec3::X, a.rotation_y)
+            .xz()
+            .normalize_or_zero(),
+        rotate_local_xz(Vec3::Z, a.rotation_y)
+            .xz()
+            .normalize_or_zero(),
+        rotate_local_xz(Vec3::X, b.rotation_y)
+            .xz()
+            .normalize_or_zero(),
+        rotate_local_xz(Vec3::Z, b.rotation_y)
+            .xz()
+            .normalize_or_zero(),
     ];
 
     axes.iter().all(|axis| {

@@ -66,7 +66,8 @@ pub fn apply_manual_move_intent(
         .remove::<Engagement>()
         .remove::<AttackCommit>()
         .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>();
+        .remove::<SlotClaim>()
+        .remove::<PreferredResource>();
 }
 
 pub fn apply_manual_attack_intent(
@@ -103,7 +104,8 @@ pub fn apply_manual_attack_intent(
         ))
         .remove::<AttackCommit>()
         .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>();
+        .remove::<SlotClaim>()
+        .remove::<PreferredResource>();
 }
 
 pub fn apply_manual_attack_move_intent(
@@ -139,7 +141,8 @@ pub fn apply_manual_attack_move_intent(
         .remove::<CombatTargetLock>()
         .remove::<AttackCommit>()
         .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>();
+        .remove::<SlotClaim>()
+        .remove::<PreferredResource>();
 }
 
 pub fn apply_manual_hold_intent(commands: &mut Commands, entity: Entity, issue_time: f64) {
@@ -167,7 +170,8 @@ pub fn apply_manual_hold_intent(commands: &mut Commands, entity: Entity, issue_t
         .remove::<CombatTargetLock>()
         .remove::<AttackCommit>()
         .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>();
+        .remove::<SlotClaim>()
+        .remove::<PreferredResource>();
 }
 
 pub fn clear_combat_intent(commands: &mut Commands, entity: Entity, issue_time: f64) {

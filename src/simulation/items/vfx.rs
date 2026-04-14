@@ -259,7 +259,12 @@ pub fn sync_item_vfx(
     vfx_assets: Res<ItemVfxAssets>,
     registry: Res<ItemRegistry>,
     units: Query<
-        (Entity, &UnitInventory, Option<&Children>, Option<&ItemVfxState>),
+        (
+            Entity,
+            &UnitInventory,
+            Option<&Children>,
+            Option<&ItemVfxState>,
+        ),
         (With<Unit>, Changed<UnitInventory>),
     >,
     vfx_roots: Query<(), With<ItemVfxRoot>>,
@@ -304,8 +309,15 @@ pub fn sync_item_vfx(
                     .id();
 
                 for &pvfx in profile.persistent {
-                    let child =
-                        spawn_persistent_vfx(&mut commands, &mut materials, &vfx_assets, item, def.beam_color, slot as u8, pvfx);
+                    let child = spawn_persistent_vfx(
+                        &mut commands,
+                        &mut materials,
+                        &vfx_assets,
+                        item,
+                        def.beam_color,
+                        slot as u8,
+                        pvfx,
+                    );
                     commands.entity(root).add_child(child);
                 }
 
@@ -319,10 +331,7 @@ pub fn sync_item_vfx(
                     slot: slot as u8,
                     condition,
                     // Scan and always-on effects start active; conditional ones start inactive
-                    active: matches!(
-                        condition,
-                        ItemVfxCondition::ScanActive
-                    ),
+                    active: matches!(condition, ItemVfxCondition::ScanActive),
                 });
             }
         }
@@ -393,43 +402,34 @@ fn persistent_vfx_geometry(
     match kind {
         PersistentVfxKind::GroundAuraRing => (
             assets.ring_mesh.clone(),
-            Transform::from_xyz(0.0, 0.05, 0.0)
-                .with_rotation(Quat::from_rotation_x(PI * 0.5)),
+            Transform::from_xyz(0.0, 0.05, 0.0).with_rotation(Quat::from_rotation_x(PI * 0.5)),
         ),
         PersistentVfxKind::ScanRipple => (
             assets.scan_ring_mesh.clone(),
-            Transform::from_xyz(0.0, 0.08, 0.0)
-                .with_rotation(Quat::from_rotation_x(PI * 0.5)),
+            Transform::from_xyz(0.0, 0.08, 0.0).with_rotation(Quat::from_rotation_x(PI * 0.5)),
         ),
-        PersistentVfxKind::ChargeMark => (
-            assets.orb_mesh.clone(),
-            Transform::from_xyz(0.0, 1.2, 0.15),
-        ),
+        PersistentVfxKind::ChargeMark => {
+            (assets.orb_mesh.clone(), Transform::from_xyz(0.0, 1.2, 0.15))
+        }
         PersistentVfxKind::ShellShimmer => (
             assets.small_ring_mesh.clone(),
-            Transform::from_xyz(0.0, 0.7, 0.0)
-                .with_rotation(Quat::from_rotation_x(PI * 0.5)),
+            Transform::from_xyz(0.0, 0.7, 0.0).with_rotation(Quat::from_rotation_x(PI * 0.5)),
         ),
-        PersistentVfxKind::FocusSigil => (
-            assets.orb_mesh.clone(),
-            Transform::from_xyz(0.0, 1.4, 0.12),
-        ),
-        PersistentVfxKind::AimFocus => (
-            assets.orb_mesh.clone(),
-            Transform::from_xyz(0.0, 1.0, 0.2),
-        ),
-        PersistentVfxKind::WeaponPulse => (
-            assets.orb_mesh.clone(),
-            Transform::from_xyz(0.12, 0.8, 0.0),
-        ),
-        PersistentVfxKind::ArmorGlint => (
-            assets.orb_mesh.clone(),
-            Transform::from_xyz(0.0, 0.85, 0.1),
-        ),
+        PersistentVfxKind::FocusSigil => {
+            (assets.orb_mesh.clone(), Transform::from_xyz(0.0, 1.4, 0.12))
+        }
+        PersistentVfxKind::AimFocus => {
+            (assets.orb_mesh.clone(), Transform::from_xyz(0.0, 1.0, 0.2))
+        }
+        PersistentVfxKind::WeaponPulse => {
+            (assets.orb_mesh.clone(), Transform::from_xyz(0.12, 0.8, 0.0))
+        }
+        PersistentVfxKind::ArmorGlint => {
+            (assets.orb_mesh.clone(), Transform::from_xyz(0.0, 0.85, 0.1))
+        }
         PersistentVfxKind::HeadRing => (
             assets.small_ring_mesh.clone(),
-            Transform::from_xyz(0.0, 1.35, 0.0)
-                .with_rotation(Quat::from_rotation_x(PI * 0.5)),
+            Transform::from_xyz(0.0, 1.35, 0.0).with_rotation(Quat::from_rotation_x(PI * 0.5)),
         ),
     }
 }
@@ -439,7 +439,12 @@ fn persistent_vfx_geometry(
 pub fn animate_persistent_item_vfx(
     time: Res<Time>,
     vfx_state_q: Query<&ItemVfxState>,
-    mut persistent_q: Query<(&ChildOf, &ItemVfxPersistent, &mut Transform, &mut Visibility)>,
+    mut persistent_q: Query<(
+        &ChildOf,
+        &ItemVfxPersistent,
+        &mut Transform,
+        &mut Visibility,
+    )>,
 ) {
     let t = time.elapsed_secs();
 
@@ -577,7 +582,7 @@ pub fn update_item_vfx_conditions(
                     ((t * 0.5) % 3.0) < 1.0
                 }
                 ItemVfxCondition::AbilityPrimed => true, // Twin Rings: show until consumed
-                ItemVfxCondition::ShieldActive => false,  // Linked Rings: activated by overheal
+                ItemVfxCondition::ShieldActive => false, // Linked Rings: activated by overheal
                 ItemVfxCondition::BracedPrimed => move_target.is_none(), // Mage Crozier: braced = stationary
             };
         }

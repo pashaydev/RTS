@@ -3,15 +3,16 @@ use bevy::prelude::*;
 use bevy_matchbox::prelude::*;
 use game_state::message::{ClientMessage, InputCommand, PlayerInput};
 
+use super::actions_units::PreferResourceButton;
+use super::core::constants::*;
 use crate::blueprints::{BlueprintRegistry, EntityKind};
-use crate::simulation::buildings;
-use crate::presentation::camera;
-use crate::simulation::combat::{apply_manual_hold_intent, clear_combat_intent};
-use crate::types::*;
 use crate::infrastructure::multiplayer::{ClientNetState, NetRole};
 use crate::infrastructure::net_bridge::EntityNetMap;
+use crate::presentation::camera;
+use crate::simulation::buildings;
+use crate::simulation::combat::{apply_manual_hold_intent, clear_combat_intent};
+use crate::types::*;
 use crate::ui::theme::{self, Theme};
-use super::core::constants::*;
 
 /// Mark the UI as having been clicked this frame (prevents clicks falling through to the game world).
 #[inline]
@@ -783,12 +784,7 @@ pub fn handle_assign_worker_button(
                     continue;
                 }
                 let Some(priority) = processor_assignment_priority(
-                    *kind,
-                    *state,
-                    *source,
-                    carrying,
-                    queue,
-                    assignment,
+                    *kind, *state, *source, carrying, queue, assignment,
                 ) else {
                     continue;
                 };
@@ -809,6 +805,7 @@ pub fn handle_assign_worker_button(
             commands
                 .entity(worker_entity)
                 .remove::<AttackTarget>()
+                .remove::<PreferredResource>()
                 .remove::<ManualIdleSince>();
             if let Ok(mut queue) = worker_queries.p2().get_mut(worker_entity) {
                 queue.clear();
@@ -884,8 +881,15 @@ pub fn handle_unassign_specific_worker_button(
         ui_press.0 = true;
 
         let worker = btn.0;
-        let building = worker_assignments.get(worker).ok().map(|assignment| assignment.0);
-        crate::simulation::resources::unassign_worker_from_processor(&mut commands, worker, building);
+        let building = worker_assignments
+            .get(worker)
+            .ok()
+            .map(|assignment| assignment.0);
+        crate::simulation::resources::unassign_worker_from_processor(
+            &mut commands,
+            worker,
+            building,
+        );
     }
 }
 
@@ -1249,7 +1253,10 @@ pub fn handle_stop_button(
                     entity,
                     assignment.map(|assignment| assignment.0),
                 );
-                commands.entity(entity).insert(grace);
+                commands
+                    .entity(entity)
+                    .remove::<PreferredResource>()
+                    .insert(grace);
             } else {
                 commands
                     .entity(entity)
@@ -1345,6 +1352,49 @@ pub fn handle_formation_button(
         if *interaction == Interaction::Pressed {
             mark_click(&mut ui_clicked, &mut ui_press);
             formation.formation = formation.formation.cycle();
+        }
+    }
+}
+
+pub fn handle_prefer_resource_button(
+    mut commands: Commands,
+    interactions: Query<&Interaction, (Changed<Interaction>, With<PreferResourceButton>)>,
+    selected: Query<
+        (Entity, &Faction, &EntityKind, Option<&PreferredResource>),
+        (With<Unit>, With<Selected>),
+    >,
+    active_player: Res<ActivePlayer>,
+    mut ui_clicked: ResMut<UiClickedThisFrame>,
+    mut ui_press: ResMut<UiPressActive>,
+) {
+    for interaction in &interactions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        mark_click(&mut ui_clicked, &mut ui_press);
+
+        let current = SelectedWorkerPreference::from_worker_prefs(
+            selected
+                .iter()
+                .filter(|(_, f, k, _)| **f == active_player.0 && **k == EntityKind::Worker)
+                .map(|(_, _, _, pref)| pref.map(|p| p.0)),
+        );
+        let next = current
+            .unwrap_or(SelectedWorkerPreference::Off)
+            .cycle_target();
+
+        for (entity, faction, kind, _) in &selected {
+            if *faction != active_player.0 || *kind != EntityKind::Worker {
+                continue;
+            }
+            match next {
+                Some(rt) => {
+                    commands.entity(entity).insert(PreferredResource(rt));
+                }
+                None => {
+                    commands.entity(entity).remove::<PreferredResource>();
+                }
+            }
         }
     }
 }

@@ -12,17 +12,17 @@ use game_state::message::{
 };
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
+use crate::infrastructure::net_bridge::{EntityNetMap, NetworkId};
 use crate::simulation::buildings;
 use crate::simulation::combat::{
     apply_manual_attack_intent, apply_manual_attack_move_intent, apply_manual_hold_intent,
     apply_manual_move_intent, clear_combat_intent,
 };
+use crate::simulation::orders;
 use crate::types::*;
+use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
 use crate::world::ground::{terrain_heights_hash, HeightMap, TerrainShapeSyncState};
 use crate::world::lighting::DayCycle;
-use crate::infrastructure::net_bridge::{EntityNetMap, NetworkId};
-use crate::simulation::orders;
-use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
 
 use super::debug_tap;
 use super::transport::{self, MatchboxInbox, PeerMap};
@@ -1495,11 +1495,7 @@ pub fn host_broadcast_neutral_world_sync(
     cycle: Res<DayCycle>,
     height_map: Res<HeightMap>,
     terrain_sync: Res<TerrainShapeSyncState>,
-    resource_nodes: Query<(
-        &NetworkId,
-        &crate::types::ResourceNode,
-        &GlobalTransform,
-    )>,
+    resource_nodes: Query<(&NetworkId, &crate::types::ResourceNode, &GlobalTransform)>,
 ) {
     timer.0.tick(time.delta());
     if !timer.0.just_finished() {

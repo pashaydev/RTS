@@ -3,13 +3,13 @@ use bevy::window::PrimaryWindow;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::OutlineVolume;
 
-use crate::infrastructure::audio::{PlaySfx, SfxKind};
 use crate::blueprints::{EntityKind, EntityVisualCache};
+use crate::infrastructure::audio::{PlaySfx, SfxKind};
 use crate::presentation::camera;
+use crate::presentation::minimap::MinimapInteraction;
+use crate::simulation::items::ItemPickup;
 use crate::types::*;
 use crate::world::ground::HeightMap;
-use crate::simulation::items::ItemPickup;
-use crate::presentation::minimap::MinimapInteraction;
 
 use super::picking::{pick_for_click, PickCycleState};
 
@@ -132,7 +132,11 @@ pub(crate) fn handle_click_select(
     mut commands: Commands,
     mouse: Res<ButtonInput<MouseButton>>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut state: (ResMut<DragState>, ResMut<InspectedEnemy>, ResMut<PickCycleState>),
+    mut state: (
+        ResMut<DragState>,
+        ResMut<InspectedEnemy>,
+        ResMut<PickCycleState>,
+    ),
     placement: Res<BuildingPlacementState>,
     viewport: (
         Query<(&Camera, &GlobalTransform), With<RtsCamera>>,

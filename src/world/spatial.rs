@@ -306,8 +306,9 @@ impl WallSpatialGrid {
         if let Some(current_key) = self.entity_cells.get(&entity).copied() {
             if current_key == key {
                 if let Some(entries) = self.cells.get_mut(&key) {
-                    if let Some((_, stored_pos, stored_fp, stored_faction)) =
-                        entries.iter_mut().find(|(stored, _, _, _)| *stored == entity)
+                    if let Some((_, stored_pos, stored_fp, stored_faction)) = entries
+                        .iter_mut()
+                        .find(|(stored, _, _, _)| *stored == entity)
                     {
                         *stored_pos = pos;
                         *stored_fp = footprint;

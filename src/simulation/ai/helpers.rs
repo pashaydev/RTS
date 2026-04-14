@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache,
 };
+use crate::presentation::model_assets::BuildingModelAssets;
 use crate::simulation::buildings::footprint_for_kind;
 use crate::types::*;
 use crate::world::ground::HeightMap;
-use crate::presentation::model_assets::BuildingModelAssets;
 
 use super::types::*;
 

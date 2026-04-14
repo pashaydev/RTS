@@ -189,8 +189,7 @@ struct HoverClassify<'w, 's> {
     hovered: Query<'w, 's, Entity, With<Hovered>>,
     unit_q: Query<'w, 's, &'static Faction, With<Unit>>,
     mob_q: Query<'w, 's, (), With<Mob>>,
-    building_q:
-        Query<'w, 's, (&'static Faction, Option<&'static BuildingState>), With<Building>>,
+    building_q: Query<'w, 's, (&'static Faction, Option<&'static BuildingState>), With<Building>>,
     resource_q: Query<'w, 's, (), With<ResourceNode>>,
     health_q: Query<'w, 's, &'static Health>,
 }

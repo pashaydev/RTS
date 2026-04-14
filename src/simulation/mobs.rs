@@ -4,13 +4,13 @@ use rand::Rng;
 use rand::SeedableRng;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
+use crate::presentation::model_assets::UnitModelAssets;
 use crate::simulation::combat::{
     apply_auto_attack_intent, reset_combat_state, CombatBudgetState, CombatCoreSet,
 };
+use crate::simulation::items::ItemKind;
 use crate::types::*;
 use crate::world::ground::{is_in_mountain_border, BorderSettings, HeightMap};
-use crate::simulation::items::ItemKind;
-use crate::presentation::model_assets::UnitModelAssets;
 
 pub struct MobsPlugin;
 
@@ -20,7 +20,9 @@ impl Plugin for MobsPlugin {
             OnEnter(AppState::InGame),
             spawn_mob_camps
                 .after(crate::world::ground::spawn_ground)
-                .run_if(not(resource_exists::<crate::infrastructure::save_load::PendingLoad>)),
+                .run_if(not(resource_exists::<
+                    crate::infrastructure::save_load::PendingLoad,
+                >)),
         )
         .add_systems(
             FixedUpdate,
@@ -700,7 +702,14 @@ fn camp_item_drops_for_kind(rng: &mut StdRng, kind: EntityKind) -> CampItemDrops
     use ItemKind::*;
 
     let pool: &[ItemKind] = match kind {
-        EntityKind::Goblin => &[PaddedVest, KettleHelm, PlainBand, ArmingSword, BattleStaff, YewLongbow],
+        EntityKind::Goblin => &[
+            PaddedVest,
+            KettleHelm,
+            PlainBand,
+            ArmingSword,
+            BattleStaff,
+            YewLongbow,
+        ],
         EntityKind::Skeleton | EntityKind::Orc => &[
             BronzeCuirass,
             CrusaderHelm,
@@ -784,10 +793,10 @@ fn mob_patrol(
                 let seed = bits.wrapping_mul(2654435761) as f32;
                 let mut target = None;
                 for attempt in 0..4u32 {
-                    let angle = seed % std::f32::consts::TAU
-                        + (now as f32) * 0.3
-                        + attempt as f32 * 1.57; // rotate 90deg per attempt
-                    let r = patrol.radius * (0.3 + ((seed * 0.7 + attempt as f32).sin() * 0.5 + 0.5) * 0.7);
+                    let angle =
+                        seed % std::f32::consts::TAU + (now as f32) * 0.3 + attempt as f32 * 1.57; // rotate 90deg per attempt
+                    let r = patrol.radius
+                        * (0.3 + ((seed * 0.7 + attempt as f32).sin() * 0.5 + 0.5) * 0.7);
                     let candidate = Vec3::new(
                         patrol.center.x + angle.cos() * r,
                         0.0,
@@ -795,9 +804,9 @@ fn mob_patrol(
                     );
 
                     // Check passability if NavGrid is available
-                    let passable = nav_grid
-                        .as_ref()
-                        .map_or(true, |grid| grid.is_world_passable(candidate.x, candidate.z));
+                    let passable = nav_grid.as_ref().map_or(true, |grid| {
+                        grid.is_world_passable(candidate.x, candidate.z)
+                    });
                     if passable {
                         target = Some(candidate);
                         break;
@@ -819,11 +828,8 @@ fn mob_patrol(
             }
             PatrolStateKind::Patrolling => {
                 if let Some(target) = patrol.patrol_target {
-                    let dist = Vec2::new(
-                        target.x - tf.translation.x,
-                        target.z - tf.translation.z,
-                    )
-                    .length();
+                    let dist = Vec2::new(target.x - tf.translation.x, target.z - tf.translation.z)
+                        .length();
 
                     // Reached target or stuck too long → go idle
                     if dist < 2.5 || (now - patrol.patrol_started) > PATROL_STUCK_SECS {
@@ -851,9 +857,7 @@ fn mob_patrol(
                     commands.entity(entity).remove::<MoveTarget>();
                 } else if move_target.is_none() {
                     // Insert MoveTarget toward camp center so pathfinding handles return
-                    commands
-                        .entity(entity)
-                        .insert(MoveTarget(patrol.center));
+                    commands.entity(entity).insert(MoveTarget(patrol.center));
                 }
             }
             _ => {}

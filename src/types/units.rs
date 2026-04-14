@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use std::collections::{HashMap, VecDeque};
 
 use super::app::Faction;
-use super::economy::AssignedPhase;
+use super::economy::{AssignedPhase, ResourceType};
 use crate::blueprints::EntityKind;
 
 // ── Unit markers ──
@@ -150,6 +150,71 @@ impl TaskQueue {
 
 #[derive(Resource, Default)]
 pub struct NextTaskId(pub u64);
+
+/// Worker bias: while present, idle auto-scan seeks nodes of this resource
+/// type across the whole map instead of the 20u local scan.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct PreferredResource(pub ResourceType);
+
+pub const PREFERRED_RESOURCE_CYCLE: [ResourceType; 6] = [
+    ResourceType::Wood,
+    ResourceType::Copper,
+    ResourceType::Iron,
+    ResourceType::Gold,
+    ResourceType::Oil,
+    ResourceType::Stone,
+];
+
+pub fn next_preferred_resource(current: Option<ResourceType>) -> Option<ResourceType> {
+    match current {
+        None => Some(PREFERRED_RESOURCE_CYCLE[0]),
+        Some(rt) => {
+            let idx = PREFERRED_RESOURCE_CYCLE.iter().position(|&x| x == rt);
+            match idx {
+                Some(i) if i + 1 < PREFERRED_RESOURCE_CYCLE.len() => {
+                    Some(PREFERRED_RESOURCE_CYCLE[i + 1])
+                }
+                _ => None,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectedWorkerPreference {
+    Off,
+    Single(ResourceType),
+    Mixed,
+}
+
+impl SelectedWorkerPreference {
+    pub fn from_worker_prefs<I>(prefs: I) -> Option<Self>
+    where
+        I: IntoIterator<Item = Option<ResourceType>>,
+    {
+        let mut prefs = prefs.into_iter();
+        let first = prefs.next()?;
+        let mut mixed = false;
+        for pref in prefs {
+            if pref != first {
+                mixed = true;
+                break;
+            }
+        }
+        Some(match (mixed, first) {
+            (true, _) => Self::Mixed,
+            (false, Some(rt)) => Self::Single(rt),
+            (false, None) => Self::Off,
+        })
+    }
+
+    pub fn cycle_target(self) -> Option<ResourceType> {
+        match self {
+            Self::Off | Self::Mixed => next_preferred_resource(None),
+            Self::Single(rt) => next_preferred_resource(Some(rt)),
+        }
+    }
+}
 
 /// Tracks which workers are assigned inside a building (for UI display).
 #[derive(Component, Default)]
@@ -519,6 +584,8 @@ pub struct JustArrived(pub Timer);
 #[derive(Component)]
 pub struct AnimationController {
     pub current_state: AnimState,
+    /// Cooldown remaining (seconds) before a non-critical state change is allowed.
+    pub change_cooldown: f32,
 }
 
 /// Reference to the entity that owns the AnimationPlayer (deep in the GLTF hierarchy).

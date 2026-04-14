@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use std::f32::consts::TAU;
 
 use crate::blueprints::EntityKind;
+use crate::infrastructure::multiplayer::NetRole;
 use crate::simulation::buildings::is_wall_like_kind;
 use crate::simulation::combat::{
     apply_auto_attack_intent, apply_auto_move_intent, apply_manual_attack_intent,
@@ -10,7 +11,6 @@ use crate::simulation::combat::{
     CombatBudgetState, TargetScoreInput,
 };
 use crate::types::*;
-use crate::infrastructure::multiplayer::NetRole;
 use crate::world::spatial::SpatialHashGrid;
 
 pub struct UnitAiPlugin;
@@ -43,10 +43,7 @@ impl Plugin for UnitAiPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                (
-                    cleanup_recent_combat_damage,
-                    update_combat_hotspots,
-                )
+                (cleanup_recent_combat_damage, update_combat_hotspots)
                     .in_set(UnitAiSet::Hotspots)
                     .run_if(in_state(AppState::InGame)),
             )
@@ -113,7 +110,15 @@ fn stance_leash_distance(stance: UnitStance, tuning: &CombatTuning) -> f32 {
 fn update_combat_hotspots(
     mut hotspots: ResMut<CombatHotspots>,
     mut frame_counter: Local<u32>,
-    units: Query<(&Transform, &UnitState, &Faction, Option<&RecentCombatDamage>), With<Unit>>,
+    units: Query<
+        (
+            &Transform,
+            &UnitState,
+            &Faction,
+            Option<&RecentCombatDamage>,
+        ),
+        With<Unit>,
+    >,
 ) {
     *frame_counter = frame_counter.wrapping_add(1);
     // Only update every 6 frames to save cost
@@ -398,10 +403,9 @@ fn decision_priority_system(
             if let Some(ref engagement) = opt_engagement {
                 if let Some(target) = engagement.target {
                     let still_valid = now <= engagement.persistence_until
-                        && factions
-                            .get(target)
-                            .ok()
-                            .is_some_and(|target_faction| teams.is_hostile(faction, target_faction));
+                        && factions.get(target).ok().is_some_and(|target_faction| {
+                            teams.is_hostile(faction, target_faction)
+                        });
                     if still_valid {
                         if !matches!(*state, UnitState::Attacking(current) if current == target) {
                             apply_auto_attack_intent(
@@ -842,9 +846,7 @@ pub fn unit_state_executor_system(
                                 if *target_entity == entity {
                                     continue;
                                 }
-                                let Some(target_faction) =
-                                    factions.get(*target_entity).ok()
-                                else {
+                                let Some(target_faction) = factions.get(*target_entity).ok() else {
                                     continue;
                                 };
                                 if !teams.is_hostile(faction, target_faction) {
@@ -1345,8 +1347,7 @@ fn auto_heal_system(
             if *nearby_entity == entity {
                 continue;
             }
-            let Ok((ally_entity, ally_health, _ally_tf, ally_faction)) =
-                allies.get(*nearby_entity)
+            let Ok((ally_entity, ally_health, _ally_tf, ally_faction)) = allies.get(*nearby_entity)
             else {
                 continue;
             };

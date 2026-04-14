@@ -13,6 +13,7 @@ fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIST="$ROOT/dist/windows/rts"
+source "$ROOT/scripts/package-runtime.sh"
 
 # --- Build ---
 if [ "$SKIP_BUILD" = false ]; then
@@ -22,62 +23,17 @@ if [ "$SKIP_BUILD" = false ]; then
         --manifest-path "$ROOT/Cargo.toml"
 fi
 
-# --- Assemble distribution ---
-echo "==> Assembling distribution at $DIST"
-rm -rf "$DIST"
-mkdir -p "$DIST"
-
-# Copy executable
-cp "$ROOT/target/x86_64-pc-windows-msvc/release/rts.exe" "$DIST/"
-
-# Create runtime directories
-mkdir -p "$DIST/config" "$DIST/saves" "$DIST/logs"
-
-# Copy only the asset subtrees the game actually loads.
-# This list mirrors the Dockerfile and model_assets.rs references.
-ASSETS="$ROOT/assets"
-DEST="$DIST/assets"
-
-copy_asset_dir() {
-    local src="$ASSETS/$1"
-    local dst="$DEST/$1"
-    if [ -d "$src" ]; then
-        mkdir -p "$dst"
-        cp -r "$src/." "$dst/"
-    else
-        echo "  WARNING: missing asset directory: $1"
-    fi
-}
-
-echo "  Copying assets..."
-copy_asset_dir "audio"
-copy_asset_dir "fonts"
-copy_asset_dir "shaders"
-copy_asset_dir "icons"
-copy_asset_dir "textures"
-copy_asset_dir "trees_compressed"
-copy_asset_dir "KayKit_Forest_Nature/Assets/gltf"
-copy_asset_dir "UltimateFantasyRTS/glTF"
-copy_asset_dir "ToonyTinyPeople/models/buildings"
-copy_asset_dir "ToonyTinyPeople/models/units"
-copy_asset_dir "ToonyTinyPeople/textures/buildings"
-copy_asset_dir "ToonyTinyPeople/textures/units"
-copy_asset_dir "KayKit_Character_Animations/Animations/gltf/Rig_Medium"
+stage_runtime_tree \
+    "$DIST" \
+    "$ROOT/target/x86_64-pc-windows-msvc/release/rts.exe" \
+    "rts.exe"
 
 # --- Create zip archive ---
 ZIP="$ROOT/dist/windows-rts.zip"
-echo "==> Creating archive at $ZIP"
-rm -f "$ZIP"
-(cd "$ROOT/dist/windows" && zip -r "$ZIP" rts/)
+create_runtime_archive "$ROOT/dist/windows" "$ZIP"
 
 # --- Clean up folder ---
 rm -rf "$ROOT/dist/windows"
 
-# --- Summary ---
-ZIP_SIZE=$(du -sh "$ZIP" | cut -f1)
-echo ""
-echo "==> Done!"
-echo "    Archive:  $ZIP_SIZE"
-echo "    Output:   $ZIP"
 echo ""
 echo "    Extract the zip and run rts.exe from inside the rts/ folder."

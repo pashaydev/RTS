@@ -7,9 +7,9 @@ use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityCategory, EntityKind,
     EntityVisualCache, LevelBonus,
 };
+use crate::presentation::model_assets::UnitModelAssets;
 use crate::types::*;
 use crate::world::ground::HeightMap;
-use crate::presentation::model_assets::UnitModelAssets;
 
 // ── Unit ejection from newly placed buildings ──
 
@@ -22,14 +22,8 @@ pub(super) fn eject_units_from_buildings(
         (With<Building>, Added<Building>),
     >,
     nav_grid: Option<Res<crate::world::pathfinding::NavGrid>>,
-    all_buildings: Query<
-        (Entity, &Transform, &BuildingFootprint, &BuildingState),
-        With<Building>,
-    >,
-    mut units: Query<
-        (Entity, &mut Transform),
-        (Or<(With<Unit>, With<Mob>)>, Without<Building>),
-    >,
+    all_buildings: Query<(Entity, &Transform, &BuildingFootprint, &BuildingState), With<Building>>,
+    mut units: Query<(Entity, &mut Transform), (Or<(With<Unit>, With<Mob>)>, Without<Building>)>,
 ) {
     for (building_entity, building_tf, footprint) in &new_buildings {
         let building_pos = building_tf.translation;
@@ -121,7 +115,9 @@ pub(super) fn tower_auto_attack(
         }
 
         // Client: only run tower attacks for local player's towers
-        if *net_role == crate::infrastructure::multiplayer::NetRole::Client && *tower_faction != active_player.0 {
+        if *net_role == crate::infrastructure::multiplayer::NetRole::Client
+            && *tower_faction != active_player.0
+        {
             continue;
         }
 
@@ -154,24 +150,31 @@ pub(super) fn tower_auto_attack(
                 target_tf.translation,
                 0.0,
             );
-            if !crate::simulation::combat::is_in_attack_band(surface_dist, range.0, minimum_range, 0.1) {
+            if !crate::simulation::combat::is_in_attack_band(
+                surface_dist,
+                range.0,
+                minimum_range,
+                0.1,
+            ) {
                 continue;
             }
 
             if let Some(profile) = opt_profile {
                 let reserved_total = t_reserved.as_ref().map_or(0.0, |r| r.total());
-                if let Some(score) = crate::simulation::combat::target_score(&crate::simulation::combat::TargetScoreInput {
-                    profile,
-                    attacker_pos: tower_tf.translation,
-                    attacker_damage_type: tower_dmg_type,
-                    scan_range: range.0,
-                    target_pos: target_tf.translation,
-                    target_health: t_health,
-                    target_armor: *t_armor,
-                    target_threat: t_threat.map_or(0.0, |t| t.0),
-                    target_is_building: false,
-                    target_reserved_damage: reserved_total,
-                }) {
+                if let Some(score) = crate::simulation::combat::target_score(
+                    &crate::simulation::combat::TargetScoreInput {
+                        profile,
+                        attacker_pos: tower_tf.translation,
+                        attacker_damage_type: tower_dmg_type,
+                        scan_range: range.0,
+                        target_pos: target_tf.translation,
+                        target_health: t_health,
+                        target_armor: *t_armor,
+                        target_threat: t_threat.map_or(0.0, |t| t.0),
+                        target_is_building: false,
+                        target_reserved_damage: reserved_total,
+                    },
+                ) {
                     if score < best_score {
                         best_score = score;
                         best_target = Some((target_entity, surface_dist));
@@ -330,7 +333,10 @@ pub(super) fn training_queue_system(
     nav_grid: Option<Res<crate::world::pathfinding::NavGrid>>,
     unit_factions: Query<&Faction, With<Unit>>,
     cap_buildings: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
-    building_footprints: Query<(Entity, &Transform, &BuildingFootprint, &BuildingState), With<Building>>,
+    building_footprints: Query<
+        (Entity, &Transform, &BuildingFootprint, &BuildingState),
+        With<Building>,
+    >,
     mut buildings: Query<
         (
             Entity,
@@ -377,8 +383,7 @@ pub(super) fn training_queue_system(
         rally_point,
         building_faction,
         building_level,
-    ) in
-        &mut buildings
+    ) in &mut buildings
     {
         if queue.queue.is_empty() {
             continue;
