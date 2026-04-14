@@ -4,9 +4,11 @@ License: CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/)
 Authors:
 - Delapouite (https://delapouite.com/) — log, gold-mine, barrel, castle, medieval-barracks,
   mechanic-garage, watchtower, warehouse, viking-shield, planks, metal-plate, sunrise, sunset,
-  trash-can, load
+  trash-can, load, house, stone-wall, palisade, closed-doors, guards, mine-wagon
 - Lorc (https://lorcblog.blogspot.com/) — metal-bar, anvil, mining, crossed-swords, bowman,
-  thrown-charcoal, powder, cauldron, sun, night-sky
+  thrown-charcoal, powder, cauldron, sun, night-sky, stone-block, circular-sawblade, cannon
+- carl-olsen — crossbow
+- skoll — oil-drum
 
 Additional item icons from Openclipart
 License: CC0 / Public Domain (https://openclipart.org/share)
