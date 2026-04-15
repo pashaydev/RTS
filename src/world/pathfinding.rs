@@ -4,11 +4,6 @@ use bevy::prelude::*;
 use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
-use std::time::Duration;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
-#[cfg(target_arch = "wasm32")]
-use web_time::Instant;
 
 use crate::types::*;
 use crate::world::ground::{playable_half_map, HeightMap};
@@ -18,9 +13,8 @@ use crate::world::spatial::WallSpatialGrid;
 
 const NAV_GRID_STEP: f32 = 2.5;
 const ASTAR_NODE_LIMIT: usize = 12_000;
-const PATHS_PER_FRAME: usize = 48;
-const PATHFINDING_BUDGET_MS: u64 = 6;
-const NEW_PATH_REQUESTS_PER_FRAME: usize = 96;
+const PATHS_PER_FRAME: usize = usize::MAX;
+const NEW_PATH_REQUESTS_PER_FRAME: usize = usize::MAX;
 /// Distance threshold below which we skip A* and just walk directly
 const DIRECT_MOVE_THRESHOLD: f32 = 3.0;
 /// Cost for cells near obstacles (soft margin — guides paths away but doesn't block)
@@ -684,12 +678,7 @@ fn spawn_pathfinding_tasks(
     entities: &Entities,
 ) {
     let mut processed = 0;
-    let budget = Duration::from_millis(PATHFINDING_BUDGET_MS);
-    let frame_start = Instant::now();
     while processed < PATHS_PER_FRAME {
-        if processed > 0 && frame_start.elapsed() >= budget {
-            break;
-        }
 
         let Some(request) = queue.requests.pop_front() else {
             break;

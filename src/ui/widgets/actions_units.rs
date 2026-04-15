@@ -190,10 +190,6 @@ pub(super) fn spawn_units_action_bar(
             label: "Stop (X)",
             tooltip: "Stop (X)\nClear all orders",
         },
-        CmdBtn {
-            label: "Stance (V)",
-            tooltip: "Cycle Stance (V)\nCycle between Passive / Defensive / Aggressive",
-        },
     ];
 
     for (i, def) in cmd_defs.iter().enumerate() {
@@ -225,9 +221,6 @@ pub(super) fn spawn_units_action_bar(
             }
             3 => {
                 btn.insert(StopButton);
-            }
-            4 => {
-                btn.insert(CycleStanceButton);
             }
             _ => {}
         }

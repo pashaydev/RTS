@@ -258,7 +258,7 @@ pub(crate) fn spawn_status_bar(
                 })
                 .with_children(|right| {
                     right.spawn((
-                        Text::new("RTS COMMAND \u{00A9} 2026"),
+                        Text::new("Pasha Yakubovsky \u{00A9} 2026"),
                         TextFont {
                             font: fonts.body_emphasis.clone(),
                             font_size: 11.0,

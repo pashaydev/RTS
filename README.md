@@ -43,15 +43,12 @@ PATH="/tmp:/opt/homebrew/opt/llvm/bin:$PATH" cargo xwin build --release --target
 
 ### Debug
 ```sh
-# Start Tracy GUI first, click "Connect"
 tracy-capture -o trace.tracy
-# Then run:
+
 cargo run --features tracy
+
 # For memory allocation tracking too:
 cargo run --features tracy_memory
-# Play for a bit, then close the game. Convert and view:
-tracy-import-chrome trace.tracy > trace.json
-# Open trace.json at https://ui.perfetto.dev/
 ```
 
 The dev profile uses dependency optimization (`opt-level = 2`) for better iteration-time performance.
@@ -146,73 +143,10 @@ The Dockerfile builds the WASM client with Trunk and serves it with nginx. This 
 
 The host automatically serves the WASM client when a `dist/` directory is present. Web and native clients can play together in the same lobby.
 
-For full multiplayer details (transport, replication, VPN setup, limits, debug tap) see [docs/gameplay.md#multiplayer](docs/gameplay.md#multiplayer) and [docs/multiplayer-architecture.md](docs/multiplayer-architecture.md).
-
 ## Architecture
 
 The codebase is organized into six domain-driven PluginGroups, plus shared types and a separate protocol crate for networked state and messages.
 
-```
-src/
-├── types/            Shared game types (app state, economy, combat, units, buildings, AI, UI, rendering)
-│                       core.rs is the leaf primitives module; rng.rs hosts the
-│                       seeded `GameRng` used by the deterministic sim path.
-├── blueprints/       Entity definitions, spawn logic, visual cache
-│                       asset.rs is the scaffold for the RON-backed blueprint
-│                       loader that will replace the hard-coded registry.
-├── world/            WorldPlugins — terrain, environment, spatial indexing
-│   ├── ground/         Procedural terrain generation, biomes, borders, water
-│   ├── fog.rs          Fog of war
-│   ├── lighting.rs     Day/night cycle, ambient light
-│   ├── culling.rs      Frustum and distance culling
-│   ├── spatial.rs      Spatial hash grid for queries
-│   └── pathfinding.rs  A* navigation
-├── simulation/       SimulationPlugins — core gameplay logic
-│   ├── units.rs        Unit spawning, movement, stances
-│   ├── buildings/      Construction, training, upgrades, placement, walls
-│   ├── combat/         Damage, intents, budget, engagement slots
-│                         Emits `DamageApplied` messages at every damage
-│                         chokepoint for observability and replication.
-│   ├── resources/      Gathering, processing, worker assignment, trees
-│                         worker_fsm.rs owns the canonical assign / unassign
-│                         entry points for the worker state machine.
-│   ├── selection/      Click/box selection, unit commands
-│   ├── ai/             AI strategy, economy, military, tactics
-│   ├── items/          Loot, equipment, VFX
-│   ├── abilities.rs    Active abilities
-│   ├── orders.rs       Command queue
-│   ├── unit_ai.rs      Per-unit decision making
-│   ├── mobs.rs         Neutral creatures
-│   ├── ages.rs         Age/tech progression
-│   └── victory.rs      Win/loss conditions, match recording
-├── presentation/     PresentationPlugins — rendering, VFX, assets
-│   ├── camera.rs       Camera controls and zoom
-│   ├── animation.rs    Skeletal and procedural animation
-│   ├── vfx.rs          Particle effects, projectiles
-│   ├── model_assets.rs Model loading and caching
-│   ├── minimap.rs      Minimap rendering
-│   ├── pathvis.rs      Path visualization
-│   ├── procedural_mobs.rs  Procedural mob meshes
-│   ├── entity_labels.rs    Floating health bars, names
-│   └── materials/      Custom shader materials (fog, grass, terrain, water, hover, tree occlusion)
-├── infrastructure/   InfraPlugins — persistence, networking, debug
-│   ├── database.rs     SQLite profiles, match history, ELO, settings
-│   ├── save_load.rs    Game save/restore
-│   ├── multiplayer/    WebRTC transport, host/client systems, replication, debug tap
-│                         replication.rs hosts the `Replicated` trait + registry
-│                         scaffold targeted by the per-component sync rewrite.
-│   ├── net_bridge.rs   Network ID assignment and ECS/network mapping
-│   ├── logging.rs      Session logging
-│   ├── audio.rs        Sound effects and music
-│   └── debug/          Debug overlay, tweaks, inspector
-├── ui/               UiPlugin — HUD, menus, theming
-│   ├── theme.rs        Color palettes, dark/light modes
-│   ├── core/           Shared UI framework, fonts, text input, tooltips, animations
-│   ├── widgets/        In-game HUD widgets (resources, selection, actions, minimap, etc.)
-│   ├── menu/           Main menu, new game, options, multiplayer lobby, pause menu
-│   └── attention.rs    Screen-edge alerts
-└── game_state/       Shared protocol crate (MessagePack codec, replicated data)
-```
 
 ## Tech Stack
 

@@ -1246,7 +1246,6 @@ fn cleanup_game_world(
     commands.insert_resource(AiFactionSettings::default());
 
     // Combat & unit AI
-    commands.insert_resource(DecisionTimer::default());
     commands.insert_resource(CombatHotspots::default());
     commands.insert_resource(CombatTuning::default());
     commands.insert_resource(CombatBudget::default());

@@ -889,11 +889,8 @@ fn mob_aggro(
     >,
 ) {
     let now = time.elapsed_secs_f64();
-    for (mob_entity, mob_tf, aggro, intent, lock, opt_think_timer) in &mut mobs {
+    for (mob_entity, mob_tf, aggro, intent, lock, _) in &mut mobs {
         if budget_state.target_rescans_this_frame >= combat_budget.max_target_rescans_per_frame {
-            continue;
-        }
-        if opt_think_timer.is_some_and(|timer| now < timer.next_think_at) {
             continue;
         }
         if matches!(intent, Some(CombatIntent::Attack(_, _)))
@@ -935,10 +932,6 @@ fn mob_aggro(
 
         if let Some(target) = target {
             apply_auto_attack_intent(&mut commands, mob_entity, target, mob_tf.translation, now);
-            commands.entity(mob_entity).insert(CombatThinkTimer {
-                next_think_at: now + 0.5 + (mob_entity.to_bits() % 5) as f64 * 0.03,
-                interval_secs: 0.5,
-            });
 
             // Pack aggro: alert nearby mobs to chase the same target
             let mob_pos = mob_tf.translation;
@@ -955,18 +948,9 @@ fn mob_aggro(
                         other_tf.translation,
                         now,
                     );
-                    commands.entity(other_entity).insert(CombatThinkTimer {
-                        next_think_at: now + 0.75,
-                        interval_secs: 0.5,
-                    });
                     alerted += 1;
                 }
             }
-        } else {
-            commands.entity(mob_entity).insert(CombatThinkTimer {
-                next_think_at: now + 0.5 + (mob_entity.to_bits() % 5) as f64 * 0.03,
-                interval_secs: 0.5,
-            });
         }
     }
 }

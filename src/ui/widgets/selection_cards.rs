@@ -171,25 +171,6 @@ pub(super) fn spawn_friendly_detail_card(
         commands.entity(stats).add_child(stat);
     }
 
-    // Stance indicator
-    if let Some(stance) = stance {
-        let (stance_text, stance_color) = match stance {
-            UnitStance::Passive => ("Passive", crate::ui::theme::STANCE_PASSIVE),
-            UnitStance::Defensive => ("Defensive", crate::ui::theme::STANCE_DEFENSIVE),
-            UnitStance::Aggressive => ("Aggressive", crate::ui::theme::STANCE_AGGRESSIVE),
-        };
-        let stance_label = commands
-            .spawn((
-                Text::new(format!("[{}] (V)", stance_text)),
-                TextFont {
-                    font_size: theme.typography.small,
-                    ..default()
-                },
-                TextColor(stance_color),
-            ))
-            .id();
-        commands.entity(info).add_child(stance_label);
-    }
 
     spawn_single_inventory_section(
         commands,

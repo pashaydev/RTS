@@ -68,8 +68,8 @@ Units and towers select targets using a weighted scoring formula instead of alwa
 
 **Stance modifiers:**
 - **Passive** — never auto-engage
-- **Defensive** — scan range = attack range × 1.35
-- **Aggressive** — scan range = attack range × 2.25
+- **Defensive** — scan range = attack range × 1.5
+- **Aggressive** — scan range = attack range × 2.5
 
 **Threat values:**
 

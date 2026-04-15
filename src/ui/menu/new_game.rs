@@ -10,6 +10,21 @@ use super::*;
 
 // ── New Game Page ──
 
+#[derive(Component)]
+pub(crate) struct ResourceDensityLabelText;
+
+#[derive(Component)]
+pub(crate) struct ResourceDensityValueText;
+
+#[derive(Component)]
+pub(crate) struct ResourceDensityBarFill;
+
+#[derive(Component)]
+pub(crate) struct ResourceDensityOptionDot(usize);
+
+#[derive(Component)]
+pub(crate) struct ResourceDensityOptionLabel(usize);
+
 pub(crate) fn spawn_new_game_page(
     commands: &mut Commands,
     container: Entity,
@@ -651,16 +666,7 @@ fn spawn_resource_density_block(
     selected: usize,
     theme: &Theme,
 ) {
-    let pct = match selected {
-        0 => 35.0,
-        1 => 63.0,
-        _ => 88.0,
-    };
-    let selected_label = ["Sparse", "Standard", "Dense"]
-        .get(selected)
-        .copied()
-        .unwrap_or("Standard")
-        .to_uppercase();
+    let (selected_label, pct) = resource_density_display(selected);
     let entity = commands
         .spawn(Node {
             width: Val::Percent(100.0),
@@ -680,6 +686,7 @@ fn spawn_resource_density_block(
                 })
                 .with_children(|row| {
                     row.spawn((
+                        ResourceDensityLabelText,
                         Text::new(selected_label),
                         TextFont {
                             font_size: 10.0,
@@ -688,6 +695,7 @@ fn spawn_resource_density_block(
                         TextColor(theme.colors.text_primary.with_alpha(0.9)),
                     ));
                     row.spawn((
+                        ResourceDensityValueText,
                         Text::new(format!("{pct:.0}%")),
                         TextFont {
                             font_size: 10.0,
@@ -709,6 +717,7 @@ fn spawn_resource_density_block(
                 ))
                 .with_children(|track| {
                     track.spawn((
+                        ResourceDensityBarFill,
                         Node {
                             width: Val::Percent(pct),
                             height: Val::Percent(100.0),
@@ -750,6 +759,7 @@ fn spawn_resource_density_block(
                         ))
                         .with_children(|btn| {
                             btn.spawn((
+                                ResourceDensityOptionDot(i),
                                 Node {
                                     width: Val::Px(10.0),
                                     height: Val::Px(10.0),
@@ -769,6 +779,7 @@ fn spawn_resource_density_block(
                                 Pickable::IGNORE,
                             ));
                             btn.spawn((
+                                ResourceDensityOptionLabel(i),
                                 Text::new(*label),
                                 TextFont {
                                     font_size: 9.0,
@@ -787,6 +798,76 @@ fn spawn_resource_density_block(
         })
         .id();
     commands.entity(container).add_child(entity);
+}
+
+fn resource_density_display(selected: usize) -> (String, f32) {
+    let pct = match selected {
+        0 => 35.0,
+        1 => 63.0,
+        _ => 88.0,
+    };
+    let label = ["Sparse", "Standard", "Dense"]
+        .get(selected)
+        .copied()
+        .unwrap_or("Standard")
+        .to_uppercase();
+    (label, pct)
+}
+
+pub(crate) fn sync_resource_density_block(
+    config: Res<GameSetupConfig>,
+    mut label_texts: Query<
+        &mut Text,
+        (With<ResourceDensityLabelText>, Without<ResourceDensityValueText>),
+    >,
+    mut value_texts: Query<
+        &mut Text,
+        (With<ResourceDensityValueText>, Without<ResourceDensityLabelText>),
+    >,
+    mut fill_nodes: Query<&mut Node, With<ResourceDensityBarFill>>,
+    mut dots: Query<(&ResourceDensityOptionDot, &mut BackgroundColor, &mut BorderColor)>,
+    mut option_labels: Query<
+        (&ResourceDensityOptionLabel, &mut TextColor),
+        Without<ResourceDensityLabelText>,
+    >,
+    theme: Res<Theme>,
+) {
+    let selected = match config.resource_density {
+        ResourceDensity::Sparse => 0,
+        ResourceDensity::Normal => 1,
+        ResourceDensity::Dense => 2,
+    };
+    let (label, pct) = resource_density_display(selected);
+
+    for mut text in &mut label_texts {
+        **text = label.clone();
+    }
+    for mut text in &mut value_texts {
+        **text = format!("{pct:.0}%");
+    }
+    for mut node in &mut fill_nodes {
+        node.width = Val::Percent(pct);
+    }
+    for (dot, mut bg, mut border) in &mut dots {
+        let active = dot.0 == selected;
+        *bg = BackgroundColor(if active {
+            theme.colors.accent
+        } else {
+            Color::NONE
+        });
+        *border = BorderColor::all(if active {
+            theme.colors.accent
+        } else {
+            theme.colors.text_secondary.with_alpha(0.6)
+        });
+    }
+    for (option, mut color) in &mut option_labels {
+        color.0 = if option.0 == selected {
+            theme.colors.text_primary
+        } else {
+            theme.colors.text_secondary.with_alpha(0.7)
+        };
+    }
 }
 
 fn spawn_seed_block(

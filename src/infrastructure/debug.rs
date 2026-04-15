@@ -10,6 +10,7 @@ use bevy::light::cluster::{ClusterConfig, ClusterZConfig};
 use bevy::prelude::*;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
+use crate::presentation::camera::CameraPanTuning;
 use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::simulation::items::{ItemKind, SpawnItemPickup, UnitInventory};
 use crate::types::{
@@ -113,6 +114,7 @@ impl Plugin for DebugPlugin {
                     )
                         .chain(),
                     sync_debug_flow_tweaks,
+                    sync_camera_debug_tweaks,
                     sync_entity_spawn_tweaks,
                     sync_entity_selected_tweaks,
                     sync_runtime_debug_tweaks,
@@ -366,6 +368,7 @@ const SPAWN_FOLDER: &str = "Entities/Spawn";
 const SELECTED_FOLDER: &str = "Entities/Selected";
 const RUNTIME_FOLDER: &str = "Game/Runtime";
 const FLOW_FOLDER: &str = "Game/Flow";
+const CAMERA_FOLDER: &str = "Game/Camera";
 const AI_FOLDER: &str = "Game/AI Settings";
 const SAVE_FOLDER: &str = "Game/Save & Load";
 const FRUSTUM_FOLDER: &str = "Game/Frustum Debug";
@@ -450,6 +453,20 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_readonly(FLOW_FOLDER, "Move Targets", "0");
     tweaks.add_readonly(FLOW_FOLDER, "Attack Targets", "0");
     tweaks.add_readonly(FLOW_FOLDER, "Queued Paths", "0");
+
+    tweaks.add_float(CAMERA_FOLDER, "Keyboard Accel", 200.0, 5.0, 300.0, 1.0);
+    tweaks.add_float(CAMERA_FOLDER, "Keyboard Max Speed", 100.0, 2.0, 160.0, 0.5);
+    tweaks.add_float(CAMERA_FOLDER, "Keyboard Sprint", 1.8, 1.0, 4.0, 0.05);
+    tweaks.add_float(CAMERA_FOLDER, "Edge Accel", 150.0, 5.0, 300.0, 1.0);
+    tweaks.add_float(CAMERA_FOLDER, "Edge Max Speed", 100.0, 2.0, 160.0, 0.5);
+    tweaks.add_float(CAMERA_FOLDER, "Edge Zone %", 0.035, 0.005, 0.12, 0.001);
+    tweaks.add_float(CAMERA_FOLDER, "Edge Zone Min Px", 14.0, 2.0, 80.0, 1.0);
+    tweaks.add_float(CAMERA_FOLDER, "Edge Zone Max Px", 36.0, 4.0, 160.0, 1.0);
+    tweaks.add_float(CAMERA_FOLDER, "Edge Curve", 1.8, 0.5, 4.0, 0.05);
+    tweaks.add_float(CAMERA_FOLDER, "Edge Delay", 0.08, 0.0, 0.4, 0.01);
+    tweaks.add_float(CAMERA_FOLDER, "Edge Release Px", 8.0, 0.0, 40.0, 1.0);
+    tweaks.add_float(CAMERA_FOLDER, "Friction", 3.0, 0.5, 20.0, 0.1);
+    tweaks.add_float(CAMERA_FOLDER, "Map Edge Margin", 6.0, 0.0, 40.0, 0.5);
 
     // AI Settings folder
     for prefix in ["P2", "P3", "P4"] {
@@ -1156,6 +1173,65 @@ fn sync_debug_flow_tweaks(
             .unwrap_or_default()
             .to_string(),
     );
+}
+
+fn sync_camera_debug_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    mut tuning: ResMut<CameraPanTuning>,
+) {
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Keyboard Accel") {
+        tuning.keyboard_accel = v;
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Keyboard Max Speed") {
+        tuning.keyboard_max_speed = v.max(0.0);
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Keyboard Sprint") {
+        tuning.keyboard_sprint_multiplier = v.max(1.0);
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Edge Accel") {
+        tuning.edge_accel = v;
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Edge Max Speed") {
+        tuning.edge_max_speed = v.max(0.0);
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Edge Zone %") {
+        tuning.edge_zone_frac = v.max(0.001);
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Edge Zone Min Px") {
+        tuning.edge_zone_min_px = v.max(0.0);
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Edge Zone Max Px") {
+        tuning.edge_zone_max_px = v.max(tuning.edge_zone_min_px);
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Edge Curve") {
+        tuning.edge_curve_power = v.max(0.1);
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Edge Delay") {
+        tuning.edge_activation_delay = v.max(0.0);
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Edge Release Px") {
+        tuning.edge_release_extra_px = v.max(0.0);
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Friction") {
+        tuning.friction = v.max(0.01);
+    }
+    if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Map Edge Margin") {
+        tuning.map_edge_margin = v.max(0.0);
+    }
+
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Keyboard Accel", tuning.keyboard_accel);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Keyboard Max Speed", tuning.keyboard_max_speed);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Keyboard Sprint", tuning.keyboard_sprint_multiplier);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Accel", tuning.edge_accel);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Max Speed", tuning.edge_max_speed);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Zone %", tuning.edge_zone_frac);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Zone Min Px", tuning.edge_zone_min_px);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Zone Max Px", tuning.edge_zone_max_px);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Curve", tuning.edge_curve_power);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Delay", tuning.edge_activation_delay);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Release Px", tuning.edge_release_extra_px);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Friction", tuning.friction);
+    tweaks.set_float_if_changed(CAMERA_FOLDER, "Map Edge Margin", tuning.map_edge_margin);
 }
 
 fn sync_entity_spawn_tweaks(

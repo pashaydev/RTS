@@ -217,6 +217,8 @@ pub struct SavedEntity {
     pub pos: [f32; 3],
     pub rot_y: f32,
     pub health: Option<[f32; 2]>,
+    #[serde(default)]
+    pub scale: Option<f32>,
     pub entity_type: SavedEntityType,
 }
 
@@ -740,21 +742,6 @@ fn combat_intent_to_saved(
     }
 }
 
-fn stance_to_u8(s: &UnitStance) -> u8 {
-    match s {
-        UnitStance::Passive => 0,
-        UnitStance::Defensive => 1,
-        UnitStance::Aggressive => 2,
-    }
-}
-
-fn u8_to_stance(v: u8) -> UnitStance {
-    match v {
-        0 => UnitStance::Passive,
-        2 => UnitStance::Aggressive,
-        _ => UnitStance::Defensive,
-    }
-}
 
 fn veterancy_to_u8(v: &VeterancyLevel) -> u8 {
     match v {
@@ -928,6 +915,7 @@ struct BaseEntityFields {
     pos: [f32; 3],
     rot_y: f32,
     health: Option<[f32; 2]>,
+    scale: Option<f32>,
 }
 
 fn collect_base_fields(world: &World, entity: Entity, save_id: u32) -> Option<BaseEntityFields> {
@@ -936,6 +924,12 @@ fn collect_base_fields(world: &World, entity: Entity, save_id: u32) -> Option<Ba
     let faction = world.get::<Faction>(entity);
     let health = world.get::<Health>(entity);
 
+    let scale = if (transform.scale - Vec3::ONE).length_squared() > 0.001 {
+        Some(transform.scale.x)
+    } else {
+        None
+    };
+
     Some(BaseEntityFields {
         save_id,
         kind: kind.map(|k| entity_kind_to_u16(*k)).unwrap_or(0),
@@ -943,6 +937,7 @@ fn collect_base_fields(world: &World, entity: Entity, save_id: u32) -> Option<Ba
         pos: vec3_to_arr(transform.translation),
         rot_y: transform.rotation.to_euler(EulerRot::YXZ).0,
         health: health.map(|h| [h.current, h.max]),
+        scale,
     })
 }
 
@@ -1264,9 +1259,10 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
             pos: base.pos,
             rot_y: base.rot_y,
             health: base.health,
+            scale: base.scale,
             entity_type: SavedEntityType::Unit(SavedUnitData {
                 state: unit_state_to_saved(state, emap),
-                stance: get!(entity, UnitStance).map(stance_to_u8).unwrap_or(2),
+                stance: get!(entity, UnitStance).map(|s| s.to_u8()).unwrap_or(2),
                 speed: get!(entity, UnitSpeed).map(|s| s.0).unwrap_or(0.0),
                 carrying: get!(entity, Carrying).map(|c| SavedCarrying {
                     amount: c.amount,
@@ -1348,6 +1344,7 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
             pos: base.pos,
             rot_y: base.rot_y,
             health: base.health,
+            scale: base.scale,
             entity_type: SavedEntityType::Building(SavedBuildingData {
                 state: match state {
                     BuildingState::UnderConstruction => 0,
@@ -1431,6 +1428,7 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
             pos: base.pos,
             rot_y: base.rot_y,
             health: None,
+            scale: base.scale,
             entity_type: SavedEntityType::ResourceNode(SavedResourceNodeData {
                 resource_type: node.resource_type.index() as u8,
                 amount_remaining: node.amount_remaining,
@@ -1454,9 +1452,10 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
             pos: base.pos,
             rot_y: base.rot_y,
             health: base.health,
+            scale: base.scale,
             entity_type: SavedEntityType::Mob(SavedMobData {
                 state: get!(entity, UnitState).map(|s| unit_state_to_saved(s, emap)),
-                stance: get!(entity, UnitStance).map(|s| stance_to_u8(s)),
+                stance: get!(entity, UnitStance).map(|s| s.to_u8()),
                 attack_target_id: atk_target,
                 attack_damage: atk_dmg,
                 attack_range: atk_rng,
@@ -1489,6 +1488,7 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                 pos: vec3_to_arr(tf.translation),
                 rot_y: 0.0,
                 health: None,
+                scale: None,
                 entity_type: SavedEntityType::ItemPickup(SavedItemPickupData {
                     item_kind: item_kind_to_u8(&pickup.item),
                     owner_faction: pickup.owner.as_ref().map(faction_to_u8),
@@ -1518,6 +1518,7 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                 pos: vec3_to_arr(tf.translation),
                 rot_y: tf.rotation.to_euler(EulerRot::YXZ).0,
                 health: None,
+                scale: None,
                 entity_type: SavedEntityType::GrowingResource(SavedGrowingResourceData {
                     resource_type: gr.resource_type.index() as u8,
                     amount: gr.amount,
@@ -2021,7 +2022,7 @@ pub fn load_saved_game(
                     &height_map,
                     saved,
                 );
-                commands.entity(e).insert(u8_to_stance(unit_data.stance));
+                commands.entity(e).insert(UnitStance::from_u8(unit_data.stance));
                 commands.entity(e).insert(UnitSpeed(unit_data.speed));
                 if let Some(ref c) = unit_data.carrying {
                     commands.entity(e).insert(Carrying {
@@ -2264,13 +2265,9 @@ pub fn load_saved_game(
                 e
             }
             SavedEntityType::ResourceNode(node_data) => {
-                // Resource nodes are spawned by the resource system normally.
-                // For loading, we need to spawn them manually.
-                // Use a simple approach: spawn a minimal entity with the ResourceNode component.
-                // The resource spawn system adds meshes/models — we skip it during load.
-                // We need to spawn resource nodes with visuals. Use the resource node
-                // spawning approach from the resource system.
                 let rt = resource_type_from_index(node_data.resource_type as usize);
+                let default_scale = if rt == ResourceType::Wood { 0.4 } else { 1.0 };
+                let scale = saved.scale.unwrap_or(default_scale);
                 let e = commands
                     .spawn((
                         GameWorld,
@@ -2281,6 +2278,7 @@ pub fn load_saved_game(
                         Transform {
                             translation: pos,
                             rotation: rot,
+                            scale: Vec3::splat(scale),
                             ..default()
                         },
                     ))
@@ -2298,7 +2296,7 @@ pub fn load_saved_game(
                     saved,
                 );
                 if let Some(stance) = mob_data.stance {
-                    commands.entity(e).insert(u8_to_stance(stance));
+                    commands.entity(e).insert(UnitStance::from_u8(stance));
                 }
                 restore_combat_components(
                     &mut commands,

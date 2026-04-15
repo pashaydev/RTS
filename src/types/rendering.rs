@@ -22,6 +22,10 @@ pub struct RtsCamera {
     pub target_distance: f32,
     pub target_angle: f32,
     pub pan_velocity: Vec3,
+    pub pan_accel: Vec3,
+    pub pan_speed_cap_multiplier: f32,
+    pub edge_hover_time: f32,
+    pub edge_scroll_active: bool,
 }
 
 // ── Ground ──

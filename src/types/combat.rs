@@ -316,7 +316,6 @@ pub enum UnitStance {
 }
 
 impl UnitStance {
-    #[allow(dead_code)]
     pub fn cycle(self) -> Self {
         match self {
             UnitStance::Passive => UnitStance::Defensive,
@@ -325,21 +324,19 @@ impl UnitStance {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn scan_multiplier(self) -> f32 {
+    pub fn to_u8(self) -> u8 {
         match self {
-            UnitStance::Passive => 0.0,
-            UnitStance::Defensive => 1.5,
-            UnitStance::Aggressive => 2.5,
+            UnitStance::Passive => 0,
+            UnitStance::Defensive => 1,
+            UnitStance::Aggressive => 2,
         }
     }
 
-    #[allow(dead_code)]
-    pub fn leash_distance(self) -> f32 {
-        match self {
-            UnitStance::Passive => 0.0,
-            UnitStance::Defensive => 12.0,
-            UnitStance::Aggressive => 50.0,
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => UnitStance::Passive,
+            2 => UnitStance::Aggressive,
+            _ => UnitStance::Defensive,
         }
     }
 }
@@ -394,15 +391,10 @@ pub struct LeashOrigin(pub Vec3);
 // 20. CombatTuning
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 #[derive(Resource, Clone, Debug)]
 pub struct CombatTuning {
-    pub passive_scan_multiplier: f32,
-    pub defensive_scan_multiplier: f32,
-    pub aggressive_scan_multiplier: f32,
-    pub passive_leash_distance: f32,
-    pub defensive_leash_distance: f32,
-    pub aggressive_leash_distance: f32,
+    pub scan_multipliers: [f32; 3],
+    pub leash_distances: [f32; 3],
     pub manual_override_freshness_secs: f32,
     pub command_buffer_ttl_secs: f32,
     pub manual_target_lock_secs: f32,
@@ -421,12 +413,8 @@ pub struct CombatTuning {
 impl Default for CombatTuning {
     fn default() -> Self {
         Self {
-            passive_scan_multiplier: 0.0,
-            defensive_scan_multiplier: 1.5,
-            aggressive_scan_multiplier: 2.5,
-            passive_leash_distance: 0.0,
-            defensive_leash_distance: 12.0,
-            aggressive_leash_distance: 50.0,
+            scan_multipliers: [0.0, 1.5, 2.5],
+            leash_distances: [0.0, 12.0, 50.0],
             manual_override_freshness_secs: 1.5,
             command_buffer_ttl_secs: 0.35,
             manual_target_lock_secs: 0.75,
@@ -441,6 +429,16 @@ impl Default for CombatTuning {
             damage_memory_secs: 1.6,
             ally_alert_assist_range: 16.0,
         }
+    }
+}
+
+impl CombatTuning {
+    pub fn scan_multiplier(&self, stance: UnitStance) -> f32 {
+        self.scan_multipliers[stance.to_u8() as usize]
+    }
+
+    pub fn leash_distance(&self, stance: UnitStance) -> f32 {
+        self.leash_distances[stance.to_u8() as usize]
     }
 }
 
@@ -460,10 +458,10 @@ pub struct CombatBudget {
 impl Default for CombatBudget {
     fn default() -> Self {
         Self {
-            max_target_rescans_per_frame: 64,
-            max_slot_refreshes_per_frame: 32,
-            max_repath_requests_per_frame: 48,
-            max_blocked_resolutions_per_frame: 32,
+            max_target_rescans_per_frame: usize::MAX,
+            max_slot_refreshes_per_frame: usize::MAX,
+            max_repath_requests_per_frame: usize::MAX,
+            max_blocked_resolutions_per_frame: usize::MAX,
         }
     }
 }

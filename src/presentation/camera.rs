@@ -21,21 +21,56 @@ use crate::types::{
     DragState, EffectQuality, FrustumDebugMode, GameFlowSet, GameSetupConfig, GameWorld,
     GraphicsSettings, MapSeed, RtsCamera, UiMode,
 };
+use crate::world::ground::playable_half_map;
 
 // ── Tuning constants ──
 
 const PAN_SMOOTH: f32 = 10.0;
 const ZOOM_SMOOTH: f32 = 6.0;
 const ROTATE_SMOOTH: f32 = 8.0;
-const FRICTION: f32 = 8.0;
-const PAN_SPEED_SCALE: f32 = 0.1;
 const ZOOM_SENSITIVITY: f32 = 0.07;
-const EDGE_THRESHOLD: f32 = 0.06;
 const PITCH_MIN: f32 = 0.4;
 const PITCH_MAX: f32 = 1.1;
 const DISTANCE_MIN: f32 = 10.0;
 const DISTANCE_MAX: f32 = 100.0;
 pub(crate) const PRESENTATION_LAYER: usize = 1;
+
+#[derive(Resource, Clone)]
+pub(crate) struct CameraPanTuning {
+    pub keyboard_accel: f32,
+    pub keyboard_max_speed: f32,
+    pub keyboard_sprint_multiplier: f32,
+    pub edge_accel: f32,
+    pub edge_max_speed: f32,
+    pub edge_zone_frac: f32,
+    pub edge_zone_min_px: f32,
+    pub edge_zone_max_px: f32,
+    pub edge_curve_power: f32,
+    pub edge_activation_delay: f32,
+    pub edge_release_extra_px: f32,
+    pub friction: f32,
+    pub map_edge_margin: f32,
+}
+
+impl Default for CameraPanTuning {
+    fn default() -> Self {
+        Self {
+            keyboard_accel: 200.0,
+            keyboard_max_speed: 100.0,
+            keyboard_sprint_multiplier: 1.8,
+            edge_accel: 150.0,
+            edge_max_speed: 100.0,
+            edge_zone_frac: 0.035,
+            edge_zone_min_px: 14.0,
+            edge_zone_max_px: 36.0,
+            edge_curve_power: 1.8,
+            edge_activation_delay: 0.08,
+            edge_release_extra_px: 8.0,
+            friction: 3.0,
+            map_edge_margin: 6.0,
+        }
+    }
+}
 
 #[derive(Resource, Clone)]
 pub struct InternalRenderTarget {
@@ -62,6 +97,7 @@ impl Plugin for CameraPlugin {
             .init_resource::<LastSelection>()
             .init_resource::<CameraZoomLevel>()
             .init_resource::<FrustumDebugMode>()
+            .init_resource::<CameraPanTuning>()
             .add_systems(
                 OnEnter(AppState::InGame),
                 setup_internal_render_target.before(spawn_camera),
@@ -143,6 +179,10 @@ fn spawn_camera(
             target_distance: distance,
             target_angle: angle,
             pan_velocity: Vec3::ZERO,
+            pan_accel: Vec3::ZERO,
+            pan_speed_cap_multiplier: 1.0,
+            edge_hover_time: 0.0,
+            edge_scroll_active: false,
         },
         Camera3d::default(),
         Camera {
@@ -533,6 +573,7 @@ fn sync_camera_post_process_settings(
 
 fn camera_pan_input(
     keyboard: Res<ButtonInput<KeyCode>>,
+    tuning: Res<CameraPanTuning>,
     mut query: Query<&mut RtsCamera>,
     debug_mode: Res<FrustumDebugMode>,
 ) {
@@ -542,8 +583,6 @@ fn camera_pan_input(
     let Ok(mut cam) = query.single_mut() else {
         return;
     };
-
-    let speed = PAN_SPEED_SCALE * cam.distance;
 
     let forward = Vec3::new(-cam.angle.sin(), 0.0, -cam.angle.cos());
     let right = Vec3::new(cam.angle.cos(), 0.0, -cam.angle.sin());
@@ -563,67 +602,101 @@ fn camera_pan_input(
     }
 
     if dir.length_squared() > 0.0 {
-        cam.pan_velocity += dir.normalize() * speed;
+        let zoom_scale = pan_zoom_scale(cam.distance);
+        let sprinting =
+            keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+        let sprint_scale = if sprinting {
+            tuning.keyboard_sprint_multiplier
+        } else {
+            1.0
+        };
+        cam.pan_accel += dir.normalize() * tuning.keyboard_accel * zoom_scale * sprint_scale;
+        cam.pan_speed_cap_multiplier = cam.pan_speed_cap_multiplier.max(sprint_scale);
     }
 }
 
 fn camera_edge_scroll(
+    time: Res<Time>,
     windows: Query<&Window, With<PrimaryWindow>>,
     drag: Res<DragState>,
-    cursor_over_ui: Res<CursorOverUi>,
+    tuning: Res<CameraPanTuning>,
+    widget_q: Query<
+        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility),
+        With<crate::ui::core::framework::Widget>,
+    >,
     mut query: Query<&mut RtsCamera>,
     debug_mode: Res<FrustumDebugMode>,
 ) {
     if debug_mode.enabled && debug_mode.freeze_main_camera {
         return;
     }
-    if drag.dragging || cursor_over_ui.0 {
-        return;
-    }
-
-    let Ok(window) = windows.single() else {
-        return;
-    };
-
-    let Some(cursor) = window.cursor_position() else {
-        return;
-    };
-
-    if !window.focused {
-        return;
-    }
-
-    let w = window.width();
-    let h = window.height();
-    let ex = EDGE_THRESHOLD * w;
-    let ey = EDGE_THRESHOLD * h;
-
-    let mut dir = Vec3::ZERO;
 
     let Ok(mut cam) = query.single_mut() else {
         return;
     };
 
+    if drag.dragging {
+        cam.edge_hover_time = 0.0;
+        return;
+    }
+
+    let Ok(window) = windows.single() else {
+        cam.edge_hover_time = 0.0;
+        return;
+    };
+
+    let Some(cursor) = window.cursor_position() else {
+        cam.edge_hover_time = 0.0;
+        return;
+    };
+
+    if !window.focused {
+        cam.edge_hover_time = 0.0;
+        return;
+    }
+
+    if window
+        .physical_cursor_position()
+        .is_some_and(|cursor_phys| cursor_hits_widget(cursor_phys, &widget_q))
+    {
+        cam.edge_hover_time = 0.0;
+        return;
+    }
+
+    let w = window.width();
+    let h = window.height();
+    let ex = (w * tuning.edge_zone_frac).clamp(tuning.edge_zone_min_px, tuning.edge_zone_max_px);
+    let ey = (h * tuning.edge_zone_frac).clamp(tuning.edge_zone_min_px, tuning.edge_zone_max_px);
+    let release_ex = (ex + tuning.edge_release_extra_px).min(w * 0.5);
+    let release_ey = (ey + tuning.edge_release_extra_px).min(h * 0.5);
+    let active_edge_x = if cam.edge_scroll_active { release_ex } else { ex };
+    let active_edge_y = if cam.edge_scroll_active { release_ey } else { ey };
+
+    let edge_x = signed_edge_strength(cursor.x, w, active_edge_x, tuning.edge_curve_power);
+    let edge_y = -signed_edge_strength(cursor.y, h, active_edge_y, tuning.edge_curve_power);
+
     let forward = Vec3::new(-cam.angle.sin(), 0.0, -cam.angle.cos());
     let right = Vec3::new(cam.angle.cos(), 0.0, -cam.angle.sin());
+    let desired = right * edge_x + forward * edge_y;
 
-    if cursor.x < ex {
-        dir -= right;
-    }
-    if cursor.x > w - ex {
-        dir += right;
-    }
-    if cursor.y < ey {
-        dir += forward;
-    }
-    if cursor.y > h - ey {
-        dir -= forward;
+    if desired.length_squared() == 0.0 {
+        cam.edge_hover_time = 0.0;
+        cam.edge_scroll_active = false;
+        return;
     }
 
-    if dir.length_squared() > 0.0 {
-        let speed = PAN_SPEED_SCALE * cam.distance / 3.0;
-        cam.pan_velocity += dir.normalize() * speed;
+    if !cam.edge_scroll_active {
+        cam.edge_hover_time += time.delta_secs();
+        if cam.edge_hover_time < tuning.edge_activation_delay {
+            return;
+        }
+        cam.edge_scroll_active = true;
     }
+
+    let zoom_scale = pan_zoom_scale(cam.distance);
+    let strength = desired.length().min(1.0);
+    let accel = desired.normalize() * tuning.edge_accel * zoom_scale * strength;
+    cam.pan_accel += accel;
 }
 
 fn camera_zoom_input(
@@ -651,11 +724,7 @@ fn camera_zoom_input(
         .single()
         .ok()
         .and_then(|window| window.physical_cursor_position())
-        .is_some_and(|cursor_phys| {
-            widget_q.iter().any(|(computed, ui_tf, vis)| {
-                vis.get() && computed.contains_point(*ui_tf, cursor_phys)
-            })
-        });
+        .is_some_and(|cursor_phys| cursor_hits_widget(cursor_phys, &widget_q));
 
     for ev in scroll_events.read() {
         let scroll = match ev.unit {
@@ -704,7 +773,12 @@ fn camera_rotate_input(
     }
 }
 
-fn camera_smooth_update(time: Res<Time>, mut query: Query<(&mut RtsCamera, &mut Transform)>) {
+fn camera_smooth_update(
+    time: Res<Time>,
+    config: Res<GameSetupConfig>,
+    tuning: Res<CameraPanTuning>,
+    mut query: Query<(&mut RtsCamera, &mut Transform)>,
+) {
     let Ok((mut cam, mut transform)) = query.single_mut() else {
         return;
     };
@@ -715,9 +789,17 @@ fn camera_smooth_update(time: Res<Time>, mut query: Query<(&mut RtsCamera, &mut 
     }
 
     // a) Momentum decay (frame-rate independent)
-    cam.pan_velocity *= (-FRICTION * dt).exp();
+    let pan_accel = cam.pan_accel;
+    cam.pan_velocity += pan_accel * dt;
+    let keyboard_max_speed = tuning.keyboard_max_speed * cam.pan_speed_cap_multiplier;
+    let pan_max_speed = keyboard_max_speed.max(tuning.edge_max_speed) * pan_zoom_scale(cam.distance);
+    cam.pan_velocity = cam.pan_velocity.clamp_length_max(pan_max_speed);
+    cam.pan_velocity *= (-tuning.friction * dt).exp();
     let vel = cam.pan_velocity * dt;
     cam.target_pivot += vel;
+    cam.target_pivot = clamp_camera_pivot(cam.target_pivot, &config, &tuning);
+    cam.pan_accel = Vec3::ZERO;
+    cam.pan_speed_cap_multiplier = 1.0;
 
     // b) Exponential smoothing toward targets
     let alpha_pan = 1.0 - (-PAN_SMOOTH * dt).exp();
@@ -748,6 +830,49 @@ fn camera_smooth_update(time: Res<Time>, mut query: Query<(&mut RtsCamera, &mut 
     let offset = Vec3::new(cam.angle.sin() * h_dist, height, cam.angle.cos() * h_dist);
     transform.translation = cam.pivot + offset;
     transform.look_at(cam.pivot, Vec3::Y);
+}
+
+fn pan_zoom_scale(distance: f32) -> f32 {
+    let t = ((distance - DISTANCE_MIN) / (DISTANCE_MAX - DISTANCE_MIN)).clamp(0.0, 1.0);
+    0.75 + 0.85 * t
+}
+
+fn signed_edge_strength(cursor: f32, window_size: f32, edge_px: f32, curve_power: f32) -> f32 {
+    if edge_px <= 0.0 || window_size <= 0.0 {
+        return 0.0;
+    }
+
+    let raw = if cursor < edge_px {
+        -(1.0 - cursor / edge_px)
+    } else if cursor > window_size - edge_px {
+        (cursor - (window_size - edge_px)) / edge_px
+    } else {
+        0.0
+    };
+
+    raw.signum() * raw.abs().powf(curve_power)
+}
+
+fn clamp_camera_pivot(
+    pivot: Vec3,
+    config: &GameSetupConfig,
+    tuning: &CameraPanTuning,
+) -> Vec3 {
+    let playable_half = playable_half_map(config.map_size.world_size());
+    let limit = (playable_half - tuning.map_edge_margin).max(0.0);
+    Vec3::new(pivot.x.clamp(-limit, limit), 0.0, pivot.z.clamp(-limit, limit))
+}
+
+fn cursor_hits_widget(
+    cursor_phys: Vec2,
+    widget_q: &Query<
+        (&ComputedNode, &UiGlobalTransform, &InheritedVisibility),
+        With<crate::ui::core::framework::Widget>,
+    >,
+) -> bool {
+    widget_q
+        .iter()
+        .any(|(computed, ui_tf, vis)| vis.get() && computed.contains_point(*ui_tf, cursor_phys))
 }
 
 fn track_last_selection(ui_mode: Res<UiMode>, mut last: ResMut<LastSelection>) {

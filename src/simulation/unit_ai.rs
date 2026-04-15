@@ -27,8 +27,7 @@ enum UnitAiSet {
 
 impl Plugin for UnitAiPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<DecisionTimer>()
-            .init_resource::<CombatHotspots>()
+        app.init_resource::<CombatHotspots>()
             .configure_sets(
                 FixedUpdate,
                 (
@@ -88,28 +87,11 @@ impl Plugin for UnitAiPlugin {
 /// 4. Auto-role behavior (handled by worker_ai_system for Economy)
 /// 5. Idle
 /// Number of frames over which to spread unit AI decisions within one timer period.
-const DECISION_AMORTIZE_FRAMES: usize = 8;
 
-fn stance_scan_multiplier(stance: UnitStance, tuning: &CombatTuning) -> f32 {
-    match stance {
-        UnitStance::Passive => tuning.passive_scan_multiplier,
-        UnitStance::Defensive => tuning.defensive_scan_multiplier,
-        UnitStance::Aggressive => tuning.aggressive_scan_multiplier,
-    }
-}
-
-fn stance_leash_distance(stance: UnitStance, tuning: &CombatTuning) -> f32 {
-    match stance {
-        UnitStance::Passive => tuning.passive_leash_distance,
-        UnitStance::Defensive => tuning.defensive_leash_distance,
-        UnitStance::Aggressive => tuning.aggressive_leash_distance,
-    }
-}
 
 /// Collects positions of units currently in combat for ally-assist detection.
 fn update_combat_hotspots(
     mut hotspots: ResMut<CombatHotspots>,
-    mut frame_counter: Local<u32>,
     units: Query<
         (
             &Transform,
@@ -120,11 +102,6 @@ fn update_combat_hotspots(
         With<Unit>,
     >,
 ) {
-    *frame_counter = frame_counter.wrapping_add(1);
-    // Only update every 6 frames to save cost
-    if *frame_counter % 6 != 0 {
-        return;
-    }
     hotspots.spots.clear();
     for (tf, state, faction, recent_damage) in &units {
         if let UnitState::Attacking(target) = *state {
@@ -156,7 +133,6 @@ fn cleanup_recent_combat_damage(
 fn decision_priority_system(
     mut commands: Commands,
     time: Res<Time>,
-    mut decision_timer: ResMut<DecisionTimer>,
     combat_tuning: Res<CombatTuning>,
     budgeting: (Res<CombatBudget>, ResMut<CombatBudgetState>),
     teams: Res<TeamConfig>,
@@ -198,64 +174,34 @@ fn decision_priority_system(
         Option<&AttackProfile>,
         Option<&TacticalRole>,
     )>,
-    mut batch_offset: Local<usize>,
-    mut batch_total: Local<usize>,
 ) {
     let (combat_budget, mut budget_state) = budgeting;
     let (net_role, active_player) = net_state;
-    decision_timer.timer.tick(time.delta());
     let mut nearby_targets = Vec::new();
 
-    // On timer tick: start a new amortization cycle.
-    if decision_timer.timer.just_finished() {
-        *batch_offset = 0;
-        *batch_total = units.iter().len();
-    }
-
-    // Nothing to process if cycle is complete.
-    if *batch_offset >= *batch_total || *batch_total == 0 {
-        return;
-    }
-
-    // Process one chunk of units this frame.
-    let remaining = *batch_total - *batch_offset;
-    let chunk_size = (remaining + DECISION_AMORTIZE_FRAMES - 1) / DECISION_AMORTIZE_FRAMES;
-    let chunk_start = *batch_offset;
-    let chunk_end = (chunk_start + chunk_size).min(*batch_total);
-    *batch_offset = chunk_end;
-
     for (
-        idx,
+        entity,
+        tf,
+        mut state,
+        mut source,
+        stance,
+        faction,
+        health,
+        attack_range,
+        task_queue,
         (
-            entity,
-            tf,
-            mut state,
-            mut source,
-            stance,
-            faction,
-            health,
-            attack_range,
-            task_queue,
-            (
-                opt_targeting_profile,
-                opt_damage_type,
-                opt_recent_damage,
-                opt_engagement,
-                combat_intent,
-                target_lock,
-                opt_think_timer,
-            ),
-            (opt_tactical_role, manual_idle_since),
+            opt_targeting_profile,
+            opt_damage_type,
+            opt_recent_damage,
+            opt_engagement,
+            combat_intent,
+            target_lock,
+            _opt_think_timer,
         ),
-    ) in units.iter_mut().enumerate()
+        (opt_tactical_role, manual_idle_since),
+    ) in units.iter_mut()
     {
-        if idx < chunk_start || idx >= chunk_end {
-            continue;
-        }
         let now = time.elapsed_secs_f64();
-        if opt_think_timer.is_some_and(|timer| now < timer.next_think_at) {
-            continue;
-        }
         // Client: only process local player's units; remote units are driven by host state sync
         if *net_role == NetRole::Client && *faction != active_player.0 {
             continue;
@@ -369,7 +315,7 @@ fn decision_priority_system(
             {
                 continue;
             }
-            let scan_range = attack_r.0 * stance_scan_multiplier(*stance, &combat_tuning);
+            let scan_range = attack_r.0 * combat_tuning.scan_multiplier(*stance);
             if scan_range <= 0.0 {
                 continue;
             }
@@ -558,10 +504,6 @@ fn decision_priority_system(
                     _ => true,
                 };
                 if !should_switch {
-                    commands.entity(entity).insert(CombatThinkTimer {
-                        next_think_at: now + 0.12,
-                        interval_secs: 0.16,
-                    });
                     continue;
                 }
                 apply_auto_attack_intent(&mut commands, entity, target, tf.translation, now);
@@ -572,12 +514,6 @@ fn decision_priority_system(
             ) {
                 reset_combat_state(&mut commands, entity);
             }
-            commands.entity(entity).insert(CombatThinkTimer {
-                next_think_at: now
-                    + 0.16
-                    + ((entity.to_bits() % DECISION_AMORTIZE_FRAMES as u64) as f64 * 0.006),
-                interval_secs: 0.16,
-            });
         }
     }
 }
@@ -617,7 +553,7 @@ fn leash_return_system(
             continue;
         }
 
-        let leash_dist = stance_leash_distance(*stance, &combat_tuning);
+        let leash_dist = combat_tuning.leash_distance(*stance);
         if leash_dist <= 0.0 {
             commands.entity(entity).remove::<LeashOrigin>();
             continue;
@@ -882,10 +818,6 @@ pub fn unit_state_executor_system(
                                     .remove::<Engagement>();
                             }
 
-                            commands.entity(entity).insert(CombatThinkTimer {
-                                next_think_at: now + 0.2,
-                                interval_secs: 0.2,
-                            });
                         }
                     }
                 } else {
@@ -1229,10 +1161,6 @@ pub fn unit_state_executor_system(
                             );
                             commands.entity(entity).remove::<MoveTarget>();
                         }
-                        commands.entity(entity).insert(CombatThinkTimer {
-                            next_think_at: now + 0.18,
-                            interval_secs: 0.18,
-                        });
                     }
                 }
             }

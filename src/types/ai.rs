@@ -130,20 +130,6 @@ impl Default for AiFactionConfig {
     }
 }
 
-/// Timer that controls decision priority ticks (every 0.2s).
-#[derive(Resource)]
-pub struct DecisionTimer {
-    pub timer: Timer,
-}
-
-impl Default for DecisionTimer {
-    fn default() -> Self {
-        Self {
-            timer: Timer::from_seconds(0.1, TimerMode::Repeating),
-        }
-    }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PatrolStateKind {
     Idle,

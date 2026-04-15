@@ -30,13 +30,6 @@ pub(crate) struct OnlineInputParams<'w> {
     time: Res<'w, Time>,
 }
 
-fn stance_to_net_u8(stance: UnitStance) -> u8 {
-    match stance {
-        UnitStance::Passive => 0,
-        UnitStance::Defensive => 1,
-        UnitStance::Aggressive => 2,
-    }
-}
 
 fn send_online_input_to_host(
     client: &ClientNetState,
@@ -1322,7 +1315,7 @@ pub fn handle_cycle_stance_button(
                 &online.time,
                 entity_ids,
                 vec![InputCommand::SetStance {
-                    stance: stance_to_net_u8(stance),
+                    stance: stance.to_u8(),
                 }],
             );
             continue;

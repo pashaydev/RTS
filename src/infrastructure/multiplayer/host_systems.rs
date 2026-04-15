@@ -61,13 +61,6 @@ fn send_to_player(
 /// Execute a player input command on the ECS. Used by both host and client.
 /// Mirrors the full component setup that the local right-click handler does,
 /// so that MoveTarget, TaskSource, TaskQueue, etc. are all set correctly.
-fn stance_from_net_u8(stance: u8) -> UnitStance {
-    match stance {
-        0 => UnitStance::Passive,
-        2 => UnitStance::Aggressive,
-        _ => UnitStance::Defensive,
-    }
-}
 
 fn building_can_train(
     registry: &BlueprintRegistry,
@@ -416,7 +409,7 @@ pub fn execute_input_command(
                 )));
             }
             InputCommand::SetStance { stance } => {
-                let new_stance = stance_from_net_u8(*stance);
+                let new_stance = UnitStance::from_u8(*stance);
                 for &eid in &input.entity_ids {
                     if let Some(&ecs_entity) = net_map.to_ecs.get(&eid) {
                         commands.entity(ecs_entity).insert(new_stance);
@@ -949,13 +942,6 @@ fn ecs_to_net_unit_state(state: &UnitState, net_map: &EntityNetMap) -> NetUnitSt
     }
 }
 
-fn stance_to_u8(stance: &UnitStance) -> u8 {
-    match stance {
-        UnitStance::Passive => 0,
-        UnitStance::Defensive => 1,
-        UnitStance::Aggressive => 2,
-    }
-}
 
 /// Timer resource controlling how often the host broadcasts state sync.
 #[derive(Resource)]
@@ -1035,7 +1021,7 @@ pub fn host_broadcast_state_sync(
                     amount: c.amount,
                 })
             }),
-            stance: opt_stance.map(|s| stance_to_u8(s)),
+            stance: opt_stance.map(|s| s.to_u8()),
         };
 
         // Delta compression: skip unchanged entities (unless full sync)
@@ -1626,11 +1612,8 @@ pub fn host_broadcast_victory_events(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-
-    use crate::blueprints::EntityKind;
     use crate::types::{
-        AiControlledFactions, Faction, Health, NextTaskId, TaskQueue, Unit, UnitStance, UnitState,
+         UnitStance, UnitState,
     };
 
     #[test]
@@ -1675,9 +1658,9 @@ mod tests {
 
     #[test]
     fn stance_to_u8_matches_wire_encoding() {
-        assert_eq!(stance_to_u8(&UnitStance::Passive), 0);
-        assert_eq!(stance_to_u8(&UnitStance::Defensive), 1);
-        assert_eq!(stance_to_u8(&UnitStance::Aggressive), 2);
+        assert_eq!(UnitStance::Passive.to_u8(), 0);
+        assert_eq!(UnitStance::Defensive.to_u8(), 1);
+        assert_eq!(UnitStance::Aggressive.to_u8(), 2);
     }
 
     // Note: Tests that used to verify broadcast over mpsc senders have been removed

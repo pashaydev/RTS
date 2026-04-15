@@ -123,13 +123,6 @@ fn is_local_entity(
         .map_or(false, |f| *f == active_player.0)
 }
 
-fn u8_to_stance(v: u8) -> UnitStance {
-    match v {
-        0 => UnitStance::Passive,
-        2 => UnitStance::Aggressive,
-        _ => UnitStance::Defensive,
-    }
-}
 
 fn net_to_ecs_unit_state(net: &NetUnitState, net_map: &EntityNetMap) -> Option<UnitState> {
     match net {
@@ -467,7 +460,7 @@ pub fn client_apply_state_sync(
         }
         if let Some(stance_u8) = snap.stance {
             if let Ok(mut stance) = unit_sync.stances_q.get_mut(ecs_entity) {
-                *stance = u8_to_stance(stance_u8);
+                *stance = UnitStance::from_u8(stance_u8);
             }
         }
     }
@@ -1046,10 +1039,10 @@ mod tests {
 
     #[test]
     fn u8_to_stance_maps_expected_values() {
-        assert_eq!(u8_to_stance(0), UnitStance::Passive);
-        assert_eq!(u8_to_stance(1), UnitStance::Defensive);
-        assert_eq!(u8_to_stance(2), UnitStance::Aggressive);
-        assert_eq!(u8_to_stance(9), UnitStance::Defensive);
+        assert_eq!(UnitStance::from_u8(0), UnitStance::Passive);
+        assert_eq!(UnitStance::from_u8(1), UnitStance::Defensive);
+        assert_eq!(UnitStance::from_u8(2), UnitStance::Aggressive);
+        assert_eq!(UnitStance::from_u8(9), UnitStance::Defensive);
     }
 
     #[test]

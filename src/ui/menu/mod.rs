@@ -336,6 +336,7 @@ impl Plugin for MenuPlugin {
                 Update,
                 (
                     systems::update_selector_visuals,
+                    new_game::sync_resource_density_block,
                     text_input::animate_text_input_chrome,
                     text_input::text_input_cursor_blink,
                     text_input::text_input_render_system,
