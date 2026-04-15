@@ -1,8 +1,8 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use std::f32::consts::TAU;
 
 use crate::blueprints::EntityKind;
-use crate::infrastructure::multiplayer::NetRole;
 use crate::simulation::buildings::is_wall_like_kind;
 use crate::simulation::combat::{
     apply_auto_attack_intent, apply_auto_move_intent, apply_manual_attack_intent,
@@ -119,7 +119,7 @@ fn update_combat_hotspots(
 
 fn cleanup_recent_combat_damage(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     memories: Query<(Entity, &RecentCombatDamage)>,
 ) {
     let now = time.elapsed_secs_f64();
@@ -132,7 +132,7 @@ fn cleanup_recent_combat_damage(
 
 fn decision_priority_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     combat_tuning: Res<CombatTuning>,
     budgeting: (Res<CombatBudget>, ResMut<CombatBudgetState>),
     teams: Res<TeamConfig>,
@@ -163,7 +163,6 @@ fn decision_priority_system(
         With<Unit>,
     >,
     factions: Query<&Faction>,
-    net_state: (Res<NetRole>, Res<ActivePlayer>),
     building_check: Query<(), With<Building>>,
     deposit_points: Query<(Entity, &Transform, &Faction), (With<DepositPoint>, Without<Unit>)>,
     target_data: Query<(
@@ -176,7 +175,6 @@ fn decision_priority_system(
     )>,
 ) {
     let (combat_budget, mut budget_state) = budgeting;
-    let (net_role, active_player) = net_state;
     let mut nearby_targets = Vec::new();
 
     for (
@@ -202,11 +200,6 @@ fn decision_priority_system(
     ) in units.iter_mut()
     {
         let now = time.elapsed_secs_f64();
-        // Client: only process local player's units; remote units are driven by host state sync
-        if *net_role == NetRole::Client && *faction != active_player.0 {
-            continue;
-        }
-
         // Skip units with manual orders or queued tasks
         if *source == TaskSource::Manual
             || task_queue.current.is_some()
@@ -522,8 +515,6 @@ fn decision_priority_system(
 fn leash_return_system(
     mut commands: Commands,
     combat_tuning: Res<CombatTuning>,
-    net_role: Res<NetRole>,
-    active_player: Res<ActivePlayer>,
     mut units: Query<
         (
             Entity,
@@ -537,11 +528,7 @@ fn leash_return_system(
         With<Unit>,
     >,
 ) {
-    for (entity, tf, mut state, mut source, stance, leash_origin, faction) in &mut units {
-        // Client: only process local player's units; remote units driven by host
-        if *net_role == NetRole::Client && *faction != active_player.0 {
-            continue;
-        }
+    for (entity, tf, mut state, mut source, stance, leash_origin, _faction) in &mut units {
         // Only apply leash to auto-sourced attacks
         if *source != TaskSource::Auto {
             continue;
@@ -576,7 +563,7 @@ fn leash_return_system(
 
 pub fn task_queue_advance_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut units: Query<
         (
             Entity,
@@ -591,15 +578,8 @@ pub fn task_queue_advance_system(
     transforms: Query<&Transform>,
     _processors: Query<(&ResourceProcessor, &BuildingState, &Faction), With<Building>>,
     _assigned_workers_q: Query<&AssignedWorkers>,
-    net_role: Res<NetRole>,
-    active_player: Res<ActivePlayer>,
 ) {
-    for (entity, mut state, mut source, mut queue, _kind, faction) in &mut units {
-        // Client: only process local player's units
-        if *net_role == NetRole::Client && *faction != active_player.0 {
-            continue;
-        }
-
+    for (entity, mut state, mut source, mut queue, _kind, _faction) in &mut units {
         if *state != UnitState::Idle || queue.current.is_some() || queue.queue.is_empty() {
             continue;
         }
@@ -669,11 +649,9 @@ pub fn task_queue_advance_system(
 /// Handles arrival detection, state transitions, and MoveTarget/AttackTarget sync.
 pub fn unit_state_executor_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     teams: Res<TeamConfig>,
     spatial_grid: Res<SpatialHashGrid>,
-    net_role: Res<NetRole>,
-    active_player: Res<ActivePlayer>,
     combat_budget: Res<CombatBudget>,
     mut budget_state: ResMut<CombatBudgetState>,
     mut units: Query<
@@ -723,11 +701,6 @@ pub fn unit_state_executor_system(
         stance,
     ) in &mut units
     {
-        // Client: only process local player's units; remote units are driven by host state sync
-        if *net_role == NetRole::Client && *faction != active_player.0 {
-            continue;
-        }
-
         match *state {
             UnitState::Idle => {
                 // Remove stale targets and always clear combat intent so
@@ -1219,11 +1192,9 @@ pub fn unit_state_executor_system(
 /// Auto-heal system for Priests: scans nearby allies and heals the lowest-HP one.
 fn auto_heal_system(
     mut commands: Commands,
-    _time: Res<Time>,
+    _time: Res<Time<Fixed>>,
     spatial_grid: Res<SpatialHashGrid>,
     teams: Res<TeamConfig>,
-    net_role: Res<NetRole>,
-    active_player: Res<ActivePlayer>,
     mut nearby_allies: Local<Vec<(Entity, Vec3)>>,
     mut priests: Query<
         (
@@ -1252,10 +1223,6 @@ fn auto_heal_system(
         }
         // Don't interrupt an active cast
         if casting.is_some() {
-            continue;
-        }
-        // Client: only process local player's units
-        if *net_role == NetRole::Client && *faction != active_player.0 {
             continue;
         }
         // Check if PriestHeal is available and off cooldown

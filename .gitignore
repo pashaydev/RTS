@@ -34,3 +34,5 @@ trace.json
 mempalace.yaml
 entities.json
 trace.tracy
+
+*.txt

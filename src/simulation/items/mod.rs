@@ -6,6 +6,7 @@ pub mod vfx;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::math::primitives::Rectangle;
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use bevy::render::alpha::AlphaMode;
 use std::collections::HashSet;
 use std::f32::consts::PI;
@@ -221,7 +222,7 @@ fn refresh_item_runtime_state(
 
 fn spawn_pickup_entities(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut reader: MessageReader<SpawnItemPickup>,
     item_assets: Res<ItemAssets>,
@@ -620,7 +621,7 @@ fn collect_item_pickups(
 
 fn resolve_pending_item_pickups(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut changed: MessageWriter<InventoryChanged>,
     mut collected: MessageWriter<ItemPickupCollected>,
     mut failed: MessageWriter<ItemPickupFailed>,
@@ -872,7 +873,7 @@ fn tick_pickup_collect_vfx(
 
 fn despawn_expired_pickups(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     pickups: Query<(Entity, &ItemPickup), Without<PickupCollectVfx>>,
 ) {
     for (entity, pickup) in &pickups {
@@ -911,7 +912,7 @@ fn drop_inventory_items(
 }
 
 fn notify_pickup_failures(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut notifications: ResMut<AllyNotifications>,
     mut failures: MessageReader<ItemPickupFailed>,
     pickups: Query<&Transform, With<ItemPickup>>,

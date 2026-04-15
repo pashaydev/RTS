@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use rand::Rng;
 
 use crate::presentation::camera::InternalRenderTarget;
@@ -15,9 +16,9 @@ use super::spawning::{random_tree, terrain_translation};
 
 pub(super) fn spawn_saplings_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut config: ResMut<TreeGrowthConfig>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
+    mut game_rng: ResMut<GameRng>,
     biome_map: Res<BiomeMap>,
     height_map: Res<HeightMap>,
     model_assets: Res<ModelAssets>,
@@ -27,10 +28,6 @@ pub(super) fn spawn_saplings_system(
     game_config: Res<GameSetupConfig>,
     map_seed: Res<MapSeed>,
 ) {
-    if *net_role == crate::infrastructure::multiplayer::NetRole::Client {
-        return;
-    }
-
     config.spawn_timer.tick(time.delta());
     if !config.spawn_timer.just_finished() {
         return;
@@ -46,7 +43,7 @@ pub(super) fn spawn_saplings_system(
         return;
     }
 
-    let mut rng = rand::rng();
+    let rng = &mut game_rng.rng;
     let trees: Vec<Vec3> = mature_trees.iter().map(|t| t.translation).collect();
     if trees.is_empty() {
         return;
@@ -81,7 +78,7 @@ pub(super) fn spawn_saplings_system(
             continue;
         }
 
-        let (scene_handle, base_scale) = random_tree(&mut rng, &model_assets).unwrap();
+        let (scene_handle, base_scale) = random_tree(rng, &model_assets).unwrap();
         let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
         let target_scale = rng.random_range(0.8_f32..1.2) * base_scale;
         let initial_scale = 0.15 * base_scale;
@@ -103,15 +100,10 @@ pub(super) fn spawn_saplings_system(
 
 pub(super) fn grow_saplings_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     config: Res<TreeGrowthConfig>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
     mut saplings: Query<(Entity, &mut Sapling, &mut Transform), Without<FrustumCulled>>,
 ) {
-    if *net_role == crate::infrastructure::multiplayer::NetRole::Client {
-        return;
-    }
-
     for (entity, mut sapling, mut tf) in &mut saplings {
         sapling.timer.tick(time.delta());
         let progress = sapling.timer.fraction();
@@ -134,15 +126,10 @@ pub(super) fn grow_saplings_system(
 
 pub(super) fn grow_trees_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     config: Res<TreeGrowthConfig>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
     mut growing: Query<(Entity, &mut GrowingTree, &mut Transform), Without<FrustumCulled>>,
 ) {
-    if *net_role == crate::infrastructure::multiplayer::NetRole::Client {
-        return;
-    }
-
     for (entity, mut tree, mut tf) in &mut growing {
         tree.timer.tick(time.delta());
         let progress = tree.timer.fraction();

@@ -6,6 +6,7 @@ mod tactical;
 pub mod types;
 
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use std::collections::{HashMap, HashSet};
 
 use crate::blueprints::EntityKind;
@@ -259,11 +260,13 @@ fn build_ai_world_snapshot(
         return;
     }
 
-    let dirty_factions: Vec<Faction> = dirty
+    let mut dirty_factions: Vec<Faction> = dirty
         .per_faction
         .iter()
         .filter_map(|(faction, flags)| flags.any().then_some(*faction))
         .collect();
+    // Sort for deterministic rebuild order across peers.
+    dirty_factions.sort();
 
     if dirty_factions.is_empty() && !dirty.resource_nodes {
         return;
@@ -454,7 +457,7 @@ impl Default for AiDebugValidationTimer {
 
 #[cfg(debug_assertions)]
 fn validate_ai_snapshot_integrity(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut timer: ResMut<AiDebugValidationTimer>,
     snapshot: Res<AiWorldSnapshot>,
     carried_totals: Res<CarriedResourceTotals>,

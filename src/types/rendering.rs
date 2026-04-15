@@ -35,7 +35,7 @@ pub struct Ground;
 
 // ── Biome system ──
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub enum Biome {
     Grassland,
     Forest,

@@ -10,7 +10,6 @@ use bevy::prelude::*;
 
 // ── Shared Types ──
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Resource)]
 pub(crate) struct JoinDiscoveryScan {
     pub(super) rx: std::sync::Mutex<
@@ -18,23 +17,11 @@ pub(crate) struct JoinDiscoveryScan {
     >,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum JoinTarget {
-    Tcp { host: String, port: u16 },
-    WebSocket { url: String },
-}
-
 #[derive(Resource)]
 pub(crate) struct PendingGameStart;
 
 #[derive(Resource)]
 pub(crate) struct PendingLobbyBroadcast;
-
-// ── Constants ──
-
-pub(super) const DEFAULT_PORT: u16 = 7878;
-pub(super) const WEB_SESSION_WS_PATH_PREFIX: &str = "/session";
 
 // ── Shared Helpers ──
 
@@ -98,17 +85,14 @@ pub(crate) use networking::connect_to_host_system;
 pub(crate) use networking::poll_lan_discovery_results_system;
 pub(crate) use networking::refresh_lan_hosts_system;
 pub(crate) use networking::select_discovered_host_system;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use networking::start_hosting;
 pub(crate) use networking::stop_client;
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use networking::stop_hosting;
 
 pub(crate) use pages::spawn_host_lobby_page;
 pub(crate) use pages::spawn_join_lobby_page;
 pub(crate) use pages::spawn_multiplayer_page;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use lobby::broadcast_lobby_update;
 pub(crate) use lobby::clear_code_system;
 pub(crate) use lobby::connection_timer_system;
@@ -120,4 +104,3 @@ pub(crate) use lobby::lobby_ping_system;
 pub(crate) use lobby::paste_code_system;
 pub(crate) use lobby::sync_connect_button_state;
 pub(crate) use lobby::update_lobby_ui;
-pub(crate) use lobby::update_web_client_url;

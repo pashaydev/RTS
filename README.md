@@ -1,6 +1,6 @@
 # RTS Prototype
 
-A 3D RTS prototype built with [Bevy](https://bevyengine.org/) 0.18. The project focuses on settlement-first progression, biome-driven maps, layered economy, combined-arms combat, strong in-game tooling, and a playable host-authoritative LAN multiplayer path.
+A 3D RTS prototype built with [Bevy](https://bevyengine.org/) 0.18. The project focuses on settlement-first progression, biome-driven maps, layered economy, combined-arms combat, strong in-game tooling, and deterministic lockstep multiplayer.
 
 ## Overview
 
@@ -9,7 +9,7 @@ A 3D RTS prototype built with [Bevy](https://bevyengine.org/) 0.18. The project 
 - Economy with raw and processed resources, worker assignment, recipes, storage, and building upgrades
 - Combined-arms roster with infantry, ranged, cavalry, siege, casters, towers, walls, and gatehouses
 - Skirmish configuration for AI count, AI difficulty, teams, map size, resource density, day length, seed, and player color
-- Multiplayer via Matchbox WebRTC with host simulation, client command relay, delta-compressed state sync, entity and resource node replication, NAT traversal for internet play, built-in web client hosting, and 30s reconnection grace before AI takeover
+- Deterministic lockstep multiplayer via Matchbox WebRTC with input synchronization, FNV-1a checksum-based desync detection, NAT traversal for internet play, and 30s reconnection grace before AI takeover
 
 For gameplay details, controls, unit/building stats, and match setup options see [docs/gameplay.md](docs/gameplay.md).
 
@@ -23,12 +23,6 @@ For gameplay details, controls, unit/building stats, and match setup options see
 
 ```sh
 cargo run
-```
-
-### Web
-
-```sh
-trunk serve --config .trunk.toml
 ```
 
 ### Windows
@@ -71,39 +65,16 @@ Run only the multiplayer-focused native tests:
 cargo test multiplayer -- --nocapture
 ```
 
-### WASM
-
-Compile the wasm-targeted tests:
-
-```sh
-cargo test --target wasm32-unknown-unknown --no-run multiplayer
-```
-
-Run the wasm-specific multiplayer tests under the wasm bindgen runner:
-
-```sh
-CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
-  cargo test --target wasm32-unknown-unknown wasm_tests -- --nocapture
-```
-
-### Notes
-
-- The wasm test flow requires the `wasm32-unknown-unknown` Rust target.
-- `wasm-bindgen-test-runner` is used to execute the generated `.wasm` test binary instead of trying to run it directly as a native executable.
-- The current multiplayer test coverage includes native host/client transport and systems plus wasm-side WebSocket payload encoding and decoding paths.
-
 ## Deployment
 
-Build and deploy everything with a single command:
+Build and deploy with:
 
 ```sh
-./scripts/deploy.sh                        # bump patch + Windows build + macOS build + Fly.io deploy
+./scripts/deploy.sh                        # bump patch + Windows build + macOS build
 ./scripts/deploy.sh --windows-only         # bump patch + Windows zip only
 ./scripts/deploy.sh --macos-only           # bump patch + macOS zip only
-./scripts/deploy.sh --fly-only             # bump patch + Web deploy only
 ./scripts/deploy.sh --minor --windows-only # bump minor + Windows zip only
 ./scripts/deploy.sh --minor --macos-only   # bump minor + macOS zip only
-./scripts/deploy.sh --major --fly-only     # bump major + Web deploy only
 ```
 
 **Prerequisites:**
@@ -112,11 +83,6 @@ Build and deploy everything with a single command:
 |---------|-------------|
 | Windows | `cargo install cargo-xwin` + LLVM (`/opt/homebrew/opt/llvm`) |
 | macOS   | `rustup target add aarch64-apple-darwin` (or set `MACOS_TARGET` to another Rust target triple) |
-| Web     | [flyctl](https://fly.io/docs/flyctl/install/) + `fly auth login` |
-
-### Docker / Fly.io
-
-The Dockerfile builds the WASM client with Trunk and serves it with nginx. This is suitable for hosting a downloadable web client, though for LAN multiplayer the native host can serve the client directly (see below).
 
 ## Multiplayer
 
@@ -129,21 +95,14 @@ The Dockerfile builds the WASM client with Trunk and serves it with nginx. This 
 3. Share the displayed session code (signaling URL)
 4. Start once players are connected
 
-#### Client (Native or WASM)
+#### Client
 
 1. Open `Multiplayer`
 2. Choose `Join Game`
 3. Enter the session code (signaling URL like `ws://IP:3536/rts_room` or just the host IP)
 4. Wait for host start
 
-#### Client (Web Browser on LAN)
-
-1. Open the URL shown in the host lobby (e.g., `http://192.168.1.5:7880`)
-2. Choose `Join Game`
-3. Enter the host session code
-4. Wait for host start
-
-The host automatically serves the WASM client when a `dist/` directory is present. Web and native clients can play together in the same lobby.
+All peers run the full deterministic simulation locally. Only player inputs are exchanged over the network. See [docs/mul-arch.md](docs/mul-arch.md) for architecture details.
 
 ## Architecture
 

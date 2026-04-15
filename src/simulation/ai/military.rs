@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use std::collections::HashMap;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind};
@@ -19,7 +20,7 @@ const STAGING_RADIUS: f32 = 25.0;
 
 pub fn ai_military_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     config: Res<GameSetupConfig>,
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,

@@ -167,18 +167,16 @@ fn main() {
             )
                 .chain(),
         )
+        // Lockstep: FixedUpdate's simulation set is gated on the
+        // `advance_allowed` flag latched earlier in FixedFirst, so the tick
+        // only runs when every peer's input for it is confirmed.
+        .configure_sets(
+            FixedUpdate,
+            GameFlowSet::Simulation.run_if(infrastructure::multiplayer::lockstep_advance_allowed),
+        )
         .configure_sets(
             Update,
-            (
-                SimSet::Ai,
-                SimSet::Command,
-                SimSet::Movement,
-                SimSet::Combat,
-                SimSet::Economy,
-                SimSet::Spatial,
-            )
-                .chain()
-                .in_set(GameFlowSet::Simulation),
+            GameFlowSet::Simulation.run_if(not(infrastructure::multiplayer::is_online)),
         )
         .configure_sets(
             FixedUpdate,
@@ -197,9 +195,15 @@ fn main() {
         .insert_resource(GameRng::default())
         .add_systems(
             FixedFirst,
-            advance_sim_clock.run_if(in_state(AppState::InGame)),
+            advance_sim_clock
+                .run_if(in_state(AppState::InGame))
+                .run_if(infrastructure::multiplayer::lockstep_advance_allowed)
+                .after(infrastructure::multiplayer::lockstep_check_gate),
         )
-        .add_systems(OnEnter(AppState::InGame), reseed_game_rng)
+        .add_systems(
+            OnEnter(AppState::InGame),
+            reseed_game_rng.after(crate::world::ground::resolve_map_seed),
+        )
         .insert_resource(GameSetupConfig::default())
         .insert_resource(ui::theme::Theme::from_mode(graphics.theme_mode))
         .insert_resource(graphics)
@@ -225,7 +229,7 @@ fn cfg_outline_plugin() -> impl bevy::app::Plugin {
     |_app: &mut App| {}
 }
 
-fn advance_sim_clock(mut clock: ResMut<SimClock>) {
+pub(crate) fn advance_sim_clock(mut clock: ResMut<SimClock>) {
     clock.tick = clock.tick.wrapping_add(1);
 }
 

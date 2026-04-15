@@ -27,32 +27,19 @@ bevy-inspector-egui = { version = "0.36", optional = true }
 bevy_matchbox = { version = "0.14", features = ["signaling"], optional = true }
 noise = { version = "0.9", optional = true }
 rand = { version = "0.9", optional = true }
-getrandom = { version = "0.3", features = ["wasm_js"], optional = true }
+getrandom = { version = "0.3", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rmp-serde = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 game_state = { path = "game_state" }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rusqlite = { version = "0.33", features = ["bundled"] }
 bevy_mod_outline = { version = "0.12" }
 socket2 = "0.5"
 if-addrs = "0.13"
-tungstenite = { version = "0.26", features = ["native-tls"] }
 arboard = "3"
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { version = "0.3.91", features = ["WebSocket", "MessageEvent", "ErrorEvent", "CloseEvent", "BinaryType", "Document", "Element", "CssStyleDeclaration", "HtmlDocument", "HtmlElement", "DataTransfer", "ClipboardEvent", "Clipboard", "Navigator", "Window", "Location"] }
-wasm-bindgen = "0.2.114"
-js-sys = "0.3.91"
-web-time = "1.1"
-console_error_panic_hook = "0.1"
-
 [dev-dependencies]
-
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test = "0.3.41"
 
 # Enable optimizations for dependencies in dev builds for acceptable framerate
 [profile.dev.package."*"]
@@ -68,10 +55,3 @@ strip = true
 inherits = "release"
 strip = false
 debug = 1
-
-[profile.wasm-release]
-inherits = "release"
-opt-level = "z"
-lto = "thin"
-codegen-units = 1
-strip = true

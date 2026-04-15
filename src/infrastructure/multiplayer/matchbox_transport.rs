@@ -1,15 +1,17 @@
-//! Matchbox WebRTC transport layer — replaces TCP/WebSocket with WebRTC data channels.
+//! Matchbox WebRTC transport layer.
 //!
-//! Uses `bevy_matchbox` for both native and WASM targets, with an embedded
-//! signaling server on the host side. The host-authoritative model is unchanged:
-//! the host runs the full simulation, clients receive state sync and send commands.
+//! Uses `bevy_matchbox` with an embedded signaling server on the host side.
+//! Under deterministic lockstep, the host is a packet relay only — its only
+//! job is to forward `InputBroadcast` messages from one client to every
+//! other client, keep the Matchbox signaling server alive, and answer
+//! lobby / ping / checksum traffic.
 
 use bevy::prelude::*;
 use bevy_matchbox::prelude::*;
 use std::collections::HashMap;
 
 use game_state::codec;
-use game_state::message::{ClientMessage, ServerFrame, ServerMessage};
+use game_state::message::{ClientMessage, ServerMessage};
 
 use super::debug_tap;
 use super::NET_TRAFFIC;
@@ -79,30 +81,6 @@ impl MatchboxInbox {
         self.server_messages.clear();
         self.connected.clear();
         self.disconnected.clear();
-    }
-}
-
-/// Decoded payload from a peer — either a single message or a batched frame.
-enum DecodedServerPayload {
-    Message(ServerMessage),
-    Frame(ServerFrame),
-}
-
-impl DecodedServerPayload {
-    fn describe(&self) -> String {
-        match self {
-            Self::Message(msg) => format!("host -> client {}", server_msg_kind(msg)),
-            Self::Frame(frame) => format!("host -> client frame({})", frame.messages.len()),
-        }
-    }
-
-    fn to_debug_json(&self) -> String {
-        match self {
-            Self::Message(msg) => codec::to_debug_json(msg),
-            Self::Frame(frame) => serde_json::to_string(frame).unwrap_or_else(|_| {
-                debug_tap::payload_preview(&codec::encode(frame).unwrap_or_default())
-            }),
-        }
     }
 }
 
@@ -184,48 +162,37 @@ pub fn poll_matchbox(
                     warn!("Host: failed to decode ClientMessage from peer {:?}", peer);
                 }
             } else {
-                // Client receives ServerMessages or ServerFrames
-                if let Some(payload) = decode_server_payload(bytes) {
-                    debug_tap::record_rx(
-                        "matchbox_client_rx",
-                        payload.describe(),
-                        bytes.len(),
-                        Some(payload.to_debug_json()),
-                    );
-                    match payload {
-                        DecodedServerPayload::Message(msg) => {
-                            inbox.server_messages.push(msg);
-                        }
-                        DecodedServerPayload::Frame(frame) => {
-                            inbox.server_messages.extend(frame.messages);
-                        }
+                // Client receives ServerMessages
+                match codec::decode::<ServerMessage>(bytes) {
+                    Ok(msg) => {
+                        debug_tap::record_rx(
+                            "matchbox_client_rx",
+                            format!("host -> client {}", server_msg_kind(&msg)),
+                            bytes.len(),
+                            Some(codec::to_debug_json(&msg)),
+                        );
+                        inbox.server_messages.push(msg);
                     }
-                } else {
-                    debug_tap::record_error(
-                        "matchbox_client_rx",
-                        format!("failed to decode server payload from peer {:?}", peer),
-                    );
-                    debug_tap::record_rx(
-                        "matchbox_client_rx",
-                        format!("peer {:?} -> client raw_invalid", peer),
-                        bytes.len(),
-                        Some(debug_tap::payload_preview(bytes)),
-                    );
-                    warn!(
-                        "Client: failed to decode server payload from peer {:?}",
-                        peer
-                    );
+                    Err(_) => {
+                        debug_tap::record_error(
+                            "matchbox_client_rx",
+                            format!("failed to decode ServerMessage from peer {:?}", peer),
+                        );
+                        debug_tap::record_rx(
+                            "matchbox_client_rx",
+                            format!("peer {:?} -> client raw_invalid", peer),
+                            bytes.len(),
+                            Some(debug_tap::payload_preview(bytes)),
+                        );
+                        warn!(
+                            "Client: failed to decode ServerMessage from peer {:?}",
+                            peer
+                        );
+                    }
                 }
             }
         }
     }
-}
-
-fn decode_server_payload(data: &[u8]) -> Option<DecodedServerPayload> {
-    codec::decode::<ServerMessage>(data)
-        .map(DecodedServerPayload::Message)
-        .or_else(|_| codec::decode::<ServerFrame>(data).map(DecodedServerPayload::Frame))
-        .ok()
 }
 
 // ── Send helpers ─────────────────────────────────────────────────────────────
@@ -241,31 +208,23 @@ fn track_send(bytes_len: usize) {
 
 fn client_msg_kind(msg: &ClientMessage) -> &'static str {
     match msg {
-        ClientMessage::Input { .. } => "input",
+        ClientMessage::InputBroadcast { .. } => "input_broadcast",
         ClientMessage::JoinRequest { .. } => "join",
         ClientMessage::LeaveNotice { .. } => "leave",
         ClientMessage::Ping { .. } => "ping",
         ClientMessage::Reconnect { .. } => "reconnect",
         ClientMessage::Chat { .. } => "chat",
         ClientMessage::NameUpdate { .. } => "name_update",
+        ClientMessage::ChecksumReport { .. } => "checksum_report",
     }
 }
 
 fn server_msg_kind(msg: &ServerMessage) -> &'static str {
     match msg {
         ServerMessage::Event { .. } => "event",
-        ServerMessage::RelayedInput { .. } => "relayed_input",
-        ServerMessage::StateSync { .. } => "state_sync",
-        ServerMessage::EntitySpawn { .. } => "entity_spawn",
-        ServerMessage::EntityDespawn { .. } => "entity_despawn",
-        ServerMessage::BuildingSync { .. } => "building_sync",
-        ServerMessage::TerrainShapeSync { .. } => "terrain_shape_sync",
-        ServerMessage::ResourceSync { .. } => "resource_sync",
-        ServerMessage::DayCycleSync { .. } => "day_cycle_sync",
-        ServerMessage::WorldBaseline { .. } => "world_baseline",
-        ServerMessage::NeutralWorldDelta { .. } => "neutral_world_delta",
-        ServerMessage::NeutralWorldDespawn { .. } => "neutral_world_despawn",
+        ServerMessage::InputBroadcast { .. } => "input_broadcast",
         ServerMessage::Pong { .. } => "pong",
+        ServerMessage::ChecksumReport { .. } => "checksum_report",
     }
 }
 
@@ -293,50 +252,6 @@ pub fn broadcast_reliable(socket: &mut MatchboxSocket, msg: &ServerMessage) {
             packet.len(),
             payload.clone(),
         );
-    }
-}
-
-/// Broadcast a ServerFrame to all connected peers on the unreliable channel.
-/// Falls back to reliable if the frame is too large for unreliable delivery.
-pub fn broadcast_unreliable(socket: &mut MatchboxSocket, frame: &ServerFrame) {
-    let Ok(bytes) = codec::encode(frame) else {
-        error!("Failed to encode ServerFrame for broadcast");
-        return;
-    };
-    let packet: Box<[u8]> = bytes.into();
-    let peers: Vec<PeerId> = socket.connected_peers().collect();
-    if peers.is_empty() {
-        return;
-    }
-    // WebRTC data channels typically support up to ~256KB but practical limit
-    // for unreliable is ~16KB. Fall back to reliable for large payloads.
-    let ch = if packet.len() > 16_000 {
-        RELIABLE_CH
-    } else {
-        UNRELIABLE_CH
-    };
-    let lane = if ch == RELIABLE_CH {
-        "matchbox_host_tx"
-    } else {
-        "matchbox_host_tx_unreliable"
-    };
-    let detail = format!(
-        "host -> peers {} frame({})",
-        if ch == RELIABLE_CH {
-            "reliable"
-        } else {
-            "unreliable"
-        },
-        frame.messages.len()
-    );
-    let payload = Some(
-        serde_json::to_string(frame)
-            .unwrap_or_else(|_| debug_tap::payload_preview(packet.as_ref())),
-    );
-    for peer in peers {
-        track_send(packet.len());
-        let _ = socket.channel_mut(ch).try_send(packet.clone(), peer);
-        debug_tap::record_tx(lane, detail.clone(), packet.len(), payload.clone());
     }
 }
 

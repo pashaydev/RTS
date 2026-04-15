@@ -1,5 +1,6 @@
 use bevy::prelude::*;
-use std::collections::HashMap;
+use bevy::time::Fixed;
+use std::collections::BTreeMap;
 
 use crate::types::*;
 
@@ -79,7 +80,7 @@ fn cleanup_stale_slot_claims(
 
 fn assign_melee_slot_claims(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     budget: Res<CombatBudget>,
     mut budget_state: ResMut<CombatBudgetState>,
     mut slot_cache: ResMut<MeleeSlotCache>,
@@ -107,7 +108,8 @@ fn assign_melee_slot_claims(
     target_footprints: Query<&BuildingFootprint, With<Building>>,
 ) {
     let now = time.elapsed_secs_f64();
-    let mut per_target: HashMap<Entity, Vec<(Entity, Vec3, f32, Option<u16>)>> = HashMap::new();
+    // BTreeMap: deterministic iteration order for lockstep multiplayer.
+    let mut per_target: BTreeMap<Entity, Vec<(Entity, Vec3, f32, Option<u16>)>> = BTreeMap::new();
 
     for (entity, tf, range, timing, profile, order, engagement, intent, lock, claim, contact) in
         &attackers

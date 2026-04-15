@@ -1,24 +1,15 @@
-#[cfg(not(target_arch = "wasm32"))]
 use std::io;
-#[cfg(not(target_arch = "wasm32"))]
 use std::net::UdpSocket;
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
-#[cfg(not(target_arch = "wasm32"))]
 use serde::{Deserialize, Serialize};
 
-#[cfg(not(target_arch = "wasm32"))]
 pub const DISCOVERY_PORT: u16 = 7877;
 
-#[cfg(not(target_arch = "wasm32"))]
 const DISCOVERY_MAGIC: &str = "rts-lan-discovery-v1";
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 enum DiscoveryMessage {
@@ -32,7 +23,6 @@ enum DiscoveryMessage {
     },
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn discovery_listener_thread(
     socket: UdpSocket,
     host_name: String,
@@ -78,7 +68,6 @@ pub fn discovery_listener_thread(
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn detect_broadcast_targets() -> Vec<std::net::SocketAddr> {
     let mut targets = std::collections::BTreeSet::new();
     targets.insert(std::net::SocketAddr::from((
@@ -106,7 +95,6 @@ fn detect_broadcast_targets() -> Vec<std::net::SocketAddr> {
     targets.into_iter().collect()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn discover_lan_hosts(timeout: Duration) -> Vec<(String, String)> {
     let Ok(socket) = UdpSocket::bind("0.0.0.0:0") else {
         return Vec::new();

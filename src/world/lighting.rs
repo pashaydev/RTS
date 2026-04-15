@@ -5,6 +5,7 @@ use bevy::camera::primitives::{Frustum, Sphere as FrustumSphere};
 use bevy::light::VolumetricLight;
 use bevy::light::{CascadeShadowConfig, CascadeShadowConfigBuilder, DirectionalLightShadowMap};
 use bevy::prelude::*;
+use bevy::time::Fixed;
 
 use crate::types::{
     AppState, Building, CullingSourceCamera, GameSetupConfig, GameWorld, GhostBuilding,
@@ -379,7 +380,7 @@ fn apply_graphics_lighting_settings(
 
 // ── Day cycle advancement ──
 
-fn advance_day_cycle(mut cycle: ResMut<DayCycle>, time: Res<Time>) {
+fn advance_day_cycle(mut cycle: ResMut<DayCycle>, time: Res<Time<Fixed>>) {
     if cycle.paused {
         return;
     }

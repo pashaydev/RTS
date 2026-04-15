@@ -418,6 +418,28 @@ pub enum AbilityId {
 }
 
 impl AbilityId {
+    pub fn to_u8(self) -> u8 {
+        match self {
+            Self::KnightCharge => 0,
+            Self::MageFireball => 1,
+            Self::MageFrostNova => 2,
+            Self::PriestHeal => 3,
+            Self::PriestHolySmite => 4,
+            Self::CatapultAoeBoulder => 5,
+        }
+    }
+
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => Self::KnightCharge,
+            1 => Self::MageFireball,
+            2 => Self::MageFrostNova,
+            3 => Self::PriestHeal,
+            4 => Self::PriestHolySmite,
+            _ => Self::CatapultAoeBoulder,
+        }
+    }
+
     pub fn display_name(self) -> &'static str {
         match self {
             Self::KnightCharge => "Charge",

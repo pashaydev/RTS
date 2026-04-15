@@ -113,9 +113,6 @@ pub(crate) struct HostIpList;
 pub(crate) struct HostIpListPopulated;
 
 #[derive(Component)]
-pub(crate) struct WebClientUrlText;
-
-#[derive(Component)]
 pub(crate) struct PasteCodeButton;
 
 #[derive(Component)]
@@ -340,7 +337,6 @@ impl Plugin for MenuPlugin {
                     text_input::animate_text_input_chrome,
                     text_input::text_input_cursor_blink,
                     text_input::text_input_render_system,
-                    multiplayer::update_web_client_url,
                     multiplayer::paste_code_system,
                     multiplayer::clear_code_system,
                     multiplayer::sync_connect_button_state,

@@ -1,24 +1,23 @@
-//! ECS network identity bridge — assigns stable network IDs to entities.
+//! Stable entity IDs for lockstep wire commands.
+//!
+//! Deterministic lockstep carries `entity_ids: Vec<u32>` in `PlayerInput`, so
+//! every peer needs a matching Bevy `Entity` ↔ stable `u32` table. Each peer
+//! runs the same sort-and-assign pass locally against the same deterministic
+//! simulation state, so the same ECS entity gets the same `NetworkId` on
+//! every machine.
 
 use bevy::prelude::*;
 use std::collections::HashMap;
 
 use crate::blueprints::EntityKind;
-use crate::infrastructure::multiplayer::NetRole;
 use crate::types::{
     AppState, ExplosiveProp, Faction, GrowingResource, GrowingTree, MatureTree, ResourceNode,
     Sapling,
 };
 
-// ── Core bridge types ────────────────────────────────────────────────────────
-
 /// Stable network identity for an ECS entity. Persists across ticks.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct NetworkId(pub u32);
-
-/// Marks gameplay-relevant entities that should eventually participate in network replication.
-#[derive(Component, Clone, Copy, Debug, Default)]
-pub struct ReplicatedNetEntity;
 
 /// Monotonically increasing counter for assigning NetworkIds.
 #[derive(Resource, Default)]
@@ -38,16 +37,20 @@ pub struct EntityNetMap {
     pub to_ecs: HashMap<u32, Entity>,
 }
 
-// ── System: assign_network_ids ───────────────────────────────────────────────
-
-fn mark_replicated_entities(
+fn assign_network_ids(
     mut commands: Commands,
-    query: Query<
-        Entity,
+    mut counter: ResMut<NetworkIdCounter>,
+    mut net_map: ResMut<EntityNetMap>,
+    gameplay_query: Query<
+        (Entity, &EntityKind, Option<&Faction>, Option<&Transform>),
+        (With<EntityKind>, Without<NetworkId>),
+    >,
+    neutral_query: Query<
+        (Entity, Option<&Transform>),
         (
-            Without<ReplicatedNetEntity>,
+            Without<EntityKind>,
+            Without<NetworkId>,
             Or<(
-                With<EntityKind>,
                 With<ResourceNode>,
                 With<Sapling>,
                 With<GrowingTree>,
@@ -57,48 +60,31 @@ fn mark_replicated_entities(
             )>,
         ),
     >,
+    added: Query<(Entity, &NetworkId), Added<NetworkId>>,
+    mut removed: RemovedComponents<NetworkId>,
 ) {
-    for entity in &query {
-        commands.entity(entity).insert(ReplicatedNetEntity);
+    // Keep the map in sync with NetworkId churn first — this lets the
+    // assignment below run against a clean view of "already mapped" state.
+    for entity in removed.read() {
+        if let Some(net_id) = net_map.to_net.remove(&entity) {
+            net_map.to_ecs.remove(&net_id);
+        }
     }
-}
+    for (entity, net_id) in &added {
+        net_map.to_net.insert(entity, net_id.0);
+        net_map.to_ecs.insert(net_id.0, entity);
+    }
 
-fn assign_network_ids(
-    mut commands: Commands,
-    mut counter: ResMut<NetworkIdCounter>,
-    net_role: Res<NetRole>,
-    query: Query<
-        (Entity, &EntityKind, Option<&Faction>, Option<&Transform>),
-        (
-            With<EntityKind>,
-            With<ReplicatedNetEntity>,
-            Without<NetworkId>,
-        ),
-    >,
-    neutral_query: Query<
-        (Entity, Option<&Transform>),
-        (
-            Without<EntityKind>,
-            With<ReplicatedNetEntity>,
-            Without<NetworkId>,
-        ),
-    >,
-) {
-    // Client: don't assign IDs locally — all NetworkIds come from the host
-    // via EntitySpawn messages. This prevents ID mismatches between host and client.
-    if *net_role == NetRole::Client {
-        return;
-    }
-    let mut pending: Vec<_> = query
+    let mut pending: Vec<_> = gameplay_query
         .iter()
         .map(|(entity, kind, faction, transform)| {
             let faction_key = faction.map(faction_sort_key).unwrap_or(u8::MAX);
             let transform_key = transform
-                .map(|transform| {
+                .map(|t| {
                     (
-                        ordered_f32_bits(transform.translation.x),
-                        ordered_f32_bits(transform.translation.y),
-                        ordered_f32_bits(transform.translation.z),
+                        ordered_f32_bits(t.translation.x),
+                        ordered_f32_bits(t.translation.y),
+                        ordered_f32_bits(t.translation.z),
                     )
                 })
                 .unwrap_or((u32::MAX, u32::MAX, u32::MAX));
@@ -106,7 +92,6 @@ fn assign_network_ids(
         })
         .collect();
 
-    // Also assign NetworkIds to neutral replicated entities (ResourceNode, Sapling, etc.)
     let mut neutral_pending: Vec<_> = neutral_query
         .iter()
         .map(|(entity, transform)| {
@@ -128,43 +113,15 @@ fn assign_network_ids(
         (*kind_key, *faction_key, *transform_key)
     });
 
-    // Assign EntityKind entities first, then neutrals (deterministic order)
     pending.extend(neutral_pending);
-
-    if !pending.is_empty() {
-        info!(
-            "NetworkId: assigning {} new IDs (counter will be {}..={})",
-            pending.len(),
-            counter.0 + 1,
-            counter.0 + pending.len() as u32,
-        );
-    }
 
     for (entity, _, _, _) in pending {
         let id = counter.next();
         commands.entity(entity).insert(NetworkId(id));
+        net_map.to_net.insert(entity, id);
+        net_map.to_ecs.insert(id, entity);
     }
 }
-
-// ── System: rebuild_entity_net_map ───────────────────────────────────────────
-
-fn rebuild_entity_net_map(
-    mut net_map: ResMut<EntityNetMap>,
-    added: Query<(Entity, &NetworkId), Added<NetworkId>>,
-    mut removed: RemovedComponents<NetworkId>,
-) {
-    for entity in removed.read() {
-        if let Some(net_id) = net_map.to_net.remove(&entity) {
-            net_map.to_ecs.remove(&net_id);
-        }
-    }
-    for (entity, net_id) in &added {
-        net_map.to_net.insert(entity, net_id.0);
-        net_map.to_ecs.insert(net_id.0, entity);
-    }
-}
-
-// ── Plugin ───────────────────────────────────────────────────────────────────
 
 pub struct NetBridgePlugin;
 
@@ -175,12 +132,7 @@ impl Plugin for NetBridgePlugin {
             .add_systems(OnEnter(AppState::InGame), reset_network_identity)
             .add_systems(
                 Update,
-                (
-                    mark_replicated_entities,
-                    assign_network_ids.after(mark_replicated_entities),
-                    rebuild_entity_net_map.after(assign_network_ids),
-                )
-                    .run_if(in_state(AppState::InGame)),
+                assign_network_ids.run_if(in_state(AppState::InGame)),
             );
     }
 }

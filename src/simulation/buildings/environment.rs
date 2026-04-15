@@ -2,6 +2,7 @@
 
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
+use bevy::time::Fixed;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::types::*;
@@ -264,7 +265,7 @@ fn default_resource_height_offset(resource_type: ResourceType) -> f32 {
 // ── Aura Systems ──
 
 pub(super) fn healing_aura_system(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     teams: Res<TeamConfig>,
     auras: Query<(&Transform, &HealingAura, &BuildingState, &Faction), With<Building>>,
     mut healable: Query<(&Transform, &mut Health, &Faction), Without<Building>>,
@@ -720,7 +721,7 @@ const YARD_TREE_REGROW_SECS: f32 = 20.0;
 
 /// Regrows depleted yard trees over time so the sawmill has a renewable wood supply.
 pub(super) fn yard_tree_regrowth_system(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     sawmills: Query<(&SawmillYard, &BuildingState), With<Building>>,
     mut nodes: Query<&mut ResourceNode, With<YardResourceNode>>,
     mut timers: Local<std::collections::HashMap<Entity, f32>>,

@@ -17,7 +17,7 @@ use super::super::*;
 use super::config::SerializableGameConfig;
 use super::{
     first_open_multiplayer_slot, sync_multiplayer_slots_from_lobby, PendingGameStart,
-    PendingLobbyBroadcast, DEFAULT_PORT,
+    PendingLobbyBroadcast,
 };
 
 // ── Update Lobby UI ──
@@ -31,7 +31,7 @@ pub(crate) fn update_lobby_ui(
         Option<ResMut<PeerMap>>,
         Option<ResMut<MatchboxInbox>>,
     ),
-    client_state: Option<ResMut<ClientNetState>>,
+    mut client_state: Option<ResMut<ClientNetState>>,
     pending: (
         Option<Res<PendingGameStart>>,
         Option<Res<PendingLobbyBroadcast>>,
@@ -323,10 +323,11 @@ pub(crate) fn update_lobby_ui(
                         }
                     }
                 }
-                game_state::message::ClientMessage::Input { .. } => {}
+                game_state::message::ClientMessage::InputBroadcast { .. } => {}
                 game_state::message::ClientMessage::Ping { .. } => {}
                 game_state::message::ClientMessage::Reconnect { .. } => {}
                 game_state::message::ClientMessage::Chat { .. } => {}
+                game_state::message::ClientMessage::ChecksumReport { .. } => {}
             }
         }
 
@@ -433,7 +434,7 @@ pub(crate) fn update_lobby_ui(
     }
 
     // ── Client: poll matchbox for lobby updates and game start ──
-    if let (Some(mut client), Some(ref mut socket)) = (client_state, socket.as_mut()) {
+    if let (Some(client), Some(ref mut socket)) = (client_state.as_mut(), socket.as_mut()) {
         // Update peers to detect connection/disconnection
         if let Ok(changes) = socket.try_update_peers() {
             for (peer, state) in &changes {
@@ -550,6 +551,34 @@ pub(crate) fn update_lobby_ui(
                                 {
                                     net_config.apply_to_config(&mut config);
                                     net_config.apply_to_lobby(&mut lobby);
+                                    let mut local_slot_override = None;
+                                    let local_player = if client.player_id != 0 {
+                                        lobby.players
+                                            .iter()
+                                            .find(|p| p.player_id == client.player_id)
+                                    } else {
+                                        lobby.players
+                                            .iter()
+                                            .find(|p| !p.is_host && p.connected)
+                                            .or_else(|| {
+                                                lobby.players.iter().find(|p| {
+                                                    !p.is_host
+                                                        && p.connected
+                                                        && p.faction == client.my_faction
+                                                })
+                                            })
+                                    };
+                                    if let Some(local_player) = local_player {
+                                        client.player_id = local_player.player_id;
+                                        client.seat_index = local_player.seat_index;
+                                        client.my_faction = local_player.faction;
+                                        client.color_index = local_player.color_index;
+                                        local_slot_override =
+                                            Some(local_player.seat_index as usize);
+                                    }
+                                    if let Some(local_slot) = local_slot_override {
+                                        config.local_player_slot = local_slot;
+                                    }
                                     info!(
                                         "Applied host config: seed={}, map_size={}, {} seats",
                                         config.map_seed,
@@ -575,18 +604,9 @@ pub(crate) fn update_lobby_ui(
                         }
                     }
                 }
-                game_state::message::ServerMessage::RelayedInput { .. } => {}
-                game_state::message::ServerMessage::StateSync { .. } => {}
-                game_state::message::ServerMessage::EntitySpawn { .. } => {}
-                game_state::message::ServerMessage::EntityDespawn { .. } => {}
-                game_state::message::ServerMessage::BuildingSync { .. } => {}
-                game_state::message::ServerMessage::TerrainShapeSync { .. } => {}
-                game_state::message::ServerMessage::ResourceSync { .. } => {}
-                game_state::message::ServerMessage::DayCycleSync { .. } => {}
-                game_state::message::ServerMessage::WorldBaseline { .. } => {}
-                game_state::message::ServerMessage::NeutralWorldDelta { .. } => {}
-                game_state::message::ServerMessage::NeutralWorldDespawn { .. } => {}
+                game_state::message::ServerMessage::InputBroadcast { .. } => {}
                 game_state::message::ServerMessage::Pong { .. } => {}
+                game_state::message::ServerMessage::ChecksumReport { .. } => {}
             }
         }
     }
@@ -645,38 +665,6 @@ pub(super) fn broadcast_lobby_update_matchbox(
         }],
     };
     matchbox_transport::broadcast_reliable(socket, &msg);
-}
-
-// ── Web Client URL ──
-
-pub(crate) fn update_web_client_url(
-    lobby: Res<LobbyState>,
-    mut texts: Query<&mut Text, With<WebClientUrlText>>,
-) {
-    let dist_exists =
-        std::path::Path::new(&std::env::var("DIST_DIR").unwrap_or_else(|_| "dist".to_string()))
-            .is_dir();
-
-    let display = if dist_exists && !lobby.all_ips.is_empty() {
-        let ip = lobby
-            .all_ips
-            .iter()
-            .find(|(_, _, vpn)| !vpn)
-            .or_else(|| lobby.all_ips.first())
-            .map(|(ip, _, _)| ip.as_str())
-            .unwrap_or("127.0.0.1");
-        let http_port =
-            DEFAULT_PORT + crate::infrastructure::multiplayer::transport::HTTP_PORT_OFFSET;
-        format!("Web clients: http://{}:{}", ip, http_port)
-    } else {
-        String::new()
-    };
-
-    for mut text in &mut texts {
-        if **text != display {
-            **text = display.clone();
-        }
-    }
 }
 
 // ── Session Code Clipboard ──

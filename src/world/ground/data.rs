@@ -1,7 +1,27 @@
 use std::collections::{HashSet, VecDeque};
 
 use bevy::prelude::*;
-use game_state::message::TerrainShapeOp;
+
+/// A single terrain-shaping operation applied to the authoritative heightmap.
+/// Used by building placement and footprint flattening; applied deterministically
+/// on every peer so the heightmap stays identical under lockstep.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TerrainShapeOp {
+    pub center: [f32; 2],
+    pub footprint: f32,
+    pub target_height: f32,
+}
+
+impl Eq for TerrainShapeOp {}
+
+impl std::hash::Hash for TerrainShapeOp {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.center[0].to_bits().hash(state);
+        self.center[1].to_bits().hash(state);
+        self.footprint.to_bits().hash(state);
+        self.target_height.to_bits().hash(state);
+    }
+}
 
 /// Pre-computed grid of terrain heights that matches the rendered mesh exactly.
 /// Use `sample(x, z)` for triangle-matched interpolation between grid vertices.

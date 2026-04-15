@@ -1,7 +1,5 @@
-#[cfg(not(target_arch = "wasm32"))]
 use std::net::UdpSocket;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn detect_lan_ip() -> Option<String> {
     let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
@@ -9,7 +7,6 @@ pub fn detect_lan_ip() -> Option<String> {
     Some(addr.ip().to_string())
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone)]
 pub struct DetectedIp {
     pub ip: String,
@@ -17,7 +14,6 @@ pub struct DetectedIp {
     pub is_likely_vpn: bool,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 pub fn detect_all_ips() -> Vec<DetectedIp> {
     let mut results = Vec::new();
     if let Ok(ifaces) = if_addrs::get_if_addrs() {

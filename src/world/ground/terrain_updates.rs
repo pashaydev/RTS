@@ -1,12 +1,11 @@
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
-use game_state::message::TerrainShapeOp;
 
 use crate::blueprints::EntityKind;
 use crate::types::{Building, BuildingFootprint, Ground};
 
 use super::data::{
-    foundation_radii, HeightMap, TerrainShapeSyncState, TerrainShapeUpdateQueue,
+    foundation_radii, HeightMap, TerrainShapeOp, TerrainShapeSyncState, TerrainShapeUpdateQueue,
     TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
 };
 
@@ -157,41 +156,6 @@ pub fn apply_terrain_shape_op(height_map: &mut HeightMap, update: &TerrainShapeO
     changed
 }
 
-pub fn sync_ground_mesh_to_height_map(mesh: &mut Mesh, height_map: &HeightMap) {
-    let mut positions = match mesh.attribute(Mesh::ATTRIBUTE_POSITION) {
-        Some(VertexAttributeValues::Float32x3(values)) => values.clone(),
-        _ => return,
-    };
-
-    if positions.len() != height_map.heights.len() {
-        return;
-    }
-
-    for (position, height) in positions.iter_mut().zip(height_map.heights.iter().copied()) {
-        position[1] = height;
-    }
-
-    let mut normals = Vec::with_capacity(height_map.heights.len());
-    for iz in 0..height_map.grid_size {
-        for ix in 0..height_map.grid_size {
-            let left_ix = ix.saturating_sub(1);
-            let right_ix = (ix + 1).min(height_map.grid_size - 1);
-            let down_iz = iz.saturating_sub(1);
-            let up_iz = (iz + 1).min(height_map.grid_size - 1);
-
-            let h_l = height_map.heights[iz * height_map.grid_size + left_ix];
-            let h_r = height_map.heights[iz * height_map.grid_size + right_ix];
-            let h_d = height_map.heights[down_iz * height_map.grid_size + ix];
-            let h_u = height_map.heights[up_iz * height_map.grid_size + ix];
-            let normal = Vec3::new(h_l - h_r, 2.0 * height_map.step, h_d - h_u).normalize();
-            normals.push(normal.to_array());
-        }
-    }
-
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-    mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-}
-
 /// Update only the dirty region of the mesh instead of all vertices.
 pub fn sync_ground_mesh_partial(
     mesh: &mut Mesh,
@@ -241,11 +205,6 @@ pub fn sync_ground_mesh_partial(
             normals[idx] = normal.to_array();
         }
     }
-}
-
-pub fn reset_terrain_to_natural(height_map: &mut HeightMap, mesh: &mut Mesh) {
-    height_map.heights.clone_from(&height_map.natural_heights);
-    sync_ground_mesh_to_height_map(mesh, height_map);
 }
 
 /// Paint floor blend on the ground mesh vertex colors.
@@ -312,11 +271,3 @@ pub fn paint_floor_blend_on_ground(
     }
 }
 
-pub fn terrain_heights_hash(height_map: &HeightMap) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for height in &height_map.heights {
-        hash ^= height.to_bits() as u64;
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
-}

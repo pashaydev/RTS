@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 
 use crate::types::*;
 
@@ -292,7 +293,7 @@ pub fn set_intent_target_lock(
 
 fn cleanup_expired_combat_state(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut stats: ResMut<CombatStatsDebug>,
     buffered_commands: Query<(Entity, &BufferedCommand)>,
     target_locks: Query<(Entity, &CombatTargetLock)>,

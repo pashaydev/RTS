@@ -163,24 +163,6 @@ pub(crate) fn spawn_host_lobby_page(
         .id();
     commands.entity(container).add_child(hint);
 
-    // Web client URL (if dist/ is available)
-    let web_hint = commands
-        .spawn((
-            WebClientUrlText,
-            Text::new(""),
-            TextFont {
-                font_size: theme.typography.medium,
-                ..default()
-            },
-            TextColor(SUCCESS),
-            Node {
-                margin: UiRect::bottom(Val::Px(4.0)),
-                ..default()
-            },
-        ))
-        .id();
-    commands.entity(container).add_child(web_hint);
-
     let ip_list = commands
         .spawn((
             HostIpList,

@@ -1,6 +1,7 @@
 use bevy::ecs::entity::Entities;
 use bevy::ecs::lifecycle::RemovedComponents;
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
@@ -275,7 +276,7 @@ fn cleanup_orphan_paths(
 /// and force a repath by clearing their NavPath.
 fn detect_stuck_units(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     nav_grid: Option<Res<NavGrid>>,
     mut units: Query<
         (Entity, &mut Transform, Option<&mut StuckTimer>),
@@ -540,7 +541,7 @@ fn refresh_nav_grid(
 
         // Stamp walls.
         for cells in wall_grid.cells.values() {
-            for &(_entity, wall_pos, wall_fp, _faction) in cells {
+            for &(_entity, wall_pos, wall_fp, _faction, _stable_id) in cells {
                 let radius = wall_fp + 0.6;
                 let margin_radius = radius + step;
                 stamp_obstacle(&mut nav_grid, wall_pos, radius, margin_radius, gs);

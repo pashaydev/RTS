@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use std::collections::HashMap;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
@@ -8,7 +9,7 @@ use super::workers::{building_worker_interaction_target, spawn_deposit_vfx, spaw
 
 /// Resource processing buildings auto-harvest nearby nodes on a timer and deposit into player resources.
 pub(super) fn resource_processor_system(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut commands: Commands,
     mut all_resources: ResMut<AllPlayerResources>,
     mut processors: Query<
@@ -160,7 +161,7 @@ pub(super) fn resource_processor_system(
 
 /// Production chain system: buildings with ProductionState convert input resources to outputs.
 pub(super) fn production_chain_system(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut commands: Commands,
     mut all_resources: ResMut<AllPlayerResources>,
     registry: Res<BlueprintRegistry>,
@@ -298,10 +299,8 @@ pub(super) fn production_chain_system(
 /// Workers are visible and physically walk between nodes and their assigned building.
 pub(super) fn processor_worker_visual_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     vfx_assets: Option<Res<VfxAssets>>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
-    active_player: Res<ActivePlayer>,
     mut workers: Query<
         (
             Entity,
@@ -341,13 +340,7 @@ pub(super) fn processor_worker_visual_system(
         }
     }
 
-    for (entity, tf, mut unit_state, _carrying, faction, move_target) in &mut workers {
-        // Client: only drive local player's assigned workers; remote workers driven by host
-        if *net_role == crate::infrastructure::multiplayer::NetRole::Client
-            && *faction != active_player.0
-        {
-            continue;
-        }
+    for (entity, tf, mut unit_state, _carrying, _faction, move_target) in &mut workers {
         // Check immutably first to avoid triggering Changed<UnitState> for non-assigned units
         let Some(building_entity) = unit_state.assigned_processor_building() else {
             continue;

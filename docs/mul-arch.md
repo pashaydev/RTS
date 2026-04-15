@@ -1,9 +1,10 @@
 # Multiplayer Architecture
 
-> Host-authoritative multiplayer with **Matchbox WebRTC** transport (native + WASM).
+> **Deterministic lockstep** multiplayer with **Matchbox WebRTC** transport (native only).
 > Embedded signaling server on the host — no external infrastructure needed for LAN play.
 > WebRTC NAT traversal enables internet play without VPN.
-> **MessagePack binary wire protocol** over reliable + unreliable WebRTC data channels. Delta-compressed state sync at ~10Hz with staged client application.
+> **MessagePack binary wire protocol** over reliable WebRTC data channel. All peers run the full simulation; only player inputs are exchanged.
+> FNV-1a checksum-based desync detection every ~1 second.
 > Reconnection with 30s grace period.
 
 ---
@@ -12,72 +13,52 @@
 
 ```mermaid
 flowchart TB
-    subgraph Host["HOST (Full Simulation)"]
-        ECS["Bevy ECS\n(authoritative world)"]
-        SRV["server module\n- input\n- replication"]
-        NB["Net Bridge\n- assign_network_ids\n- rebuild_entity_net_map"]
-        MBX["transport module\n- MatchboxSocket\n- PeerMap\n- MatchboxInbox"]
+    subgraph Peer1["PEER 1 (Host)"]
+        ECS1["Bevy ECS\n(full simulation)"]
+        LS1["lockstep module\n- input buffer\n- tick gate\n- checksum"]
+        MBX1["transport module\n- MatchboxSocket\n- PeerMap"]
         SIG["Embedded Signaling\nServer :3536\n(ClientServer topology)"]
 
-        ECS <--> SRV
-        ECS <--> NB
-        SRV <--> MBX
+        ECS1 <--> LS1
+        LS1 <--> MBX1
     end
 
     subgraph Transport["TRANSPORT LAYER"]
-        WEBRTC["WebRTC Data Channels\n(reliable + unreliable)"]
-        HTTP["HTTP File Server\n:7880\n(serves dist/ for browsers)"]
-        LAN["LAN Discovery + host helpers\n"]
+        WEBRTC["WebRTC Data Channel\n(reliable, ordered)"]
+        LAN["LAN Discovery\n:7877 broadcast"]
     end
 
-    subgraph Client1["CLIENT (Native)"]
-        CECS1["Bevy ECS\n(mirrored state)"]
-        CR1["client::receive\n- client_receive_commands\n- client_send_ping"]
-        CA1["client::apply\n- apply_world_baseline\n- apply_state_sync\n- apply_entity_sync\n- apply_neutral_sync"]
-        CI1["client::interpolation\n- client_interpolate_remote_units"]
-        CNS1["ClientNetState\n+ MatchboxSocket"]
-        CECS1 <--> CR1
-        CECS1 <--> CA1
-        CECS1 <--> CI1
-        CR1 <--> CNS1
+    subgraph Peer2["PEER 2 (Client)"]
+        ECS2["Bevy ECS\n(full simulation)"]
+        LS2["lockstep module\n- input buffer\n- tick gate\n- checksum"]
+        MBX2["transport module\n- MatchboxSocket"]
+
+        ECS2 <--> LS2
+        LS2 <--> MBX2
     end
 
-    subgraph Client2["CLIENT (WASM/Browser)"]
-        CECS2["Bevy ECS\n(mirrored state)"]
-        CS2["Same client module split\nas native"]
-        CNS2["ClientNetState\n+ MatchboxSocket"]
-        CECS2 <--> CS2
-        CS2 <--> CNS2
-    end
-
-    MBX -->|ServerMessages| WEBRTC
-    WEBRTC -->|ClientMessages| MBX
-
-    WEBRTC ---|"WebRTC P2P\n(via signaling)"| CNS1
-    WEBRTC ---|"WebRTC P2P\n(via signaling)"| CNS2
+    MBX1 <-->|"InputBroadcast\nChecksumReport"| WEBRTC
+    WEBRTC <-->|"InputBroadcast\nChecksumReport"| MBX2
 
     SIG -.->|"signaling handshake"| WEBRTC
 
-    style Host fill:#1a3a1a,stroke:#4a8a4a,color:#fff
-    style Client1 fill:#1a2a3a,stroke:#4a7a9a,color:#fff
-    style Client2 fill:#2a1a3a,stroke:#7a4a9a,color:#fff
+    style Peer1 fill:#1a3a1a,stroke:#4a8a4a,color:#fff
+    style Peer2 fill:#1a2a3a,stroke:#4a7a9a,color:#fff
     style Transport fill:#3a2a1a,stroke:#9a7a4a,color:#fff
 ```
 
-### Current module split
+### Module split
 
 All multiplayer modules live under `src/infrastructure/multiplayer/`:
 
-- `transport`: Matchbox send/receive path, peer tracking, LAN discovery, and HTTP hosting helpers.
-- `server::input`: host-side command validation/execution and disconnect handling.
-- `server::replication`: host-side snapshot building and broadcast systems.
-- `client::receive`: drains inbox and stages server messages into pending resources.
-- `client::apply`: mutates ECS from staged baseline/delta data.
-- `client::interpolation`: visual smoothing only.
-- `replication`: scaffold for the upcoming per-component replication registry
-  (`Replicated` trait, `ReplicationRegistry` resource, `App::replicate::<T>()`
-  extension). Not yet wired into the live broadcast loop — see *Known Remaining
-  Work* below.
+- `lockstep`: `LockstepInputBuffer`, tick gate, input application — the core deterministic sync loop.
+- `checksum`: `SyncChecksum`, `DesyncDetected`, FNV-1a world state hashing every 30 ticks.
+- `transport` / `matchbox_transport`: Matchbox WebRTC wrapper, peer tracking, LAN discovery.
+- `host_systems`: host-side lobby management, input relay to other peers.
+- `client_systems`: client-side input capture, connection to host signaling.
+- `server/`: host networking (join/leave handling, event broadcast).
+- `client/`: client networking (message receive, ping).
+- `debug_tap`: network debugging utilities.
 
 The multiplayer menu UI lives under `src/ui/menu/multiplayer/`.
 
@@ -89,13 +70,12 @@ The multiplayer menu UI lives under `src/ui/menu/multiplayer/`.
 flowchart LR
     subgraph MainThread["MAIN THREAD (Bevy)"]
         Poll["poll_matchbox system\n(each frame)"]
-        HS["server/client module systems"]
-        Poll --> HS
+        LS["lockstep systems"]
+        Poll --> LS
     end
 
     subgraph MatchboxSocket["MatchboxSocket (Resource)"]
         CH0["Channel 0\n(reliable, ordered)"]
-        CH1["Channel 1\n(unreliable, unordered)"]
     end
 
     subgraph Signaling["Embedded Signaling Server"]
@@ -103,12 +83,11 @@ flowchart LR
     end
 
     subgraph Optional["OPTIONAL (LAN)"]
-        HTTP["HTTP File Server\n:7880 serves dist/"]
         UDP["UDP LAN Discovery\n:7877 broadcast"]
     end
 
     Poll -->|"update_peers()\nchannel.receive()"| MatchboxSocket
-    HS -->|"channel.send()"| MatchboxSocket
+    LS -->|"channel.send()"| MatchboxSocket
     MatchboxSocket ---|"WebRTC signaling"| SIG
 
     style MainThread fill:#1a3a1a,stroke:#4a8a4a,color:#fff
@@ -116,12 +95,11 @@ flowchart LR
     style Signaling fill:#2a1a3a,stroke:#7a4a9a,color:#fff
 ```
 
-**Key differences from the old TCP/WS architecture:**
-- No background reader/writer threads — all I/O is polled from the main Bevy thread via `poll_matchbox` system
-- Unified transport for native and WASM — no `#[cfg(target_arch)]` branching in connection code
-- WebRTC NAT traversal via ICE/STUN — internet play without VPN
-- Two channels: reliable (commands, events, spawns) and unreliable (high-frequency state sync)
-- `transport.rs` still contains legacy LAN discovery / HTTP host helpers, so the file is broader than just Matchbox runtime transport
+- All I/O is polled from the main Bevy thread via `poll_matchbox`
+- Native-only transport (WASM support removed)
+- WebRTC NAT traversal via ICE/STUN for internet play
+- Single reliable channel — no unreliable channel needed (no high-frequency state sync)
+- Codec: MessagePack (`rmp-serde`)
 
 ---
 
@@ -139,7 +117,7 @@ sequenceDiagram
     Host->>Signaling: Start embedded signaling (:3536)
     Host->>Host: Open MatchboxSocket (ws://127.0.0.1:3536/rts_room)
     Host->>Host: Insert HostNetState, PeerMap, NetRole::Host
-    Host->>UI: Show HostLobby (signaling URL + web URL)
+    Host->>UI: Show HostLobby (signaling URL)
 
     Note over UI: CLIENT: JOIN GAME
     UI->>Client: User enters session code
@@ -148,7 +126,7 @@ sequenceDiagram
     Signaling->>Host: Peer connection established
     Signaling->>Client: Peer connection established
 
-    Note over Host,Client: WebRTC data channels open
+    Note over Host,Client: WebRTC data channel open
 
     Client->>Host: JoinRequest { player_name }
     Host->>Host: Assign seat_index, faction, color via PeerMap
@@ -159,33 +137,22 @@ sequenceDiagram
     Host->>Host: PendingGameStart (next frame)
     Host->>Host: Build SerializableGameConfig
     Host->>Client: Event::GameStart { config_json }
-    Host->>Host: Transition → AppState::InGame
-    Client->>Client: Deserialize config, Transition → InGame
+    Host->>Host: Transition to AppState::InGame
+    Client->>Client: Deserialize config, Transition to InGame
 
-    Note over Host,Client: === IN-GAME SYNC LOOP ===
+    Note over Host,Client: === DETERMINISTIC LOCKSTEP ===
 
-    loop Every 100ms
-        Host->>Client: StateSync (unreliable channel)
-        Host->>Client: EntitySpawn / EntityDespawn (reliable channel)
+    loop Every FixedUpdate tick (30 Hz)
+        Host->>Client: InputBroadcast { player_id, tick, commands }
+        Client->>Host: InputBroadcast { player_id, tick, commands }
+        Note over Host,Client: Both peers wait for all inputs,<br/>then advance SimClock and simulate
     end
 
-    loop Every 500ms
-        Host->>Client: WorldBaseline (reliable, periodic neutral-world baseline)
-        Host->>Client: BuildingSync (reliable)
-        Host->>Client: NeutralWorldDelta (reliable)
+    loop Every 30 ticks (~1s)
+        Host->>Client: ChecksumReport { tick, checksum }
+        Client->>Host: ChecksumReport { tick, checksum }
+        Note over Host,Client: Compare checksums — flag desync if mismatch
     end
-
-    loop Every 1s
-        Host->>Client: ResourceSync (reliable)
-    end
-
-    loop Every 250ms
-        Host->>Client: DayCycleSync (reliable)
-    end
-
-    Client->>Host: Input { PlayerInput } (reliable)
-    Host->>Host: Validate & execute command
-    Host->>Client: RelayedInput (reliable, to all other clients)
 
     loop Every 5s
         Client->>Host: Ping (reliable)
@@ -195,29 +162,115 @@ sequenceDiagram
     Note over Host,Client: === DISCONNECT ===
     Note over Host: PeerState::Disconnected detected
     Host->>Host: Start 30s reconnect grace period
-    Host-->>Client: Announcement "Player disconnected — waiting for reconnection"
+    Host-->>Client: Announcement "Player disconnected"
 
     Note over Host,Client: === GRACE PERIOD EXPIRED ===
     Host->>Host: Convert faction to AI permanently
     Host-->>Client: Announcement "AI taking over"
 ```
 
-### Client apply pipeline
+---
 
-The in-game client path is now two-stage:
+## Lockstep Synchronization
 
-1. `client_receive_commands` drains `MatchboxInbox` and stores incoming data in pending resources.
-2. Follow-up apply systems mutate ECS in deterministic order:
-   - `client_apply_world_baseline`
-   - `client_apply_relayed_inputs`
-   - `client_apply_state_sync`
-   - `client_apply_building_sync`
-   - `client_apply_resource_sync`
-   - `client_apply_day_cycle_sync`
-   - `client_apply_server_events`
-   - `client_apply_entity_sync`
-   - `client_apply_neutral_sync`
-3. `client_interpolate_remote_units` performs visual smoothing after authoritative state is staged.
+```mermaid
+flowchart TD
+    subgraph InputPhase["INPUT PHASE (GameFlowSet::Input)"]
+        CAPTURE["Capture local player commands"]
+        STAMP["Stamp with tick = SimClock.tick + input_delay"]
+        SEND["Broadcast InputBroadcast to all peers"]
+        CAPTURE --> STAMP --> SEND
+    end
+
+    subgraph ReceivePhase["RECEIVE PHASE (GameFlowSet::NetworkReceive)"]
+        RECV["Receive InputBroadcast from peers"]
+        BUFFER["Insert into LockstepInputBuffer"]
+        CHECK{"All players' inputs<br/>for next tick received?"}
+        RECV --> BUFFER --> CHECK
+        CHECK -->|Yes| ALLOW["advance_allowed = true"]
+        CHECK -->|No| STALL["advance_allowed = false<br/>(FixedUpdate stalls)"]
+    end
+
+    subgraph SimPhase["SIMULATION PHASE (FixedUpdate)"]
+        GATE{"lockstep_advance_allowed?"}
+        GATE -->|Yes| APPLY["Apply all inputs for current tick<br/>(sorted by player_id via BTreeMap)"]
+        GATE -->|No| SKIP["Skip — wait for inputs"]
+        APPLY --> EXEC["execute_input_command()<br/>for each player's commands"]
+        EXEC --> SIM["Run full simulation:<br/>AI → Command → Movement → Combat → Economy → Spatial"]
+        SIM --> TICK["SimClock.tick += 1"]
+    end
+
+    SEND --> RECV
+    ALLOW --> GATE
+
+    style InputPhase fill:#1a3a1a,stroke:#4a8a4a,color:#fff
+    style ReceivePhase fill:#1a2a3a,stroke:#4a7a9a,color:#fff
+    style SimPhase fill:#2a1a3a,stroke:#7a4a9a,color:#fff
+```
+
+### LockstepInputBuffer
+
+```rust
+pub struct LockstepInputBuffer {
+    pub pending: BTreeMap<u64, BTreeMap<u8, PlayerInput>>,
+    pub confirmed_tick: u64,
+    pub input_delay: u64,         // default: 3 ticks (~100ms at 30 Hz)
+    pub expected_players: u8,
+    pub advance_allowed: bool,
+    pub last_applied_tick: Option<u64>,
+    pub last_local_tick_sent: Option<u64>,
+    seq: u32,
+}
+```
+
+- `BTreeMap` ensures deterministic iteration order (sorted by tick, then by player_id)
+- `input_delay` of 3 ticks at 30 Hz = ~100ms — enough to absorb typical LAN jitter
+- Simulation stalls if any peer's input is missing for the next tick
+
+### Determinism guarantees
+
+| Concern | Solution |
+|---------|----------|
+| Frame-rate independence | All simulation in `FixedUpdate` at 30 Hz, using `Time<Fixed>` |
+| System ordering | `GameFlowSet` chain: Input → NetworkReceive → Simulation → NetworkBroadcast; `SimSet` chain: Ai → Command → Movement → Combat → Economy → Spatial |
+| RNG | `GameRng` resource: `StdRng` seeded from `map_seed`, with `fork(tag)` for subsystems |
+| Collection iteration | `BTreeMap` in lockstep buffer and combat slot assignment; spatial queries sorted by Entity |
+| Entity spawn order | Deterministic via `SimSet` ordering — same spawn sequence on all peers |
+| Tick counter | `SimClock.tick` increments once per `FixedUpdate`, shared by all peers |
+
+---
+
+## Desync Detection
+
+```mermaid
+flowchart LR
+    subgraph Compute["compute_world_checksum (every 30 ticks)"]
+        QUERY["Query all gameplay entities:<br/>Transform, CombatStats, UnitState, Faction"]
+        SORT["Sort by (EntityKind, Faction, quantized_pos)"]
+        HASH["FNV-1a hash:<br/>positions (x1000 → i32), health,<br/>unit state, faction, resources"]
+        STORE["Store SyncChecksum { tick, checksum }"]
+        QUERY --> SORT --> HASH --> STORE
+    end
+
+    subgraph Exchange["Peer exchange"]
+        SEND["Send ChecksumReport { tick, checksum }"]
+        RECV["Receive remote ChecksumReport"]
+        CMP{"Checksums match?"}
+        RECV --> CMP
+        CMP -->|Yes| OK["All good"]
+        CMP -->|No| DESYNC["Set DesyncDetected resource<br/>Log error + dump state to file"]
+    end
+
+    STORE --> SEND
+    SEND --> RECV
+
+    style Compute fill:#1a3a1a,stroke:#4a8a4a,color:#fff
+    style Exchange fill:#3a1a1a,stroke:#9a4a4a,color:#fff
+```
+
+- Positions quantized to 1mm precision (multiply by 1000, cast to i32) before hashing
+- Only gameplay state is hashed — visual state (animations, particles, interpolation) is excluded
+- On desync: entity state dump written to `desync_dump_tick_{N}.txt` for manual diffing
 
 ---
 
@@ -225,13 +278,9 @@ The in-game client path is now two-stage:
 
 ### Wire Format
 
-Messages are sent as MessagePack-encoded bytes directly over WebRTC data channels (no length-prefix framing needed — WebRTC is message-oriented).
+Messages are MessagePack-encoded bytes over a single reliable, ordered WebRTC data channel.
 
-- **Channel 0 (reliable, ordered):** Commands, events, entity spawns/despawns, building sync, resource sync, day cycle sync
-- **Channel 1 (unreliable, unordered):** High-frequency `StateSync` with entity positions (falls back to reliable if payload > 16KB)
-- **Codec:** MessagePack (`rmp-serde`) — ~2-4x smaller than JSON, self-describing binary format
-
-### Client → Server Messages
+### Client → Host Messages
 
 ```mermaid
 classDiagram
@@ -239,12 +288,17 @@ classDiagram
         +seq: u32
         +timestamp: f64
     }
-    class Input {
-        +input: PlayerInput
+    class InputBroadcast {
+        +player_id: u8
+        +tick: u64
+        +commands: Vec~InputCommand~
+    }
+    class ChecksumReport {
+        +tick: u64
+        +checksum: u64
     }
     class JoinRequest {
         +player_name: String
-        +preferred_faction_index: Option~u8~
     }
     class LeaveNotice
     class Ping
@@ -254,105 +308,48 @@ classDiagram
     class Chat {
         +message: String
     }
+    class NameUpdate {
+        +name: String
+    }
 
-    ClientMessage <|-- Input
+    ClientMessage <|-- InputBroadcast
+    ClientMessage <|-- ChecksumReport
     ClientMessage <|-- JoinRequest
     ClientMessage <|-- LeaveNotice
     ClientMessage <|-- Ping
     ClientMessage <|-- Reconnect
     ClientMessage <|-- Chat
-
-    class PlayerInput {
-        +player_id: EntityId
-        +tick: u64
-        +entity_ids: Vec~EntityId~
-        +commands: Vec~InputCommand~
-    }
-
-    Input --> PlayerInput
-
-    class InputCommand {
-        <<enumeration>>
-        Move(target: Vec3)
-        Attack(target_id: EntityId)
-        Gather(target_id: EntityId)
-        Patrol(target: Vec3)
-        AttackMove(target: Vec3)
-        HoldPosition
-        SetStance(stance: u8)
-        Build / Train / Rally
-    }
-
-    PlayerInput --> InputCommand
+    ClientMessage <|-- NameUpdate
 ```
 
-### Server → Client Messages
+### Host → Client Messages
 
 ```mermaid
 classDiagram
     class ServerMessage {
         +seq: u32
     }
-
-    class StateSync {
-        +entities: Vec~EntitySnapshot~
-    }
-    class EntitySpawn {
-        +spawns: Vec~EntitySpawnData~
-    }
-    class EntityDespawn {
-        +net_ids: Vec~EntityId~
-    }
-    class BuildingSync {
-        +buildings: Vec~BuildingSnapshot~
-    }
-    class ResourceSync {
-        +factions: Vec~(u8, u32[11])~
-    }
-    class DayCycleSync {
-        +cycle: DayCycleSnapshot
-    }
-    class RelayedInput {
+    class InputBroadcast {
         +player_id: u8
-        +input: PlayerInput
+        +tick: u64
+        +commands: Vec~InputCommand~
+    }
+    class ChecksumReport {
+        +tick: u64
+        +checksum: u64
     }
     class Event {
         +timestamp: f64
         +events: Vec~GameEvent~
     }
-    class NeutralWorldDelta {
-        +objects: Vec~NeutralWorldSnapshot~
-    }
-    class WorldBaseline {
-        +terrain: TerrainDescriptor
-        +terrain_hash: u64
-        +biome_hash: u64
-        +terrain_ops: Vec~TerrainShapeOp~
-        +neutral_objects: Vec~NeutralWorldSnapshot~
-    }
     class Pong {
         +timestamp: f64
     }
-    class TerrainShapeSync {
-        +ops: Vec~TerrainShapeOp~
-    }
-    class NeutralWorldDespawn {
-        +net_ids: Vec~EntityId~
-    }
 
-    ServerMessage <|-- StateSync
-    ServerMessage <|-- EntitySpawn
-    ServerMessage <|-- EntityDespawn
-    ServerMessage <|-- BuildingSync
-    ServerMessage <|-- ResourceSync
-    ServerMessage <|-- DayCycleSync
-    ServerMessage <|-- NeutralWorldDelta
-    ServerMessage <|-- WorldBaseline
-    ServerMessage <|-- RelayedInput
+    ServerMessage <|-- InputBroadcast
+    ServerMessage <|-- ChecksumReport
     ServerMessage <|-- Event
     ServerMessage <|-- Pong
-    ServerMessage <|-- TerrainShapeSync
-    ServerMessage <|-- NeutralWorldDespawn
 ```
 
 ### Game Events (inside `Event` message)
@@ -365,10 +362,6 @@ classDiagram
     class Chat {
         +sender: EntityId
         +message: String
-    }
-    class Kill {
-        +killer: EntityId
-        +victim: EntityId
     }
     class Announcement {
         +text: String
@@ -402,7 +395,6 @@ classDiagram
     }
 
     GameEvent <|-- Chat
-    GameEvent <|-- Kill
     GameEvent <|-- Announcement
     GameEvent <|-- CountdownStart
     GameEvent <|-- CountdownCancel
@@ -416,137 +408,16 @@ classDiagram
 
 ---
 
-## State Sync Strategy
+## Network Bandwidth
 
-```mermaid
-flowchart TD
-    subgraph Host
-        TICK["Frame Tick"]
-        TICK --> CHECK{"tick % 50 == 0?\n(every ~5s)"}
+| Data | Frequency | Channel | Size |
+|------|-----------|---------|------|
+| InputBroadcast (per player) | Every tick (30 Hz) | Reliable | ~20-200 bytes (depends on commands) |
+| ChecksumReport | Every 30 ticks (~1 Hz) | Reliable | 16 bytes |
+| Ping/Pong | Every 5s | Reliable | 8 bytes |
+| Event (lobby/chat) | On demand | Reliable | Variable |
 
-        CHECK -->|Yes| FULL["FULL RESYNC\nSend ALL entity snapshots\n+ ALL entity spawns"]
-        CHECK -->|No| DELTA["DELTA SYNC\nOnly changed entities"]
-
-        DELTA --> COMPARE["Compare vs PreviousSnapshots"]
-        COMPARE --> POS["Position Δ > 0.05m?"]
-        COMPARE --> ROT["Rotation Δ > 0.02 rad?"]
-        COMPARE --> HP["Health changed?"]
-        COMPARE --> STATE["UnitState changed?"]
-
-        POS --> SEND["Include in StateSync"]
-        ROT --> SEND
-        HP --> SEND
-        STATE --> SEND
-    end
-
-    subgraph Client
-        RECV["Receive StateSync"]
-        RECV --> OWN{"My faction's\nunits?"}
-        OWN -->|"Yes (skip)"| LOCAL["Keep local state\n(client-predicted)"]
-        OWN -->|No| DIST{"Distance > 10m?"}
-        DIST -->|Yes| SNAP["Teleport (snap)"]
-        DIST -->|No| INTERP["Set interpolation target\nblend = 0.0"]
-
-        INTERP --> LERP["client_interpolate_remote_units\nlerp rate = 10.0\n~0.1s to reach target"]
-    end
-
-    SEND -->|"100ms timer\n(unreliable channel)"| RECV
-
-    style Host fill:#1a3a1a,stroke:#4a8a4a,color:#fff
-    style Client fill:#1a2a3a,stroke:#4a7a9a,color:#fff
-```
-
-### Baseline vs delta
-
-- `StateSync`, `EntitySpawn`, `EntityDespawn`, `BuildingSync`, `ResourceSync`, `DayCycleSync`, and `NeutralWorldDelta` remain the main runtime delta path.
-- `WorldBaseline` is now actively emitted by the host and applied by clients, but it currently covers:
-  - terrain metadata (`TerrainDescriptor`)
-  - neutral world objects
-- `WorldBaseline` does **not** yet replace entity bootstrap. Faction/unit/building entity bootstrap still depends on `EntitySpawn` plus periodic full resync behavior.
-- Practically, the baseline path is now a neutral-world bootstrap/resync path, not a full-world snapshot path.
-
----
-
-## Entity Replication
-
-```mermaid
-flowchart TD
-    subgraph HostSide["Host: Entity Lifecycle"]
-        SPAWN["Entity spawned in ECS"]
-        SPAWN --> MARK["mark_replicated_entities()\nAdd ReplicatedNetEntity marker"]
-        MARK --> ASSIGN["assign_network_ids()\nSort by (Kind, Faction, Pos)\nAssign monotonic NetworkId(u32)"]
-        ASSIGN --> MAP["rebuild_entity_net_map()\nEntity ↔ NetworkId bidirectional"]
-        MAP --> TRACK["SyncedEntitySet\nTrack known set"]
-        TRACK --> DIFF{"New entity?"}
-        DIFF -->|Yes| BROADCAST["Send EntitySpawn\n{net_id, kind, faction, pos, rot}"]
-        DIFF -->|"Removed from ECS"| DESPAWN["Send EntityDespawn\n{net_ids}"]
-    end
-
-    subgraph ClientSide["Client: Deterministic Entity Sync"]
-        RECEIVE["Receive EntitySpawn"]
-        RECEIVE --> KNOWN{"NetworkId\nalready exists?"}
-        KNOWN -->|Yes| SKIP["SKIP (already synced)"]
-        KNOWN -->|No| CREATE["SPAWN: Create fresh from\nblueprint + NetworkId\n(no distance heuristic)"]
-
-        RECEIVE2["Receive EntityDespawn"]
-        RECEIVE2 --> LOOKUP["EntityNetMap lookup"]
-        LOOKUP --> REMOVE["despawn() entity"]
-    end
-
-    BROADCAST --> RECEIVE
-    DESPAWN --> RECEIVE2
-
-    style HostSide fill:#1a3a1a,stroke:#4a8a4a,color:#fff
-    style ClientSide fill:#1a2a3a,stroke:#4a7a9a,color:#fff
-```
-
-**Replicated entity types:** `EntityKind`, `ResourceNode`, `Sapling`, `GrowingTree`, `GrowingResource`, `MatureTree`, `ExplosiveProp`
-(`NeutralKind` also includes `MobCamp`, reserved for future use but not yet replicated via `mark_replicated_entities`.)
-
----
-
-## Command Flow (Player Input)
-
-```mermaid
-sequenceDiagram
-    participant CLocal as Client (Local ECS)
-    participant CNet as Client (Net)
-    participant HNet as Host (Net)
-    participant HExec as Host (execute_input_command)
-    participant Other as Other Clients
-
-    Note over CLocal: Player right-clicks → Move
-    CLocal->>CLocal: Apply command locally (prediction)
-    CLocal->>CNet: Queue ClientMessage::Input
-
-    CNet->>HNet: Send Input { PlayerInput } (reliable channel)
-
-    HNet->>HNet: Validate ownership\n(entity faction == sender faction)
-    HNet->>HExec: execute_input_command()
-
-    Note over HExec: Set UnitState::Moving\nInsert MoveTarget\nCircular formation for groups
-
-    HExec->>HNet: Command applied on host ECS
-    HNet->>Other: RelayedInput { player_id, input } (reliable channel)
-
-    Other->>Other: execute_input_command()\n(same logic as host)
-```
-
----
-
-## Sync Cadence Table
-
-| Data Type | Interval | System | Channel | Delta Compressed |
-|-----------|----------|--------|---------|-----------------|
-| Entity positions, health, state | 100ms (~10Hz) | `host_broadcast_state_sync` | Unreliable | Yes (Δ pos>0.05, rot>0.02) |
-| Entity spawns/despawns | 100ms | `host_broadcast_entity_spawns` | Reliable | Yes (new/removed only) |
-| Building state | 500ms | `host_broadcast_building_sync` | Reliable | Yes (level/progress/queue Δ) |
-| Neutral-world baseline | first tick, then periodic (~5s via 500ms timer * 10) | `host_broadcast_neutral_world_sync` | Reliable | No (full neutral snapshot) |
-| Resource node amounts | 500ms (~2Hz) | `host_broadcast_neutral_world_sync` | Reliable | Yes (amount_remaining Δ) |
-| Player resources | 1000ms | `host_broadcast_resource_sync` | Reliable | No (full) |
-| Day/night cycle | 250ms | `host_broadcast_day_cycle_sync` | Reliable | No (full) |
-| Full resync (all data) | ~5s (tick%50) | Same systems | Both | No (forced full) |
-| Ping/Pong (keepalive) | 5s | `client_send_ping` | Reliable | N/A |
+Lockstep bandwidth is minimal compared to the old state sync — typically <5 KB/s per peer.
 
 ---
 
@@ -566,7 +437,7 @@ flowchart LR
     end
 
     subgraph ECS["update_net_stats (each frame)"]
-        NS["NetStats resource\n- rtt_ms / rtt_smoothed_ms\n- bytes_sent_total / per_sec\n- bytes_recv_total / per_sec\n- msgs_sent_total / per_sec\n- last_sync_entity_count\n- net_map_size\n- pending_spawns\n- connected_clients"]
+        NS["NetStats resource\n- rtt_ms / rtt_smoothed_ms\n- bytes_sent_total / per_sec\n- bytes_recv_total / per_sec\n- msgs_sent_total / per_sec\n- connected_clients"]
     end
 
     Poll -->|"fetch_add on send"| BS
@@ -624,26 +495,24 @@ stateDiagram-v2
 
 **Session code format:** Signaling URL (e.g., `ws://192.168.1.5:3536/rts_room`) or just the host IP (auto-expanded to `ws://IP:3536/rts_room`)
 
-**Web client access:** The host serves the WASM build at `http://<host-ip>:7880` when a `dist/` directory is present. Browser players open that URL, then enter the session code to join.
-
 **Player ID assignment:**
 - Host: `player_id = 0`
 - Clients: assigned incrementally (1, 2, 3, ...) via `PeerMap` when peers connect
 
 ---
 
-## Host/Client Responsibility Split
+## Peer Responsibility Split
 
 | Responsibility | Host | Client |
 |---------------|------|--------|
-| World simulation (physics, AI, combat) | Authoritative | Read-only mirror |
-| Entity spawn/despawn | Creates + broadcasts | Receives + spawns locally |
-| NetworkId assignment | Assigns (sorted, monotonic) to entities + neutral objects | Receives via EntitySpawn / NeutralWorldDelta |
-| Player commands | Validates + executes + relays | Sends input, applies relayed |
-| Resource tracking (player totals) | Authoritative | Synced every 1s |
-| Resource node amounts (world) | Authoritative | Synced every 500ms (NeutralWorldDelta) |
-| Building construction/training | Runs timers + logic | Synced every 500ms |
-| Day/night cycle | Runs timer | Synced every 250ms |
-| AI opponents | Runs all AI logic | No AI systems (cleared) |
+| World simulation (AI, combat, economy) | Full | Full (identical) |
+| Entity spawning/despawning | Local (deterministic) | Local (deterministic) |
+| Player input | Captures + broadcasts | Captures + broadcasts |
+| Input relay to other clients | Relays peer inputs | N/A |
+| AI opponents | Runs all AI logic | Runs all AI logic (identical) |
 | Lobby management | Accept/reject, assign seats | Display only |
 | Signaling server | Runs embedded on :3536 | Connects to host's signaling |
+| Desync detection | Computes + exchanges checksums | Computes + exchanges checksums |
+| Disconnect handling | Starts 30s grace period | Notified via announcement |
+
+In lockstep, Host and Client are functionally identical for simulation purposes. The "Host" designation only controls lobby management and acts as the relay point for input distribution.

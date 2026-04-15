@@ -1,6 +1,6 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 
-use crate::infrastructure::multiplayer::NetRole;
 use crate::types::*;
 use crate::world::spatial::SpatialHashGrid;
 
@@ -23,9 +23,8 @@ impl Plugin for CombatProjectilesPlugin {
 
 fn tick_projectiles(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     tuning: Res<CombatTuning>,
-    net_role: Res<NetRole>,
     spatial_grid: Res<SpatialHashGrid>,
     mut impacts: MessageWriter<ProjectileImpactEvent>,
     mut damage_events: MessageWriter<DamageApplied>,
@@ -40,10 +39,6 @@ fn tick_projectiles(
         Without<Projectile>,
     >,
 ) {
-    if *net_role == NetRole::Client {
-        return;
-    }
-
     for (proj_entity, mut proj_tf, mut projectile, opt_aoe) in &mut projectiles {
         projectile.lifetime_secs -= time.delta_secs();
         if projectile.lifetime_secs <= 0.0 {

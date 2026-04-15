@@ -34,7 +34,7 @@ pub struct AllyNotification {
     pub kind: AllyNotifyKind,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash)]
 pub enum AllyNotifyKind {
     UnderAttack,
     Attacking,

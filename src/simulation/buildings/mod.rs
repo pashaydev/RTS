@@ -14,7 +14,6 @@ use crate::types::*;
 
 // ── Public re-exports ──
 
-pub use construction::try_queue_build_order_authoritative;
 pub use environment::{storage_aura_bonus, SAWMILL_TREE_SLOTS, SAWMILL_YARD_OFFSET};
 pub use upgrades::{start_demolish, start_upgrade};
 pub use walls::{
@@ -130,7 +129,7 @@ fn worker_availability_priority(
 }
 
 /// Find the best available worker for a build task at `build_pos`.
-fn find_best_worker_for_build<'a>(
+pub(crate) fn find_best_worker_for_build<'a>(
     workers: impl Iterator<
         Item = (
             Entity,
@@ -193,7 +192,7 @@ fn has_available_worker_for_build<'a>(
 
 /// When reassigning a worker away from their current task, clean up the old building's
 /// worker list and remove `BuildingAssignment`.
-fn cleanup_worker_assignment(commands: &mut Commands, worker: Entity, state: &UnitState) {
+pub(crate) fn cleanup_worker_assignment(commands: &mut Commands, worker: Entity, state: &UnitState) {
     match state {
         UnitState::AssignedGathering { building, .. }
         | UnitState::MovingToBuild(building)
@@ -498,7 +497,7 @@ pub fn is_floor_kind(kind: EntityKind) -> bool {
     kind == EntityKind::Floor
 }
 
-fn blocks_construction_overlap(kind: EntityKind) -> bool {
+pub(crate) fn blocks_construction_overlap(kind: EntityKind) -> bool {
     !is_floor_kind(kind)
 }
 

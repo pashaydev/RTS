@@ -1,5 +1,6 @@
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
+use bevy::time::Fixed;
 
 use crate::blueprints::EntityKind;
 use crate::simulation::combat::apply_damage;
@@ -28,7 +29,7 @@ impl Plugin for AbilitiesPlugin {
 }
 
 /// Tick down all ability cooldowns each frame.
-fn tick_ability_cooldowns(time: Res<Time>, mut units: Query<&mut UnitAbilities>) {
+fn tick_ability_cooldowns(time: Res<Time<Fixed>>, mut units: Query<&mut UnitAbilities>) {
     let dt = time.delta_secs();
     for mut abilities in &mut units {
         for cd in abilities.cooldowns.values_mut() {
@@ -42,7 +43,7 @@ fn tick_ability_cooldowns(time: Res<Time>, mut units: Query<&mut UnitAbilities>)
 /// Process abilities that are currently being cast.
 fn process_ability_casts(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     tuning: Res<CombatTuning>,
     spatial_grid: Res<SpatialHashGrid>,
     teams: Res<TeamConfig>,
@@ -414,7 +415,7 @@ fn aoe_damage_at(
 /// Apply status effects: slow modifies speed, stun blocks actions, burning does DoT.
 fn apply_status_effects(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut units: Query<(Entity, &mut StatusEffects, Option<&mut Health>)>,
 ) {
     let dt = time.delta_secs();
@@ -453,7 +454,7 @@ fn cleanup_expired_effects(mut units: Query<&mut StatusEffects>) {
 /// Tick charge bonus timer and remove when expired.
 fn tick_charge_bonus(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut charged: Query<(Entity, &mut ChargeBonus)>,
 ) {
     for (entity, mut bonus) in &mut charged {

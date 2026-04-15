@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache, ResourceCost};
 use crate::presentation::model_assets::BuildingModelAssets;
@@ -16,7 +17,7 @@ use super::AiWorldSnapshot;
 
 pub fn ai_economy_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     context: (
         Res<GameSetupConfig>,
         Res<ActivePlayer>,
