@@ -43,12 +43,14 @@ PATH="/tmp:/opt/homebrew/opt/llvm/bin:$PATH" cargo xwin build --release --target
 
 ### Debug
 ```sh
+# In separate terminal run capture
 tracy-capture -o trace.tracy
-
+# Run bevy with tracy feature
 cargo run --features tracy
-
 # For memory allocation tracking too:
 cargo run --features tracy_memory
+# After play session open tracy UI with
+tracy trace.tracy
 ```
 
 The dev profile uses dependency optimization (`opt-level = 2`) for better iteration-time performance.
