@@ -2,6 +2,7 @@
 
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
+use bevy::time::Fixed;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
 use crate::presentation::model_assets::BuildingModelAssets;
@@ -68,7 +69,7 @@ pub fn start_upgrade(
 
 pub(super) fn building_upgrade_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     registry: Res<BlueprintRegistry>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     building_models: Option<Res<BuildingModelAssets>>,
@@ -324,7 +325,7 @@ pub fn start_demolish(commands: &mut Commands, entity: Entity, transform: &Trans
 
 pub(super) fn demolish_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     registry: Res<BlueprintRegistry>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     mut all_resources: ResMut<AllPlayerResources>,

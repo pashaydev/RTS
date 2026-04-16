@@ -752,25 +752,11 @@ fn veterancy_to_u8(v: &VeterancyLevel) -> u8 {
 }
 
 fn ability_id_to_u8(a: &AbilityId) -> u8 {
-    match a {
-        AbilityId::KnightCharge => 0,
-        AbilityId::MageFireball => 1,
-        AbilityId::MageFrostNova => 2,
-        AbilityId::PriestHeal => 3,
-        AbilityId::PriestHolySmite => 4,
-        AbilityId::CatapultAoeBoulder => 5,
-    }
+    a.to_u8()
 }
 
 fn u8_to_ability_id(v: u8) -> AbilityId {
-    match v {
-        0 => AbilityId::KnightCharge,
-        1 => AbilityId::MageFireball,
-        2 => AbilityId::MageFrostNova,
-        3 => AbilityId::PriestHeal,
-        4 => AbilityId::PriestHolySmite,
-        _ => AbilityId::CatapultAoeBoulder,
-    }
+    AbilityId::from_u8(v)
 }
 
 fn item_kind_to_u8(k: &ItemKind) -> u8 {
@@ -1984,7 +1970,7 @@ pub fn load_saved_game(
 
     // 5. Restore terrain operations
     {
-        use game_state::message::TerrainShapeOp;
+        use crate::world::ground::TerrainShapeOp;
         let mut terrain_sync = TerrainShapeSyncState::default();
         for op_data in &save.terrain_ops {
             let op = TerrainShapeOp {

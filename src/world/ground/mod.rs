@@ -17,7 +17,7 @@ pub use border::spawn_mountain_border;
 #[allow(unused_imports)]
 pub use data::{
     edge_distance_to_square, foundation_radii, is_in_mountain_border, playable_half_map,
-    BorderSettings, HeightMap, TerrainShapeSyncState, TerrainShapeUpdateQueue,
+    BorderSettings, HeightMap, TerrainShapeOp, TerrainShapeSyncState, TerrainShapeUpdateQueue,
     TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue, WATER_LEVEL,
 };
 #[allow(unused_imports)]
@@ -28,8 +28,7 @@ pub use generation::TerrainTextures;
 pub use noise::resolve_map_seed;
 #[allow(unused_imports)]
 pub use terrain_updates::{
-    apply_terrain_shape_op, paint_floor_blend_on_ground, reset_terrain_to_natural,
-    sync_ground_mesh_partial, sync_ground_mesh_to_height_map, terrain_heights_hash,
+    apply_terrain_shape_op, paint_floor_blend_on_ground, sync_ground_mesh_partial,
 };
 #[allow(unused_imports)]
 pub use water::WaterPlane;

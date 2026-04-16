@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
+use bevy::time::Fixed;
 
 use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache,
@@ -12,195 +13,7 @@ use crate::infrastructure::audio::{PlaySfx, SfxKind};
 use crate::presentation::model_assets::{BuildingConstructionAssets, BuildingModelAssets};
 use crate::types::*;
 use crate::world::ground::HeightMap;
-#[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline};
-
-pub fn try_queue_build_order_authoritative(
-    commands: &mut Commands,
-    kind: EntityKind,
-    build_pos: Vec3,
-    faction: Faction,
-    all_resources: &mut AllPlayerResources,
-    base_state: &FactionBaseState,
-    carried_totals: &CarriedResourceTotals,
-    pending_drains: &mut PendingCarriedDrains,
-    registry: &BlueprintRegistry,
-    all_completed: &AllCompletedBuildings,
-    biome_map: Option<&BiomeMap>,
-    faction_ages: &crate::simulation::ages::FactionAges,
-    height_map: &HeightMap,
-    existing_buildings: &Query<
-        (&Transform, &BuildingFootprint, &Faction, &EntityKind),
-        (With<Building>, Without<GhostBuilding>),
-    >,
-    workers: &Query<
-        (
-            Entity,
-            &Transform,
-            &UnitState,
-            &Faction,
-            &EntityKind,
-            Option<&PendingBuildOrder>,
-        ),
-        With<Unit>,
-    >,
-    obstacle_grid: &ObstacleGrid,
-) -> Result<(), String> {
-    if matches!(
-        kind,
-        EntityKind::WallSegment
-            | EntityKind::WallPost
-            | EntityKind::WallCorner
-            | EntityKind::Gatehouse
-            | EntityKind::Floor
-    ) {
-        return Err("This building uses a specialized placement flow.".to_string());
-    }
-
-    let bp = registry.get(kind);
-    let new_footprint = super::footprint_for_kind(kind);
-    let has_base_started = base_state.is_founded(&faction)
-        || existing_buildings
-            .iter()
-            .any(|(_, _, building_faction, building_kind)| {
-                *building_faction == faction && *building_kind == EntityKind::Base
-            })
-        || workers
-            .iter()
-            .any(|(_, _, _, worker_faction, _, pending_order)| {
-                *worker_faction == faction
-                    && pending_order.is_some_and(|order| order.kind == EntityKind::Base)
-            });
-
-    if kind == EntityKind::Base && has_base_started {
-        return Err("Base is already being founded.".to_string());
-    }
-
-    let prereq_met = if let Some(ref bd) = bp.building {
-        match bd.prerequisite {
-            None => true,
-            Some(prereq_kind) => {
-                if prereq_kind == EntityKind::Base {
-                    base_state.is_founded(&faction) || all_completed.has(&faction, prereq_kind)
-                } else {
-                    all_completed.has(&faction, prereq_kind)
-                }
-            }
-        }
-    } else {
-        true
-    };
-    if !prereq_met {
-        return Err("Prerequisite not met.".to_string());
-    }
-
-    let required_age = crate::simulation::ages::required_age_for_building(kind);
-    let current_age = faction_ages.get_age(&faction);
-    if current_age < required_age {
-        return Err(format!("Requires {}", required_age.display_name()));
-    }
-
-    if let Some(biome_map) = biome_map {
-        if !super::is_biome_valid_for(kind, biome_map.get_biome(build_pos.x, build_pos.z)) {
-            return Err(super::biome_requirement_text(kind)
-                .unwrap_or("Invalid biome for building placement")
-                .to_string());
-        }
-    }
-
-    if !matches!(
-        kind,
-        EntityKind::WallSegment | EntityKind::WallPost | EntityKind::WallCorner
-    ) {
-        const MAX_BUILDING_SLOPE: f32 = 0.5;
-        let slope = height_map.max_slope_under_footprint(build_pos.x, build_pos.z, new_footprint);
-        if slope > MAX_BUILDING_SLOPE {
-            return Err("Ground is too steep here.".to_string());
-        }
-    }
-
-    for (building_tf, existing_fp, _, existing_kind) in existing_buildings {
-        if !super::blocks_construction_overlap(*existing_kind) {
-            continue;
-        }
-        if super::building_blocks_area(
-            kind,
-            build_pos,
-            0.0,
-            new_footprint,
-            *existing_kind,
-            building_tf.translation,
-            super::rotation_y_from_quat(building_tf.rotation),
-            existing_fp.0,
-        ) {
-            return Err("Building footprint is blocked.".to_string());
-        }
-    }
-
-    if super::building_area_blocked_by_obstacles(kind, build_pos, 0.0, new_footprint, obstacle_grid)
-    {
-        return Err("Blocked by trees.".to_string());
-    }
-
-    let half_map = height_map.half_map;
-    if build_pos.x.abs() > half_map - 5.0 || build_pos.z.abs() > half_map - 5.0 {
-        return Err("Too close to the edge of the map.".to_string());
-    }
-
-    // Find best worker using priority-based selection (includes processor-assigned workers)
-    let worker_iter = workers
-        .iter()
-        .map(|(e, tf, state, fac, kind, _)| (e, tf, state, fac, kind));
-    let Some((worker_entity, _worker_prio)) =
-        super::find_best_worker_for_build(worker_iter, faction, build_pos)
-    else {
-        return Err("No workers available!".to_string());
-    };
-
-    let player_res = all_resources.get(&faction);
-    let carried = carried_totals.get(&faction);
-    if !bp.cost.can_afford_with_carried(player_res, carried) {
-        return Err("Not enough resources.".to_string());
-    }
-
-    let player_res_mut = all_resources.get_mut(&faction);
-    let deficits = bp.cost.deduct_with_carried(player_res_mut);
-    let drain = SpendFromCarried {
-        faction,
-        amounts: deficits,
-    };
-    if drain.has_deficit() {
-        pending_drains.drains.push(drain);
-    }
-
-    // Clean up any existing gathering assignment before reassigning
-    if let Ok((_, _, w_state, _, _, _)) = workers.get(worker_entity) {
-        super::cleanup_worker_assignment(commands, worker_entity, w_state);
-    }
-
-    // Clear any stale combat order so resolve_combat_intents doesn't overwrite MoveTarget
-    crate::simulation::combat::reset_combat_state(commands, worker_entity);
-
-    commands
-        .entity(worker_entity)
-        .remove::<MoveTarget>()
-        .remove::<AttackTarget>()
-        .insert(UnitState::MovingToPlot(build_pos))
-        .insert(TaskSource::Manual)
-        .insert(PendingBuildOrder {
-            kind,
-            position: build_pos,
-            faction,
-            rotation_y: 0.0,
-        })
-        .insert(MoveTarget(build_pos));
-    commands
-        .entity(worker_entity)
-        .entry::<TaskQueue>()
-        .and_modify(|mut tq| tq.queue.clear());
-
-    Ok(())
-}
 
 pub(super) fn pending_build_arrival_system(
     mut commands: Commands,
@@ -279,7 +92,7 @@ pub(super) fn pending_build_arrival_system(
 
 pub(super) fn build_site_preparation_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
     ghost_mats: Res<BuildingGhostMaterials>,
@@ -480,7 +293,7 @@ fn spawn_foundation_prep_vfx(
 
 pub(super) fn construction_progress_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
     building_models: Res<BuildingModelAssets>,

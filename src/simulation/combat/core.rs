@@ -1,8 +1,8 @@
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
+use bevy::time::Fixed;
 
 use crate::blueprints::EntityKind;
-use crate::infrastructure::multiplayer::NetRole;
 use crate::simulation::items::vfx::{ItemVfxTrigger, ItemVfxTriggerKind};
 use crate::simulation::items::{ItemKind, SpawnItemPickup, UnitInventory};
 use crate::simulation::mobs::CampItemDrops;
@@ -100,8 +100,6 @@ fn intended_attack_target(
 
 fn resolve_combat_intents(
     mut commands: Commands,
-    net_role: Res<NetRole>,
-    active_player: Res<ActivePlayer>,
     all_entities: Query<()>,
     mut actors: Query<
         (
@@ -122,7 +120,7 @@ fn resolve_combat_intents(
 ) {
     for (
         entity,
-        faction,
+        _faction,
         order,
         engagement,
         intent,
@@ -134,10 +132,6 @@ fn resolve_combat_intents(
         unit_state,
     ) in &mut actors
     {
-        if net_role.as_ref() == &NetRole::Client && faction.is_some_and(|f| *f != active_player.0) {
-            continue;
-        }
-
         // Skip non-combat states — these own their own MoveTarget management.
         if let Some(state) = unit_state {
             match state {
@@ -305,17 +299,12 @@ fn desired_attack_move_target(
 fn explode_props(
     mut commands: Commands,
     vfx_assets: Option<Res<VfxAssets>>,
-    net_role: Res<NetRole>,
     mut queries: ParamSet<(
         Query<(Entity, &Transform, &ExplosiveProp, &Health)>,
         Query<(Entity, &mut Transform, &mut Health), Without<Projectile>>,
     )>,
 ) {
     let Some(vfx) = vfx_assets else { return };
-    // Client: skip explosion damage — host handles it and syncs health
-    if *net_role == NetRole::Client {
-        return;
-    }
 
     let detonations: Vec<_> = queries
         .p0()
@@ -378,13 +367,12 @@ fn explode_props(
 
 pub fn approach_attack_target(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     tuning: Res<CombatTuning>,
     combat_budget: Res<CombatBudget>,
     mut budget_state: ResMut<CombatBudgetState>,
     teams: Res<TeamConfig>,
     wall_grid: Res<WallSpatialGrid>,
-    net_state: (Res<NetRole>, Res<ActivePlayer>),
     mut attackers: Query<
         (
             Entity,
@@ -432,7 +420,6 @@ pub fn approach_attack_target(
     spatial_grid: Res<SpatialHashGrid>,
     mut nearby_entities: Local<Vec<(Entity, Vec3)>>,
 ) {
-    let (net_role, active_player) = net_state;
     let (wall_check, all_transforms, building_footprints, tactical_roles, factions) = scene_queries;
     for (
         attacker_entity,
@@ -456,10 +443,6 @@ pub fn approach_attack_target(
     {
         // During windup/recovery, unit is locked in animation — skip
         if windup.is_some() || recovery.is_some() {
-            continue;
-        }
-        // Client: only approach for local player's units
-        if *net_role == NetRole::Client && *faction != active_player.0 {
             continue;
         }
         let Ok(target_tf) = all_transforms.get(attack_target.0) else {
@@ -721,9 +704,7 @@ pub fn approach_attack_target(
 
 fn start_attack_windups(
     mut commands: Commands,
-    time: Res<Time>,
-    net_role: Res<NetRole>,
-    active_player: Res<ActivePlayer>,
+    time: Res<Time<Fixed>>,
     mut attackers: Query<(
         Entity,
         &Transform,
@@ -752,16 +733,13 @@ fn start_attack_windups(
         attack_timing,
         profile,
         atk_damage,
-        faction,
+        _faction,
         opt_engagement,
         windup,
         recovery,
         opt_status,
     ) in &mut attackers
     {
-        if *net_role == NetRole::Client && *faction != active_player.0 {
-            continue;
-        }
         if windup.is_some() || recovery.is_some() {
             continue;
         }
@@ -806,12 +784,10 @@ fn start_attack_windups(
 
 fn resolve_attack_windups(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     tuning: Res<CombatTuning>,
     vfx_assets: Option<Res<VfxAssets>>,
     projectile_assets: Option<Res<crate::presentation::model_assets::ProjectileModelAssets>>,
-    net_role: Res<NetRole>,
-    active_player: Res<ActivePlayer>,
     mut damage_events: MessageWriter<DamageApplied>,
     mut attackers: Query<(
         Entity,
@@ -848,7 +824,7 @@ fn resolve_attack_windups(
         damage,
         range,
         attack_timing,
-        faction,
+        _faction,
         opt_dmg_type,
         opt_engagement,
         mut windup,
@@ -856,10 +832,6 @@ fn resolve_attack_windups(
         opt_entity_kind,
     ) in &mut attackers
     {
-        // Client: only execute attacks for local player's units
-        if *net_role == NetRole::Client && *faction != active_player.0 {
-            continue;
-        }
         windup.remaining_secs -= time.delta_secs();
         if windup.remaining_secs > 0.0 {
             continue;
@@ -1064,7 +1036,7 @@ fn resolve_attack_windups(
 
 fn tick_attack_recovery(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut recoveries: Query<(Entity, &mut AttackRecovery, Option<&mut Engagement>)>,
 ) {
     for (entity, mut recovery, mut opt_engagement) in &mut recoveries {
@@ -1156,8 +1128,6 @@ fn spawn_combat_dust_scaled(
 
 fn handle_death(
     mut commands: Commands,
-    net_role: Res<NetRole>,
-    active_player: Res<ActivePlayer>,
     mut item_pickup_spawns: MessageWriter<SpawnItemPickup>,
     dead: Query<
         (
@@ -1186,29 +1156,17 @@ fn handle_death(
     mut experience_q: Query<&mut Experience>,
     mut all_assigned_workers: Query<&mut AssignedWorkers>,
     workers_with_state: Query<(Entity, &UnitState), With<Unit>>,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     mut all_resources: ResMut<AllPlayerResources>,
     attacker_factions: Query<&Faction, With<AttackTarget>>,
     mut wall_grid: ResMut<WallGrid>,
     wall_coord_q: Query<&WallGridCoord>,
 ) {
-    let is_client = *net_role == NetRole::Client;
     // Collect dead entities first to avoid borrow issues
-    // On client: only detect death for local player's entities (remote deaths come via EntityDespawn)
     let dead_list: Vec<_> = dead
         .iter()
-        .filter(|(_, health, _, _, _, _, _, opt_faction, _, _)| {
-            if health.current > 0.0 {
-                return false;
-            }
-            if is_client {
-                // Only handle death for local player's entities
-                opt_faction.map_or(false, |f| *f == active_player.0)
-            } else {
-                true
-            }
-        })
+        .filter(|(_, health, _, _, _, _, _, _, _, _)| health.current <= 0.0)
         .map(
             |(
                 entity,
@@ -1249,50 +1207,48 @@ fn handle_death(
         opt_camp_item_drops,
     ) in &dead_list
     {
-        // Grant camp reward resources to the killing faction (host only)
-        if !is_client {
-            if let (Some(drop_table), Some(transform)) = (opt_camp_item_drops, opt_transform) {
-                for (idx, &item) in drop_table.items.iter().enumerate() {
-                    let angle = if drop_table.items.len() == 1 {
-                        0.0
-                    } else {
-                        idx as f32 / drop_table.items.len() as f32 * std::f32::consts::TAU
-                    };
-                    let radius = if drop_table.items.len() == 1 {
-                        0.0
-                    } else {
-                        0.9
-                    };
-                    item_pickup_spawns.write(SpawnItemPickup {
-                        item,
-                        position: transform.translation
-                            + Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius),
-                        owner: None,
-                        lifetime_secs: 90.0,
-                    });
-                }
+        // Grant camp reward resources to the killing faction
+        if let (Some(drop_table), Some(transform)) = (opt_camp_item_drops, opt_transform) {
+            for (idx, &item) in drop_table.items.iter().enumerate() {
+                let angle = if drop_table.items.len() == 1 {
+                    0.0
+                } else {
+                    idx as f32 / drop_table.items.len() as f32 * std::f32::consts::TAU
+                };
+                let radius = if drop_table.items.len() == 1 {
+                    0.0
+                } else {
+                    0.9
+                };
+                item_pickup_spawns.write(SpawnItemPickup {
+                    item,
+                    position: transform.translation
+                        + Vec3::new(angle.cos() * radius, 0.0, angle.sin() * radius),
+                    owner: None,
+                    lifetime_secs: 90.0,
+                });
             }
+        }
 
-            if let Some(reward) = opt_camp_reward {
-                // Find who was attacking this mob to determine the rewarded faction
-                let killer_faction = attackers_with_target
-                    .iter()
-                    .find(|(_, at, _, _)| at.0 == *dead_entity)
-                    .and_then(|(attacker_e, _, _, _)| attacker_factions.get(attacker_e).ok());
-                if let Some(killer_f) = killer_faction {
-                    if let Some(res) = all_resources.resources.get_mut(killer_f) {
-                        for (rt, amt) in reward.resources.cost_entries() {
-                            res.amounts[rt.index()] += amt;
-                        }
+        if let Some(reward) = opt_camp_reward {
+            // Find who was attacking this mob to determine the rewarded faction
+            let killer_faction = attackers_with_target
+                .iter()
+                .find(|(_, at, _, _)| at.0 == *dead_entity)
+                .and_then(|(attacker_e, _, _, _)| attacker_factions.get(attacker_e).ok());
+            if let Some(killer_f) = killer_faction {
+                if let Some(res) = all_resources.resources.get_mut(killer_f) {
+                    for (rt, amt) in reward.resources.cost_entries() {
+                        res.amounts[rt.index()] += amt;
                     }
-                    event_log.push(
-                        time.elapsed_secs(),
-                        format!("Camp cleared! Resources gained."),
-                        crate::ui::event_log_widget::EventCategory::Resource,
-                        opt_transform.map(|t| t.translation),
-                        Some(*killer_f),
-                    );
                 }
+                event_log.push(
+                    time.elapsed_secs(),
+                    format!("Camp cleared! Resources gained."),
+                    crate::ui::event_log_widget::EventCategory::Resource,
+                    opt_transform.map(|t| t.translation),
+                    Some(*killer_f),
+                );
             }
         }
 
@@ -1435,7 +1391,7 @@ fn handle_death(
 
 fn tick_dying(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut dying: Query<(Entity, &mut Dying, &mut Transform), Without<ProceduralMob>>,
 ) {
     for (entity, mut dying, mut tf) in &mut dying {
@@ -1515,7 +1471,7 @@ pub fn target_score(input: &TargetScoreInput) -> Option<f32> {
 
 // ── Damage reservation TTL tick ──
 
-fn tick_damage_reservations(time: Res<Time>, mut query: Query<&mut ReservedIncomingDamage>) {
+fn tick_damage_reservations(time: Res<Time<Fixed>>, mut query: Query<&mut ReservedIncomingDamage>) {
     let dt = time.delta_secs();
     for mut reserved in &mut query {
         if reserved.reservations.is_empty() {

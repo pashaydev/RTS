@@ -2,6 +2,7 @@ use bevy::ecs::lifecycle::RemovedComponents;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
+use crate::infrastructure::net_bridge::NetworkId;
 use crate::types::*;
 
 pub struct SpatialPlugin;
@@ -31,7 +32,7 @@ impl Plugin for SpatialPlugin {
 #[derive(Resource)]
 pub struct SpatialHashGrid {
     pub inv_cell_size: f32,
-    pub cells: HashMap<IVec2, Vec<(Entity, Vec3)>>,
+    pub cells: HashMap<IVec2, Vec<(Entity, Vec3, u32)>>,
     pub entity_cells: HashMap<Entity, IVec2>,
 }
 
@@ -53,9 +54,12 @@ impl SpatialHashGrid {
         )
     }
 
-    pub fn insert(&mut self, entity: Entity, pos: Vec3) {
+    pub fn insert(&mut self, entity: Entity, pos: Vec3, stable_id: Option<u32>) {
         let key = self.cell_key(pos);
-        self.cells.entry(key).or_default().push((entity, pos));
+        self.cells
+            .entry(key)
+            .or_default()
+            .push((entity, pos, stable_id.unwrap_or(u32::MAX)));
         self.entity_cells.insert(entity, key);
     }
 
@@ -64,22 +68,24 @@ impl SpatialHashGrid {
             return;
         };
         if let Some(entries) = self.cells.get_mut(&key) {
-            entries.retain(|(stored, _)| *stored != entity);
+            entries.retain(|(stored, _, _)| *stored != entity);
             if entries.is_empty() {
                 self.cells.remove(&key);
             }
         }
     }
 
-    pub fn upsert(&mut self, entity: Entity, pos: Vec3) {
+    pub fn upsert(&mut self, entity: Entity, pos: Vec3, stable_id: Option<u32>) {
+        let stable_id = stable_id.unwrap_or(u32::MAX);
         let key = self.cell_key(pos);
         if let Some(current_key) = self.entity_cells.get(&entity).copied() {
             if current_key == key {
                 if let Some(entries) = self.cells.get_mut(&key) {
-                    if let Some((_, stored_pos)) =
-                        entries.iter_mut().find(|(stored, _)| *stored == entity)
+                    if let Some((_, stored_pos, stored_id)) =
+                        entries.iter_mut().find(|(stored, _, _)| *stored == entity)
                     {
                         *stored_pos = pos;
+                        *stored_id = stable_id;
                         return;
                     }
                 }
@@ -87,7 +93,7 @@ impl SpatialHashGrid {
                 self.remove(entity);
             }
         }
-        self.cells.entry(key).or_default().push((entity, pos));
+        self.cells.entry(key).or_default().push((entity, pos, stable_id));
         self.entity_cells.insert(entity, key);
     }
 
@@ -102,7 +108,7 @@ impl SpatialHashGrid {
         for cx in min_x..=max_x {
             for cz in min_z..=max_z {
                 if let Some(entries) = self.cells.get(&IVec2::new(cx, cz)) {
-                    for &(entity, epos) in entries {
+                    for &(entity, epos, _) in entries {
                         let dx = epos.x - pos.x;
                         let dz = epos.z - pos.z;
                         if dx * dx + dz * dz <= radius_sq {
@@ -112,6 +118,7 @@ impl SpatialHashGrid {
                 }
             }
         }
+        out.sort_by(|a, b| stable_entity_order(a.0, a.1, b.0, b.1, &self.entity_cells, &self.cells));
     }
 
     pub fn query_radius(&self, pos: Vec3, radius: f32) -> Vec<(Entity, Vec3)> {
@@ -147,7 +154,7 @@ impl SpatialHashGrid {
         for cx in min_x..=max_x {
             for cz in min_z..=max_z {
                 if let Some(entries) = self.cells.get(&IVec2::new(cx, cz)) {
-                    for &(entity, epos) in entries {
+                    for &(entity, epos, _) in entries {
                         let dx = epos.x - pos.x;
                         let dz = epos.z - pos.z;
                         if dx * dx + dz * dz > radius_sq {
@@ -160,6 +167,7 @@ impl SpatialHashGrid {
                 }
             }
         }
+        out.sort_by(|a, b| stable_entity_order(a.0, a.1, b.0, b.1, &self.entity_cells, &self.cells));
     }
 
     pub fn collect_radius_limited(
@@ -173,7 +181,9 @@ impl SpatialHashGrid {
         out.sort_by(|a, b| {
             let da = (a.1.x - pos.x).powi(2) + (a.1.z - pos.z).powi(2);
             let db = (b.1.x - pos.x).powi(2) + (b.1.z - pos.z).powi(2);
-            da.total_cmp(&db)
+            da.total_cmp(&db).then_with(|| {
+                stable_entity_order(a.0, a.1, b.0, b.1, &self.entity_cells, &self.cells)
+            })
         });
         out.truncate(limit);
     }
@@ -223,7 +233,9 @@ impl SpatialHashGrid {
         out.sort_by(|a, b| {
             let da = (a.1.x - from.x).powi(2) + (a.1.z - from.z).powi(2);
             let db = (b.1.x - from.x).powi(2) + (b.1.z - from.z).powi(2);
-            da.total_cmp(&db)
+            da.total_cmp(&db).then_with(|| {
+                stable_entity_order(a.0, a.1, b.0, b.1, &self.entity_cells, &self.cells)
+            })
         });
         out.truncate(limit);
     }
@@ -245,7 +257,7 @@ impl SpatialHashGrid {
 #[derive(Resource)]
 pub struct WallSpatialGrid {
     pub inv_cell_size: f32,
-    pub cells: HashMap<IVec2, Vec<(Entity, Vec3, f32, Faction)>>, // entity, pos, footprint, faction
+    pub cells: HashMap<IVec2, Vec<(Entity, Vec3, f32, Faction, u32)>>, // entity, pos, footprint, faction, stable id
     pub entity_cells: HashMap<Entity, IVec2>,
 }
 
@@ -283,7 +295,7 @@ impl WallSpatialGrid {
         for cx in min_x..=max_x {
             for cz in min_z..=max_z {
                 if let Some(entries) = self.cells.get(&IVec2::new(cx, cz)) {
-                    for &(entity, epos, fp, faction) in entries {
+                    for &(entity, epos, fp, faction, _) in entries {
                         let dx = epos.x - pos.x;
                         let dz = epos.z - pos.z;
                         if dx * dx + dz * dz <= radius_sq {
@@ -293,6 +305,14 @@ impl WallSpatialGrid {
                 }
             }
         }
+        out.sort_by(|a, b| {
+            stable_wall_order(
+                (a.0, a.1, a.2, a.3),
+                (b.0, b.1, b.2, b.3),
+                &self.entity_cells,
+                &self.cells,
+            )
+        });
     }
 
     pub fn query_radius(&self, pos: Vec3, radius: f32) -> Vec<(Entity, Vec3, f32, Faction)> {
@@ -301,18 +321,27 @@ impl WallSpatialGrid {
         results
     }
 
-    pub fn upsert(&mut self, entity: Entity, pos: Vec3, footprint: f32, faction: Faction) {
+    pub fn upsert(
+        &mut self,
+        entity: Entity,
+        pos: Vec3,
+        footprint: f32,
+        faction: Faction,
+        stable_id: Option<u32>,
+    ) {
+        let stable_id = stable_id.unwrap_or(u32::MAX);
         let key = self.cell_key(pos);
         if let Some(current_key) = self.entity_cells.get(&entity).copied() {
             if current_key == key {
                 if let Some(entries) = self.cells.get_mut(&key) {
-                    if let Some((_, stored_pos, stored_fp, stored_faction)) = entries
+                    if let Some((_, stored_pos, stored_fp, stored_faction, stored_id)) = entries
                         .iter_mut()
-                        .find(|(stored, _, _, _)| *stored == entity)
+                        .find(|(stored, _, _, _, _)| *stored == entity)
                     {
                         *stored_pos = pos;
                         *stored_fp = footprint;
                         *stored_faction = faction;
+                        *stored_id = stable_id;
                         return;
                     }
                 }
@@ -323,7 +352,7 @@ impl WallSpatialGrid {
         self.cells
             .entry(key)
             .or_default()
-            .push((entity, pos, footprint, faction));
+            .push((entity, pos, footprint, faction, stable_id));
         self.entity_cells.insert(entity, key);
     }
 
@@ -332,7 +361,7 @@ impl WallSpatialGrid {
             return;
         };
         if let Some(entries) = self.cells.get_mut(&key) {
-            entries.retain(|(stored, _, _, _)| *stored != entity);
+            entries.retain(|(stored, _, _, _, _)| *stored != entity);
             if entries.is_empty() {
                 self.cells.remove(&key);
             }
@@ -340,12 +369,106 @@ impl WallSpatialGrid {
     }
 }
 
+fn ordered_bits(value: f32) -> u32 {
+    let bits = value.to_bits();
+    if bits & 0x8000_0000 == 0 {
+        bits | 0x8000_0000
+    } else {
+        !bits
+    }
+}
+
+fn stable_entity_key(
+    entity: Entity,
+    pos: Vec3,
+    entity_cells: &HashMap<Entity, IVec2>,
+    cells: &HashMap<IVec2, Vec<(Entity, Vec3, u32)>>,
+) -> (u32, u32, u32, u32) {
+    let stable_id = entity_cells
+        .get(&entity)
+        .and_then(|key| cells.get(key))
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|(stored, _, _)| *stored == entity)
+                .map(|(_, _, stable_id)| *stable_id)
+        })
+        .unwrap_or(u32::MAX);
+    (
+        stable_id,
+        ordered_bits(pos.x),
+        ordered_bits(pos.y),
+        ordered_bits(pos.z),
+    )
+}
+
+fn stable_entity_order(
+    left_entity: Entity,
+    left_pos: Vec3,
+    right_entity: Entity,
+    right_pos: Vec3,
+    entity_cells: &HashMap<Entity, IVec2>,
+    cells: &HashMap<IVec2, Vec<(Entity, Vec3, u32)>>,
+) -> std::cmp::Ordering {
+    stable_entity_key(left_entity, left_pos, entity_cells, cells)
+        .cmp(&stable_entity_key(
+            right_entity,
+            right_pos,
+            entity_cells,
+            cells,
+        ))
+}
+
+fn stable_wall_key(
+    entity: Entity,
+    pos: Vec3,
+    footprint: f32,
+    faction: Faction,
+    entity_cells: &HashMap<Entity, IVec2>,
+    cells: &HashMap<IVec2, Vec<(Entity, Vec3, f32, Faction, u32)>>,
+) -> (u32, u8, u32, u32, u32, u32) {
+    let stable_id = entity_cells
+        .get(&entity)
+        .and_then(|key| cells.get(key))
+        .and_then(|entries| {
+            entries
+                .iter()
+                .find(|(stored, _, _, _, _)| *stored == entity)
+                .map(|(_, _, _, _, stable_id)| *stable_id)
+        })
+        .unwrap_or(u32::MAX);
+    (
+        stable_id,
+        faction.to_net_index(),
+        ordered_bits(pos.x),
+        ordered_bits(pos.y),
+        ordered_bits(pos.z),
+        ordered_bits(footprint),
+    )
+}
+
+fn stable_wall_order(
+    left: (Entity, Vec3, f32, Faction),
+    right: (Entity, Vec3, f32, Faction),
+    entity_cells: &HashMap<Entity, IVec2>,
+    cells: &HashMap<IVec2, Vec<(Entity, Vec3, f32, Faction, u32)>>,
+) -> std::cmp::Ordering {
+    stable_wall_key(left.0, left.1, left.2, left.3, entity_cells, cells).cmp(&stable_wall_key(
+        right.0,
+        right.1,
+        right.2,
+        right.3,
+        entity_cells,
+        cells,
+    ))
+}
+
 fn seed_spatial_grid(
     mut grid: ResMut<SpatialHashGrid>,
-    units: Query<(Entity, &Transform), With<Unit>>,
-    mobs: Query<(Entity, &Transform), (With<Mob>, Without<Unit>)>,
+    units: Query<(Entity, &Transform, Option<&NetworkId>), With<Unit>>,
+    mobs: Query<(Entity, &Transform, Option<&NetworkId>), (With<Mob>, Without<Unit>)>,
     buildings: Query<
-        (Entity, &Transform),
+        (Entity, &Transform, Option<&NetworkId>),
         (
             With<Building>,
             Without<Unit>,
@@ -356,46 +479,57 @@ fn seed_spatial_grid(
 ) {
     grid.cells.clear();
     grid.entity_cells.clear();
-    for (entity, tf) in &units {
-        grid.insert(entity, tf.translation);
+    for (entity, tf, network_id) in &units {
+        grid.insert(entity, tf.translation, network_id.map(|id| id.0));
     }
-    for (entity, tf) in &mobs {
-        grid.insert(entity, tf.translation);
+    for (entity, tf, network_id) in &mobs {
+        grid.insert(entity, tf.translation, network_id.map(|id| id.0));
     }
-    for (entity, tf) in &buildings {
-        grid.insert(entity, tf.translation);
+    for (entity, tf, network_id) in &buildings {
+        grid.insert(entity, tf.translation, network_id.map(|id| id.0));
     }
 }
 
 fn update_spatial_grid(
     mut grid: ResMut<SpatialHashGrid>,
-    units: Query<(Entity, &Transform), (With<Unit>, Or<(Added<Unit>, Changed<Transform>)>)>,
+    units: Query<
+        (Entity, &Transform, Option<&NetworkId>),
+        (
+            With<Unit>,
+            Or<(Added<Unit>, Changed<Transform>, Added<NetworkId>, Changed<NetworkId>)>,
+        ),
+    >,
     mobs: Query<
-        (Entity, &Transform),
+        (Entity, &Transform, Option<&NetworkId>),
         (
             (With<Mob>, Without<Unit>),
-            Or<(Added<Mob>, Changed<Transform>)>,
+            Or<(Added<Mob>, Changed<Transform>, Added<NetworkId>, Changed<NetworkId>)>,
         ),
     >,
     buildings: Query<
-        (Entity, &Transform),
+        (Entity, &Transform, Option<&NetworkId>),
         (
             With<Building>,
             Without<Unit>,
             Without<Mob>,
             Without<FloorTile>,
-            Or<(Added<Building>, Changed<Transform>)>,
+            Or<(
+                Added<Building>,
+                Changed<Transform>,
+                Added<NetworkId>,
+                Changed<NetworkId>,
+            )>,
         ),
     >,
 ) {
-    for (entity, tf) in &units {
-        grid.upsert(entity, tf.translation);
+    for (entity, tf, network_id) in &units {
+        grid.upsert(entity, tf.translation, network_id.map(|id| id.0));
     }
-    for (entity, tf) in &mobs {
-        grid.upsert(entity, tf.translation);
+    for (entity, tf, network_id) in &mobs {
+        grid.upsert(entity, tf.translation, network_id.map(|id| id.0));
     }
-    for (entity, tf) in &buildings {
-        grid.upsert(entity, tf.translation);
+    for (entity, tf, network_id) in &buildings {
+        grid.upsert(entity, tf.translation, network_id.map(|id| id.0));
     }
 }
 
@@ -419,7 +553,13 @@ fn remove_spatial_grid_entities(
 fn seed_wall_grid(
     mut grid: ResMut<WallSpatialGrid>,
     walls: Query<
-        (Entity, &Transform, &BuildingFootprint, &Faction),
+        (
+            Entity,
+            &Transform,
+            &BuildingFootprint,
+            &Faction,
+            Option<&NetworkId>,
+        ),
         (
             With<Building>,
             Or<(
@@ -432,15 +572,27 @@ fn seed_wall_grid(
 ) {
     grid.cells.clear();
     grid.entity_cells.clear();
-    for (entity, tf, fp, faction) in &walls {
-        grid.upsert(entity, tf.translation, fp.0, *faction);
+    for (entity, tf, fp, faction, network_id) in &walls {
+        grid.upsert(
+            entity,
+            tf.translation,
+            fp.0,
+            *faction,
+            network_id.map(|id| id.0),
+        );
     }
 }
 
 fn update_wall_grid(
     mut grid: ResMut<WallSpatialGrid>,
     walls: Query<
-        (Entity, &Transform, &BuildingFootprint, &Faction),
+        (
+            Entity,
+            &Transform,
+            &BuildingFootprint,
+            &Faction,
+            Option<&NetworkId>,
+        ),
         (
             With<Building>,
             Or<(
@@ -452,12 +604,20 @@ fn update_wall_grid(
                 Added<Building>,
                 Changed<Transform>,
                 Changed<BuildingFootprint>,
+                Added<NetworkId>,
+                Changed<NetworkId>,
             )>,
         ),
     >,
 ) {
-    for (entity, tf, fp, faction) in &walls {
-        grid.upsert(entity, tf.translation, fp.0, *faction);
+    for (entity, tf, fp, faction, network_id) in &walls {
+        grid.upsert(
+            entity,
+            tf.translation,
+            fp.0,
+            *faction,
+            network_id.map(|id| id.0),
+        );
     }
 }
 

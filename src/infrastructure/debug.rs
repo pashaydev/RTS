@@ -1658,6 +1658,7 @@ fn sync_network_debug_tweaks(
     net_stats: Option<Res<crate::infrastructure::multiplayer::NetStats>>,
     role: Res<crate::infrastructure::multiplayer::NetRole>,
     lobby: Option<Res<crate::infrastructure::multiplayer::LobbyState>>,
+    desync: Option<Res<crate::infrastructure::multiplayer::DesyncDetected>>,
 ) {
     use crate::infrastructure::multiplayer::{NetRole, NetStatVisibility, NET_STAT_FIELDS};
 
@@ -1673,6 +1674,15 @@ fn sync_network_debug_tweaks(
         .unwrap_or_else(|| "--".to_string());
     tweaks.set_readonly_if_changed(NET_CONN_FOLDER, "Tap API", &tap_api);
 
+    // Desync field comes from DesyncDetected, not NetStats — handle separately
+    let desync_display = match desync.as_deref() {
+        Some(d) if d.has_triggered() => format!(
+            "!! DESYNC tick={} local={:#018x} remote={:#018x} peer={}",
+            d.tick, d.local_checksum, d.remote_checksum, d.remote_player_id
+        ),
+        _ => "ok".to_string(),
+    };
+
     // Default stats for when resource isn't present yet
     let default_stats = crate::infrastructure::multiplayer::NetStats::default();
     let stats = net_stats.as_deref().unwrap_or(&default_stats);
@@ -1680,6 +1690,13 @@ fn sync_network_debug_tweaks(
     for field in NET_STAT_FIELDS {
         if field.label == "Status" {
             continue; // handled above
+        }
+        if field.label == "Desync" {
+            let folder = net_folder(field.folder_key);
+            let visible = *role != NetRole::Offline;
+            let display = if visible { &desync_display[..] } else { "--" };
+            tweaks.set_readonly_if_changed(folder, field.label, display);
+            continue;
         }
 
         let folder = net_folder(field.folder_key);

@@ -7,19 +7,17 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::blueprints::{
-    BlueprintRegistry, EntityCategory, EntityKind, EntityVisualCache, LevelBonus,
+    BlueprintRegistry, EntityKind, EntityVisualCache,
 };
-use crate::infrastructure::audio::{PlaySfx, SfxKind};
 use crate::presentation::camera;
 use crate::presentation::model_assets::{
-    BuildingConstructionAssets, BuildingModelAssets, UnitModelAssets,
+    BuildingModelAssets,
 };
 use crate::types::*;
 use crate::world::ground::{
     apply_terrain_shape_op, foundation_radii, sync_ground_mesh_partial, HeightMap,
-    TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
+    TerrainShapeOp, TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
 };
-use game_state::message::TerrainShapeOp;
 
 use super::{
     auto_tile_piece, biome_requirement_text, blocks_construction_overlap,
@@ -33,9 +31,8 @@ use super::{
 #[derive(SystemParam)]
 pub(crate) struct PlacementOnlineParams<'w> {
     net_role: Res<'w, crate::infrastructure::multiplayer::NetRole>,
-    client_state: Option<Res<'w, crate::infrastructure::multiplayer::ClientNetState>>,
-    matchbox_socket: Option<ResMut<'w, bevy_matchbox::prelude::MatchboxSocket>>,
-    time: Res<'w, Time>,
+    pending_local_input:
+        ResMut<'w, crate::infrastructure::multiplayer::lockstep::PendingLocalInput>,
 }
 
 // ── Asset creation (ghost materials only) ──
@@ -1361,33 +1358,14 @@ pub(crate) fn confirm_placement(
         return;
     }
 
-    if *online.net_role == crate::infrastructure::multiplayer::NetRole::Client {
-        let (Some(client), Some(ref mut socket)) = (
-            online.client_state.as_ref(),
-            online.matchbox_socket.as_mut(),
-        ) else {
-            return;
-        };
-        let seq = {
-            let mut s = client.seq.lock().unwrap();
-            *s += 1;
-            *s
-        };
-        let msg = game_state::message::ClientMessage::Input {
-            seq,
-            timestamp: online.time.elapsed_secs_f64(),
-            input: game_state::message::PlayerInput {
-                player_id: client.player_id as u32,
-                tick: 0,
-                entity_ids: Vec::new(),
-                commands: vec![game_state::message::InputCommand::Build {
-                    kind: kind.to_index(),
-                    position: [build_pos.x, build_pos.y, build_pos.z],
-                }],
-            },
-        };
-        crate::infrastructure::multiplayer::matchbox_transport::send_to_host(socket, &msg);
-
+    if *online.net_role != crate::infrastructure::multiplayer::NetRole::Offline {
+        online.pending_local_input.push(
+            Vec::new(),
+            vec![game_state::message::InputCommand::Build {
+                kind: kind.to_index(),
+                position: [build_pos.x, build_pos.y, build_pos.z],
+            }],
+        );
         if let Some(ghost) = placement.preview_entity {
             commands.entity(ghost).try_despawn();
         }

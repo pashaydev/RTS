@@ -1,7 +1,8 @@
 //! Victory / defeat condition checking and UI overlay.
 
 use bevy::prelude::*;
-use std::collections::HashMap;
+use bevy::time::Fixed;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::blueprints::EntityKind;
 use crate::infrastructure::database::{ActiveProfile, GameDatabase};
@@ -56,27 +57,26 @@ pub enum FactionStatus {
 
 #[derive(Resource)]
 pub struct VictoryState {
-    pub faction_status: HashMap<Faction, FactionStatus>,
+    /// BTreeMap for deterministic iteration — elimination events are
+    /// broadcast to peers in order, so this must be identical across hosts.
+    pub faction_status: BTreeMap<Faction, FactionStatus>,
     pub check_timer: Timer,
     pub game_over: bool,
     pub winner: Option<Faction>,
     pub winner_team: Option<u8>,
     /// Prevents spawning the overlay more than once.
     pub overlay_spawned: bool,
-    /// Queued network events to broadcast (host only). Consumed by multiplayer systems.
-    pub pending_net_events: Vec<game_state::message::GameEvent>,
 }
 
 impl Default for VictoryState {
     fn default() -> Self {
         Self {
-            faction_status: HashMap::new(),
+            faction_status: BTreeMap::new(),
             check_timer: Timer::from_seconds(CHECK_INTERVAL_SECS, TimerMode::Repeating),
             game_over: false,
             winner: None,
             winner_team: None,
             overlay_spawned: false,
-            pending_net_events: Vec::new(),
         }
     }
 }
@@ -118,8 +118,7 @@ fn init_faction_status_system(
 /// Tick the check timer, count bases per faction, and transition statuses:
 /// Alive → GracePeriod (lost all bases) → Eliminated (grace expired + can't rebuild).
 fn update_faction_status_system(
-    time: Res<Time>,
-    net_role: Res<NetRole>,
+    time: Res<Time<Fixed>>,
     mut victory: ResMut<VictoryState>,
     buildings: Query<(&EntityKind, &Faction, &BuildingState), With<Building>>,
     mut event_log: ResMut<GameEventLog>,
@@ -191,13 +190,6 @@ fn update_faction_status_system(
                             None,
                             Some(faction),
                         );
-                        if *net_role == NetRole::Host {
-                            victory.pending_net_events.push(
-                                game_state::message::GameEvent::FactionEliminated {
-                                    faction_index: faction.to_net_index(),
-                                },
-                            );
-                        }
                     }
                 }
             }
@@ -208,10 +200,9 @@ fn update_faction_status_system(
 
 /// Determine if the game is over: last faction or last team standing.
 fn check_winner_system(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut victory: ResMut<VictoryState>,
     teams: Res<TeamConfig>,
-    net_role: Res<NetRole>,
     mut event_log: ResMut<GameEventLog>,
 ) {
     if victory.game_over || victory.faction_status.is_empty() {
@@ -241,15 +232,6 @@ fn check_winner_system(
                 None,
                 Some(winner),
             );
-            if *net_role == NetRole::Host {
-                let wt = victory.winner_team;
-                victory
-                    .pending_net_events
-                    .push(game_state::message::GameEvent::Victory {
-                        winner_faction: winner.to_net_index(),
-                        winner_team: wt,
-                    });
-            }
         }
         return;
     }
@@ -274,15 +256,6 @@ fn check_winner_system(
             None,
             None,
         );
-        if *net_role == NetRole::Host {
-            let wt = victory.winner_team;
-            victory
-                .pending_net_events
-                .push(game_state::message::GameEvent::Victory {
-                    winner_faction: alive_factions[0].to_net_index(),
-                    winner_team: wt,
-                });
-        }
     }
 }
 
@@ -295,7 +268,7 @@ fn record_match_system(
     net_role: Res<NetRole>,
     faction_stats: Res<FactionStats>,
     all_resources: Res<AllPlayerResources>,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     match_start: Option<Res<MatchStartTime>>,
     lobby: Option<Res<crate::infrastructure::multiplayer::LobbyState>>,
     mut recorded: Local<bool>,

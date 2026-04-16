@@ -7,7 +7,9 @@ use crate::types::*;
 
 // ── EntityKind — unified type enum ──
 
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
+#[derive(
+    Component, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Serialize, Deserialize,
+)]
 pub enum EntityKind {
     // Player Units
     Worker,

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use std::collections::HashSet;
 
 use crate::blueprints::{
@@ -55,7 +56,7 @@ pub fn apply_game_config(
 
     // Setup AI controlled factions
     let human_set: HashSet<usize> = config.human_faction_indices().into_iter().collect();
-    let mut ai_facs = HashSet::new();
+    let mut ai_facs = std::collections::BTreeSet::new();
     for &idx in &active {
         if !human_set.contains(&idx) {
             ai_facs.insert(Faction::PLAYERS[idx]);
@@ -97,7 +98,6 @@ pub fn y_offset_for(kind: EntityKind, registry: &BlueprintRegistry) -> f32 {
 
 fn spawn_all_players(
     mut commands: Commands,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
     unit_models: Option<Res<UnitModelAssets>>,
@@ -108,10 +108,6 @@ fn spawn_all_players(
     config: Res<GameSetupConfig>,
     map_seed: Res<MapSeed>,
 ) {
-    if *net_role == crate::infrastructure::multiplayer::NetRole::Client {
-        return;
-    }
-
     let mut positions = config.spawn_positions(map_seed.0);
 
     // Biome validation: nudge spawn positions away from Water/Mountain
@@ -212,12 +208,10 @@ fn target_building(
 
 fn steer_avoidance(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     spatial_grid: Res<SpatialHashGrid>,
     wall_grid: Res<WallSpatialGrid>,
     nav_grid: Option<Res<NavGrid>>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
-    active_player: Res<ActivePlayer>,
     mut units: Query<
         (
             Entity,
@@ -257,17 +251,10 @@ fn steer_avoidance(
         unit_state,
         attack_target,
         building_assignment,
-        faction,
+        _faction,
         mut just_arrived,
     ) in &mut units
     {
-        // Client: only apply avoidance to local player's units; remote units positioned by state sync
-        if *net_role == crate::infrastructure::multiplayer::NetRole::Client
-            && *faction != active_player.0
-        {
-            continue;
-        }
-
         // Tick JustArrived timer and compute dampening factor
         let arrival_dampen = if let Some(ref mut arrived) = just_arrived {
             arrived.0.tick(time.delta());
@@ -467,13 +454,11 @@ fn steer_avoidance(
 
 fn move_units(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     teams: Res<TeamConfig>,
     wall_grid: Res<WallSpatialGrid>,
     floor_grid: Res<FloorGrid>,
     nav_grid: Option<Res<NavGrid>>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
-    active_player: Res<ActivePlayer>,
     mut query: Query<
         (
             Entity,
@@ -513,12 +498,6 @@ fn move_units(
         opt_unit_state,
     ) in &mut query
     {
-        // Client: only move local player's units; remote units are positioned by state sync
-        if *net_role == crate::infrastructure::multiplayer::NetRole::Client
-            && *faction != active_player.0
-        {
-            continue;
-        }
         // Stunned units cannot move
         if opt_status.map_or(false, |s| s.is_stunned()) {
             continue;
@@ -702,17 +681,9 @@ fn move_units(
 fn snap_units_to_terrain(
     registry: Res<BlueprintRegistry>,
     height_map: Res<HeightMap>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
-    active_player: Res<ActivePlayer>,
     mut units: Query<(&mut Transform, &EntityKind, &Faction), Or<(With<Unit>, With<Mob>)>>,
 ) {
-    for (mut transform, kind, faction) in &mut units {
-        // Client: only snap local player's units; remote units get correct Y from state sync
-        if *net_role == crate::infrastructure::multiplayer::NetRole::Client
-            && *faction != active_player.0
-        {
-            continue;
-        }
+    for (mut transform, kind, _faction) in &mut units {
         transform.translation.y = height_map
             .sample(transform.translation.x, transform.translation.z)
             + y_offset_for(*kind, &registry);

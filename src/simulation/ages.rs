@@ -1,7 +1,8 @@
 //! Age / Era system — gates buildings behind 3 tech ages (Settlement → Expansion → Conquest).
 
 use bevy::prelude::*;
-use std::collections::HashMap;
+use bevy::time::Fixed;
+use std::collections::BTreeMap;
 
 use crate::blueprints::EntityKind;
 use crate::infrastructure::multiplayer::NetRole;
@@ -51,8 +52,11 @@ pub struct AgeResearch {
 
 #[derive(Resource, Default)]
 pub struct FactionAges {
-    pub ages: HashMap<Faction, Age>,
-    pub researching: HashMap<Faction, AgeResearch>,
+    /// BTreeMap: the age-research tick loop iterates `researching` and
+    /// writes event-log + net events, so iteration order must be
+    /// deterministic for lockstep multiplayer.
+    pub ages: BTreeMap<Faction, Age>,
+    pub researching: BTreeMap<Faction, AgeResearch>,
 }
 
 impl FactionAges {
@@ -105,7 +109,7 @@ pub fn required_age_for_building(kind: EntityKind) -> Age {
 // ── Systems ──
 
 fn age_research_system(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     _net_role: Res<NetRole>,
     mut ages: ResMut<FactionAges>,
     mut event_log: ResMut<GameEventLog>,

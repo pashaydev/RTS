@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use std::collections::HashMap;
 
 use crate::blueprints::EntityKind;
@@ -13,7 +14,7 @@ use super::AiWorldSnapshot;
 // ════════════════════════════════════════════════════════════════════
 
 pub fn ai_strategy_system(
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     config: Res<GameSetupConfig>,
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,

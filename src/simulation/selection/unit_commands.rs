@@ -1,10 +1,11 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use bevy::window::PrimaryWindow;
-use game_state::message::{ClientMessage, InputCommand, PlayerInput, ServerMessage};
+use game_state::message::InputCommand;
 
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::infrastructure::audio::{PlaySfx, SfxKind};
-use crate::infrastructure::multiplayer::host_systems::execute_input_command;
+use crate::infrastructure::multiplayer::lockstep::{GameplayInputSubmit, PendingLocalInput};
 use crate::infrastructure::multiplayer::{ClientNetState, HostNetState, NetRole};
 use crate::infrastructure::net_bridge::EntityNetMap;
 use crate::presentation::camera;
@@ -70,11 +71,8 @@ pub(crate) fn handle_right_click_move(
         Option<Res<HostNetState>>,
         Res<BlueprintRegistry>,
         Option<Res<EntityNetMap>>,
-        Res<Time>,
-        Query<&mut UnitState>,
-        Query<(&mut TrainingQueue, &EntityKind, Option<&BuildingLevel>), With<Building>>,
-        Query<&GlobalTransform>,
-        Option<ResMut<bevy_matchbox::prelude::MatchboxSocket>>,
+        Res<Time<Fixed>>,
+        ResMut<PendingLocalInput>,
     ),
 ) {
     let (camera_q, windows) = viewport;
@@ -84,15 +82,12 @@ pub(crate) fn handle_right_click_move(
     let (minimap_interaction, ui_clicked, ui_press, mut sfx) = ui_flags;
     let (
         net_role,
-        client_net,
-        host_net,
-        registry,
+        _client_net,
+        _host_net,
+        _registry,
         net_map,
         time,
-        mut unit_states_q,
-        mut training_buildings,
-        all_transforms,
-        mut matchbox_socket,
+        mut pending_local_input,
     ) = net_params;
 
     if !mouse.just_pressed(MouseButton::Right) {
@@ -249,13 +244,12 @@ pub(crate) fn handle_right_click_move(
     let ground_point = height_map.raycast(ray);
 
     let shift = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
-    let input_player_id = client_net
-        .as_ref()
-        .map(|client| client.player_id as u32)
-        .unwrap_or(0);
 
-    // Build one network input packet for right-click actions supported by current relay path.
-    let make_network_input = || -> Option<PlayerInput> {
+    // Build a lockstep-friendly input packet for right-click actions that
+    // already round-trip through `execute_input_command`. Anything else
+    // still falls through to the direct offline path below so single-player
+    // gameplay stays unchanged.
+    let make_network_input = || -> Option<(Vec<u32>, Vec<InputCommand>)> {
         let net_map = net_map.as_ref()?;
         let entity_ids: Vec<u32> = units_vec
             .iter()
@@ -265,98 +259,41 @@ pub(crate) fn handle_right_click_move(
             return None;
         }
 
-        let mut commands = Vec::new();
+        let mut cmds = Vec::new();
         match target_action {
             Some((target_entity, RClickAction::AttackEnemy)) => {
                 let target_id = *net_map.to_net.get(&target_entity)?;
-                commands.push(InputCommand::Attack { target_id });
+                cmds.push(InputCommand::Attack { target_id });
             }
             Some((target_entity, RClickAction::GatherResource)) => {
                 let target_id = *net_map.to_net.get(&target_entity)?;
-                commands.push(InputCommand::Gather { target_id });
+                cmds.push(InputCommand::Gather { target_id });
             }
             Some(_) => {
-                // Unsupported complex right-click action for network relay yet.
+                // Unsupported complex right-click action for lockstep — let
+                // the legacy direct path below handle it.
                 return None;
             }
             None => {
                 let point = ground_point?;
-                commands.push(InputCommand::Move {
+                cmds.push(InputCommand::Move {
                     target: [point.x, point.y, point.z],
                     formation: Some(formation.formation.to_net_u8()),
                 });
             }
         }
 
-        Some(PlayerInput {
-            player_id: input_player_id,
-            tick: 0,
-            entity_ids,
-            commands,
-        })
+        Some((entity_ids, cmds))
     };
 
-    if *net_role == NetRole::Client {
-        if let (Some(client), Some(ref mut socket)) =
-            (client_net.as_ref(), matchbox_socket.as_mut())
-        {
-            if let Some(input) = make_network_input() {
-                let seq = {
-                    let mut s = client.seq.lock().unwrap();
-                    *s += 1;
-                    *s
-                };
-                let msg = ClientMessage::Input {
-                    seq,
-                    timestamp: time.elapsed_secs_f64(),
-                    input,
-                };
-                crate::infrastructure::multiplayer::matchbox_transport::send_to_host(socket, &msg);
-            }
+    if *net_role != NetRole::Offline {
+        if let Some((entity_ids, cmds)) = make_network_input() {
+            pending_local_input.push(entity_ids, cmds);
+            return;
         }
-        // Client no longer mutates local gameplay state directly; host relays supported inputs.
-        return;
-    }
-
-    if *net_role == NetRole::Host {
-        if let Some(host) = host_net.as_ref() {
-            if let Some(input) = make_network_input() {
-                let seq = {
-                    let mut s = host.seq.lock().unwrap();
-                    *s += 1;
-                    *s
-                };
-                let relay = ServerMessage::RelayedInput {
-                    seq,
-                    timestamp: time.elapsed_secs_f64(),
-                    player_id: 0,
-                    input: input.clone(),
-                };
-                if let Some(ref mut socket) = matchbox_socket {
-                    crate::infrastructure::multiplayer::matchbox_transport::broadcast_reliable(
-                        socket, &relay,
-                    );
-                }
-
-                // Execute locally through the same code path as client commands,
-                // so host and clients have identical component setup.
-                if let Some(ref nm) = net_map {
-                    execute_input_command(
-                        &mut commands,
-                        &input,
-                        time.elapsed_secs_f64(),
-                        nm,
-                        &mut unit_states_q,
-                        &mut task_queues,
-                        &mut training_buildings,
-                        &mut next_task_id,
-                        &all_transforms,
-                        &registry,
-                    );
-                }
-                return;
-            }
-        }
+        // Fall through to the direct path for unsupported actions — that
+        // matches the old behaviour where a handful of right-click cases
+        // were only ever applied locally.
     }
 
     if let Some((target_entity, action)) = target_action {
@@ -703,6 +640,7 @@ pub(crate) fn handle_unit_command_hotkeys(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
+    mut online_submit: GameplayInputSubmit,
     mut cmd_mode: ResMut<CommandMode>,
     mut label_visibility: ResMut<EntityLabelVisibility>,
     mut next_task_id: ResMut<NextTaskId>,
@@ -712,18 +650,27 @@ pub(crate) fn handle_unit_command_hotkeys(
         Res<GraphicsSettings>,
     ),
     selected_units: Query<
-        (Entity, &EntityKind, &Faction, Option<&BuildingAssignment>),
+        (
+            Entity,
+            &EntityKind,
+            &Faction,
+            Option<&BuildingAssignment>,
+            Option<&UnitStance>,
+        ),
         (With<Unit>, With<Selected>),
     >,
     mut task_queues: Query<&mut TaskQueue, With<Unit>>,
     mut unit_abilities: Query<&mut UnitAbilities>,
     active_player: Res<ActivePlayer>,
     mut formation: ResMut<ActiveFormation>,
-    time: Res<Time>,
-    ui_clicked: Res<UiClickedThisFrame>,
-    ui_press: Res<UiPressActive>,
-    placement: Res<BuildingPlacementState>,
+    time: Res<Time<Fixed>>,
+    ui_state: (
+        Res<UiClickedThisFrame>,
+        Res<UiPressActive>,
+        Res<BuildingPlacementState>,
+    ),
 ) {
+    let (ui_clicked, ui_press, placement) = ui_state;
     let (ref camera_q, ref windows, ref graphics) = viewport;
     if placement.mode != PlacementMode::None {
         return;
@@ -731,7 +678,7 @@ pub(crate) fn handle_unit_command_hotkeys(
 
     let has_selected = selected_units
         .iter()
-        .any(|(_, _, f, _)| *f == active_player.0);
+        .any(|(_, _, f, _, _)| *f == active_player.0);
 
     // Escape cancels command mode
     if keys.just_pressed(KeyCode::Escape) {
@@ -745,9 +692,28 @@ pub(crate) fn handle_unit_command_hotkeys(
     }
 
     if has_selected {
+        let selected_player_entities = || {
+            selected_units
+                .iter()
+                .filter(|(_, _, f, _, _)| **f == active_player.0)
+                .map(|(entity, _, _, _, _)| entity)
+        };
+        let selected_player_workers = || {
+            selected_units
+                .iter()
+                .filter(|(_, kind, faction, _, _)| {
+                    **faction == active_player.0 && **kind == EntityKind::Worker
+                })
+                .map(|(entity, _, _, _, _)| entity)
+        };
+
         // --- 1. Instant Commands (Hold & Stop) ---
         if keys.just_pressed(KeyCode::KeyH) {
-            for (entity, _, faction, _) in &selected_units {
+            if online_submit.submit(selected_player_entities(), vec![InputCommand::HoldPosition]) {
+                *cmd_mode = CommandMode::Normal;
+                return;
+            }
+            for (entity, _, faction, _, _) in &selected_units {
                 if *faction != active_player.0 {
                     continue;
                 }
@@ -771,7 +737,11 @@ pub(crate) fn handle_unit_command_hotkeys(
         }
 
         if keys.just_pressed(KeyCode::KeyX) {
-            for (entity, kind, faction, assignment) in &selected_units {
+            if online_submit.submit(selected_player_workers(), vec![InputCommand::Scuttle]) {
+                *cmd_mode = CommandMode::Normal;
+                return;
+            }
+            for (entity, kind, faction, assignment, _) in &selected_units {
                 if *faction != active_player.0 {
                     continue;
                 }
@@ -804,7 +774,23 @@ pub(crate) fn handle_unit_command_hotkeys(
 
         // --- 2. Stance Cycle (V) ---
         if keys.just_pressed(KeyCode::KeyV) {
-            for (entity, _, faction, _) in &selected_units {
+            let next_stance = selected_units
+                .iter()
+                .find(|(_, _, faction, _, _)| **faction == active_player.0)
+                .map(|(_, _, _, _, stance)| {
+                    stance.copied().unwrap_or(UnitStance::Defensive).cycle()
+                });
+            if let Some(stance) = next_stance {
+                if online_submit.submit(
+                    selected_player_entities(),
+                    vec![InputCommand::SetStance {
+                        stance: stance.to_u8(),
+                    }],
+                ) {
+                    return;
+                }
+            }
+            for (entity, _, faction, _, _) in &selected_units {
                 if *faction != active_player.0 {
                     continue;
                 }
@@ -845,13 +831,34 @@ pub(crate) fn handle_unit_command_hotkeys(
         };
         if let Some(slot) = ability_hotkey {
             // Find first selected unit with abilities
-            for (entity, _kind, faction, _) in &selected_units {
+            for (entity, _kind, faction, _, _) in &selected_units {
                 if *faction != active_player.0 {
                     continue;
                 }
                 if let Ok(abilities) = unit_abilities.get(entity) {
                     if let Some(&ability) = abilities.abilities.get(slot) {
                         if ability.targeting() == AbilityTargeting::NoTarget {
+                            if online_submit.submit(
+                                selected_units
+                                    .iter()
+                                    .filter(|(_, _, selected_faction, _, _)| {
+                                        **selected_faction == active_player.0
+                                    })
+                                    .filter_map(|(selected_entity, _, _, _, _)| {
+                                        unit_abilities
+                                            .get(selected_entity)
+                                            .ok()
+                                            .filter(|ab| ab.is_ready(ability))
+                                            .map(|_| selected_entity)
+                                    }),
+                                vec![InputCommand::UseAbility {
+                                    ability_id: ability.to_u8(),
+                                    target: [0.0, 0.0, 0.0],
+                                }],
+                            ) {
+                                *cmd_mode = CommandMode::Normal;
+                                return;
+                            }
                             // Execute immediately
                             if let Ok(mut ab) = unit_abilities.get_mut(entity) {
                                 if ab.is_ready(ability) {
@@ -901,8 +908,8 @@ pub(crate) fn handle_unit_command_hotkeys(
 
     let units_vec: Vec<(Entity, EntityKind)> = selected_units
         .iter()
-        .filter(|(_, _, f, _)| **f == active_player.0)
-        .map(|(e, k, _, _)| (e, *k))
+        .filter(|(_, _, f, _, _)| **f == active_player.0)
+        .map(|(e, k, _, _, _)| (e, *k))
         .collect();
 
     if units_vec.is_empty() {
@@ -914,6 +921,15 @@ pub(crate) fn handle_unit_command_hotkeys(
 
     match *cmd_mode {
         CommandMode::AttackMove => {
+            if online_submit.submit(
+                units_vec.iter().map(|(entity, _)| *entity),
+                vec![InputCommand::AttackMove {
+                    target: [point.x, point.y, point.z],
+                }],
+            ) {
+                *cmd_mode = CommandMode::Normal;
+                return;
+            }
             let n = units_vec.len();
             let spacing = 1.5;
             let radius = if n > 1 {
@@ -960,6 +976,15 @@ pub(crate) fn handle_unit_command_hotkeys(
             }
         }
         CommandMode::Patrol => {
+            if online_submit.submit(
+                units_vec.iter().map(|(entity, _)| *entity),
+                vec![InputCommand::Patrol {
+                    target: [point.x, point.y, point.z],
+                }],
+            ) {
+                *cmd_mode = CommandMode::Normal;
+                return;
+            }
             for (entity, _kind) in &units_vec {
                 if shift {
                     enqueue_task(
@@ -991,6 +1016,24 @@ pub(crate) fn handle_unit_command_hotkeys(
             }
         }
         CommandMode::AbilityTarget(ability) => {
+            if online_submit.submit(
+                units_vec
+                    .iter()
+                    .filter_map(|(entity, _)| {
+                        unit_abilities
+                            .get(*entity)
+                            .ok()
+                            .filter(|abilities| abilities.is_ready(ability))
+                            .map(|_| *entity)
+                    }),
+                vec![InputCommand::UseAbility {
+                    ability_id: ability.to_u8(),
+                    target: [point.x, point.y, point.z],
+                }],
+            ) {
+                *cmd_mode = CommandMode::Normal;
+                return;
+            }
             for (entity, _kind) in &units_vec {
                 if let Ok(mut abilities) = unit_abilities.get_mut(*entity) {
                     if abilities.is_ready(ability) {

@@ -1,5 +1,3 @@
-#![allow(unused_imports)]
-
 pub use crate::infrastructure::multiplayer::host_systems::{
-    execute_input_command, host_handle_disconnects, host_process_client_commands,
+    host_handle_disconnects, host_process_client_commands,
 };

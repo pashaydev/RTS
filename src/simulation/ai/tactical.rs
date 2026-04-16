@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use std::collections::HashSet;
 
 use crate::blueprints::EntityKind;
@@ -14,7 +15,7 @@ use super::types::*;
 
 pub fn ai_tactical_system(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     config: Res<GameSetupConfig>,
     active_player: Res<ActivePlayer>,
     teams: Res<TeamConfig>,

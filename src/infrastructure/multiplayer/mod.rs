@@ -1,16 +1,23 @@
-//! Multiplayer — host-authoritative model with Matchbox WebRTC transport.
+//! Multiplayer — deterministic lockstep with Matchbox WebRTC transport.
 //!
-//! Host runs full simulation, clients receive state updates and send commands.
-//! Uses WebRTC data channels via `bevy_matchbox` for both native and WASM.
+//! Every peer runs the same simulation at a fixed tick rate. Local input is
+//! scheduled for `SimClock.tick + input_delay` and broadcast to all other
+//! peers; a tick only advances once every connected player's input for that
+//! tick is in the buffer. Host is NOT authoritative — it just relays packets.
 
+pub mod checksum;
 pub mod client;
 pub mod client_systems;
 pub mod debug_tap;
 pub mod host_systems;
+pub mod lockstep;
 pub mod matchbox_transport;
-pub mod replication;
 pub mod server;
 pub mod transport;
+
+#[allow(unused_imports)]
+pub use checksum::{DesyncDetected, PendingChecksumReports, SyncChecksum};
+pub use lockstep::{lockstep_advance_allowed, lockstep_check_gate, LockstepInputBuffer};
 
 use bevy::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,15 +54,6 @@ pub struct NetStats {
 
     // Host-only: connected client count
     pub connected_clients: u8,
-
-    // Sync stats
-    pub last_sync_entity_count: u32,
-    pub last_state_unmatched: u32,
-    pub net_map_size: u32,
-    pub pending_spawns: u32,
-    pub pending_despawns: u32,
-    pub last_spawn_batch: u32,
-    pub last_despawn_batch: u32,
 }
 
 /// Which roles a stat is relevant for.
@@ -137,39 +135,10 @@ pub const NET_STAT_FIELDS: &[NetStatField] = &[
         label: "Msgs Received",
         visibility: NetStatVisibility::Always,
     },
+    // ── Desync detection ──
     NetStatField {
-        folder_key: "traffic",
-        label: "Sync Entities",
-        visibility: NetStatVisibility::Always,
-    },
-    NetStatField {
-        folder_key: "traffic",
-        label: "Net Map Size",
-        visibility: NetStatVisibility::Always,
-    },
-    NetStatField {
-        folder_key: "traffic",
-        label: "State Misses",
-        visibility: NetStatVisibility::Always,
-    },
-    NetStatField {
-        folder_key: "traffic",
-        label: "Pending Spawns",
-        visibility: NetStatVisibility::Always,
-    },
-    NetStatField {
-        folder_key: "traffic",
-        label: "Pending Despawns",
-        visibility: NetStatVisibility::Always,
-    },
-    NetStatField {
-        folder_key: "traffic",
-        label: "Spawn Batch",
-        visibility: NetStatVisibility::Always,
-    },
-    NetStatField {
-        folder_key: "traffic",
-        label: "Despawn Batch",
+        folder_key: "conn",
+        label: "Desync",
         visibility: NetStatVisibility::Always,
     },
 ];
@@ -204,14 +173,7 @@ impl NetStats {
             "Total Received" => Some(format_bytes(self.total_bytes_received)),
             "Msgs Sent" => Some(self.total_msgs_sent.to_string()),
             "Msgs Received" => Some(self.total_msgs_received.to_string()),
-            "Sync Entities" => Some(self.last_sync_entity_count.to_string()),
-            "Net Map Size" => Some(self.net_map_size.to_string()),
-            "State Misses" => Some(self.last_state_unmatched.to_string()),
-            "Pending Spawns" => Some(self.pending_spawns.to_string()),
-            "Pending Despawns" => Some(self.pending_despawns.to_string()),
-            "Spawn Batch" => Some(self.last_spawn_batch.to_string()),
-            "Despawn Batch" => Some(self.last_despawn_batch.to_string()),
-            _ => None, // "Status" is derived from LobbyState, handled externally
+            _ => None, // "Status" and "Desync" are derived elsewhere
         }
     }
 }
@@ -293,6 +255,12 @@ fn update_net_stats(time: Res<Time>, mut stats: ResMut<NetStats>) {
 
 // ── Net Role ────────────────────────────────────────────────────────────────
 
+/// Whether we're part of a multiplayer session and, if so, who is relaying.
+///
+/// Under deterministic lockstep the simulation is the same on every peer;
+/// `Host` vs `Client` only affects lobby management, Matchbox topology,
+/// and which peer seeds the initial lobby state. There is no
+/// host-authoritative simulation path.
 #[derive(Resource, Default, PartialEq, Eq, Clone, Copy, Debug)]
 pub enum NetRole {
     #[default]
@@ -428,16 +396,12 @@ impl Default for ClientNetState {
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub enum NetSet {
-    /// Host: process incoming client commands.
-    /// Client: receive and apply server messages.
+    /// Drain inbound messages from the Matchbox socket into the ECS.
     Receive,
-    /// Host: broadcast state/entity/building/resource/day-cycle sync.
-    Broadcast,
+    /// Process drained messages — apply lobby/chat events, forward inputs,
+    /// send pings, etc.
+    Apply,
 }
-
-// Keep old name as alias for backwards compat within the crate
-#[allow(dead_code)]
-pub type MultiplayerSet = NetSet;
 
 // ── Run conditions ──────────────────────────────────────────────────────────
 
@@ -454,7 +418,6 @@ pub fn is_not_client(role: Res<NetRole>) -> bool {
     *role != NetRole::Client
 }
 
-#[allow(dead_code)]
 pub fn is_online(role: Res<NetRole>) -> bool {
     *role != NetRole::Offline
 }
@@ -510,26 +473,21 @@ pub fn configure_multiplayer_ai(
         NetRole::Offline => {}
     }
 
-    // On the client, disable ALL AI — the host runs simulation and syncs state.
-    // On the host, rebuild AI ownership from the authoritative slot config and
-    // then strip any connected human seats.
-    if *role == NetRole::Client {
-        info!("Client: disabling all local AI (host is authoritative)");
-        ai_factions.factions.clear();
-    } else {
-        ai_factions.factions = config
-            .ai_factions_with_difficulty()
-            .into_iter()
-            .map(|(index, _)| Faction::PLAYERS[index])
-            .collect();
-        for player in &lobby.players {
-            if player.connected {
-                ai_factions.factions.remove(&player.faction);
-                info!(
-                    "Multiplayer: {:?} controlled by human ({})",
-                    player.faction, player.name
-                );
-            }
+    // Lockstep: all peers (host + client) apply the same AI ownership so every
+    // peer simulates AI factions identically. Rebuild from the authoritative
+    // slot config, then strip any connected human seats.
+    ai_factions.factions = config
+        .ai_factions_with_difficulty()
+        .into_iter()
+        .map(|(index, _)| Faction::PLAYERS[index])
+        .collect();
+    for player in &lobby.players {
+        if player.connected {
+            ai_factions.factions.remove(&player.faction);
+            info!(
+                "Multiplayer: {:?} controlled by human ({})",
+                player.faction, player.name
+            );
         }
     }
 }
@@ -537,35 +495,27 @@ pub fn configure_multiplayer_ai(
 // ── Plugin ──────────────────────────────────────────────────────────────────
 
 fn reset_multiplayer_sync(
-    mut synced: ResMut<server::replication::SyncedEntitySet>,
-    mut pending: ResMut<client::apply::PendingNetSpawns>,
-    mut pending_neutral: ResMut<client::apply::PendingNeutralUpdates>,
-    mut pending_baseline: ResMut<client::apply::PendingBaseline>,
-    mut pending_terrain: ResMut<client::apply::PendingTerrainShapeSync>,
-    mut prev_snapshots: ResMut<server::replication::PreviousSnapshots>,
-    mut prev_buildings: ResMut<server::replication::PreviousBuildingSnapshots>,
-    mut prev_neutral: ResMut<server::replication::PreviousNeutralSnapshots>,
-    mut pending_frame: ResMut<server::replication::PendingServerFrame>,
-    mut terrain_queue: ResMut<crate::world::ground::TerrainShapeUpdateQueue>,
-    mut terrain_sync: ResMut<crate::world::ground::TerrainShapeSyncState>,
+    mut lockstep_buffer: ResMut<LockstepInputBuffer>,
+    mut pending_local_input: ResMut<lockstep::PendingLocalInput>,
+    mut pending_input_broadcasts: ResMut<client::apply::PendingInputBroadcasts>,
+    mut pending_events: ResMut<client::apply::PendingNetEvents>,
 ) {
-    synced.known.clear();
-    synced.full_resync_counter = 0;
-    pending.spawns.clear();
-    pending.despawns.clear();
-    pending_neutral.deltas.clear();
-    pending_neutral.despawns.clear();
-    pending_baseline.baseline = None;
-    pending_terrain.ops.clear();
-    prev_snapshots.snapshots.clear();
-    prev_snapshots.full_sync_counter = 0;
-    prev_buildings.snapshots.clear();
-    prev_neutral.amounts.clear();
-    pending_frame.messages.clear();
-    terrain_queue.pending.clear();
-    terrain_sync.applied_history.clear();
-    terrain_sync.applied_history_ordered.clear();
-    terrain_sync.pending_network.clear();
+    lockstep_buffer.reset();
+    pending_local_input.batches.clear();
+    pending_input_broadcasts.inputs.clear();
+    pending_events.events.clear();
+}
+
+fn reset_desync_state(
+    mut sync_checksum: ResMut<checksum::SyncChecksum>,
+    mut latest_snapshot: ResMut<checksum::LatestChecksumSnapshot>,
+    mut desync: ResMut<checksum::DesyncDetected>,
+    mut pending_checksums: ResMut<checksum::PendingChecksumReports>,
+) {
+    *sync_checksum = checksum::SyncChecksum::default();
+    *latest_snapshot = checksum::LatestChecksumSnapshot::default();
+    *desync = checksum::DesyncDetected::default();
+    pending_checksums.reports.clear();
 }
 
 pub struct MultiplayerPlugin;
@@ -574,10 +524,9 @@ impl Plugin for MultiplayerPlugin {
     fn build(&self, app: &mut App) {
         debug_tap::ensure_started();
 
-        // Configure system set ordering: Receive runs before Broadcast
         app.configure_sets(
             Update,
-            (NetSet::Receive, NetSet::Broadcast.after(NetSet::Receive)),
+            (NetSet::Receive, NetSet::Apply.after(NetSet::Receive)),
         );
 
         app.init_resource::<NetRole>()
@@ -586,27 +535,34 @@ impl Plugin for MultiplayerPlugin {
             .init_resource::<SessionTokens>()
             .init_resource::<transport::PeerMap>()
             .init_resource::<transport::MatchboxInbox>()
-            .init_resource::<server::replication::StateSyncTimer>()
-            .init_resource::<server::replication::SyncedEntitySet>()
-            .init_resource::<server::replication::PreviousSnapshots>()
-            .init_resource::<server::replication::PendingServerFrame>()
-            .init_resource::<server::replication::PreviousBuildingSnapshots>()
-            .init_resource::<server::replication::BuildingSyncTimer>()
-            .init_resource::<server::replication::ResourceSyncTimer>()
-            .init_resource::<server::replication::DayCycleSyncTimer>()
-            .init_resource::<server::replication::NeutralWorldSyncTimer>()
-            .init_resource::<server::replication::PreviousNeutralSnapshots>()
-            .init_resource::<client::apply::PendingRelayedInputs>()
-            .init_resource::<client::apply::PendingStateSync>()
-            .init_resource::<client::apply::PendingBuildingSync>()
-            .init_resource::<client::apply::PendingResourceSync>()
-            .init_resource::<client::apply::PendingDayCycleSync>()
+            .init_resource::<LockstepInputBuffer>()
+            .init_resource::<lockstep::PendingLocalInput>()
+            .init_resource::<checksum::SyncChecksum>()
+            .init_resource::<checksum::LatestChecksumSnapshot>()
+            .init_resource::<checksum::DesyncDetected>()
+            .init_resource::<checksum::PendingChecksumReports>()
+            .init_resource::<client::apply::PendingInputBroadcasts>()
             .init_resource::<client::apply::PendingNetEvents>()
-            .init_resource::<client::apply::PendingBaseline>()
-            .init_resource::<client::apply::PendingTerrainShapeSync>()
-            .init_resource::<client::apply::PendingNetSpawns>()
-            .init_resource::<client::apply::PendingNeutralUpdates>()
             .init_resource::<client::receive::ClientPingTimer>()
+            // Gate: latch advance_allowed once per FixedFirst iteration so
+            // both advance_sim_clock and the FixedUpdate simulation set see
+            // a consistent value.
+            .add_systems(
+                FixedFirst,
+                lockstep::lockstep_check_gate
+                    .run_if(in_state(AppState::InGame))
+                    .before(crate::advance_sim_clock),
+            )
+            // Apply queued lockstep inputs at the start of the simulation
+            // set so AI/movement/combat all see the post-input state.
+            .add_systems(
+                FixedUpdate,
+                lockstep::lockstep_apply_tick_inputs
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(lockstep::lockstep_advance_allowed)
+                    .in_set(GameFlowSet::Simulation)
+                    .before(crate::types::SimSet::Ai),
+            )
             // Poll matchbox socket each frame (before game systems)
             .add_systems(
                 Update,
@@ -617,11 +573,23 @@ impl Plugin for MultiplayerPlugin {
                     .in_set(GameFlowSet::NetworkReceive)
                     .before(NetSet::Receive),
             )
-            // Host: receive commands
+            // Local input capture / broadcast runs before network receive.
+            .add_systems(
+                Update,
+                lockstep::collect_and_broadcast_local_input
+                    .run_if(in_state(AppState::InGame))
+                    .in_set(GameFlowSet::Input),
+            )
+            // Host: receive commands, forward remote inputs, handle
+            // joins/leaves/pings, and watch for disconnects.
             .add_systems(
                 Update,
                 (
-                    server::input::host_process_client_commands,
+                    lockstep::host_receive_remote_inputs,
+                    checksum::host_drain_checksum_reports
+                        .after(lockstep::host_receive_remote_inputs),
+                    server::input::host_process_client_commands
+                        .after(checksum::host_drain_checksum_reports),
                     server::input::host_handle_disconnects,
                 )
                     .in_set(NetSet::Receive)
@@ -629,53 +597,30 @@ impl Plugin for MultiplayerPlugin {
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_host),
             )
-            // Host: broadcast sync data
+            // Client: drain inbox, insert remote inputs into the lockstep
+            // buffer.
             .add_systems(
                 Update,
                 (
-                    server::replication::host_broadcast_state_sync,
-                    server::replication::host_broadcast_entity_spawns
-                        .after(server::replication::host_broadcast_state_sync),
-                    server::replication::host_broadcast_building_sync,
-                    server::replication::host_broadcast_terrain_shape_sync,
-                    server::replication::host_broadcast_resource_sync,
-                    server::replication::host_broadcast_day_cycle_sync,
-                    server::replication::host_broadcast_neutral_world_sync,
-                    server::replication::host_broadcast_victory_events,
+                    client::receive::client_receive_commands,
+                    lockstep::client_receive_remote_inputs
+                        .after(client::receive::client_receive_commands),
                 )
-                    .in_set(NetSet::Broadcast)
-                    .in_set(GameFlowSet::NetworkBroadcast)
-                    .run_if(in_state(AppState::InGame))
-                    .run_if(is_host),
-            )
-            // Client: receive and apply server messages
-            .add_systems(
-                Update,
-                client::receive::client_receive_commands
                     .in_set(NetSet::Receive)
                     .in_set(GameFlowSet::NetworkReceive)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_client),
             )
-            // Client: post-receive processing
+            // Client: post-receive processing (lobby/chat events, ping,
+            // disconnect watchdog).
             .add_systems(
                 Update,
                 (
-                    client::apply::client_apply_world_baseline,
-                    client::apply::client_apply_relayed_inputs,
-                    client::apply::client_apply_state_sync,
-                    client::apply::client_apply_building_sync,
-                    client::apply::client_apply_terrain_shape_sync,
-                    client::apply::client_apply_resource_sync,
-                    client::apply::client_apply_day_cycle_sync,
                     client::apply::client_apply_server_events,
-                    client::apply::client_apply_entity_sync,
-                    client::apply::client_apply_neutral_sync,
-                    client::interpolation::client_interpolate_remote_units,
                     client::receive::client_handle_disconnect,
                     client::receive::client_send_ping,
                 )
-                    .in_set(NetSet::Broadcast)
+                    .in_set(NetSet::Apply)
                     .in_set(GameFlowSet::NetworkBroadcast)
                     .run_if(in_state(AppState::InGame))
                     .run_if(is_client),
@@ -686,6 +631,20 @@ impl Plugin for MultiplayerPlugin {
                     .in_set(GameFlowSet::Diagnostics)
                     .run_if(in_state(AppState::InGame)),
             )
+            // Desync detection: compute a world checksum every ~30 ticks
+            // after the simulation has run, broadcast to peers, and compare
+            // against any remote checksums received for the same tick.
+            // Runs in FixedUpdate so it's coupled to SimClock, not framerate.
+            .add_systems(
+                FixedUpdate,
+                (
+                    checksum::compute_world_checksum,
+                    checksum::check_desync.after(checksum::compute_world_checksum),
+                )
+                    .in_set(GameFlowSet::Diagnostics)
+                    .run_if(in_state(AppState::InGame))
+                    .run_if(checksum::in_game_and_online),
+            )
             .add_systems(
                 OnEnter(AppState::InGame),
                 (
@@ -693,6 +652,7 @@ impl Plugin for MultiplayerPlugin {
                         .after(crate::simulation::units::apply_game_config)
                         .run_if(is_online),
                     reset_multiplayer_sync,
+                    reset_desync_state,
                 ),
             );
     }
@@ -734,13 +694,6 @@ mod tests {
             bytes_sent_last_sec: 512,
             bytes_received_last_sec: 3_072,
             connected_clients: 2,
-            last_sync_entity_count: 42,
-            last_state_unmatched: 5,
-            net_map_size: 77,
-            pending_spawns: 3,
-            pending_despawns: 4,
-            last_spawn_batch: 6,
-            last_despawn_batch: 2,
             ..Default::default()
         };
 
@@ -783,34 +736,6 @@ mod tests {
         assert_eq!(
             stats.display_value("Msgs Received", &NetRole::Host),
             Some("9".to_string())
-        );
-        assert_eq!(
-            stats.display_value("Sync Entities", &NetRole::Host),
-            Some("42".to_string())
-        );
-        assert_eq!(
-            stats.display_value("Net Map Size", &NetRole::Host),
-            Some("77".to_string())
-        );
-        assert_eq!(
-            stats.display_value("State Misses", &NetRole::Host),
-            Some("5".to_string())
-        );
-        assert_eq!(
-            stats.display_value("Pending Spawns", &NetRole::Host),
-            Some("3".to_string())
-        );
-        assert_eq!(
-            stats.display_value("Pending Despawns", &NetRole::Host),
-            Some("4".to_string())
-        );
-        assert_eq!(
-            stats.display_value("Spawn Batch", &NetRole::Host),
-            Some("6".to_string())
-        );
-        assert_eq!(
-            stats.display_value("Despawn Batch", &NetRole::Host),
-            Some("2".to_string())
         );
         assert_eq!(stats.display_value("Status", &NetRole::Host), None);
     }
@@ -879,11 +804,24 @@ mod tests {
     }
 
     #[test]
-    fn configure_multiplayer_ai_for_client_disables_all_ai_and_uses_client_faction() {
+    fn configure_multiplayer_ai_for_client_matches_host_ai_and_uses_client_faction() {
+        // In lockstep, the client must apply the same AI ownership as the host
+        // so that AI factions simulate identically on every peer.
         let mut world = World::new();
-        world.insert_resource(GameSetupConfig::default());
+        world.insert_resource(GameSetupConfig {
+            slots: [
+                crate::types::SlotOccupant::Human,
+                crate::types::SlotOccupant::Ai(crate::types::AiDifficulty::Medium),
+                crate::types::SlotOccupant::Ai(crate::types::AiDifficulty::Medium),
+                crate::types::SlotOccupant::Human,
+            ],
+            ..Default::default()
+        });
         world.insert_resource(LobbyState {
-            players: vec![lobby_player(0, "Host", Faction::Player1, 0, true, true)],
+            players: vec![
+                lobby_player(0, "Host", Faction::Player1, 0, true, true),
+                lobby_player(1, "Guest", Faction::Player4, 3, false, true),
+            ],
             ..Default::default()
         });
         world.insert_resource(NetRole::Client);
@@ -905,7 +843,10 @@ mod tests {
         let active_player = world.resource::<ActivePlayer>();
         let ai = world.resource::<AiControlledFactions>();
         assert_eq!(active_player.0, Faction::Player4);
-        assert!(ai.factions.is_empty());
+        assert!(ai.factions.contains(&Faction::Player2));
+        assert!(ai.factions.contains(&Faction::Player3));
+        assert!(!ai.factions.contains(&Faction::Player1));
+        assert!(!ai.factions.contains(&Faction::Player4));
     }
 
     #[test]

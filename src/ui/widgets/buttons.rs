@@ -1,13 +1,12 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use bevy_matchbox::prelude::*;
-use game_state::message::{ClientMessage, InputCommand, PlayerInput};
+use game_state::message::InputCommand;
 
 use super::actions_units::PreferResourceButton;
 use super::core::constants::*;
 use crate::blueprints::{BlueprintRegistry, EntityKind};
-use crate::infrastructure::multiplayer::{ClientNetState, NetRole};
-use crate::infrastructure::net_bridge::EntityNetMap;
+use crate::infrastructure::multiplayer::lockstep::GameplayInputSubmit;
+use crate::infrastructure::multiplayer::NetRole;
 use crate::presentation::camera;
 use crate::simulation::buildings;
 use crate::simulation::combat::{apply_manual_hold_intent, clear_combat_intent};
@@ -24,40 +23,15 @@ fn mark_click(ui_clicked: &mut UiClickedThisFrame, ui_press: &mut UiPressActive)
 #[derive(SystemParam)]
 pub(crate) struct OnlineInputParams<'w> {
     net_role: Res<'w, NetRole>,
-    client_state: Option<Res<'w, ClientNetState>>,
-    matchbox_socket: Option<ResMut<'w, MatchboxSocket>>,
-    net_map: Option<Res<'w, EntityNetMap>>,
-    time: Res<'w, Time>,
+    submit: GameplayInputSubmit<'w>,
 }
 
-
-fn send_online_input_to_host(
-    client: &ClientNetState,
-    socket: &mut MatchboxSocket,
-    time: &Time,
+fn push_online_input(
+    submit: &mut GameplayInputSubmit,
     entity_ids: Vec<u32>,
     commands: Vec<InputCommand>,
 ) {
-    if commands.is_empty() {
-        return;
-    }
-
-    let seq = {
-        let mut s = client.seq.lock().unwrap();
-        *s += 1;
-        *s
-    };
-    let msg = ClientMessage::Input {
-        seq,
-        timestamp: time.elapsed_secs_f64(),
-        input: PlayerInput {
-            player_id: client.player_id as u32,
-            tick: 0,
-            entity_ids,
-            commands,
-        },
-    };
-    crate::infrastructure::multiplayer::matchbox_transport::send_to_host(socket, &msg);
+    submit.push_raw(entity_ids, commands);
 }
 
 // ── Build button handler ──
@@ -218,26 +192,19 @@ pub fn handle_train_buttons(
             continue;
         }
 
-        if *online.net_role == NetRole::Client {
-            let (Some(client), Some(ref mut socket), Some(net_map)) = (
-                online.client_state.as_ref(),
-                online.matchbox_socket.as_mut(),
-                online.net_map.as_ref(),
-            ) else {
-                continue;
-            };
-
+        if *online.net_role != NetRole::Offline {
             let Some(building_entity) = selected_buildings.iter().next() else {
                 continue;
             };
-            let Some(&building_id) = net_map.to_net.get(&building_entity) else {
+            let Some(entity_ids) = online.submit.entity_ids_for([building_entity]) else {
+                continue;
+            };
+            let Some(&building_id) = entity_ids.first() else {
                 continue;
             };
 
-            send_online_input_to_host(
-                client,
-                socket,
-                &online.time,
+            push_online_input(
+                &mut online.submit,
                 Vec::new(),
                 vec![InputCommand::Train {
                     building_id,
@@ -514,6 +481,7 @@ pub fn handle_demolish_confirm(
 
 pub fn handle_scuttle_unit_button(
     interactions: Query<&Interaction, (Changed<Interaction>, With<ScuttleUnitButton>)>,
+    mut online: OnlineInputParams,
     selected_units: Query<(Entity, &EntityKind, &Faction), (With<Unit>, With<Selected>)>,
     active_player: Res<ActivePlayer>,
     mut health_q: Query<&mut Health, With<Unit>>,
@@ -528,6 +496,18 @@ pub fn handle_scuttle_unit_button(
         ui_clicked.0 = 2;
         ui_press.0 = true;
         *cmd_mode = CommandMode::Normal;
+
+        if online.submit.submit(
+            selected_units
+                .iter()
+                .filter(|(_, kind, faction)| {
+                    **faction == active_player.0 && **kind == EntityKind::Worker
+                })
+                .map(|(entity, _, _)| entity),
+            vec![InputCommand::Scuttle],
+        ) {
+            continue;
+        }
 
         for (entity, kind, faction) in &selected_units {
             if *faction != active_player.0 || *kind != EntityKind::Worker {
@@ -544,6 +524,7 @@ pub fn handle_scuttle_unit_button(
 
 pub fn handle_drop_cargo_button(
     interactions: Query<&Interaction, (Changed<Interaction>, With<DropCargoButton>)>,
+    mut online: OnlineInputParams,
     mut workers: Query<
         (Entity, &EntityKind, &Faction, &mut Carrying, &mut UnitState),
         (With<Unit>, With<Selected>),
@@ -558,6 +539,20 @@ pub fn handle_drop_cargo_button(
         }
         ui_clicked.0 = 2;
         ui_press.0 = true;
+
+        if online.submit.submit(
+            workers
+                .iter()
+                .filter(|(_, kind, faction, carrying, _)| {
+                    **faction == active_player.0
+                        && **kind == EntityKind::Worker
+                        && carrying.amount > 0
+                })
+                .map(|(entity, _, _, _, _)| entity),
+            vec![InputCommand::DropCargo],
+        ) {
+            continue;
+        }
 
         for (_, kind, faction, mut carrying, mut state) in &mut workers {
             if *faction != active_player.0 || *kind != EntityKind::Worker {
@@ -617,21 +612,15 @@ pub fn handle_rally_point_button(
         let world_pos = ray.get_point(dist);
 
         for entity in &selected_buildings {
-            if *online.net_role == NetRole::Client {
-                let (Some(client), Some(ref mut socket), Some(net_map)) = (
-                    online.client_state.as_ref(),
-                    online.matchbox_socket.as_mut(),
-                    online.net_map.as_ref(),
-                ) else {
+            if *online.net_role != NetRole::Offline {
+                let Some(entity_ids) = online.submit.entity_ids_for([entity]) else {
                     continue;
                 };
-                let Some(&building_id) = net_map.to_net.get(&entity) else {
+                let Some(&building_id) = entity_ids.first() else {
                     continue;
                 };
-                send_online_input_to_host(
-                    client,
-                    socket,
-                    &online.time,
+                push_online_input(
+                    &mut online.submit,
                     Vec::new(),
                     vec![InputCommand::SetRallyPoint {
                         building_id,
@@ -656,6 +645,7 @@ pub fn handle_toggle_auto_attack(
     interactions: Query<&Interaction, (Changed<Interaction>, With<ToggleAutoAttackButton>)>,
     selected_buildings: Query<Entity, (With<Building>, With<Selected>)>,
     mut auto_attacks: Query<&mut TowerAutoAttackEnabled>,
+    mut online: OnlineInputParams,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -666,7 +656,19 @@ pub fn handle_toggle_auto_attack(
         ui_clicked.0 = 2;
         ui_press.0 = true;
         for entity in &selected_buildings {
-            if let Ok(mut aa) = auto_attacks.get_mut(entity) {
+            if *online.net_role != NetRole::Offline {
+                let Some(entity_ids) = online.submit.entity_ids_for([entity]) else {
+                    continue;
+                };
+                let Some(&building_id) = entity_ids.first() else {
+                    continue;
+                };
+                push_online_input(
+                    &mut online.submit,
+                    Vec::new(),
+                    vec![InputCommand::ToggleAutoAttack { building_id }],
+                );
+            } else if let Ok(mut aa) = auto_attacks.get_mut(entity) {
                 aa.0 = !aa.0;
             }
         }
@@ -923,6 +925,7 @@ pub fn handle_pause_building_button(
     mut commands: Commands,
     interactions: Query<&Interaction, (Changed<Interaction>, With<PauseBuildingButton>)>,
     selected_buildings: Query<(Entity, Option<&BuildingPaused>), (With<Building>, With<Selected>)>,
+    mut online: OnlineInputParams,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -934,7 +937,19 @@ pub fn handle_pause_building_button(
         ui_press.0 = true;
 
         for (building_entity, paused) in &selected_buildings {
-            if paused.is_some() {
+            if *online.net_role != NetRole::Offline {
+                let Some(entity_ids) = online.submit.entity_ids_for([building_entity]) else {
+                    continue;
+                };
+                let Some(&building_id) = entity_ids.first() else {
+                    continue;
+                };
+                push_online_input(
+                    &mut online.submit,
+                    Vec::new(),
+                    vec![InputCommand::TogglePauseBuilding { building_id }],
+                );
+            } else if paused.is_some() {
                 commands.entity(building_entity).remove::<BuildingPaused>();
             } else {
                 commands.entity(building_entity).insert(BuildingPaused);
@@ -1174,6 +1189,7 @@ pub fn handle_command_mode_buttons(
 
 pub fn handle_hold_position_button(
     interactions: Query<&Interaction, (Changed<Interaction>, With<HoldPositionButton>)>,
+    mut online: OnlineInputParams,
     mut commands: Commands,
     selected_units: Query<(Entity, &Faction), (With<Unit>, With<Selected>)>,
     mut task_queues: Query<&mut TaskQueue, With<Unit>>,
@@ -1191,6 +1207,17 @@ pub fn handle_hold_position_button(
         ui_clicked.0 = 2;
         ui_press.0 = true;
         *cmd_mode = CommandMode::Normal;
+
+        if online.submit.submit(
+            selected_units
+                .iter()
+                .filter(|(_, faction)| **faction == active_player.0)
+                .map(|(entity, _)| entity),
+            vec![InputCommand::HoldPosition],
+        ) {
+            continue;
+        }
+
         for (entity, faction) in &selected_units {
             if *faction != active_player.0 {
                 continue;
@@ -1216,6 +1243,7 @@ pub fn handle_hold_position_button(
 
 pub fn handle_stop_button(
     interactions: Query<&Interaction, (Changed<Interaction>, With<StopButton>)>,
+    mut online: OnlineInputParams,
     mut commands: Commands,
     selected_units: Query<
         (Entity, &Faction, &EntityKind, Option<&BuildingAssignment>),
@@ -1234,6 +1262,17 @@ pub fn handle_stop_button(
         ui_clicked.0 = 2;
         ui_press.0 = true;
         *cmd_mode = CommandMode::Normal;
+
+        if online.submit.submit(
+            selected_units
+                .iter()
+                .filter(|(_, faction, _, _)| **faction == active_player.0)
+                .map(|(entity, _, _, _)| entity),
+            vec![InputCommand::Stop],
+        ) {
+            continue;
+        }
+
         for (entity, faction, kind, assignment) in &selected_units {
             if *faction != active_player.0 {
                 continue;
@@ -1283,25 +1322,14 @@ pub fn handle_cycle_stance_button(
         ui_clicked.0 = 2;
         ui_press.0 = true;
 
-        if *online.net_role == NetRole::Client {
-            let (Some(client), Some(ref mut socket), Some(net_map)) = (
-                online.client_state.as_ref(),
-                online.matchbox_socket.as_mut(),
-                online.net_map.as_ref(),
-            ) else {
-                continue;
-            };
-
-            let mut entity_ids = Vec::new();
+        if *online.net_role != NetRole::Offline {
+            let mut entities = Vec::new();
             let mut next_stance = None;
             for (entity, faction, stance) in &selected_units {
                 if *faction != active_player.0 {
                     continue;
                 }
-                let Some(&net_id) = net_map.to_net.get(&entity) else {
-                    continue;
-                };
-                entity_ids.push(net_id);
+                entities.push(entity);
                 if next_stance.is_none() {
                     next_stance = Some(stance.copied().unwrap_or(UnitStance::Defensive).cycle());
                 }
@@ -1309,11 +1337,8 @@ pub fn handle_cycle_stance_button(
             let Some(stance) = next_stance else {
                 continue;
             };
-            send_online_input_to_host(
-                client,
-                socket,
-                &online.time,
-                entity_ids,
+            online.submit.submit(
+                entities,
                 vec![InputCommand::SetStance {
                     stance: stance.to_u8(),
                 }],
@@ -1352,6 +1377,7 @@ pub fn handle_formation_button(
 pub fn handle_prefer_resource_button(
     mut commands: Commands,
     interactions: Query<&Interaction, (Changed<Interaction>, With<PreferResourceButton>)>,
+    mut online: OnlineInputParams,
     selected: Query<
         (Entity, &Faction, &EntityKind, Option<&PreferredResource>),
         (With<Unit>, With<Selected>),
@@ -1376,6 +1402,20 @@ pub fn handle_prefer_resource_button(
             .unwrap_or(SelectedWorkerPreference::Off)
             .cycle_target();
 
+        if online.submit.submit(
+            selected
+                .iter()
+                .filter(|(_, faction, kind, _)| {
+                    **faction == active_player.0 && **kind == EntityKind::Worker
+                })
+                .map(|(entity, _, _, _)| entity),
+            vec![InputCommand::SetPreferredResource {
+                resource: next.map(|rt| rt.index() as u8).unwrap_or(u8::MAX),
+            }],
+        ) {
+            continue;
+        }
+
         for (entity, faction, kind, _) in &selected {
             if *faction != active_player.0 || *kind != EntityKind::Worker {
                 continue;
@@ -1395,6 +1435,7 @@ pub fn handle_prefer_resource_button(
 pub fn handle_ability_button(
     mut commands: Commands,
     interactions: Query<(&Interaction, &AbilityButton), Changed<Interaction>>,
+    mut online: OnlineInputParams,
     mut selected_units: Query<
         (Entity, &Faction, &mut UnitAbilities, &Transform),
         (With<Unit>, With<Selected>),
@@ -1414,6 +1455,20 @@ pub fn handle_ability_button(
         let ability = ability_btn.0;
 
         if ability.targeting() == AbilityTargeting::NoTarget {
+            if online.submit.submit(
+                selected_units
+                    .iter_mut()
+                    .filter(|(_, faction, abilities, _)| {
+                        **faction == active_player.0 && abilities.is_ready(ability)
+                    })
+                    .map(|(entity, _, _, _)| entity),
+                vec![InputCommand::UseAbility {
+                    ability_id: ability.to_u8(),
+                    target: [0.0, 0.0, 0.0],
+                }],
+            ) {
+                continue;
+            }
             // Execute immediately on all selected units that have this ability
             for (entity, faction, mut abilities, _tf) in &mut selected_units {
                 if *faction != active_player.0 {

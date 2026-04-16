@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::app::Faction;
 use crate::blueprints::{EntityKind, ResourceCost};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Serialize, Deserialize)]
 pub enum ResourceType {
     // Raw (0-5)
     Wood,

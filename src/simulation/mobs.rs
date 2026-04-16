@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use rand::rngs::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
@@ -563,7 +564,6 @@ fn distribute_camps(total: usize) -> Vec<usize> {
 
 fn spawn_mob_camps(
     mut commands: Commands,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
     unit_models: Option<Res<UnitModelAssets>>,
@@ -572,10 +572,6 @@ fn spawn_mob_camps(
     config: Res<GameSetupConfig>,
     map_seed: Res<MapSeed>,
 ) {
-    if *net_role == crate::infrastructure::multiplayer::NetRole::Client {
-        return;
-    }
-
     let mut rng = StdRng::seed_from_u64(map_seed.0.wrapping_add(3000));
     let half_map = config.map_size.world_size() / 2.0;
 
@@ -749,7 +745,7 @@ fn camp_item_drops_for_kind(rng: &mut StdRng, kind: EntityKind) -> CampItemDrops
 
 fn mob_patrol(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     nav_grid: Option<Res<crate::world::pathfinding::NavGrid>>,
     mut mobs: Query<
         (
@@ -867,7 +863,7 @@ fn mob_patrol(
 
 fn mob_aggro(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     combat_budget: Res<CombatBudget>,
     mut budget_state: ResMut<CombatBudgetState>,
     mut mobs: Query<
@@ -961,7 +957,7 @@ fn mob_aggro(
 /// (approach_attack_target → start_attack_windups → resolve_attack_windups).
 fn mob_leash(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     mut mobs: Query<
         (
             Entity,

@@ -2,6 +2,7 @@
 
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
+use bevy::time::Fixed;
 
 use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityCategory, EntityKind,
@@ -53,12 +54,10 @@ pub(super) fn eject_units_from_buildings(
 
 pub(super) fn tower_auto_attack(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     teams: Res<TeamConfig>,
     vfx_assets: Option<Res<VfxAssets>>,
     projectile_assets: Option<Res<crate::presentation::model_assets::ProjectileModelAssets>>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
-    active_player: Res<ActivePlayer>,
     mut towers: Query<
         (
             Entity,
@@ -111,13 +110,6 @@ pub(super) fn tower_auto_attack(
     ) in &mut towers
     {
         if !kind.uses_tower_auto_attack() || *state != BuildingState::Complete {
-            continue;
-        }
-
-        // Client: only run tower attacks for local player's towers
-        if *net_role == crate::infrastructure::multiplayer::NetRole::Client
-            && *tower_faction != active_player.0
-        {
             continue;
         }
 
@@ -324,8 +316,7 @@ pub(super) fn find_trained_unit_spawn_position(
 
 pub(super) fn training_queue_system(
     mut commands: Commands,
-    time: Res<Time>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
+    time: Res<Time<Fixed>>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
     unit_models: Option<Res<UnitModelAssets>>,
@@ -352,10 +343,6 @@ pub(super) fn training_queue_system(
     >,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
 ) {
-    if *net_role == crate::infrastructure::multiplayer::NetRole::Client {
-        return;
-    }
-
     let mut used_by_faction: std::collections::HashMap<Faction, u32> =
         std::collections::HashMap::new();
     for faction in &unit_factions {

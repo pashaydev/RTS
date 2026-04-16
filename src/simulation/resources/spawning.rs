@@ -1,5 +1,6 @@
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use bevy::time::Fixed;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use crate::types::*;
@@ -631,7 +632,7 @@ pub(super) fn spawn_resource_nodes(
 pub(super) fn deplete_resource_nodes(
     mut commands: Commands,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
-    time: Res<Time>,
+    time: Res<Time<Fixed>>,
     nodes: Query<(
         Entity,
         &ResourceNode,
@@ -690,8 +691,8 @@ pub(super) fn deplete_resource_nodes(
 /// Processing buildings periodically spawn new resource nodes nearby.
 pub(super) fn resource_respawn_system(
     mut commands: Commands,
-    time: Res<Time>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
+    time: Res<Time<Fixed>>,
+    mut game_rng: ResMut<GameRng>,
     height_map: Res<HeightMap>,
     model_assets: Res<ModelAssets>,
     node_mats: Res<ResourceNodeMaterials>,
@@ -701,10 +702,6 @@ pub(super) fn resource_respawn_system(
     growing_resources: Query<(&Transform, &GrowingResource), Without<Building>>,
     building_positions: Query<&Transform, (With<Building>, Without<ResourceNode>)>,
 ) {
-    if *net_role == crate::infrastructure::multiplayer::NetRole::Client {
-        return;
-    }
-
     for (building_tf, mut config, state) in &mut buildings {
         if *state != BuildingState::Complete {
             continue;
@@ -745,7 +742,7 @@ pub(super) fn resource_respawn_system(
             }
 
             // Find spawn position: random point within radius, avoiding building overlap
-            let mut rng = rand::rng();
+            let rng = &mut game_rng.rng;
             let mut attempts = 0;
             loop {
                 if attempts >= 10 {
@@ -774,7 +771,7 @@ pub(super) fn resource_respawn_system(
 
                 if rt == ResourceType::Wood {
                     // Reuse sapling system — spawn a Sapling
-                    if let Some((scene_handle, base_scale)) = random_tree(&mut rng, &model_assets) {
+                    if let Some((scene_handle, base_scale)) = random_tree(rng, &model_assets) {
                         let y_rotation = rng.random_range(0.0..std::f32::consts::TAU);
                         let target_scale = rng.random_range(0.8_f32..1.2) * base_scale;
 
@@ -857,15 +854,10 @@ pub(super) fn resource_respawn_system(
 /// Animates GrowingResource entities and promotes them to ResourceNode when complete.
 pub(super) fn grow_resource_system(
     mut commands: Commands,
-    time: Res<Time>,
-    net_role: Res<crate::infrastructure::multiplayer::NetRole>,
+    time: Res<Time<Fixed>>,
     height_map: Res<HeightMap>,
     mut growing: Query<(Entity, &mut GrowingResource, &mut Transform), Without<FrustumCulled>>,
 ) {
-    if *net_role == crate::infrastructure::multiplayer::NetRole::Client {
-        return;
-    }
-
     for (entity, mut res, mut tf) in &mut growing {
         res.timer.tick(time.delta());
         let progress = res.timer.fraction();

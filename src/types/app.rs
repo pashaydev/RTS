@@ -98,7 +98,9 @@ pub struct SimClock {
 
 // ── Faction ──
 
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Hash, Serialize, Deserialize)]
+#[derive(
+    Component, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug, Hash, Serialize, Deserialize,
+)]
 pub enum Faction {
     Player1,
     Player2,
@@ -263,14 +265,17 @@ impl FactionColors {
 }
 
 /// Which factions are AI-controlled (not human players).
+/// `BTreeSet` gives deterministic iteration order — lockstep AI systems
+/// iterate this to drive per-faction ticks, so order must be identical on
+/// every peer.
 #[derive(Resource)]
 pub struct AiControlledFactions {
-    pub factions: HashSet<Faction>,
+    pub factions: std::collections::BTreeSet<Faction>,
 }
 
 impl Default for AiControlledFactions {
     fn default() -> Self {
-        let mut factions = HashSet::new();
+        let mut factions = std::collections::BTreeSet::new();
         factions.insert(Faction::Player2);
         factions.insert(Faction::Player3);
         factions.insert(Faction::Player4);
