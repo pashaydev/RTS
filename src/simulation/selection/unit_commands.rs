@@ -80,15 +80,8 @@ pub(crate) fn handle_right_click_move(
     let (other_units, other_buildings) = enemy_detect;
     let (_assigned_workers_q, building_aabb_q, height_map, graphics) = picking_extra;
     let (minimap_interaction, ui_clicked, ui_press, mut sfx) = ui_flags;
-    let (
-        net_role,
-        _client_net,
-        _host_net,
-        _registry,
-        net_map,
-        time,
-        mut pending_local_input,
-    ) = net_params;
+    let (net_role, _client_net, _host_net, _registry, net_map, time, mut pending_local_input) =
+        net_params;
 
     if !mouse.just_pressed(MouseButton::Right) {
         return;
@@ -1017,15 +1010,13 @@ pub(crate) fn handle_unit_command_hotkeys(
         }
         CommandMode::AbilityTarget(ability) => {
             if online_submit.submit(
-                units_vec
-                    .iter()
-                    .filter_map(|(entity, _)| {
-                        unit_abilities
-                            .get(*entity)
-                            .ok()
-                            .filter(|abilities| abilities.is_ready(ability))
-                            .map(|_| *entity)
-                    }),
+                units_vec.iter().filter_map(|(entity, _)| {
+                    unit_abilities
+                        .get(*entity)
+                        .ok()
+                        .filter(|abilities| abilities.is_ready(ability))
+                        .map(|_| *entity)
+                }),
                 vec![InputCommand::UseAbility {
                     ability_id: ability.to_u8(),
                     target: [point.x, point.y, point.z],

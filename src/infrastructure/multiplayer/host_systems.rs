@@ -11,11 +11,11 @@ use game_state::message::{ClientMessage, GameEvent, InputCommand, PlayerInput, S
 
 use crate::blueprints::{BlueprintRegistry, EntityKind, LevelBonus};
 use crate::infrastructure::net_bridge::EntityNetMap;
+use crate::simulation::buildings::{cleanup_worker_assignment, find_best_worker_for_build};
 use crate::simulation::combat::{
     apply_manual_attack_intent, apply_manual_attack_move_intent, apply_manual_hold_intent,
     apply_manual_move_intent, clear_combat_intent,
 };
-use crate::simulation::buildings::{cleanup_worker_assignment, find_best_worker_for_build};
 use crate::simulation::orders;
 use crate::types::*;
 use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
@@ -389,12 +389,16 @@ pub fn execute_input_command(
                         }
                         clear_combat_intent(commands, ecs_entity, issue_time);
                         let grace = ManualIdleSince(issue_time);
-                        if workers.iter().any(|worker| worker.entity == ecs_entity && worker.kind == EntityKind::Worker)
-                        {
+                        if workers.iter().any(|worker| {
+                            worker.entity == ecs_entity && worker.kind == EntityKind::Worker
+                        }) {
                             crate::simulation::resources::unassign_worker_from_processor(
                                 commands,
                                 ecs_entity,
-                                worker_assignments.get(ecs_entity).ok().map(|assignment| assignment.0),
+                                worker_assignments
+                                    .get(ecs_entity)
+                                    .ok()
+                                    .map(|assignment| assignment.0),
                             );
                             commands
                                 .entity(ecs_entity)
@@ -502,17 +506,19 @@ pub fn execute_input_command(
                 let build_pos = Vec3::new(position[0], position[1], position[2]);
                 let footprint = crate::simulation::buildings::footprint_for_kind(kind);
 
-                let blocked = existing_buildings
-                    .iter()
-                    .any(|(building_tf, existing_fp, existing_kind)| {
-                        if !crate::simulation::buildings::blocks_construction_overlap(*existing_kind)
-                        {
-                            return false;
-                        }
-                        let check_pos =
-                            Vec3::new(build_pos.x, building_tf.translation.y, build_pos.z);
-                        building_tf.translation.distance(check_pos) < existing_fp.0 + footprint
-                    });
+                let blocked =
+                    existing_buildings
+                        .iter()
+                        .any(|(building_tf, existing_fp, existing_kind)| {
+                            if !crate::simulation::buildings::blocks_construction_overlap(
+                                *existing_kind,
+                            ) {
+                                return false;
+                            }
+                            let check_pos =
+                                Vec3::new(build_pos.x, building_tf.translation.y, build_pos.z);
+                            building_tf.translation.distance(check_pos) < existing_fp.0 + footprint
+                        });
                 if blocked || obstacle_grid.is_footprint_blocked(build_pos, footprint) {
                     continue;
                 }
@@ -535,11 +541,17 @@ pub fn execute_input_command(
                         )
                     })
                     .collect();
-                let worker_iter = worker_candidates
-                    .iter()
-                    .map(|(entity, transform, state, worker_faction, worker_kind)| {
-                        (entity.to_owned(), transform, state, worker_faction, worker_kind)
-                    });
+                let worker_iter = worker_candidates.iter().map(
+                    |(entity, transform, state, worker_faction, worker_kind)| {
+                        (
+                            entity.to_owned(),
+                            transform,
+                            state,
+                            worker_faction,
+                            worker_kind,
+                        )
+                    },
+                );
                 let Some((worker_entity, _)) =
                     find_best_worker_for_build(worker_iter, faction, build_pos)
                 else {
@@ -637,7 +649,9 @@ pub fn execute_input_command(
                     if let Some(&ecs_entity) = net_map.to_ecs.get(&eid) {
                         match preferred {
                             Some(resource) => {
-                                commands.entity(ecs_entity).insert(PreferredResource(resource));
+                                commands
+                                    .entity(ecs_entity)
+                                    .insert(PreferredResource(resource));
                             }
                             None => {
                                 commands.entity(ecs_entity).remove::<PreferredResource>();

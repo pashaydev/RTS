@@ -37,21 +37,6 @@ impl Plugin for CullingPlugin {
 /// Used when an entity has no `CullingBounds` component.
 const FRUSTUM_PADDING: f32 = 15.0;
 
-/// Entities beyond this distance from the camera are hidden entirely.
-/// At typical RTS zoom (60+ units height), objects beyond ~200 units are sub-pixel.
-const LOD_HIDE_DISTANCE: f32 = 180.0;
-const LOD_HIDE_DISTANCE_SQ: f32 = LOD_HIDE_DISTANCE * LOD_HIDE_DISTANCE;
-
-/// Decorations are hidden at a shorter distance since they're small props.
-const DECO_HIDE_DISTANCE_SQ: f32 = 120.0 * 120.0;
-
-/// Grass chunks are hidden at a similar distance to decorations.
-const GRASS_HIDE_DISTANCE_SQ: f32 = 180.0 * 180.0;
-
-/// Trees are hidden earlier than general entities — their leaf canopy overdraw
-/// is the main GPU cost when looking top-down, and at 130 units they're tiny.
-const TREE_HIDE_DISTANCE_SQ: f32 = 130.0 * 130.0;
-
 /// Tests entity positions against the camera frustum and adds/removes `FrustumCulled`.
 ///
 /// Uses `CullingSourceCamera` to determine whose frustum to test against.
@@ -62,13 +47,15 @@ const TREE_HIDE_DISTANCE_SQ: f32 = 130.0 * 130.0;
 /// if they are in unexplored territory — that is intentional.
 fn sync_frustum_culling(
     mut commands: Commands,
-    camera_q: Query<&Frustum, With<CullingSourceCamera>>,
+    camera_q: Query<(&Frustum, &GlobalTransform), With<CullingSourceCamera>>,
     mut entities: Query<
         (
             Entity,
             &GlobalTransform,
             &mut Visibility,
             Has<FrustumCulled>,
+            Has<Unit>,
+            Has<Mob>,
             Option<&CullingBounds>,
             Option<&mut CullReason>,
         ),
@@ -87,11 +74,14 @@ fn sync_frustum_culling(
         )>,
     >,
 ) {
-    let Ok(frustum) = camera_q.single() else {
+    let Ok((frustum, cam_gtf)) = camera_q.single() else {
         return;
     };
+    let cam_pos = cam_gtf.translation();
 
-    for (entity, gtf, mut visibility, is_culled, bounds, cull_reason) in &mut entities {
+    for (entity, gtf, mut visibility, is_culled, is_unit, is_mob, bounds, cull_reason) in
+        &mut entities
+    {
         let pos = gtf.translation();
         let (center, radius) = if let Some(b) = bounds {
             (pos + b.center_offset, b.radius)
@@ -102,7 +92,25 @@ fn sync_frustum_culling(
             center: center.into(),
             radius,
         };
-        let in_view = frustum.intersects_sphere(&sphere, true);
+        let in_frustum = frustum.intersects_sphere(&sphere, true);
+
+        // For units and mobs, also treat beyond-LOD distance as out-of-view so the
+        // `FrustumCulled` marker fires and `pause_culled_animations` stops the
+        // AnimationPlayer. This was previously split between this system and
+        // `distance_lod_system` — the split left animations ticking for
+        // distance-hidden entities.
+        let (in_view, reason_if_culled) = if is_unit || is_mob {
+            let dist_sq = (cam_pos - center).length_squared();
+            if !in_frustum {
+                (false, CullReason::Frustum)
+            } else if dist_sq > UNIT_HIDE_DISTANCE_SQ {
+                (false, CullReason::Distance)
+            } else {
+                (true, CullReason::Visible)
+            }
+        } else {
+            (in_frustum, CullReason::Frustum)
+        };
 
         if in_view && is_culled {
             commands.entity(entity).remove::<FrustumCulled>();
@@ -114,7 +122,7 @@ fn sync_frustum_culling(
             commands.entity(entity).insert(FrustumCulled);
             *visibility = Visibility::Hidden;
             if let Some(mut reason) = cull_reason {
-                *reason = CullReason::Frustum;
+                *reason = reason_if_culled;
             }
         }
     }
@@ -227,7 +235,7 @@ fn distance_lod_system(
         } else if is_tree {
             TREE_HIDE_DISTANCE_SQ
         } else {
-            LOD_HIDE_DISTANCE_SQ
+            UNIT_HIDE_DISTANCE_SQ
         };
 
         if dist_sq > threshold {

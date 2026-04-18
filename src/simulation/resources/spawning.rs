@@ -555,7 +555,8 @@ pub(super) fn spawn_resource_nodes(
 
             // Sort candidates: preferred biome first, then shuffle within each group
             let mut sorted_candidates = candidates.clone();
-            sorted_candidates.sort_by_key(|&(_, _, b)| if Some(b) == preferred_biome { 0 } else { 1 });
+            sorted_candidates
+                .sort_by_key(|&(_, _, b)| if Some(b) == preferred_biome { 0 } else { 1 });
 
             let mut spawned = 0u32;
             for &(cx, cz, _) in &sorted_candidates {
@@ -579,11 +580,9 @@ pub(super) fn spawn_resource_nodes(
                         PickRadius(1.8 * scale_factor),
                         SceneRoot(scene_handle),
                         NotShadowCaster,
-                        Transform::from_translation(terrain_translation(
-                            &height_map, cx, cz, 0.0,
-                        ))
-                        .with_rotation(Quat::from_rotation_y(y_rotation))
-                        .with_scale(Vec3::splat(scale_factor)),
+                        Transform::from_translation(terrain_translation(&height_map, cx, cz, 0.0))
+                            .with_rotation(Quat::from_rotation_y(y_rotation))
+                            .with_scale(Vec3::splat(scale_factor)),
                     ));
                 } else {
                     // Oil or fallback: primitive mesh

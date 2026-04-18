@@ -55,9 +55,6 @@ pub enum EntityKind {
 
     // Mobs
     Goblin,
-    Skeleton,
-    Orc,
-    Demon,
 
     // Summons
     SkeletonMinion,
@@ -115,7 +112,7 @@ impl EntityKind {
             | Self::Smelter
             | Self::Alchemist => EntityCategory::Building,
 
-            Self::Goblin | Self::Skeleton | Self::Orc | Self::Demon => EntityCategory::Mob,
+            Self::Goblin => EntityCategory::Mob,
 
             Self::SkeletonMinion | Self::SpiritWolf | Self::FireElemental => EntityCategory::Summon,
         }
@@ -132,14 +129,11 @@ impl EntityKind {
             | Self::Priest
             | Self::Scout
             | Self::Goblin
-            | Self::Skeleton
             | Self::SkeletonMinion
             | Self::SpiritWolf
             | Self::FireElemental => Light,
-            // Heavy armor: melee fighters, heavy mobs
-            Self::Soldier | Self::Tank | Self::Knight | Self::Cavalry | Self::Orc | Self::Demon => {
-                Heavy
-            }
+            // Heavy armor: melee fighters
+            Self::Soldier | Self::Tank | Self::Knight | Self::Cavalry => Heavy,
             // Siege armor: siege units
             Self::Catapult | Self::BatteringRam => Siege,
             // Structure armor: all buildings
@@ -153,14 +147,13 @@ impl EntityKind {
         match self {
             // Pierce: ranged physical
             Self::Archer
-            | Self::Skeleton
             | Self::Tower
             | Self::WatchTower
             | Self::GuardTower
             | Self::BallistaTower
             | Self::BombardTower => Pierce,
-            // Magic: casters, demons, magic summons
-            Self::Mage | Self::Priest | Self::Demon | Self::FireElemental => Magic,
+            // Magic: casters, magic summons
+            Self::Mage | Self::Priest | Self::FireElemental => Magic,
             // Siege: siege units
             Self::Catapult | Self::BatteringRam => SiegeDmg,
             // Melee: everything else (workers, soldiers, knights, cavalry, etc.)
@@ -207,9 +200,6 @@ impl EntityKind {
             Self::Smelter => "Smelter",
             Self::Alchemist => "Alchemist",
             Self::Goblin => "Goblin",
-            Self::Skeleton => "Skeleton",
-            Self::Orc => "Orc",
-            Self::Demon => "Demon",
             Self::SkeletonMinion => "Skeleton Minion",
             Self::SpiritWolf => "Spirit Wolf",
             Self::FireElemental => "Fire Elemental",
@@ -253,9 +243,6 @@ impl EntityKind {
         EntityKind::Smelter,
         EntityKind::Alchemist,
         EntityKind::Goblin,
-        EntityKind::Skeleton,
-        EntityKind::Orc,
-        EntityKind::Demon,
         EntityKind::SkeletonMinion,
         EntityKind::SpiritWolf,
         EntityKind::FireElemental,
@@ -315,7 +302,7 @@ impl EntityKind {
             Self::OilRig => "Extracts Oil from nearby deposits.",
             Self::Smelter => "Smelts Bronze and Steel from raw ores. Assign workers to deliver inputs.",
             Self::Alchemist => "Produces Gunpowder from Charcoal and Oil. Required for siege upgrades.",
-            Self::Goblin | Self::Skeleton | Self::Orc | Self::Demon => "Enemy mob.",
+            Self::Goblin => "Enemy mob.",
             Self::SkeletonMinion | Self::SpiritWolf | Self::FireElemental => "Summoned creature.",
         }
     }
@@ -430,27 +417,6 @@ pub(crate) fn default_attack_profile(kind: EntityKind, combat: &CombatStats) -> 
             projectile_speed: 0.0,
             projectile_scale: 0.0,
             impact_scale: 0.55,
-        },
-        EntityKind::Skeleton => AttackProfile {
-            windup_secs: 0.22,
-            recovery_secs: 0.28,
-            projectile_speed: 0.0,
-            projectile_scale: 0.0,
-            impact_scale: 0.65,
-        },
-        EntityKind::Orc => AttackProfile {
-            windup_secs: 0.3,
-            recovery_secs: 0.34,
-            projectile_speed: 0.0,
-            projectile_scale: 0.0,
-            impact_scale: 0.95,
-        },
-        EntityKind::Demon => AttackProfile {
-            windup_secs: 0.38,
-            recovery_secs: 0.4,
-            projectile_speed: 14.0,
-            projectile_scale: 0.18,
-            impact_scale: 1.1,
         },
         _ if combat.is_ranged => AttackProfile {
             windup_secs: 0.22,
@@ -576,27 +542,6 @@ pub(crate) fn default_attack_timing(kind: EntityKind, combat: &CombatStats) -> A
             minimum_range: 0.0,
             _can_move_during_backswing: true,
         },
-        EntityKind::Skeleton => AttackTiming {
-            _attack_point_secs: 0.22,
-            _backswing_secs: 0.28,
-            _turn_rate_rad_per_sec: 8.5,
-            minimum_range: 0.0,
-            _can_move_during_backswing: true,
-        },
-        EntityKind::Orc => AttackTiming {
-            _attack_point_secs: 0.30,
-            _backswing_secs: 0.34,
-            _turn_rate_rad_per_sec: 7.0,
-            minimum_range: 0.0,
-            _can_move_during_backswing: false,
-        },
-        EntityKind::Demon => AttackTiming {
-            _attack_point_secs: 0.36,
-            _backswing_secs: 0.42,
-            _turn_rate_rad_per_sec: 6.5,
-            minimum_range: 0.0,
-            _can_move_during_backswing: false,
-        },
         _ if combat.is_ranged => AttackTiming {
             _attack_point_secs: 0.22,
             _backswing_secs: 0.32,
@@ -632,7 +577,7 @@ pub(crate) fn default_targeting_profile(kind: EntityKind) -> TargetingProfile {
             building_penalty: 2.5,
             reserved_damage_penalty: 0.8,
         },
-        EntityKind::Archer | EntityKind::Skeleton => TargetingProfile {
+        EntityKind::Archer => TargetingProfile {
             distance_weight: 1.1,
             low_hp_weight: 2.0,
             threat_weight: 1.2,
@@ -648,7 +593,7 @@ pub(crate) fn default_targeting_profile(kind: EntityKind) -> TargetingProfile {
             building_penalty: 2.0,
             reserved_damage_penalty: 0.7,
         },
-        EntityKind::Mage | EntityKind::Demon => TargetingProfile {
+        EntityKind::Mage => TargetingProfile {
             distance_weight: 1.0,
             low_hp_weight: 1.3,
             threat_weight: 1.8,
@@ -731,9 +676,6 @@ pub(crate) fn default_threat_value(kind: EntityKind) -> ThreatValue {
         EntityKind::Catapult => 2.10,
         EntityKind::BatteringRam => 1.90,
         EntityKind::Goblin => 0.55,
-        EntityKind::Skeleton => 0.75,
-        EntityKind::Orc => 1.05,
-        EntityKind::Demon => 1.60,
         EntityKind::Tower | EntityKind::WatchTower => 1.20,
         EntityKind::GuardTower => 1.45,
         EntityKind::BallistaTower => 1.70,
@@ -750,7 +692,7 @@ pub(crate) fn default_combat_fx(kind: EntityKind, combat: &CombatStats) -> Comba
         | EntityKind::WatchTower
         | EntityKind::GuardTower
         | EntityKind::BallistaTower => CombatFxKind::Pierce,
-        EntityKind::Mage | EntityKind::Priest | EntityKind::Demon => CombatFxKind::Arcane,
+        EntityKind::Mage | EntityKind::Priest => CombatFxKind::Arcane,
         EntityKind::Catapult | EntityKind::BatteringRam | EntityKind::BombardTower => {
             CombatFxKind::Siege
         }
@@ -934,7 +876,6 @@ pub enum MeshKind {
     Cuboid { x: f32, y: f32, z: f32 },
     GltfScene { pick_radius: f32 },
     GltfCharacter { pick_radius: f32 },
-    ProceduralMob { pick_radius: f32 },
 }
 
 impl MeshKind {
@@ -945,9 +886,7 @@ impl MeshKind {
             MeshKind::Cuboid { x, y, z } => (x * x + y * y + z * z).sqrt() / 2.0,
             MeshKind::GltfScene { pick_radius } => return pick_radius,
             MeshKind::GltfCharacter { pick_radius } => return pick_radius,
-            MeshKind::ProceduralMob { pick_radius } => return pick_radius,
         };
-        // 30% buffer for easier clicking
         r * 1.3
     }
 
@@ -960,10 +899,6 @@ impl MeshKind {
 
     pub fn is_gltf_character(&self) -> bool {
         matches!(self, MeshKind::GltfCharacter { .. })
-    }
-
-    pub fn is_procedural_mob(&self) -> bool {
-        matches!(self, MeshKind::ProceduralMob { .. })
     }
 }
 

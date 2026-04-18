@@ -192,7 +192,11 @@ fn has_available_worker_for_build<'a>(
 
 /// When reassigning a worker away from their current task, clean up the old building's
 /// worker list and remove `BuildingAssignment`.
-pub(crate) fn cleanup_worker_assignment(commands: &mut Commands, worker: Entity, state: &UnitState) {
+pub(crate) fn cleanup_worker_assignment(
+    commands: &mut Commands,
+    worker: Entity,
+    state: &UnitState,
+) {
     match state {
         UnitState::AssignedGathering { building, .. }
         | UnitState::MovingToBuild(building)

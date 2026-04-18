@@ -70,8 +70,7 @@ pub fn client_receive_commands(
                     .push((*player_id, input.clone()));
             }
             ServerMessage::Pong { .. } => {
-                let rtt =
-                    ((time.elapsed_secs_f64() - net_stats.last_ping_sent_at) * 1000.0) as f32;
+                let rtt = ((time.elapsed_secs_f64() - net_stats.last_ping_sent_at) * 1000.0) as f32;
                 if rtt.is_finite() && rtt >= 0.0 {
                     net_stats.rtt_ms = rtt;
                     if net_stats.rtt_smoothed_ms == 0.0 {

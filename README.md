@@ -11,7 +11,6 @@ A 3D RTS prototype built with [Bevy](https://bevyengine.org/) 0.18. The project 
 - Skirmish configuration for AI count, AI difficulty, teams, map size, resource density, day length, seed, and player color
 - Deterministic lockstep multiplayer via Matchbox WebRTC with input synchronization, FNV-1a checksum-based desync detection, NAT traversal for internet play, and 30s reconnection grace before AI takeover
 
-For gameplay details, controls, unit/building stats, and match setup options see [docs/gameplay.md](docs/gameplay.md).
 
 ## Quick Start
 

@@ -818,14 +818,24 @@ pub(crate) fn sync_resource_density_block(
     config: Res<GameSetupConfig>,
     mut label_texts: Query<
         &mut Text,
-        (With<ResourceDensityLabelText>, Without<ResourceDensityValueText>),
+        (
+            With<ResourceDensityLabelText>,
+            Without<ResourceDensityValueText>,
+        ),
     >,
     mut value_texts: Query<
         &mut Text,
-        (With<ResourceDensityValueText>, Without<ResourceDensityLabelText>),
+        (
+            With<ResourceDensityValueText>,
+            Without<ResourceDensityLabelText>,
+        ),
     >,
     mut fill_nodes: Query<&mut Node, With<ResourceDensityBarFill>>,
-    mut dots: Query<(&ResourceDensityOptionDot, &mut BackgroundColor, &mut BorderColor)>,
+    mut dots: Query<(
+        &ResourceDensityOptionDot,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
     mut option_labels: Query<
         (&ResourceDensityOptionLabel, &mut TextColor),
         Without<ResourceDensityLabelText>,

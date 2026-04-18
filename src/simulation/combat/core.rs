@@ -298,7 +298,9 @@ fn desired_attack_move_target(
 
 fn explode_props(
     mut commands: Commands,
+    time: Res<Time<Fixed>>,
     vfx_assets: Option<Res<VfxAssets>>,
+    mut damage_events: MessageWriter<DamageApplied>,
     mut queries: ParamSet<(
         Query<(Entity, &Transform, &ExplosiveProp, &Health)>,
         Query<(Entity, &mut Transform, &mut Health), Without<Projectile>>,
@@ -314,6 +316,7 @@ fn explode_props(
         .collect();
 
     for (source_entity, origin, prop) in detonations {
+        let now = time.elapsed_secs_f64();
         commands.spawn((
             VfxFlash {
                 timer: Timer::from_seconds(0.3, TimerMode::Once),
@@ -345,7 +348,7 @@ fn explode_props(
                 continue;
             }
 
-            apply_damage(
+            let dealt = apply_damage(
                 &mut commands,
                 target_entity,
                 None,
@@ -354,9 +357,16 @@ fn explode_props(
                 &mut health,
                 None,
                 None,
-                0.0,
+                now,
                 0.0,
             );
+            damage_events.write(DamageApplied {
+                target: target_entity,
+                source: None,
+                amount: dealt,
+                damage_type: DamageType::SiegeDmg,
+                now_secs: now,
+            });
             if dist > 0.05 {
                 let push = Vec3::new(offset.x, 0.0, offset.z).normalize_or_zero() * falloff * 0.9;
                 target_tf.translation += push;
@@ -1392,7 +1402,7 @@ fn handle_death(
 fn tick_dying(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
-    mut dying: Query<(Entity, &mut Dying, &mut Transform), Without<ProceduralMob>>,
+    mut dying: Query<(Entity, &mut Dying, &mut Transform)>,
 ) {
     for (entity, mut dying, mut tf) in &mut dying {
         dying.timer.tick(time.delta());

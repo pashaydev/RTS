@@ -11,8 +11,8 @@
 //! as `ServerMessage::InputBroadcast` to every other client. The host is
 //! NOT authoritative for simulation — it just forwards packets.
 
-use bevy::prelude::*;
 use bevy::ecs::system::SystemParam;
+use bevy::prelude::*;
 use bevy_matchbox::prelude::*;
 use std::collections::BTreeMap;
 
@@ -257,15 +257,14 @@ pub struct LockstepApplyContext<'w, 's> {
     existing_buildings: Query<
         'w,
         's,
-        (&'static Transform, &'static BuildingFootprint, &'static EntityKind),
+        (
+            &'static Transform,
+            &'static BuildingFootprint,
+            &'static EntityKind,
+        ),
         (With<Building>, Without<GhostBuilding>),
     >,
-    building_state: Query<
-        'w,
-        's,
-        (&'static Faction, Has<BuildingPaused>),
-        With<Building>,
-    >,
+    building_state: Query<'w, 's, (&'static Faction, Has<BuildingPaused>), With<Building>>,
     tower_auto_attack: Query<'w, 's, &'static mut TowerAutoAttackEnabled, With<Building>>,
     obstacle_grid: Res<'w, ObstacleGrid>,
 }
@@ -329,13 +328,15 @@ pub fn lockstep_apply_tick_inputs(
             .unit_state_queries
             .p1()
             .iter()
-            .map(|(entity, transform, unit_state, faction, kind, _)| BuildWorkerSnapshot {
-                entity,
-                translation: transform.translation,
-                state: *unit_state,
-                faction: *faction,
-                kind: *kind,
-            })
+            .map(
+                |(entity, transform, unit_state, faction, kind, _)| BuildWorkerSnapshot {
+                    entity,
+                    translation: transform.translation,
+                    state: *unit_state,
+                    faction: *faction,
+                    kind: *kind,
+                },
+            )
             .collect();
         let mut unit_states = exec.unit_state_queries.p0();
         execute_input_command(

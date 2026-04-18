@@ -88,7 +88,6 @@ impl Plugin for UnitAiPlugin {
 /// 5. Idle
 /// Number of frames over which to spread unit AI decisions within one timer period.
 
-
 /// Collects positions of units currently in combat for ally-assist detection.
 fn update_combat_hotspots(
     mut hotspots: ResMut<CombatHotspots>,
@@ -790,7 +789,6 @@ pub fn unit_state_executor_system(
                                     .remove::<CombatTargetLock>()
                                     .remove::<Engagement>();
                             }
-
                         }
                     }
                 } else {

@@ -742,7 +742,6 @@ fn combat_intent_to_saved(
     }
 }
 
-
 fn veterancy_to_u8(v: &VeterancyLevel) -> u8 {
     match v {
         VeterancyLevel::Recruit => 0,
@@ -2008,7 +2007,9 @@ pub fn load_saved_game(
                     &height_map,
                     saved,
                 );
-                commands.entity(e).insert(UnitStance::from_u8(unit_data.stance));
+                commands
+                    .entity(e)
+                    .insert(UnitStance::from_u8(unit_data.stance));
                 commands.entity(e).insert(UnitSpeed(unit_data.speed));
                 if let Some(ref c) = unit_data.carrying {
                     commands.entity(e).insert(Carrying {

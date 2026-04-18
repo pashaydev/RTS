@@ -1,0 +1,40 @@
+{
+  "atlas_width": 1024,
+  "atlas_height": 10240,
+  "directions": 8,
+  "cell_width": 128,
+  "cell_height": 128,
+  "fps": 12,
+  "states": [
+    {
+      "name": "Idle",
+      "clip": "CharacterArmature|Idle",
+      "frame_count": 16,
+      "row_offset": 0
+    },
+    {
+      "name": "Walk",
+      "clip": "CharacterArmature|Walk",
+      "frame_count": 16,
+      "row_offset": 16
+    },
+    {
+      "name": "Run",
+      "clip": "CharacterArmature|Run",
+      "frame_count": 16,
+      "row_offset": 32
+    },
+    {
+      "name": "Attack",
+      "clip": "CharacterArmature|Punch",
+      "frame_count": 16,
+      "row_offset": 48
+    },
+    {
+      "name": "Death",
+      "clip": "CharacterArmature|Death",
+      "frame_count": 16,
+      "row_offset": 64
+    }
+  ]
+}

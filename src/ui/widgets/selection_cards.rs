@@ -171,7 +171,6 @@ pub(super) fn spawn_friendly_detail_card(
         commands.entity(stats).add_child(stat);
     }
 
-
     spawn_single_inventory_section(
         commands,
         info,
@@ -846,7 +845,6 @@ pub(super) fn spawn_enemy_detail_card(
     parent: Entity,
     entity: Entity,
     kind: EntityKind,
-    is_boss: bool,
     health: &Health,
     damage: &AttackDamage,
     range: &AttackRange,
@@ -919,11 +917,7 @@ pub(super) fn spawn_enemy_detail_card(
         .id();
     commands.entity(card).add_child(info);
 
-    let name_str = if is_boss {
-        format!("{} Boss", kind.display_name())
-    } else {
-        kind.display_name().to_string()
-    };
+    let name_str = kind.display_name().to_string();
     let name = commands
         .spawn((
             Text::new(name_str),

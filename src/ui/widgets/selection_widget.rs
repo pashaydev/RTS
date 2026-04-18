@@ -524,7 +524,6 @@ fn rebuild_selection_panel(
             &AttackRange,
             &UnitSpeed,
             &AggroRange,
-            Has<Boss>,
         ),
         With<Mob>,
     >,
@@ -1060,7 +1059,7 @@ fn rebuild_selection_panel(
             crate::ui::theme::DESTRUCTIVE
         };
 
-        if let Ok((kind, health, dmg, rng, spd, aggro, is_boss)) = mob_query.get(inspected_entity) {
+        if let Ok((kind, health, dmg, rng, spd, aggro)) = mob_query.get(inspected_entity) {
             if has_selection {
                 let divider = commands
                     .spawn((
@@ -1081,7 +1080,6 @@ fn rebuild_selection_panel(
                 panel_entity,
                 inspected_entity,
                 *kind,
-                is_boss,
                 health,
                 dmg,
                 rng,

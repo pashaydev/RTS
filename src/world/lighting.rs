@@ -9,7 +9,8 @@ use bevy::time::Fixed;
 
 use crate::types::{
     AppState, Building, CullingSourceCamera, GameSetupConfig, GameWorld, GhostBuilding,
-    GraphicsSettings, ShadowQuality, Unit, WallCornerPiece, WallPostPiece, WallSegmentPiece,
+    GraphicsSettings, ShadowQuality, UNIT_HIDE_DISTANCE, Unit, WallCornerPiece, WallPostPiece,
+    WallSegmentPiece,
 };
 
 pub struct LightingPlugin;
@@ -21,10 +22,14 @@ impl Plugin for LightingPlugin {
             .add_systems(Startup, register_lighting_tweaks)
             .add_systems(OnEnter(AppState::InGame), setup_lighting)
             .add_systems(
-                Update,
-                (advance_day_cycle, update_lighting)
-                    .chain()
+                FixedUpdate,
+                advance_day_cycle
+                    .before(crate::types::SimSet::Ai)
                     .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                Update,
+                update_lighting.run_if(in_state(AppState::InGame)),
             )
             .add_systems(
                 Update,
@@ -344,7 +349,9 @@ fn cascade_shadow_config(quality: ShadowQuality) -> CascadeShadowConfig {
         ShadowQuality::Off | ShadowQuality::Low => CascadeShadowConfigBuilder {
             num_cascades: 2,
             minimum_distance: 1.0,
-            maximum_distance: 100.0,
+            // Keep shadow coverage aligned with the farthest gameplay entities
+            // that remain visible at zoomed-out camera distances.
+            maximum_distance: UNIT_HIDE_DISTANCE,
             first_cascade_far_bound: 12.0,
             overlap_proportion: 0.2,
         }
@@ -352,7 +359,7 @@ fn cascade_shadow_config(quality: ShadowQuality) -> CascadeShadowConfig {
         ShadowQuality::High => CascadeShadowConfigBuilder {
             num_cascades: 3,
             minimum_distance: 1.0,
-            maximum_distance: 150.0,
+            maximum_distance: UNIT_HIDE_DISTANCE,
             first_cascade_far_bound: 15.0,
             overlap_proportion: 0.15,
         }
@@ -485,8 +492,8 @@ impl Default for EntityLightConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            building_base_intensity: 150000.0,
-            unit_base_intensity: 80000.0,
+            building_base_intensity: 300000.0,
+            unit_base_intensity: 300000.0,
             night_factor: 1.0,
             day_factor: 0.3,
         }

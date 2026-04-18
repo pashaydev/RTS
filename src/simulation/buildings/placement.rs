@@ -6,17 +6,13 @@ use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
-use crate::blueprints::{
-    BlueprintRegistry, EntityKind, EntityVisualCache,
-};
+use crate::blueprints::{BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::presentation::camera;
-use crate::presentation::model_assets::{
-    BuildingModelAssets,
-};
+use crate::presentation::model_assets::BuildingModelAssets;
 use crate::types::*;
 use crate::world::ground::{
-    apply_terrain_shape_op, foundation_radii, sync_ground_mesh_partial, HeightMap,
-    TerrainShapeOp, TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
+    apply_terrain_shape_op, foundation_radii, sync_ground_mesh_partial, HeightMap, TerrainShapeOp,
+    TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
 };
 
 use super::{

@@ -17,9 +17,10 @@ use bevy::render::view::Hdr;
 use bevy::window::PrimaryWindow;
 
 use crate::types::{
-    ActivePlayer, AntiAliasingMode, AppState, CameraZoomLevel, CullingSourceCamera, CursorOverUi,
-    DragState, EffectQuality, FrustumDebugMode, GameFlowSet, GameSetupConfig, GameWorld,
-    GraphicsSettings, MapSeed, RtsCamera, UiMode,
+    ActivePlayer, AntiAliasingMode, AppState, CAMERA_DISTANCE_MAX, CAMERA_DISTANCE_MIN,
+    CameraZoomLevel, CullingSourceCamera, CursorOverUi, DragState, EffectQuality,
+    FrustumDebugMode, GameFlowSet, GameSetupConfig, GameWorld, GraphicsSettings, MapSeed,
+    RtsCamera, UiMode,
 };
 use crate::world::ground::playable_half_map;
 
@@ -31,8 +32,6 @@ const ROTATE_SMOOTH: f32 = 8.0;
 const ZOOM_SENSITIVITY: f32 = 0.07;
 const PITCH_MIN: f32 = 0.4;
 const PITCH_MAX: f32 = 1.1;
-const DISTANCE_MIN: f32 = 10.0;
-const DISTANCE_MAX: f32 = 100.0;
 pub(crate) const PRESENTATION_LAYER: usize = 1;
 
 #[derive(Resource, Clone)]
@@ -159,7 +158,8 @@ fn spawn_camera(
     let angle = 0.0_f32;
 
     // Compute initial pitch from distance
-    let t = ((distance - DISTANCE_MIN) / (DISTANCE_MAX - DISTANCE_MIN)).clamp(0.0, 1.0);
+    let t = ((distance - CAMERA_DISTANCE_MIN) / (CAMERA_DISTANCE_MAX - CAMERA_DISTANCE_MIN))
+        .clamp(0.0, 1.0);
     let t_smooth = t * t * (3.0 - 2.0 * t);
     let pitch = PITCH_MIN + (PITCH_MAX - PITCH_MIN) * t_smooth;
 
@@ -669,8 +669,16 @@ fn camera_edge_scroll(
     let ey = (h * tuning.edge_zone_frac).clamp(tuning.edge_zone_min_px, tuning.edge_zone_max_px);
     let release_ex = (ex + tuning.edge_release_extra_px).min(w * 0.5);
     let release_ey = (ey + tuning.edge_release_extra_px).min(h * 0.5);
-    let active_edge_x = if cam.edge_scroll_active { release_ex } else { ex };
-    let active_edge_y = if cam.edge_scroll_active { release_ey } else { ey };
+    let active_edge_x = if cam.edge_scroll_active {
+        release_ex
+    } else {
+        ex
+    };
+    let active_edge_y = if cam.edge_scroll_active {
+        release_ey
+    } else {
+        ey
+    };
 
     let edge_x = signed_edge_strength(cursor.x, w, active_edge_x, tuning.edge_curve_power);
     let edge_y = -signed_edge_strength(cursor.y, h, active_edge_y, tuning.edge_curve_power);
@@ -747,7 +755,9 @@ fn camera_zoom_input(
         cam.target_distance *= 1.0 + key_zoom_speed;
     }
 
-    cam.target_distance = cam.target_distance.clamp(DISTANCE_MIN, DISTANCE_MAX);
+    cam.target_distance = cam
+        .target_distance
+        .clamp(CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX);
 }
 
 fn camera_rotate_input(
@@ -792,7 +802,8 @@ fn camera_smooth_update(
     let pan_accel = cam.pan_accel;
     cam.pan_velocity += pan_accel * dt;
     let keyboard_max_speed = tuning.keyboard_max_speed * cam.pan_speed_cap_multiplier;
-    let pan_max_speed = keyboard_max_speed.max(tuning.edge_max_speed) * pan_zoom_scale(cam.distance);
+    let pan_max_speed =
+        keyboard_max_speed.max(tuning.edge_max_speed) * pan_zoom_scale(cam.distance);
     cam.pan_velocity = cam.pan_velocity.clamp_length_max(pan_max_speed);
     cam.pan_velocity *= (-tuning.friction * dt).exp();
     let vel = cam.pan_velocity * dt;
@@ -820,7 +831,8 @@ fn camera_smooth_update(
     cam.angle += angle_diff * alpha_rotate;
 
     // d) Zoom-dependent pitch
-    let t = ((cam.distance - DISTANCE_MIN) / (DISTANCE_MAX - DISTANCE_MIN)).clamp(0.0, 1.0);
+    let t = ((cam.distance - CAMERA_DISTANCE_MIN) / (CAMERA_DISTANCE_MAX - CAMERA_DISTANCE_MIN))
+        .clamp(0.0, 1.0);
     let t_smooth = t * t * (3.0 - 2.0 * t); // smoothstep
     cam.pitch = PITCH_MIN + (PITCH_MAX - PITCH_MIN) * t_smooth;
 
@@ -833,7 +845,8 @@ fn camera_smooth_update(
 }
 
 fn pan_zoom_scale(distance: f32) -> f32 {
-    let t = ((distance - DISTANCE_MIN) / (DISTANCE_MAX - DISTANCE_MIN)).clamp(0.0, 1.0);
+    let t = ((distance - CAMERA_DISTANCE_MIN) / (CAMERA_DISTANCE_MAX - CAMERA_DISTANCE_MIN))
+        .clamp(0.0, 1.0);
     0.75 + 0.85 * t
 }
 
@@ -853,14 +866,14 @@ fn signed_edge_strength(cursor: f32, window_size: f32, edge_px: f32, curve_power
     raw.signum() * raw.abs().powf(curve_power)
 }
 
-fn clamp_camera_pivot(
-    pivot: Vec3,
-    config: &GameSetupConfig,
-    tuning: &CameraPanTuning,
-) -> Vec3 {
+fn clamp_camera_pivot(pivot: Vec3, config: &GameSetupConfig, tuning: &CameraPanTuning) -> Vec3 {
     let playable_half = playable_half_map(config.map_size.world_size());
     let limit = (playable_half - tuning.map_edge_margin).max(0.0);
-    Vec3::new(pivot.x.clamp(-limit, limit), 0.0, pivot.z.clamp(-limit, limit))
+    Vec3::new(
+        pivot.x.clamp(-limit, limit),
+        0.0,
+        pivot.z.clamp(-limit, limit),
+    )
 }
 
 fn cursor_hits_widget(

@@ -93,7 +93,10 @@ impl SpatialHashGrid {
                 self.remove(entity);
             }
         }
-        self.cells.entry(key).or_default().push((entity, pos, stable_id));
+        self.cells
+            .entry(key)
+            .or_default()
+            .push((entity, pos, stable_id));
         self.entity_cells.insert(entity, key);
     }
 
@@ -118,7 +121,9 @@ impl SpatialHashGrid {
                 }
             }
         }
-        out.sort_by(|a, b| stable_entity_order(a.0, a.1, b.0, b.1, &self.entity_cells, &self.cells));
+        out.sort_by(|a, b| {
+            stable_entity_order(a.0, a.1, b.0, b.1, &self.entity_cells, &self.cells)
+        });
     }
 
     pub fn query_radius(&self, pos: Vec3, radius: f32) -> Vec<(Entity, Vec3)> {
@@ -167,7 +172,9 @@ impl SpatialHashGrid {
                 }
             }
         }
-        out.sort_by(|a, b| stable_entity_order(a.0, a.1, b.0, b.1, &self.entity_cells, &self.cells));
+        out.sort_by(|a, b| {
+            stable_entity_order(a.0, a.1, b.0, b.1, &self.entity_cells, &self.cells)
+        });
     }
 
     pub fn collect_radius_limited(
@@ -410,13 +417,12 @@ fn stable_entity_order(
     entity_cells: &HashMap<Entity, IVec2>,
     cells: &HashMap<IVec2, Vec<(Entity, Vec3, u32)>>,
 ) -> std::cmp::Ordering {
-    stable_entity_key(left_entity, left_pos, entity_cells, cells)
-        .cmp(&stable_entity_key(
-            right_entity,
-            right_pos,
-            entity_cells,
-            cells,
-        ))
+    stable_entity_key(left_entity, left_pos, entity_cells, cells).cmp(&stable_entity_key(
+        right_entity,
+        right_pos,
+        entity_cells,
+        cells,
+    ))
 }
 
 fn stable_wall_key(
@@ -496,14 +502,24 @@ fn update_spatial_grid(
         (Entity, &Transform, Option<&NetworkId>),
         (
             With<Unit>,
-            Or<(Added<Unit>, Changed<Transform>, Added<NetworkId>, Changed<NetworkId>)>,
+            Or<(
+                Added<Unit>,
+                Changed<Transform>,
+                Added<NetworkId>,
+                Changed<NetworkId>,
+            )>,
         ),
     >,
     mobs: Query<
         (Entity, &Transform, Option<&NetworkId>),
         (
             (With<Mob>, Without<Unit>),
-            Or<(Added<Mob>, Changed<Transform>, Added<NetworkId>, Changed<NetworkId>)>,
+            Or<(
+                Added<Mob>,
+                Changed<Transform>,
+                Added<NetworkId>,
+                Changed<NetworkId>,
+            )>,
         ),
     >,
     buildings: Query<

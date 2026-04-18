@@ -10,7 +10,7 @@
 //! assets/blueprints/
 //!   units.ron        # Worker, Soldier, Archer, Tank, …
 //!   buildings.ron    # Base, Barracks, Sawmill, Smelter, …
-//!   mobs.ron         # Goblin, Skeleton, Orc, Demon
+//!   mobs.ron         # Goblin
 //!   siege.ron        # Catapult, BatteringRam
 //! ```
 //!

@@ -1,6 +1,7 @@
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 
+use crate::blueprints::EntityKind;
 use crate::types::*;
 
 /// Maximum number of simultaneous VFX particle entities (dust, flashes, gather particles).
@@ -15,11 +16,13 @@ impl Plugin for VfxPlugin {
             Update,
             (
                 handle_projectile_impacts,
+                spawn_blood_splashes,
                 update_vfx_flashes,
                 update_gather_particles,
                 footstep_dust_spawner,
                 update_footstep_dust,
                 update_combat_dust,
+                update_blood_splashes,
                 spawn_depletion_vfx,
                 animate_depletion,
                 summon_vfx_system,
@@ -61,6 +64,22 @@ fn create_vfx_assets(
 
     let impact_material = materials.add(StandardMaterial {
         base_color: Color::srgba(1.0, 1.0, 0.6, 0.8),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        ..default()
+    });
+
+    let blood_material = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.72, 0.04, 0.04, 0.82),
+        emissive: LinearRgba::new(0.12, 0.01, 0.01, 1.0),
+        alpha_mode: AlphaMode::Blend,
+        unlit: true,
+        ..default()
+    });
+
+    let blood_dark_material = materials.add(StandardMaterial {
+        base_color: Color::srgba(0.26, 0.01, 0.01, 0.92),
+        emissive: LinearRgba::new(0.03, 0.0, 0.0, 1.0),
         alpha_mode: AlphaMode::Blend,
         unlit: true,
         ..default()
@@ -109,10 +128,138 @@ fn create_vfx_assets(
         melee_material,
         projectile_material,
         impact_material,
+        blood_material,
+        blood_dark_material,
         deposit_material,
         dust_material,
         resource_particle_materials,
     });
+}
+
+fn supports_blood_splash(kind: EntityKind) -> bool {
+    matches!(
+        kind,
+        EntityKind::Worker
+            | EntityKind::Soldier
+            | EntityKind::Archer
+            | EntityKind::Tank
+            | EntityKind::Knight
+            | EntityKind::Mage
+            | EntityKind::Priest
+            | EntityKind::Cavalry
+            | EntityKind::Scout
+            | EntityKind::Goblin
+            | EntityKind::SpiritWolf
+    )
+}
+
+fn spawn_blood_splashes(
+    mut commands: Commands,
+    mut damage_events: bevy::ecs::message::MessageReader<DamageApplied>,
+    vfx_assets: Option<Res<VfxAssets>>,
+    zoom_level: Res<CameraZoomLevel>,
+    existing_flashes: Query<(), With<VfxFlash>>,
+    existing_particles: Query<(), Or<(With<FootstepDust>, With<CombatDust>, With<GatherParticle>)>>,
+    existing_blood: Query<(), With<BloodSplashParticle>>,
+    targets: Query<(&Transform, &EntityKind), (Or<(With<Unit>, With<Mob>)>, Without<Building>)>,
+    sources: Query<&Transform, Without<Projectile>>,
+) {
+    if zoom_level.detail == DetailLevel::Far {
+        return;
+    }
+
+    let Some(vfx) = vfx_assets else { return };
+    let total_particles = existing_flashes.iter().count()
+        + existing_particles.iter().count()
+        + existing_blood.iter().count();
+    if total_particles >= MAX_VFX_PARTICLES {
+        return;
+    }
+
+    let detail_scale = match zoom_level.detail {
+        DetailLevel::Close => 1.0,
+        DetailLevel::Medium => 0.65,
+        DetailLevel::Far => 0.0,
+    };
+    let mut remaining_budget = MAX_VFX_PARTICLES.saturating_sub(total_particles);
+
+    for damage in damage_events.read() {
+        if damage.amount <= 0.0 || remaining_budget == 0 {
+            continue;
+        }
+
+        let Ok((target_tf, kind)) = targets.get(damage.target) else {
+            continue;
+        };
+        if !supports_blood_splash(*kind) {
+            continue;
+        }
+
+        let desired_count =
+            ((4.0 + (damage.amount / 10.0).clamp(0.0, 6.0)) * detail_scale).round() as usize;
+        let max_count = remaining_budget.min(10);
+        if max_count == 0 {
+            continue;
+        }
+        let min_count = if max_count >= 2 { 2 } else { 1 };
+        let count = desired_count.max(min_count).min(max_count);
+        remaining_budget = remaining_budget.saturating_sub(count);
+
+        let impact_dir = damage
+            .source
+            .and_then(|source| sources.get(source).ok())
+            .map(|source_tf| (target_tf.translation - source_tf.translation).normalize_or_zero())
+            .filter(|dir| dir.length_squared() > 0.0)
+            .unwrap_or(Vec3::Z);
+        let spray_dir = Vec3::new(impact_dir.x, 0.0, impact_dir.z).normalize_or_zero();
+        let burst_origin =
+            target_tf.translation + Vec3::Y * (0.28 + target_tf.scale.y.abs().max(1.0) * 0.32);
+        let seed = damage.now_secs as f32 * 11.7 + damage.target.to_bits() as f32 * 0.000173;
+        let speed_scale = 0.8 + (damage.amount / 24.0).min(1.5);
+
+        for i in 0..count {
+            let angle = seed + i as f32 * 2.3999631;
+            let radial = Vec3::new(angle.cos(), 0.0, angle.sin());
+            let lateral = spray_dir.cross(Vec3::Y).normalize_or_zero();
+            let forward_bias = if spray_dir.length_squared() > 0.0 {
+                spray_dir * (1.2 + (i % 3) as f32 * 0.35)
+            } else {
+                radial * 0.9
+            };
+            let side_bias = radial * (0.45 + (i % 2) as f32 * 0.2)
+                + lateral * if i % 2 == 0 { 0.25 } else { -0.25 };
+            let lift = 1.4 + ((i * 37 % 11) as f32) * 0.12;
+            let velocity =
+                (forward_bias + side_bias) * (1.7 * speed_scale) + Vec3::Y * (lift * speed_scale);
+            let offset = radial * (0.03 + i as f32 * 0.008);
+            let start_scale = 0.045 + (damage.amount / 90.0).min(0.04) + (i % 3) as f32 * 0.006;
+            let material = if i % 3 == 0 {
+                vfx.blood_dark_material.clone()
+            } else {
+                vfx.blood_material.clone()
+            };
+            let mesh = if i % 4 == 0 {
+                vfx.cube_mesh.clone()
+            } else {
+                vfx.sphere_mesh.clone()
+            };
+
+            commands.spawn((
+                BloodSplashParticle {
+                    timer: Timer::from_seconds(0.28 + 0.05 * (i % 3) as f32, TimerMode::Once),
+                    velocity,
+                    start_scale,
+                },
+                FogHideable::Vfx,
+                Mesh3d(mesh),
+                MeshMaterial3d(material),
+                Transform::from_translation(burst_origin + offset)
+                    .with_scale(Vec3::splat(start_scale)),
+                NotShadowCaster,
+                NotShadowReceiver,
+            ));
+        }
+    }
 }
 
 fn handle_projectile_impacts(
@@ -319,6 +466,28 @@ fn update_combat_dust(
         let dt = time.delta_secs();
         tf.translation += particle.velocity * dt;
         particle.velocity.y = (particle.velocity.y - 6.0 * dt).max(-1.0);
+
+        let frac = 1.0 - particle.timer.fraction();
+        tf.scale = Vec3::splat((frac * particle.start_scale).max(0.01));
+
+        if particle.timer.is_finished() {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+fn update_blood_splashes(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut particles: Query<(Entity, &mut Transform, &mut BloodSplashParticle)>,
+) {
+    for (entity, mut tf, mut particle) in &mut particles {
+        particle.timer.tick(time.delta());
+
+        let dt = time.delta_secs();
+        tf.translation += particle.velocity * dt;
+        particle.velocity *= 0.94;
+        particle.velocity.y -= 8.5 * dt;
 
         let frac = 1.0 - particle.timer.fraction();
         tf.scale = Vec3::splat((frac * particle.start_scale).max(0.01));

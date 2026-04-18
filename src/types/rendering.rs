@@ -149,11 +149,74 @@ impl Default for FrustumDebugMode {
 
 // ── Camera Zoom Detail Level ──
 
+pub const CAMERA_DISTANCE_MIN: f32 = 10.0;
+pub const CAMERA_DISTANCE_MAX: f32 = 200.0;
+
+const UNIT_IMPOSTOR_ENTER_RATIO: f32 = 55.0 / CAMERA_DISTANCE_MAX;
+const UNIT_IMPOSTOR_EXIT_RATIO: f32 = 48.0 / CAMERA_DISTANCE_MAX;
+const GRASS_LOD_SWITCH_RATIO: f32 = 120.0 / CAMERA_DISTANCE_MAX;
+const UNIT_HIDE_EXTRA_DISTANCE: f32 = 24.0;
+const DECO_HIDE_EXTRA_DISTANCE: f32 = 8.0;
+const GRASS_HIDE_EXTRA_DISTANCE: f32 = 12.0;
+const TREE_HIDE_EXTRA_DISTANCE: f32 = 16.0;
+
+const fn sq(x: f32) -> f32 {
+    x * x
+}
+
+pub const UNIT_IMPOSTOR_ENTER_DISTANCE: f32 = CAMERA_DISTANCE_MAX * UNIT_IMPOSTOR_ENTER_RATIO;
+pub const UNIT_IMPOSTOR_EXIT_DISTANCE: f32 = CAMERA_DISTANCE_MAX * UNIT_IMPOSTOR_EXIT_RATIO;
+pub const UNIT_IMPOSTOR_ENTER_DISTANCE_SQ: f32 = sq(UNIT_IMPOSTOR_ENTER_DISTANCE);
+pub const UNIT_IMPOSTOR_EXIT_DISTANCE_SQ: f32 = sq(UNIT_IMPOSTOR_EXIT_DISTANCE);
+// Hard-hide thresholds must sit beyond the maximum orbit distance.
+// At full zoom-out the camera eye is already `CAMERA_DISTANCE_MAX` away from
+// the pivot, so values below that will hide even center-screen ground objects.
+pub const UNIT_HIDE_DISTANCE: f32 = CAMERA_DISTANCE_MAX + UNIT_HIDE_EXTRA_DISTANCE;
+pub const UNIT_HIDE_DISTANCE_SQ: f32 = sq(UNIT_HIDE_DISTANCE);
+pub const DECO_HIDE_DISTANCE_SQ: f32 = sq(CAMERA_DISTANCE_MAX + DECO_HIDE_EXTRA_DISTANCE);
+pub const GRASS_HIDE_DISTANCE_SQ: f32 = sq(CAMERA_DISTANCE_MAX + GRASS_HIDE_EXTRA_DISTANCE);
+pub const TREE_HIDE_DISTANCE_SQ: f32 = sq(CAMERA_DISTANCE_MAX + TREE_HIDE_EXTRA_DISTANCE);
+pub const GRASS_LOD_SWITCH_SQ: f32 = sq(CAMERA_DISTANCE_MAX * GRASS_LOD_SWITCH_RATIO);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DetailLevel {
     Close,  // distance < 25.0
     Medium, // 25.0 .. 55.0
     Far,    // > 55.0
+}
+
+// ── Unit LOD tiers ──
+
+/// Which LOD variant an animated unit is currently displaying.
+/// `Impostor` = billboard quad sampling a pre-baked atlas (far distance).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum LodTier {
+    High,
+    Impostor,
+}
+
+/// Component tracking the current LOD of an animated unit. Added at spawn
+/// and mutated by `unit_lod_swap_system` when the camera-distance band
+/// changes. Hysteresis in the swap thresholds prevents flicker at the edge.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct UnitLod {
+    pub current: LodTier,
+    pub last_switch_dist_sq: f32,
+}
+
+impl UnitLod {
+    pub fn new() -> Self {
+        Self {
+            current: LodTier::High,
+            last_switch_dist_sq: 0.0,
+        }
+    }
+}
+
+impl Default for UnitLod {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[derive(Resource, Clone, Copy, Debug)]
@@ -291,6 +354,8 @@ pub struct VfxAssets {
     pub melee_material: Handle<StandardMaterial>,
     pub projectile_material: Handle<StandardMaterial>,
     pub impact_material: Handle<StandardMaterial>,
+    pub blood_material: Handle<StandardMaterial>,
+    pub blood_dark_material: Handle<StandardMaterial>,
     pub deposit_material: Handle<StandardMaterial>,
     pub dust_material: Handle<StandardMaterial>,
     pub resource_particle_materials: HashMap<ResourceType, Handle<StandardMaterial>>,
@@ -311,6 +376,13 @@ pub struct FootstepDust {
 
 #[derive(Component)]
 pub struct CombatDust {
+    pub timer: Timer,
+    pub velocity: Vec3,
+    pub start_scale: f32,
+}
+
+#[derive(Component)]
+pub struct BloodSplashParticle {
     pub timer: Timer,
     pub velocity: Vec3,
     pub start_scale: f32,
@@ -359,34 +431,6 @@ pub struct SummonVfx {
     pub light_entity: Option<Entity>,
 }
 
-// ── Procedural Mob Visuals ──
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
-pub enum MobVisualKind {
-    Goblin,
-    Skeleton,
-    Orc,
-    Demon,
-}
-
-#[derive(Component)]
-pub struct ProceduralMob {
-    pub visual_kind: MobVisualKind,
-    pub phase: f32,
-    pub base_y_offset: f32,
-    pub base_scale: Vec3,
-    pub base_translation: Vec3,
-    pub attack_timer: Option<Timer>,
-    pub initialized: bool,
-    pub pulse_ring_spawned: bool,
-    pub dying_progress: f32,
-}
-
-#[derive(Component)]
-pub struct DemonPulseRing {
-    pub timer: Timer,
-}
-
 // ── Model assets ──
 
 #[derive(Resource, Default)]
@@ -418,9 +462,6 @@ pub struct GrassChunkLod {
     pub full_mesh: Handle<Mesh>,
     pub reduced_mesh: Handle<Mesh>,
 }
-
-/// Distance² threshold where grass switches from full to reduced density.
-pub const GRASS_LOD_SWITCH_SQ: f32 = 120.0 * 120.0;
 
 #[derive(Resource, Default)]
 pub struct GrassChunkMap(pub HashMap<(i32, i32), Entity>);
@@ -790,9 +831,6 @@ pub struct IconAssets {
     pub battering_ram: Handle<Image>,
     // Mobs
     pub goblin: Handle<Image>,
-    pub skeleton: Handle<Image>,
-    pub orc: Handle<Image>,
-    pub demon: Handle<Image>,
     // Summons
     pub skeleton_minion: Handle<Image>,
     pub spirit_wolf: Handle<Image>,
@@ -861,9 +899,6 @@ impl IconAssets {
             EntityKind::Alchemist => self.alchemist.clone(),
             // Mobs
             EntityKind::Goblin => self.goblin.clone(),
-            EntityKind::Skeleton => self.skeleton.clone(),
-            EntityKind::Orc => self.orc.clone(),
-            EntityKind::Demon => self.demon.clone(),
             // Summons
             EntityKind::SkeletonMinion => self.skeleton_minion.clone(),
             EntityKind::SpiritWolf => self.spirit_wolf.clone(),

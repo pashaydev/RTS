@@ -1,8 +1,8 @@
 use bevy::ecs::entity::Entities;
 use bevy::ecs::lifecycle::RemovedComponents;
 use bevy::prelude::*;
-use bevy::time::Fixed;
 use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
+use bevy::time::Fixed;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 
@@ -680,7 +680,6 @@ fn spawn_pathfinding_tasks(
 ) {
     let mut processed = 0;
     while processed < PATHS_PER_FRAME {
-
         let Some(request) = queue.requests.pop_front() else {
             break;
         };
@@ -891,7 +890,11 @@ pub fn find_path(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> Option<Vec<(f32
                 // SLOPE_PENALTY_START scales linearly; above MAX_STEP_HEIGHT_DELTA
                 // we already rejected the cell as a cliff in build_nav_grid.
                 let h_here = nav_grid.heights[current];
-                let h_neigh = nav_grid.costs.get(ni).map(|_| nav_grid.heights[ni]).unwrap_or(h_here);
+                let h_neigh = nav_grid
+                    .costs
+                    .get(ni)
+                    .map(|_| nav_grid.heights[ni])
+                    .unwrap_or(h_here);
                 let dh = (h_neigh - h_here).abs();
                 let slope_penalty = if dh > SLOPE_PENALTY_START {
                     ((dh - SLOPE_PENALTY_START) * 800.0) as u32

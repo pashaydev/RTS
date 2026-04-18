@@ -48,6 +48,7 @@ fn process_ability_casts(
     spatial_grid: Res<SpatialHashGrid>,
     teams: Res<TeamConfig>,
     vfx_assets: Option<Res<VfxAssets>>,
+    mut damage_events: MessageWriter<DamageApplied>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut casters: Query<(
         Entity,
@@ -169,6 +170,7 @@ fn process_ability_casts(
                             true,
                             &mut targets_health,
                             &factions,
+                            &mut damage_events,
                             &vfx,
                             &mut materials,
                             now,
@@ -195,7 +197,7 @@ fn process_ability_casts(
                     if let Ok((_, mut health, opt_armor, _, opt_reserved)) =
                         targets_health.get_mut(*target_e)
                     {
-                        apply_damage(
+                        let dealt = apply_damage(
                             &mut commands,
                             *target_e,
                             Some(caster_entity),
@@ -207,6 +209,13 @@ fn process_ability_casts(
                             now,
                             mem,
                         );
+                        damage_events.write(DamageApplied {
+                            target: *target_e,
+                            source: Some(caster_entity),
+                            amount: dealt,
+                            damage_type: DamageType::Magic,
+                            now_secs: now,
+                        });
                     }
                     // Apply slow
                     commands.entity(*target_e).insert(StatusEffects {
@@ -279,11 +288,10 @@ fn process_ability_casts(
                     if let Ok((target_tf, mut health, opt_armor, opt_kind, opt_reserved)) =
                         targets_health.get_mut(target_e)
                     {
-                        let is_undead = opt_kind.map_or(false, |k| {
-                            matches!(k, EntityKind::Skeleton | EntityKind::SkeletonMinion)
-                        });
+                        let is_undead =
+                            opt_kind.map_or(false, |k| matches!(k, EntityKind::SkeletonMinion));
                         let base_damage = if is_undead { 50.0 } else { 25.0 };
-                        apply_damage(
+                        let dealt = apply_damage(
                             &mut commands,
                             target_e,
                             Some(caster_entity),
@@ -295,6 +303,13 @@ fn process_ability_casts(
                             now,
                             mem,
                         );
+                        damage_events.write(DamageApplied {
+                            target: target_e,
+                            source: Some(caster_entity),
+                            amount: dealt,
+                            damage_type: DamageType::Magic,
+                            now_secs: now,
+                        });
 
                         // Golden smite VFX
                         let smite_mat = materials.add(StandardMaterial {
@@ -354,6 +369,7 @@ fn aoe_damage_at(
         Without<CastingAbility>,
     >,
     factions: &Query<&Faction>,
+    damage_events: &mut MessageWriter<DamageApplied>,
     vfx: &VfxAssets,
     materials: &mut Assets<StandardMaterial>,
     now_secs: f64,
@@ -374,7 +390,7 @@ fn aoe_damage_at(
             } else {
                 1.0
             };
-            apply_damage(
+            let dealt = apply_damage(
                 commands,
                 *target_e,
                 Some(caster_entity),
@@ -386,6 +402,13 @@ fn aoe_damage_at(
                 now_secs,
                 damage_memory_secs,
             );
+            damage_events.write(DamageApplied {
+                target: *target_e,
+                source: Some(caster_entity),
+                amount: dealt,
+                damage_type,
+                now_secs,
+            });
         }
     }
 

@@ -10,8 +10,8 @@ use crate::presentation::materials::tree_occlusion::{
 };
 use crate::types::{
     AnimState, AppState, AttentionIconAssets, DayCycleIconAssets, DecoGltfHandles,
-    DecorationInstanceAssets, GrassInstanceAssets, GrassRenderSettings, IconAssets, ModelAssets,
-    TeamColor,
+    DecorationInstanceAssets, GrassInstanceAssets, GrassRenderSettings, IconAssets, LodTier,
+    ModelAssets, TeamColor,
 };
 
 pub struct ModelAssetsPlugin;
@@ -66,9 +66,6 @@ impl Plugin for ModelAssetsPlugin {
             catapult: asset_server.load("icons/units/catapult.png"),
             battering_ram: asset_server.load("icons/units/battering_ram.png"),
             goblin: asset_server.load("icons/mobs/goblin.png"),
-            skeleton: asset_server.load("icons/mobs/skeleton.png"),
-            orc: asset_server.load("icons/mobs/orc.png"),
-            demon: asset_server.load("icons/mobs/demon.png"),
             skeleton_minion: asset_server.load("icons/summons/skeleton_minion.png"),
             spirit_wolf: asset_server.load("icons/summons/spirit_wolf.png"),
             fire_elemental: asset_server.load("icons/summons/fire_elemental.png"),
@@ -603,6 +600,12 @@ pub struct CharacterModelCalibration {
 pub struct UnitModelAssets {
     pub scenes: HashMap<EntityKind, Handle<Scene>>,
     pub calibration: HashMap<EntityKind, CharacterModelCalibration>,
+    /// Per-LOD scene handles. Every kind has a `LodTier::High` entry (mirror
+    /// of `scenes`). Additional tiers are populated only when a distinct
+    /// asset is baked — the swap system skips kinds that lack the requested
+    /// tier, so this resource can be extended without touching the swap
+    /// logic.
+    pub lod_scenes: HashMap<(EntityKind, LodTier), Handle<Scene>>,
 }
 
 const TTP_UNITS_PATH: &str = "ToonyTinyPeople/models/units";
@@ -645,8 +648,8 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
         scenes.insert(*kind, handle);
     }
 
-    // Goblin mob (standalone GLB model)
-    let goblin_scene = asset_server.load("models/Goblin.glb#Scene0");
+    // Goblin mob (standalone GLB model — currently using KayKit Orc rig)
+    let goblin_scene = asset_server.load("models/Orc.glb#Scene0");
     scenes.insert(EntityKind::Goblin, goblin_scene);
 
     // (kind, scale, y_offset, facing_rotation)
@@ -666,10 +669,14 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
         // TTP siege machines
         (EntityKind::Catapult, 0.4, -0.9, 0.0),
         (EntityKind::BatteringRam, 0.4, -0.8, 0.0),
-        // Summons on TTP rigs (mobs now use procedural cubes)
+        // Summons on TTP rigs
         (EntityKind::SkeletonMinion, 0.4, -0.7, 0.0),
-        // Goblin mob (standalone GLB)
-        (EntityKind::Goblin, 0.7, -0.8, 0.0),
+        // Goblin mob (standalone GLB; KayKit Orc rig)
+        // Evaluated world height ≈ 2.97u with feet at y=-0.17u; pick scale
+        // 1.15 so rendered height is ~3.4u (matches old goblin silhouette),
+        // then y_offset cancels blueprint y_offset (0.8) + scaled feet
+        // (-0.17 × 1.15 ≈ -0.20) so feet land at terrain level.
+        (EntityKind::Goblin, 1.15, -0.6, 0.0),
     ];
     let calibration: HashMap<_, _> = calibration_data
         .iter()
@@ -685,9 +692,18 @@ fn load_unit_model_assets_eager(asset_server: &AssetServer) -> UnitModelAssets {
         })
         .collect();
 
+    // Seed per-LOD table with High = base scene for every kind. The swap
+    // system falls back to the High tier when no higher-distance entry
+    // (currently only `LodTier::Impostor` for the goblin) is registered.
+    let mut lod_scenes: HashMap<(EntityKind, LodTier), Handle<Scene>> = HashMap::new();
+    for (kind, handle) in scenes.iter() {
+        lod_scenes.insert((*kind, LodTier::High), handle.clone());
+    }
+
     UnitModelAssets {
         scenes,
         calibration,
+        lod_scenes,
     }
 }
 
@@ -843,14 +859,14 @@ fn ttp_clip_mapping(anim_set: TtpAnimSet) -> Vec<(&'static str, AnimState)> {
             ("death", AnimState::DeathA),
         ],
         TtpAnimSet::GoblinMob => vec![
-            ("Happy.002", AnimState::Idle),
-            ("Walk-fast", AnimState::Walk),
-            ("Run-flee", AnimState::Run),
-            ("Attack-two handed.002", AnimState::AttackA),
-            ("Attack-two handedAction", AnimState::AttackB),
-            ("cry.001", AnimState::Damage),
-            ("Die-jump-ground-face4 test", AnimState::DeathA),
-            ("Die-jump-ground-face4 test", AnimState::DeathB),
+            ("CharacterArmature|Idle", AnimState::Idle),
+            ("CharacterArmature|Walk", AnimState::Walk),
+            ("CharacterArmature|Run", AnimState::Run),
+            ("CharacterArmature|Punch", AnimState::AttackA),
+            ("CharacterArmature|Weapon", AnimState::AttackB),
+            ("CharacterArmature|HitReact", AnimState::Damage),
+            ("CharacterArmature|Death", AnimState::DeathA),
+            ("CharacterArmature|Death", AnimState::DeathB),
         ],
     }
 }
@@ -883,8 +899,8 @@ fn load_ttp_gltf_handles(asset_server: &AssetServer) -> TtpGltfHandles {
         units.insert(*kind, handle);
     }
 
-    // Goblin mob (standalone GLB)
-    let goblin_gltf: Handle<bevy::gltf::Gltf> = asset_server.load("models/Goblin.glb");
+    // Goblin mob (standalone GLB — KayKit Orc rig)
+    let goblin_gltf: Handle<bevy::gltf::Gltf> = asset_server.load("models/Orc.glb");
     units.insert(EntityKind::Goblin, goblin_gltf);
 
     TtpGltfHandles { units }

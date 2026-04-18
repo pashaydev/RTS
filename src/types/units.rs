@@ -633,6 +633,14 @@ pub enum AnimState {
 #[derive(Component)]
 pub struct UnitSceneChild;
 
+/// Attached alongside `UnitSceneChild` at spawn; removed once
+/// `discover_animation_players` has successfully attached the
+/// `AnimPlayerRef` to the parent. Presence of this marker is what
+/// keeps an entity in the discovery query — once removed, the
+/// scene child is skipped entirely.
+#[derive(Component)]
+pub struct UnitSceneChildPending;
+
 // ── Movement Smoothing ──
 
 #[derive(Component)]

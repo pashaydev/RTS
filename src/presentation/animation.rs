@@ -34,9 +34,9 @@ impl Plugin for AnimationPlugin {
 ///
 /// Uses per-unit-type animation graphs from `UnitAnimationRegistry` for TTP units,
 /// and falls back to the legacy shared graph for KayKit mobs.
-fn discover_animation_players(
+pub fn discover_animation_players(
     mut commands: Commands,
-    scene_children: Query<(Entity, &ChildOf), With<UnitSceneChild>>,
+    scene_children: Query<(Entity, &ChildOf), With<UnitSceneChildPending>>,
     parents_without_anim: Query<Entity, (With<Unit>, Without<AnimPlayerRef>)>,
     mob_parents_without_anim: Query<Entity, (With<Mob>, Without<AnimPlayerRef>)>,
     kind_q: Query<&EntityKind>,
@@ -51,6 +51,9 @@ fn discover_animation_players(
         let is_unit = parents_without_anim.contains(parent);
         let is_mob = mob_parents_without_anim.contains(parent);
         if !is_unit && !is_mob {
+            // Parent has no Unit/Mob marker — drop the pending flag so we
+            // don't keep rescanning this entity forever.
+            commands.entity(scene_entity).remove::<UnitSceneChildPending>();
             continue;
         }
 
@@ -126,6 +129,12 @@ fn discover_animation_players(
         commands
             .entity(player_entity)
             .insert((AnimationGraphHandle(graph), AnimationTransitions::new()));
+
+        // Discovery done — drop the pending marker so the outer query
+        // becomes empty once every unit is attached.
+        commands
+            .entity(scene_entity)
+            .remove::<UnitSceneChildPending>();
     }
 }
 
@@ -178,6 +187,8 @@ fn is_critical_state(state: AnimState) -> bool {
 /// the Walk↔Run speed threshold.
 fn drive_animations(
     time: Res<Time>,
+    mut frame_tick: Local<u32>,
+    camera_q: Query<&GlobalTransform, With<CullingSourceCamera>>,
     mut anim_controllers: Query<
         (
             Entity,
@@ -207,6 +218,13 @@ fn drive_animations(
     mut anim_players: Query<(&mut AnimationPlayer, &mut AnimationTransitions)>,
 ) {
     let dt = time.delta_secs();
+    *frame_tick = frame_tick.wrapping_add(1);
+    let tick_parity = *frame_tick & 1;
+    // Squared distance beyond which we halve the state-machine rate. Anything
+    // past LOD_HIDE_DISTANCE is already culled by sync_frustum_culling so we
+    // only throttle the 25..180 band.
+    const MEDIUM_THROTTLE_DIST_SQ: f32 = 25.0 * 25.0;
+    let cam_pos = camera_q.single().ok().map(|t| t.translation());
 
     for (
         anim_entity,
@@ -226,8 +244,22 @@ fn drive_animations(
         opt_smoothing,
     ) in &mut anim_controllers
     {
-        // Tick cooldown
+        // Tick cooldown before any throttle skip so cooldown still advances
+        // for skipped frames.
         controller.change_cooldown = (controller.change_cooldown - dt).max(0.0);
+
+        // Medium-distance rate throttle: skip every other frame for entities
+        // past 25u. Entity-bit parity spreads the skipped entities across
+        // frames so the visible population doesn't all-skip in lockstep.
+        if let Some(cam) = cam_pos {
+            let d_sq = (cam - my_tf.translation).length_squared();
+            if d_sq > MEDIUM_THROTTLE_DIST_SQ {
+                let parity = ((anim_entity.to_bits() as u32) ^ tick_parity) & 1;
+                if parity == 1 {
+                    continue;
+                }
+            }
+        }
 
         let patrol_kind = patrol_state.map(|p| p.state);
         let desired = if health.current <= 0.0 {
@@ -287,10 +319,7 @@ fn drive_animations(
         ) {
             AnimState::Walk
         } else if attack_windup.is_some() {
-            if matches!(
-                kind,
-                EntityKind::Mage | EntityKind::Priest | EntityKind::Demon
-            ) {
+            if matches!(kind, EntityKind::Mage | EntityKind::Priest) {
                 AnimState::CastA
             } else {
                 AnimState::AttackA
@@ -298,11 +327,7 @@ fn drive_animations(
         } else if attack_recovery.is_some() {
             AnimState::Idle
         } else if matches!(patrol_kind, Some(PatrolStateKind::Attacking)) {
-            if matches!(kind, EntityKind::Demon) {
-                AnimState::CastA
-            } else {
-                AnimState::AttackA
-            }
+            AnimState::AttackA
         } else if let Some(at) = attack_target {
             if let Ok(target_tf) = target_transforms.get(at.0) {
                 let dist = my_tf.translation.distance(target_tf.translation);

@@ -270,4 +270,3 @@ pub fn paint_floor_blend_on_ground(
         }
     }
 }
-

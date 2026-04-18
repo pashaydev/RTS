@@ -23,9 +23,7 @@ use bevy_matchbox::prelude::MatchboxSocket;
 use game_state::message::{ClientMessage, ServerMessage};
 
 use crate::blueprints::EntityKind;
-use crate::types::{
-    AllPlayerResources, Faction, Health, ResourceType, SimClock, UnitState,
-};
+use crate::types::{AllPlayerResources, Faction, Health, ResourceType, SimClock, UnitState};
 
 use super::matchbox_transport::{broadcast_reliable, send_to_host};
 use super::transport::MatchboxInbox;
@@ -544,7 +542,6 @@ fn dump_world_state(
         warn!("Wrote desync dump: {}", filename);
     }
 }
-
 
 // ── Host-side forwarding ────────────────────────────────────────────────────
 

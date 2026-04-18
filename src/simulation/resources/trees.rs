@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use rand::Rng;
+use bevy::light::NotShadowCaster;
 
 use crate::presentation::camera::InternalRenderTarget;
 use crate::presentation::materials::tree_occlusion::{
@@ -284,6 +285,7 @@ fn fix_alpha_recursive(
     commands: &mut Commands,
 ) -> u32 {
     let mut count = 0;
+    commands.entity(entity).insert(NotShadowCaster);
     if let Ok(mat_handle) = mesh_mat_q.get(entity) {
         if let Some(mat) = materials.get_mut(mat_handle) {
             count += 1;

@@ -418,23 +418,10 @@ pub fn build_visual_cache(
                 MeshKind::Cuboid { x, y, z } => meshes.add(Cuboid::new(x, y, z)),
                 MeshKind::GltfScene { .. } => meshes.add(Cuboid::new(4.0, 0.3, 4.0)),
                 MeshKind::GltfCharacter { .. } => meshes.add(Cuboid::new(0.5, 0.1, 0.5)),
-                MeshKind::ProceduralMob { .. } => match *kind {
-                    EntityKind::Goblin => meshes.add(Cuboid::new(0.8, 0.8, 0.8)),
-                    EntityKind::Skeleton => meshes.add(Cuboid::new(0.6, 1.6, 0.6)),
-                    EntityKind::Orc => meshes.add(Cuboid::new(1.4, 1.2, 1.4)),
-                    EntityKind::Demon => meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-                    _ => meshes.add(Cuboid::new(1.0, 1.0, 1.0)),
-                },
             },
         };
 
-        let emissive = match *kind {
-            EntityKind::Demon => LinearRgba::new(0.8, 0.1, 0.1, 1.0),
-            EntityKind::Skeleton if bp.visual.mesh_kind.is_procedural_mob() => {
-                LinearRgba::new(0.1, 0.1, 0.15, 1.0)
-            }
-            _ => LinearRgba::NONE,
-        };
+        let emissive = LinearRgba::NONE;
         let mut default_material = StandardMaterial {
             base_color: bp.visual.color,
             emissive,

@@ -553,11 +553,13 @@ pub(crate) fn update_lobby_ui(
                                     net_config.apply_to_lobby(&mut lobby);
                                     let mut local_slot_override = None;
                                     let local_player = if client.player_id != 0 {
-                                        lobby.players
+                                        lobby
+                                            .players
                                             .iter()
                                             .find(|p| p.player_id == client.player_id)
                                     } else {
-                                        lobby.players
+                                        lobby
+                                            .players
                                             .iter()
                                             .find(|p| !p.is_host && p.connected)
                                             .or_else(|| {

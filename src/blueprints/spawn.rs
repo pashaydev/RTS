@@ -183,26 +183,6 @@ pub fn spawn_from_blueprint_with_faction(
         }
         EntityCategory::Mob => {
             entity_cmds.insert((Mob, FogHideable::Mob));
-            if bp.visual.mesh_kind.is_procedural_mob() {
-                let visual_kind = match kind {
-                    EntityKind::Goblin => MobVisualKind::Goblin,
-                    EntityKind::Skeleton => MobVisualKind::Skeleton,
-                    EntityKind::Orc => MobVisualKind::Orc,
-                    EntityKind::Demon => MobVisualKind::Demon,
-                    _ => MobVisualKind::Goblin,
-                };
-                entity_cmds.insert(ProceduralMob {
-                    visual_kind,
-                    phase: 0.0,
-                    base_y_offset: bp.movement.as_ref().map(|m| m.y_offset).unwrap_or(0.3),
-                    base_scale: Vec3::splat(bp.visual.scale),
-                    base_translation: Vec3::ZERO,
-                    attack_timer: None,
-                    initialized: false,
-                    pulse_ring_spawned: false,
-                    dying_progress: 0.0,
-                });
-            }
         }
         EntityCategory::Building => {
             let footprint = crate::simulation::buildings::footprint_for_kind(kind);
@@ -518,6 +498,7 @@ pub fn spawn_from_blueprint_with_faction(
                 let mut child = commands.spawn((
                     SceneRoot(scene_handle.clone()),
                     UnitSceneChild,
+                    UnitSceneChildPending,
                     Transform::from_scale(Vec3::splat(scale))
                         .with_translation(Vec3::new(0.0, y_off, 0.0))
                         .with_rotation(Quat::from_rotation_y(facing)),
@@ -526,6 +507,7 @@ pub fn spawn_from_blueprint_with_faction(
                 child.insert((InheritOutline, AsyncSceneInheritOutline::default()));
                 let child = child.id();
                 commands.entity(entity_id).add_child(child);
+                commands.entity(entity_id).insert(UnitLod::new());
             }
         }
     }

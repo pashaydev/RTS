@@ -849,8 +849,7 @@ fn return_to_depot_or_wait(
             deposit_points,
             inventories,
         ) {
-            let (_, depot_tf, _, _, depot_kind, depot_fp, _) =
-                deposit_points.get(depot).unwrap();
+            let (_, depot_tf, _, _, depot_kind, depot_fp, _) = deposit_points.get(depot).unwrap();
             let target =
                 building_worker_interaction_target(*pos, depot_tf, depot_fp.0, *depot_kind);
             commands.entity(entity).insert(MoveTarget(target.position));
@@ -870,7 +869,12 @@ fn find_nearest_node(
     pos: &Vec3,
     range: f32,
     all_nodes: &Query<
-        (Entity, &Transform, Option<&YardResourceNode>, Option<&NetworkId>),
+        (
+            Entity,
+            &Transform,
+            Option<&YardResourceNode>,
+            Option<&NetworkId>,
+        ),
         (With<ResourceNode>, Without<Unit>),
     >,
     node_data_q: &Query<(&Transform, &mut ResourceNode, Option<&YardResourceNode>), Without<Unit>>,
@@ -941,7 +945,12 @@ fn find_nearest_node_of_type(
     pos: &Vec3,
     target: ResourceType,
     all_nodes: &Query<
-        (Entity, &Transform, Option<&YardResourceNode>, Option<&NetworkId>),
+        (
+            Entity,
+            &Transform,
+            Option<&YardResourceNode>,
+            Option<&NetworkId>,
+        ),
         (With<ResourceNode>, Without<Unit>),
     >,
     node_data_q: &Query<(&Transform, &mut ResourceNode, Option<&YardResourceNode>), Without<Unit>>,

@@ -120,6 +120,7 @@ impl Plugin for DebugPlugin {
                     sync_runtime_debug_tweaks,
                     sync_resource_debug_tweaks,
                     sync_item_debug_tweaks,
+                    sync_night_wave_tweaks,
                     sync_ai_debug_tweaks,
                     sync_network_debug_tweaks,
                     initialize_debug_folder_defaults,
@@ -378,6 +379,7 @@ const ITEMS_SELECTED_FOLDER: &str = "Items/Selected";
 const NET_CONN_FOLDER: &str = "Network/Connection";
 const NET_TRAFFIC_FOLDER: &str = "Network/Traffic";
 const GRASS_FOLDER: &str = "Visuals/Grass";
+const NIGHT_SPAWNS_FOLDER: &str = "Game/Night Spawns";
 
 fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     let grass_defaults = GrassDebugSettings::default();
@@ -536,6 +538,46 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     tweaks.add_readonly(NET_CONN_FOLDER, "Tap API", "--");
 
     register_grass_debug_tweaks(&mut tweaks, &grass_defaults);
+    register_night_wave_tweaks(&mut tweaks);
+}
+
+// Night-wave tuning sliders. These write into `NightWaveState`, which is
+// simulation state — in multiplayer, diverging values would desync peers.
+// `sync_night_wave_tweaks` therefore only mirrors sliders back to the resource
+// when `NetRole::Offline`. In online sessions the sliders stay visible but
+// read-only.
+fn register_night_wave_tweaks(tweaks: &mut DebugTweaks) {
+    let defaults = crate::simulation::mobs::NightWaveState::default();
+    tweaks.add_bool(NIGHT_SPAWNS_FOLDER, "Enabled", defaults.enabled);
+    tweaks.add_float(
+        NIGHT_SPAWNS_FOLDER,
+        "Base Count",
+        defaults.base_count,
+        0.0,
+        40.0,
+        1.0,
+    );
+    tweaks.add_float(
+        NIGHT_SPAWNS_FOLDER,
+        "Growth Per Night",
+        defaults.growth_per_night,
+        0.0,
+        20.0,
+        0.5,
+    );
+    tweaks.add_float(
+        NIGHT_SPAWNS_FOLDER,
+        "Min Player Distance",
+        defaults.min_player_dist,
+        10.0,
+        200.0,
+        5.0,
+    );
+    tweaks.add_button(NIGHT_SPAWNS_FOLDER, "Force Wave Now");
+    tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Night #", "0");
+    tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Last Wave Size", "0");
+    tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Last Spawn Tick", "--");
+    tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Status", "Offline: editable");
 }
 
 fn register_grass_debug_tweaks(tweaks: &mut DebugTweaks, defaults: &GrassDebugSettings) {
@@ -1175,10 +1217,7 @@ fn sync_debug_flow_tweaks(
     );
 }
 
-fn sync_camera_debug_tweaks(
-    mut tweaks: ResMut<DebugTweaks>,
-    mut tuning: ResMut<CameraPanTuning>,
-) {
+fn sync_camera_debug_tweaks(mut tweaks: ResMut<DebugTweaks>, mut tuning: ResMut<CameraPanTuning>) {
     if let Some(v) = tweaks.get_float(CAMERA_FOLDER, "Keyboard Accel") {
         tuning.keyboard_accel = v;
     }
@@ -1220,8 +1259,16 @@ fn sync_camera_debug_tweaks(
     }
 
     tweaks.set_float_if_changed(CAMERA_FOLDER, "Keyboard Accel", tuning.keyboard_accel);
-    tweaks.set_float_if_changed(CAMERA_FOLDER, "Keyboard Max Speed", tuning.keyboard_max_speed);
-    tweaks.set_float_if_changed(CAMERA_FOLDER, "Keyboard Sprint", tuning.keyboard_sprint_multiplier);
+    tweaks.set_float_if_changed(
+        CAMERA_FOLDER,
+        "Keyboard Max Speed",
+        tuning.keyboard_max_speed,
+    );
+    tweaks.set_float_if_changed(
+        CAMERA_FOLDER,
+        "Keyboard Sprint",
+        tuning.keyboard_sprint_multiplier,
+    );
     tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Accel", tuning.edge_accel);
     tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Max Speed", tuning.edge_max_speed);
     tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Zone %", tuning.edge_zone_frac);
@@ -1229,7 +1276,11 @@ fn sync_camera_debug_tweaks(
     tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Zone Max Px", tuning.edge_zone_max_px);
     tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Curve", tuning.edge_curve_power);
     tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Delay", tuning.edge_activation_delay);
-    tweaks.set_float_if_changed(CAMERA_FOLDER, "Edge Release Px", tuning.edge_release_extra_px);
+    tweaks.set_float_if_changed(
+        CAMERA_FOLDER,
+        "Edge Release Px",
+        tuning.edge_release_extra_px,
+    );
     tweaks.set_float_if_changed(CAMERA_FOLDER, "Friction", tuning.friction);
     tweaks.set_float_if_changed(CAMERA_FOLDER, "Map Edge Margin", tuning.map_edge_margin);
 }
@@ -1370,6 +1421,80 @@ fn sync_runtime_debug_tweaks(
         RUNTIME_FOLDER,
         "Culled Entities",
         &culled_q.iter().count().to_string(),
+    );
+}
+
+fn sync_night_wave_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    pressed: Res<DebugButtonPressed>,
+    mut wave: ResMut<crate::simulation::mobs::NightWaveState>,
+    net_role: Option<Res<crate::infrastructure::multiplayer::NetRole>>,
+) {
+    let offline = net_role
+        .as_deref()
+        .map(|role| *role == crate::infrastructure::multiplayer::NetRole::Offline)
+        .unwrap_or(true);
+
+    // Status line reflects whether sliders are live.
+    let status = if offline {
+        "Offline: editable"
+    } else {
+        "Online: sliders read-only (desync-safe)"
+    };
+    tweaks.set_readonly_if_changed(NIGHT_SPAWNS_FOLDER, "Status", status);
+
+    // Slider → state writes (offline only).
+    if offline {
+        if let Some(v) = tweaks.get_bool(NIGHT_SPAWNS_FOLDER, "Enabled") {
+            wave.enabled = v;
+        }
+        if let Some(v) = tweaks.get_float(NIGHT_SPAWNS_FOLDER, "Base Count") {
+            wave.base_count = v;
+        }
+        if let Some(v) = tweaks.get_float(NIGHT_SPAWNS_FOLDER, "Growth Per Night") {
+            wave.growth_per_night = v;
+        }
+        if let Some(v) = tweaks.get_float(NIGHT_SPAWNS_FOLDER, "Min Player Distance") {
+            wave.min_player_dist = v;
+        }
+
+        for (folder, label) in &pressed.pressed {
+            if folder == NIGHT_SPAWNS_FOLDER && label == "Force Wave Now" {
+                wave.force_wave = true;
+            }
+        }
+    } else {
+        // Reflect authoritative state back into the sliders so readers see
+        // the real values, not stale UI state.
+        tweaks.set_bool_if_changed(NIGHT_SPAWNS_FOLDER, "Enabled", wave.enabled);
+        tweaks.set_float_if_changed(NIGHT_SPAWNS_FOLDER, "Base Count", wave.base_count);
+        tweaks.set_float_if_changed(
+            NIGHT_SPAWNS_FOLDER,
+            "Growth Per Night",
+            wave.growth_per_night,
+        );
+        tweaks.set_float_if_changed(
+            NIGHT_SPAWNS_FOLDER,
+            "Min Player Distance",
+            wave.min_player_dist,
+        );
+    }
+
+    // Readonly readouts always reflect state.
+    tweaks.set_readonly_if_changed(
+        NIGHT_SPAWNS_FOLDER,
+        "Night #",
+        &wave.night_count.to_string(),
+    );
+    tweaks.set_readonly_if_changed(
+        NIGHT_SPAWNS_FOLDER,
+        "Last Wave Size",
+        &wave.last_wave_size.to_string(),
+    );
+    tweaks.set_readonly_if_changed(
+        NIGHT_SPAWNS_FOLDER,
+        "Last Spawn Tick",
+        &wave.last_wave_tick.to_string(),
     );
 }
 

@@ -6,7 +6,7 @@ pub mod materials;
 pub mod minimap;
 pub mod model_assets;
 pub mod pathvis;
-pub mod procedural_mobs;
+pub mod unit_lod;
 pub mod vfx;
 
 use bevy::app::PluginGroupBuilder;
@@ -18,11 +18,12 @@ impl PluginGroup for PresentationPlugins {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
             .add(model_assets::ModelAssetsPlugin)
+            .add(materials::impostor::ImpostorMaterialPlugin)
             .add(camera::CameraPlugin)
             .add(animation::AnimationPlugin)
+            .add(unit_lod::UnitLodPlugin)
             .add(vfx::VfxPlugin)
             .add(pathvis::PathVisPlugin)
-            .add(procedural_mobs::ProceduralMobsPlugin)
             .add(entity_labels::EntityLabelPlugin)
             .add(minimap::MinimapPlugin)
             .add(cursor::CursorPlugin)
