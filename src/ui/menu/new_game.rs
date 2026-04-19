@@ -25,6 +25,21 @@ pub(crate) struct ResourceDensityOptionDot(usize);
 #[derive(Component)]
 pub(crate) struct ResourceDensityOptionLabel(usize);
 
+#[derive(Component)]
+pub(crate) struct DayLengthValueText;
+
+#[derive(Component)]
+pub(crate) struct DayLengthBarFill;
+
+#[derive(Component)]
+pub(crate) struct DayLengthBarTrack;
+
+#[derive(Component)]
+pub(crate) struct NightIntensityOptionDot(usize);
+
+#[derive(Component)]
+pub(crate) struct NightIntensityOptionLabel(usize);
+
 pub(crate) const HOST_LOBBY_SLOT_NAV_START: usize = 10;
 pub(crate) const SLOT_NAV_ROWS_PER_CARD: usize = 3;
 
@@ -527,6 +542,30 @@ fn spawn_world_settings_panel(
     spawn_settings_group_label(commands, container, "RESOURCE DENSITY", theme);
     spawn_resource_density_block(commands, container, res_idx, theme);
 
+    spawn_settings_group_label(commands, container, "DAY/NIGHT CADENCE", theme);
+    let preset_idx = config.day_night_preset().index();
+    spawn_reference_segmented_selector(
+        commands,
+        container,
+        &["SHORT", "STANDARD", "LONG"],
+        preset_idx.unwrap_or(usize::MAX),
+        SelectorField::DayNightPreset,
+        Some(4),
+        theme,
+    );
+
+    spawn_settings_group_label(commands, container, "DAY LENGTH", theme);
+    spawn_day_length_block(commands, container, config, Some(5), theme);
+
+    spawn_settings_group_label(commands, container, "NIGHT RAIDS", theme);
+    spawn_night_intensity_block(
+        commands,
+        container,
+        config.night_spawn_intensity,
+        Some(6),
+        theme,
+    );
+
     spawn_settings_group_label(commands, container, "STARTING ALLOCATION", theme);
     spawn_reference_segmented_selector(
         commands,
@@ -534,7 +573,7 @@ fn spawn_world_settings_panel(
         &["0.5X", "1.0X", "2.0X"],
         start_idx,
         SelectorField::StartingRes,
-        Some(5),
+        Some(7),
         theme,
     );
 
@@ -544,7 +583,7 @@ fn spawn_world_settings_panel(
     let start_btn = commands
         .spawn((
             MenuButton(MenuAction::StartGame),
-            NavFocusable(6),
+            NavFocusable(9),
             Button,
             ButtonAnimState::new([0.78, 0.87, 0.88, 1.0]),
             ButtonStyle::Filled,
@@ -888,6 +927,318 @@ pub(crate) fn sync_resource_density_block(
     }
 }
 
+// ── Day Length Slider ──
+
+fn day_length_display(secs: f32) -> (String, f32) {
+    let pct = ((secs - DAY_CYCLE_SECS_MIN) / (DAY_CYCLE_SECS_MAX - DAY_CYCLE_SECS_MIN))
+        .clamp(0.0, 1.0)
+        * 100.0;
+    let mins = (secs / 60.0).floor() as u32;
+    let rem = (secs - mins as f32 * 60.0).round() as u32;
+    let label = if mins == 0 {
+        format!("{rem}s")
+    } else if rem == 0 {
+        format!("{mins}:00")
+    } else {
+        format!("{mins}:{rem:02}")
+    };
+    (label, pct)
+}
+
+pub(crate) fn spawn_day_length_block(
+    commands: &mut Commands,
+    container: Entity,
+    config: &GameSetupConfig,
+    nav_index: Option<usize>,
+    theme: &Theme,
+) {
+    let (label, pct) = day_length_display(config.day_cycle_secs);
+    let mut ec = commands.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(10.0),
+            padding: UiRect::bottom(Val::Px(6.0)),
+            ..default()
+        },
+        BorderColor::all(Color::NONE),
+    ));
+    if let Some(idx) = nav_index {
+        ec.insert(NavFocusable(idx));
+    }
+    let entity = ec
+        .with_children(|parent| {
+            parent
+                .spawn(Node {
+                    width: Val::Percent(100.0),
+                    flex_direction: FlexDirection::Row,
+                    justify_content: JustifyContent::SpaceBetween,
+                    align_items: AlignItems::Center,
+                    ..default()
+                })
+                .with_children(|row| {
+                    row.spawn((
+                        Text::new("DAY LENGTH"),
+                        TextFont {
+                            font_size: 10.0,
+                            ..default()
+                        },
+                        TextColor(theme.colors.text_primary.with_alpha(0.9)),
+                    ));
+                    row.spawn((
+                        DayLengthValueText,
+                        Text::new(label),
+                        TextFont {
+                            font_size: 10.0,
+                            ..default()
+                        },
+                        TextColor(theme.colors.text_secondary.with_alpha(0.9)),
+                    ));
+                });
+
+            parent
+                .spawn((
+                    DayLengthBarTrack,
+                    RangeSlider {
+                        field: SelectorField::DayCycleSeconds,
+                        steps: None,
+                    },
+                    Button,
+                    Interaction::None,
+                    bevy::ui::RelativeCursorPosition::default(),
+                    Node {
+                        width: Val::Percent(100.0),
+                        height: Val::Px(10.0),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    },
+                    BackgroundColor(theme.colors.bg_menu.with_alpha(0.4)),
+                ))
+                .with_children(|track| {
+                    track.spawn((
+                        DayLengthBarFill,
+                        Node {
+                            width: Val::Percent(pct),
+                            height: Val::Percent(100.0),
+                            ..default()
+                        },
+                        BackgroundColor(theme.colors.accent.with_alpha(0.82)),
+                        Pickable::IGNORE,
+                    ));
+                });
+
+            parent.spawn((
+                Text::new("CLICK OR DRAG THE BAR TO ADJUST"),
+                TextFont {
+                    font_size: 6.5,
+                    ..default()
+                },
+                TextColor(theme.colors.text_disabled.with_alpha(0.55)),
+            ));
+        })
+        .id();
+    commands.entity(container).add_child(entity);
+}
+
+pub(crate) fn sync_day_length_block(
+    config: Res<GameSetupConfig>,
+    mut value_texts: Query<&mut Text, With<DayLengthValueText>>,
+    mut fill_nodes: Query<&mut Node, With<DayLengthBarFill>>,
+) {
+    if !config.is_changed() {
+        return;
+    }
+    let (label, pct) = day_length_display(config.day_cycle_secs);
+    for mut text in &mut value_texts {
+        **text = label.clone();
+    }
+    for mut node in &mut fill_nodes {
+        node.width = Val::Percent(pct);
+    }
+}
+
+/// Handles click + drag on the day-length track to set `config.day_cycle_secs`.
+pub(crate) fn day_length_slider_drag_system(
+    mouse: Res<ButtonInput<MouseButton>>,
+    tracks: Query<
+        (Entity, &Interaction, &bevy::ui::RelativeCursorPosition),
+        With<DayLengthBarTrack>,
+    >,
+    mut drag: ResMut<SliderDragState>,
+    mut config: ResMut<GameSetupConfig>,
+    host_state: Option<Res<crate::infrastructure::multiplayer::HostNetState>>,
+    mut lobby: Option<ResMut<crate::infrastructure::multiplayer::LobbyState>>,
+    mut commands: Commands,
+) {
+    if mouse.just_released(MouseButton::Left) {
+        if let Some(active) = drag.active {
+            if tracks.get(active).is_ok() {
+                drag.active = None;
+            }
+        }
+        return;
+    }
+
+    let active = if let Some(entity) = drag.active {
+        if mouse.pressed(MouseButton::Left) && tracks.get(entity).is_ok() {
+            Some(entity)
+        } else {
+            None
+        }
+    } else if mouse.just_pressed(MouseButton::Left) {
+        tracks
+            .iter()
+            .find(|(_, i, _)| **i == Interaction::Pressed)
+            .map(|(e, _, _)| e)
+    } else {
+        None
+    };
+
+    let Some(entity) = active else {
+        return;
+    };
+    drag.active = Some(entity);
+
+    let Ok((_, _, rel)) = tracks.get(entity) else {
+        return;
+    };
+    let Some(n) = rel.normalized else {
+        return;
+    };
+    let t = (n.x + 0.5).clamp(0.0, 1.0);
+    let new_secs = DAY_CYCLE_SECS_MIN + t * (DAY_CYCLE_SECS_MAX - DAY_CYCLE_SECS_MIN);
+    if (new_secs - config.day_cycle_secs).abs() >= 0.5 {
+        config.day_cycle_secs = new_secs;
+        #[cfg(not(target_arch = "wasm32"))]
+        if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
+            super::multiplayer::broadcast_lobby_update(lobby, host, &config);
+            commands.insert_resource(super::multiplayer::PendingLobbyBroadcast);
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (&host_state, &mut lobby, &mut commands);
+        }
+    }
+}
+
+// ── Night Raids Intensity ──
+
+pub(crate) fn spawn_night_intensity_block(
+    commands: &mut Commands,
+    container: Entity,
+    intensity: NightSpawnIntensity,
+    nav_index: Option<usize>,
+    theme: &Theme,
+) {
+    let selected = intensity.index();
+    let mut ec = commands.spawn((
+        Node {
+            width: Val::Percent(100.0),
+            flex_direction: FlexDirection::Row,
+            align_items: AlignItems::Center,
+            column_gap: Val::Px(10.0),
+            padding: UiRect::bottom(Val::Px(6.0)),
+            ..default()
+        },
+        BorderColor::all(Color::NONE),
+    ));
+    if let Some(idx) = nav_index {
+        ec.insert(NavFocusable(idx));
+    }
+    let entity = ec
+        .with_children(|row| {
+            for (i, label) in ["CALM", "STANDARD", "RELENTLESS"].iter().enumerate() {
+                let active = i == selected;
+                row.spawn((
+                    MenuSelector {
+                        field: SelectorField::NightSpawnIntensity,
+                        index: i,
+                    },
+                    Button,
+                    Node {
+                        flex_direction: FlexDirection::Row,
+                        align_items: AlignItems::Center,
+                        column_gap: Val::Px(6.0),
+                        ..default()
+                    },
+                    BackgroundColor(Color::NONE),
+                    BorderColor::all(Color::NONE),
+                ))
+                .with_children(|btn| {
+                    btn.spawn((
+                        NightIntensityOptionDot(i),
+                        Node {
+                            width: Val::Px(10.0),
+                            height: Val::Px(10.0),
+                            border: UiRect::all(Val::Px(1.0)),
+                            ..default()
+                        },
+                        BackgroundColor(if active {
+                            theme.colors.accent
+                        } else {
+                            Color::NONE
+                        }),
+                        BorderColor::all(if active {
+                            theme.colors.accent
+                        } else {
+                            theme.colors.text_secondary.with_alpha(0.6)
+                        }),
+                        Pickable::IGNORE,
+                    ));
+                    btn.spawn((
+                        NightIntensityOptionLabel(i),
+                        Text::new(*label),
+                        TextFont {
+                            font_size: 9.0,
+                            ..default()
+                        },
+                        TextColor(if active {
+                            theme.colors.text_primary
+                        } else {
+                            theme.colors.text_secondary.with_alpha(0.7)
+                        }),
+                        Pickable::IGNORE,
+                    ));
+                });
+            }
+        })
+        .id();
+    commands.entity(container).add_child(entity);
+}
+
+pub(crate) fn sync_night_intensity_block(
+    config: Res<GameSetupConfig>,
+    mut dots: Query<(
+        &NightIntensityOptionDot,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
+    mut option_labels: Query<(&NightIntensityOptionLabel, &mut TextColor)>,
+    theme: Res<Theme>,
+) {
+    let selected = config.night_spawn_intensity.index();
+    for (dot, mut bg, mut border) in &mut dots {
+        let active = dot.0 == selected;
+        *bg = BackgroundColor(if active {
+            theme.colors.accent
+        } else {
+            Color::NONE
+        });
+        *border = BorderColor::all(if active {
+            theme.colors.accent
+        } else {
+            theme.colors.text_secondary.with_alpha(0.6)
+        });
+    }
+    for (opt, mut color) in &mut option_labels {
+        color.0 = if opt.0 == selected {
+            theme.colors.text_primary
+        } else {
+            theme.colors.text_secondary.with_alpha(0.7)
+        };
+    }
+}
+
 fn spawn_seed_block(
     commands: &mut Commands,
     container: Entity,
@@ -909,7 +1260,7 @@ fn spawn_seed_block(
                 ..default()
             },
             BorderColor::all(Color::NONE),
-            NavFocusable(5),
+            NavFocusable(8),
         ))
         .with_children(|parent| {
             parent

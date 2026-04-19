@@ -21,6 +21,8 @@ pub(crate) struct SerializableGameConfig {
     pub map_size: u8,
     pub resource_density: u8,
     pub day_cycle_secs: f32,
+    #[serde(default)]
+    pub night_spawn_intensity: u8,
     pub starting_resources_mult: f32,
     pub seat_assignments: Vec<SeatAssignment>,
 }
@@ -76,6 +78,7 @@ impl SerializableGameConfig {
                 ResourceDensity::Dense => 2,
             },
             day_cycle_secs: config.day_cycle_secs,
+            night_spawn_intensity: config.night_spawn_intensity.index() as u8,
             starting_resources_mult: config.starting_resources_mult,
             seat_assignments,
         }
@@ -110,6 +113,8 @@ impl SerializableGameConfig {
             _ => ResourceDensity::Dense,
         };
         config.day_cycle_secs = self.day_cycle_secs;
+        config.night_spawn_intensity =
+            NightSpawnIntensity::from_index(self.night_spawn_intensity as usize);
         config.starting_resources_mult = self.starting_resources_mult;
     }
 

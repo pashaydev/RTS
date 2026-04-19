@@ -152,6 +152,8 @@ pub struct SavedGameConfig {
     pub map_size: String,
     pub resource_density: String,
     pub day_cycle_secs: f32,
+    #[serde(default)]
+    pub night_spawn_intensity: u8,
     pub starting_resources_mult: f32,
     pub map_seed: u64,
 }
@@ -1159,6 +1161,7 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
         map_size: format!("{:?}", config.map_size),
         resource_density: format!("{:?}", config.resource_density),
         day_cycle_secs: config.day_cycle_secs,
+        night_spawn_intensity: config.night_spawn_intensity.index() as u8,
         starting_resources_mult: config.starting_resources_mult,
         map_seed,
     };
@@ -1756,6 +1759,7 @@ pub fn restore_config_from_save(config: &mut GameSetupConfig, save: &SaveData) {
     config.local_player_slot = saved.local_player_slot;
     config.player_teams = saved.player_teams;
     config.day_cycle_secs = saved.day_cycle_secs;
+    config.night_spawn_intensity = NightSpawnIntensity::from_index(saved.night_spawn_intensity as usize);
     config.starting_resources_mult = saved.starting_resources_mult;
     // Use the resolved seed from MapSeed resource, not the config seed (which may be 0/random).
     config.map_seed = save.map_seed;

@@ -267,18 +267,29 @@ pub(crate) fn spawn_host_lobby_page(
         theme,
     );
 
-    let day_idx = DAY_CYCLE_OPTIONS
-        .iter()
-        .position(|&(v, _)| (v - config.day_cycle_secs).abs() < 1.0)
-        .unwrap_or(1);
-    let day_labels: Vec<&str> = DAY_CYCLE_OPTIONS.iter().map(|&(_, l)| l).collect();
+    spawn_animated_section_divider(commands, container, "DAY/NIGHT CADENCE", fonts, theme);
+
+    let preset_idx = config
+        .day_night_preset()
+        .index()
+        .unwrap_or(usize::MAX);
     spawn_selector_row(
         commands,
         container,
-        "Day Cycle:",
-        &day_labels,
-        day_idx,
-        SelectorField::DayCycle,
+        "Preset:",
+        &["Short", "Standard", "Long"],
+        preset_idx,
+        SelectorField::DayNightPreset,
+        None,
+        theme,
+    );
+
+    new_game::spawn_day_length_block(commands, container, config, None, theme);
+
+    new_game::spawn_night_intensity_block(
+        commands,
+        container,
+        config.night_spawn_intensity,
         None,
         theme,
     );

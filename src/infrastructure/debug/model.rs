@@ -176,6 +176,21 @@ impl DebugTweaks {
         }
     }
 
+    pub fn set_cycle_selected_if_changed(
+        &mut self,
+        folder: &str,
+        label: &str,
+        new_selected: usize,
+    ) {
+        if let Some(entry) = self.get_mut(folder, label) {
+            if let TweakValue::CycleEnum { selected, options } = &mut entry.value {
+                if *selected != new_selected && new_selected < options.len() {
+                    *selected = new_selected;
+                }
+            }
+        }
+    }
+
     pub fn get_color_rgb(&self, folder: &str) -> Option<[f32; 3]> {
         match (
             self.get_float(folder, "Color R"),

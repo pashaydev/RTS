@@ -385,6 +385,40 @@ pub(crate) fn handle_selector_clicks(
                     config.day_cycle_secs = DAY_CYCLE_OPTIONS[selector.index].0;
                 }
             }
+            SelectorField::DayNightPreset => {
+                let preset = crate::types::DayNightPreset::from_index(selector.index);
+                if !matches!(preset, crate::types::DayNightPreset::Custom) {
+                    config.day_cycle_secs = preset.day_cycle_secs();
+                    config.night_spawn_intensity = preset.night_intensity();
+                    #[cfg(not(target_arch = "wasm32"))]
+                    if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
+                        multiplayer::broadcast_lobby_update(lobby, host, &config);
+                        commands.insert_resource(multiplayer::PendingLobbyBroadcast);
+                    }
+                }
+            }
+            SelectorField::DayCycleSeconds => {
+                // Drag handler sets the value; the "selector" click just acts as a
+                // step nudge (unused by the UI but keeps keyboard nav coherent).
+                let steps = 7;
+                let t = (selector.index as f32 / (steps - 1) as f32).clamp(0.0, 1.0);
+                config.day_cycle_secs = crate::types::DAY_CYCLE_SECS_MIN
+                    + t * (crate::types::DAY_CYCLE_SECS_MAX - crate::types::DAY_CYCLE_SECS_MIN);
+                #[cfg(not(target_arch = "wasm32"))]
+                if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
+                    multiplayer::broadcast_lobby_update(lobby, host, &config);
+                    commands.insert_resource(multiplayer::PendingLobbyBroadcast);
+                }
+            }
+            SelectorField::NightSpawnIntensity => {
+                config.night_spawn_intensity =
+                    crate::types::NightSpawnIntensity::from_index(selector.index);
+                #[cfg(not(target_arch = "wasm32"))]
+                if let (Some(ref mut lobby), Some(ref host)) = (&mut lobby, &host_state) {
+                    multiplayer::broadcast_lobby_update(lobby, host, &config);
+                    commands.insert_resource(multiplayer::PendingLobbyBroadcast);
+                }
+            }
             SelectorField::StartingRes => {
                 if selector.index < STARTING_RES_OPTIONS.len() {
                     config.starting_resources_mult = STARTING_RES_OPTIONS[selector.index].0;

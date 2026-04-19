@@ -852,6 +852,7 @@ impl GameDatabase {
                 team_mode: format!("{:?}", config.team_mode),
                 player_teams: config.player_teams,
                 day_cycle_secs: config.day_cycle_secs,
+                night_spawn_intensity: config.night_spawn_intensity.index() as u8,
                 starting_resources_mult: config.starting_resources_mult,
                 map_seed: config.map_seed,
                 slots: config
@@ -1156,6 +1157,8 @@ pub struct SerializablePreset {
     pub team_mode: String,
     pub player_teams: [u8; 4],
     pub day_cycle_secs: f32,
+    #[serde(default)]
+    pub night_spawn_intensity: u8,
     pub starting_resources_mult: f32,
     pub map_seed: u64,
     pub slots: Vec<String>,

@@ -17,12 +17,13 @@ use crate::types::{
     AiControlledFactions, AiFactionSettings, AllPlayerResources, AllyNotifications, AllyNotifyKind,
     AppState, AttackTarget, CullReason, Faction, FrustumCulled, FrustumDebugMode, GameFlowSet,
     GameSetupConfig, GameWorld, GrassDebugSettings, GrassRebuildState, Health, MoveTarget,
-    ResourceType, RtsCamera, Selected, UiPressActive, UnitSpeed,
+    NightSpawnIntensity, ResourceType, RtsCamera, Selected, UiPressActive, UnitSpeed,
 };
 use crate::world::fog::FogTweakSettings;
 use crate::world::ground::HeightMap;
 use crate::world::lighting::{
-    DayCycle, EntityClusterLight, EntityLightConfig, EntityLightGrid, LightingOverrides, SunLight,
+    DayCycle, DayPhase, EntityClusterLight, EntityLightConfig, EntityLightGrid, LightingOverrides,
+    SunLight,
 };
 use crate::world::pathfinding::PathRequestQueue;
 use bevy::window::PrimaryWindow;
@@ -662,12 +663,24 @@ fn register_combat_tuning_tweaks(tweaks: &mut DebugTweaks) {
 // read-only.
 fn register_night_wave_tweaks(tweaks: &mut DebugTweaks) {
     let defaults = crate::simulation::mobs::NightWaveState::default();
+    let intensity_defaults = NightSpawnIntensity::default();
     tweaks.add_bool(NIGHT_SPAWNS_FOLDER, "Enabled", defaults.enabled);
+    tweaks.add_cycle_enum(
+        NIGHT_SPAWNS_FOLDER,
+        "Intensity",
+        vec![
+            NightSpawnIntensity::Calm.label().to_string(),
+            NightSpawnIntensity::Standard.label().to_string(),
+            NightSpawnIntensity::Relentless.label().to_string(),
+        ],
+        intensity_defaults.index(),
+    );
     tweaks.add_button(NIGHT_SPAWNS_FOLDER, "Force Wave Now");
+    tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Phase", "—");
     tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Night #", "0");
     tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Wave Progress", "—");
     tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Killed This Wave", "0");
-    tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Status", "Offline: editable");
+    tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Status", "—");
 }
 
 fn register_grass_debug_tweaks(tweaks: &mut DebugTweaks, defaults: &GrassDebugSettings) {
@@ -1600,6 +1613,8 @@ fn sync_night_wave_tweaks(
     mut tweaks: ResMut<DebugTweaks>,
     pressed: Res<DebugButtonPressed>,
     mut wave: ResMut<crate::simulation::mobs::NightWaveState>,
+    mut config: ResMut<GameSetupConfig>,
+    mut day_cycle: ResMut<DayCycle>,
     net_role: Option<Res<crate::infrastructure::multiplayer::NetRole>>,
 ) {
     let offline = net_role
@@ -1607,30 +1622,45 @@ fn sync_night_wave_tweaks(
         .map(|role| *role == crate::infrastructure::multiplayer::NetRole::Offline)
         .unwrap_or(true);
 
-    // Status line reflects whether sliders are live.
-    let status = if offline {
-        "Offline: editable"
-    } else {
-        "Online: sliders read-only (desync-safe)"
-    };
-    tweaks.set_readonly_if_changed(NIGHT_SPAWNS_FOLDER, "Status", status);
-
-    // Slider → state writes (offline only).
+    // Slider → state writes (offline only). DayCycle + GameSetupConfig are
+    // simulation state, so in multiplayer we only mirror authoritative values
+    // back to the UI.
     if offline {
         if let Some(v) = tweaks.get_bool(NIGHT_SPAWNS_FOLDER, "Enabled") {
             wave.enabled = v;
         }
 
+        if let Some(idx) = tweaks.get_cycle_selected(NIGHT_SPAWNS_FOLDER, "Intensity") {
+            let new_intensity = NightSpawnIntensity::from_index(idx);
+            if config.night_spawn_intensity != new_intensity {
+                config.night_spawn_intensity = new_intensity;
+            }
+        }
+
         for (folder, label) in &pressed.pressed {
             if folder == NIGHT_SPAWNS_FOLDER && label == "Force Wave Now" {
+                // `force_wave` alone only triggers queue composition; it does
+                // nothing visible until Night phase activates the queue. Jump
+                // the day cycle into Night so the queued wave starts spawning
+                // on the next FixedUpdate tick.
                 wave.force_wave = true;
+                if !matches!(day_cycle.phase, DayPhase::Night) {
+                    day_cycle.set_time(0.05);
+                }
+                day_cycle.paused = false;
             }
         }
     } else {
         tweaks.set_bool_if_changed(NIGHT_SPAWNS_FOLDER, "Enabled", wave.enabled);
+        tweaks.set_cycle_selected_if_changed(
+            NIGHT_SPAWNS_FOLDER,
+            "Intensity",
+            config.night_spawn_intensity.index(),
+        );
     }
 
     // Readonly readouts always reflect state.
+    tweaks.set_readonly_if_changed(NIGHT_SPAWNS_FOLDER, "Phase", day_cycle.phase_name());
     tweaks.set_readonly_if_changed(
         NIGHT_SPAWNS_FOLDER,
         "Night #",
@@ -1645,6 +1675,19 @@ fn sync_night_wave_tweaks(
     };
     tweaks.set_readonly_if_changed(NIGHT_SPAWNS_FOLDER, "Wave Progress", &progress);
     tweaks.set_readonly_if_changed(NIGHT_SPAWNS_FOLDER, "Killed This Wave", &killed);
+
+    let wave_state = match (&wave.queued, &wave.active) {
+        (_, Some(active)) => format!("active (night {})", active.night),
+        (Some(queued), None) => format!("queued for night {}", queued.night),
+        (None, None) => "idle".to_string(),
+    };
+    let net_label = if offline {
+        "editable"
+    } else {
+        "read-only (online)"
+    };
+    let status = format!("{} | {}", wave_state, net_label);
+    tweaks.set_readonly_if_changed(NIGHT_SPAWNS_FOLDER, "Status", &status);
 }
 
 fn sync_combat_tuning_tweaks(

@@ -162,13 +162,25 @@ impl ActiveWave {
 
 // ── Wave composition ─────────────────────────────────────────────────────
 
-/// Total mobs and spawn cadence for a given night number. Plain hardcoded
-/// table — easy to tune without touching the spawn logic.
-fn compose_wave_count_and_cadence(night: u32) -> (u32, u64) {
-    let total = (8 + night.saturating_mul(2)).min(80);
-    // Interval ramps from 240t (8s) down to 60t (2s), reaching minimum at
-    // night 15.
-    let interval = 240u64.saturating_sub((night as u64).saturating_mul(12)).max(60);
+/// Total mobs and spawn cadence for a given night number, scaled by the
+/// player-chosen `NightSpawnIntensity`. Base curve: 8 + 2*night capped at 80.
+/// Intensity scales both the baseline and the per-night growth.
+fn compose_wave_count_and_cadence(night: u32, intensity: NightSpawnIntensity) -> (u32, u64) {
+    let base = 8.0 * intensity.count_mult();
+    let growth = intensity.growth_per_night();
+    let raw = (base + growth * night as f32).round().max(1.0) as u32;
+    let total = raw.min(80);
+
+    // Interval ramps down as nights progress. `Relentless` compresses it
+    // faster; `Calm` stretches it out.
+    let accel = match intensity {
+        NightSpawnIntensity::Calm => 8,
+        NightSpawnIntensity::Standard => 12,
+        NightSpawnIntensity::Relentless => 18,
+    };
+    let interval = 240u64
+        .saturating_sub((night as u64).saturating_mul(accel))
+        .max(60);
     (total, interval)
 }
 
@@ -219,6 +231,7 @@ fn pick_wave_direction(rng: &mut StdRng) -> WaveDirection {
 fn on_dusk_compose_wave(
     mut wave: ResMut<NightWaveState>,
     map_seed: Res<MapSeed>,
+    config: Res<GameSetupConfig>,
     mut dusk_rx: MessageReader<DuskBegan>,
     mut wave_alert_tx: MessageWriter<WaveAlert>,
     mut event_log: ResMut<GameEventLog>,
@@ -240,7 +253,8 @@ fn on_dusk_compose_wave(
         ^ (next_night as u64).wrapping_mul(PHI_U64);
     let mut rng = StdRng::seed_from_u64(seed);
 
-    let (total, interval_ticks) = compose_wave_count_and_cadence(next_night);
+    let (total, interval_ticks) =
+        compose_wave_count_and_cadence(next_night, config.night_spawn_intensity);
     let direction = pick_wave_direction(&mut rng);
     let tier_order = compose_tier_order(&mut rng, total, next_night);
 

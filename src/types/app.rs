@@ -365,6 +365,7 @@ pub struct GameSetupConfig {
     pub map_size: MapSize,
     pub resource_density: ResourceDensity,
     pub day_cycle_secs: f32,
+    pub night_spawn_intensity: NightSpawnIntensity,
     pub starting_resources_mult: f32,
     pub map_seed: u64, // 0 = random
 }
@@ -385,7 +386,8 @@ impl Default for GameSetupConfig {
             player_teams: [0, 1, 2, 3],
             map_size: MapSize::default(),
             resource_density: ResourceDensity::default(),
-            day_cycle_secs: 600.0,
+            day_cycle_secs: DayNightPreset::Standard.day_cycle_secs(),
+            night_spawn_intensity: NightSpawnIntensity::default(),
             starting_resources_mult: 1.0,
             map_seed: 0,
         }
@@ -440,6 +442,22 @@ impl GameSetupConfig {
                 _ => None,
             })
             .collect()
+    }
+
+    /// Which day/night preset, if any, matches the current `day_cycle_secs`.
+    /// Changing `night_spawn_intensity` on its own does not flip the preset —
+    /// only the slider does (matching the task's stated behavior).
+    pub fn day_night_preset(&self) -> DayNightPreset {
+        for preset in [
+            DayNightPreset::Short,
+            DayNightPreset::Standard,
+            DayNightPreset::Long,
+        ] {
+            if (preset.day_cycle_secs() - self.day_cycle_secs).abs() < 0.5 {
+                return preset;
+            }
+        }
+        DayNightPreset::Custom
     }
 
     pub fn spawn_positions(&self, seed: u64) -> Vec<(Faction, (f32, f32))> {
@@ -507,6 +525,111 @@ impl ResourceDensity {
             ResourceDensity::Sparse => 0.5,
             ResourceDensity::Normal => 1.0,
             ResourceDensity::Dense => 1.5,
+        }
+    }
+}
+
+// ── Day / Night Cadence ──
+
+pub const DAY_CYCLE_SECS_MIN: f32 = 60.0;
+pub const DAY_CYCLE_SECS_MAX: f32 = 600.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DayNightPreset {
+    Short,
+    Standard,
+    Long,
+    Custom,
+}
+
+impl DayNightPreset {
+    /// Day-cycle duration (in seconds) that this preset represents.
+    /// `Custom` returns the `Standard` value — callers should not rely on it.
+    pub fn day_cycle_secs(&self) -> f32 {
+        match self {
+            Self::Short => 120.0,
+            Self::Standard => 240.0,
+            Self::Long => 480.0,
+            Self::Custom => 240.0,
+        }
+    }
+
+    pub fn night_intensity(&self) -> NightSpawnIntensity {
+        match self {
+            Self::Short => NightSpawnIntensity::Relentless,
+            Self::Standard => NightSpawnIntensity::Standard,
+            Self::Long => NightSpawnIntensity::Calm,
+            Self::Custom => NightSpawnIntensity::Standard,
+        }
+    }
+
+    pub fn index(&self) -> Option<usize> {
+        match self {
+            Self::Short => Some(0),
+            Self::Standard => Some(1),
+            Self::Long => Some(2),
+            Self::Custom => None,
+        }
+    }
+
+    pub fn from_index(idx: usize) -> Self {
+        match idx {
+            0 => Self::Short,
+            1 => Self::Standard,
+            2 => Self::Long,
+            _ => Self::Custom,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NightSpawnIntensity {
+    Calm,
+    #[default]
+    Standard,
+    Relentless,
+}
+
+impl NightSpawnIntensity {
+    /// Multiplier applied to the base mob count per wave.
+    pub fn count_mult(&self) -> f32 {
+        match self {
+            Self::Calm => 0.6,
+            Self::Standard => 1.0,
+            Self::Relentless => 1.5,
+        }
+    }
+
+    /// Extra mobs added per night (escalation rate).
+    pub fn growth_per_night(&self) -> f32 {
+        match self {
+            Self::Calm => 1.0,
+            Self::Standard => 2.0,
+            Self::Relentless => 3.5,
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        match self {
+            Self::Calm => 0,
+            Self::Standard => 1,
+            Self::Relentless => 2,
+        }
+    }
+
+    pub fn from_index(idx: usize) -> Self {
+        match idx {
+            0 => Self::Calm,
+            2 => Self::Relentless,
+            _ => Self::Standard,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Calm => "CALM",
+            Self::Standard => "STANDARD",
+            Self::Relentless => "RELENTLESS",
         }
     }
 }

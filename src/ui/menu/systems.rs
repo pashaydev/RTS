@@ -408,6 +408,13 @@ pub(crate) fn update_selector_visuals(
             SelectorField::DayCycle => DAY_CYCLE_OPTIONS
                 .get(selector.index)
                 .map_or(false, |&(v, _)| (v - config.day_cycle_secs).abs() < 1.0),
+            SelectorField::DayNightPreset => {
+                config.day_night_preset().index() == Some(selector.index)
+            }
+            SelectorField::DayCycleSeconds => false,
+            SelectorField::NightSpawnIntensity => {
+                selector.index == config.night_spawn_intensity.index()
+            }
             SelectorField::StartingRes => STARTING_RES_OPTIONS
                 .get(selector.index)
                 .map_or(false, |&(v, _)| {
@@ -529,6 +536,23 @@ pub(crate) fn update_selector_visuals(
                     }
                 }
             }
+            if should_be_selected && was_selected.is_none() {
+                commands.entity(entity).insert(SelectedOption);
+            } else if !should_be_selected && was_selected.is_some() {
+                commands.entity(entity).remove::<SelectedOption>();
+            }
+            continue;
+        }
+
+        // Dot-style selectors (ResourceDensity, NightSpawnIntensity) have their
+        // own sync systems that color the dot + label. Skip the generic bg/text
+        // overrides here to avoid fighting those systems and causing flicker —
+        // but still maintain SelectedOption below so keyboard nav can find them.
+        let skip_visuals = matches!(
+            selector.field,
+            SelectorField::ResourceDensity | SelectorField::NightSpawnIntensity
+        );
+        if skip_visuals {
             if should_be_selected && was_selected.is_none() {
                 commands.entity(entity).insert(SelectedOption);
             } else if !should_be_selected && was_selected.is_some() {
