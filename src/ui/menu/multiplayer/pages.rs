@@ -23,6 +23,7 @@ pub(crate) fn spawn_multiplayer_page(
         container,
         "MULTIPLAYER",
         MenuButton(MenuAction::Back),
+        None,
         fonts,
         theme,
     );
@@ -91,6 +92,7 @@ pub(crate) fn spawn_host_lobby_page(
         container,
         "HOST LOBBY",
         MenuButton(MenuAction::CancelHost),
+        Some(0),
         fonts,
         theme,
     );
@@ -127,6 +129,7 @@ pub(crate) fn spawn_host_lobby_page(
             parent
                 .spawn((
                     CopyCodeButton,
+                    NavFocusable(1),
                     Button,
                     ui_components::compact_button_node(14.0, 7.0),
                     ui_components::filled_button_chrome(theme, ui_components::UiTone::Neutral),
@@ -222,6 +225,7 @@ pub(crate) fn spawn_host_lobby_page(
             config,
             true,
             Some(&lobby.players),
+            Some(new_game::host_lobby_slot_nav(i)),
             theme,
         );
     }
@@ -317,6 +321,7 @@ pub(crate) fn spawn_host_lobby_page(
     let connected_count = lobby.players.iter().filter(|p| p.connected).count();
     let mut start_cmd = commands.spawn((
         MenuButton(MenuAction::StartMultiplayer),
+        NavFocusable(30),
         Button,
         ButtonAnimState::new(theme.colors.accent.to_srgba().to_f32_array()),
         ButtonStyle::Filled,
@@ -370,6 +375,7 @@ pub(crate) fn spawn_join_lobby_page(
         container,
         "JOIN GAME",
         MenuButton(MenuAction::BackToMultiplayer),
+        Some(0),
         fonts,
         theme,
     );

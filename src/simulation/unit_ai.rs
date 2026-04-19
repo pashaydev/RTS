@@ -7,7 +7,7 @@ use crate::simulation::buildings::is_wall_like_kind;
 use crate::simulation::combat::{
     apply_auto_attack_intent, apply_auto_move_intent, apply_manual_attack_intent,
     apply_manual_attack_move_intent, apply_manual_hold_intent, apply_manual_move_intent,
-    clear_combat_intent, reset_combat_state, set_intent_target_lock, target_score,
+    clear_combat_intent, reset_combat_state, set_auto_target, target_score,
     CombatBudgetState, TargetScoreInput,
 };
 use crate::types::*;
@@ -152,9 +152,7 @@ fn decision_priority_system(
                 Option<&TargetingProfile>,
                 Option<&DamageType>,
                 Option<&RecentCombatDamage>,
-                Option<&mut Engagement>,
                 Option<&CombatIntent>,
-                Option<&CombatTargetLock>,
                 Option<&mut CombatThinkTimer>,
             ),
             (Option<&TacticalRole>, Option<&ManualIdleSince>),
@@ -190,9 +188,7 @@ fn decision_priority_system(
             opt_targeting_profile,
             opt_damage_type,
             opt_recent_damage,
-            opt_engagement,
             combat_intent,
-            target_lock,
             _opt_think_timer,
         ),
         (opt_tactical_role, manual_idle_since),
@@ -205,6 +201,51 @@ fn decision_priority_system(
             || !task_queue.queue.is_empty()
         {
             continue;
+        }
+
+        // ── Priority 1: Damage response (bypasses grace period entirely) ──
+        // This branch runs BEFORE the busy-state filter so workers in
+        // `AssignedGathering` (which would otherwise be considered
+        // non-interruptible) drop their gathering loop and fight back. The
+        // doc-flagged "workers killed unmolested" bug came from the busy-
+        // state filter blocking this path.
+        if let Some(recent_damage) = opt_recent_damage {
+            let attacker_still_hostile = now <= recent_damage.expires_at
+                && factions
+                    .get(recent_damage.attacker)
+                    .ok()
+                    .is_some_and(|target_faction| teams.is_hostile(faction, target_faction));
+            if attacker_still_hostile
+                && attack_range.is_some()
+                && *stance != UnitStance::Passive
+                && matches!(
+                    *state,
+                    UnitState::Idle
+                        | UnitState::Gathering(_)
+                        | UnitState::AssignedGathering { .. }
+                )
+            {
+                // Workers under attack drop their assignment first so they
+                // exit the FSM cleanly, then enter combat as Auto.
+                if let UnitState::AssignedGathering { building, .. } = *state {
+                    crate::simulation::resources::unassign_worker_from_processor(
+                        &mut commands,
+                        entity,
+                        Some(building),
+                    );
+                    *state = UnitState::Idle;
+                }
+                apply_auto_attack_intent(
+                    &mut commands,
+                    entity,
+                    recent_damage.attacker,
+                    tf.translation,
+                    now,
+                );
+                *source = TaskSource::Auto;
+                commands.entity(entity).remove::<ManualIdleSince>();
+                continue;
+            }
         }
 
         // Skip units that are busy with non-interruptible states
@@ -229,40 +270,19 @@ fn decision_priority_system(
         let grace_secs = if attack_range.is_some() { 0.5 } else { 5.0 };
         let in_grace = manual_idle_since.is_some_and(|s| now - s.0 < grace_secs);
 
-        // ── Priority 1: Damage response (bypasses grace period entirely) ──
-        if let Some(recent_damage) = opt_recent_damage {
-            let attacker_still_hostile = now <= recent_damage.expires_at
-                && factions
-                    .get(recent_damage.attacker)
-                    .ok()
-                    .is_some_and(|target_faction| teams.is_hostile(faction, target_faction));
-            if attacker_still_hostile
-                && attack_range.is_some()
-                && *stance != UnitStance::Passive
-                && matches!(*state, UnitState::Idle | UnitState::Gathering(_))
-            {
-                apply_auto_attack_intent(
-                    &mut commands,
-                    entity,
-                    recent_damage.attacker,
-                    tf.translation,
-                    now,
-                );
-                *source = TaskSource::Auto;
-                commands.entity(entity).remove::<ManualIdleSince>();
-                continue;
-            }
-        }
-
         // Grace period blocks proactive scanning (but not damage response above)
         if in_grace {
             continue;
         }
 
-        // ── Priority 2: Survival retreat (hp < 25%, not Aggressive) ──
+        // ── Priority 2: Survival retreat (workers flee at <50%, others <25%) ──
+        // Workers are too fragile and too cheap to die heroically — letting one
+        // fall back to base preserves population for next-day economy.
+        let is_worker = stance == &UnitStance::Defensive && attack_range.is_none();
+        let retreat_threshold = if is_worker { 0.50 } else { 0.25 };
         if *stance != UnitStance::Aggressive
             && health.current > 0.0
-            && health.current / health.max < 0.25
+            && health.current / health.max < retreat_threshold
         {
             // Only trigger retreat if currently being attacked (in Attacking state or being hit)
             if matches!(*state, UnitState::Attacking(_)) {
@@ -311,58 +331,8 @@ fn decision_priority_system(
             if scan_range <= 0.0 {
                 continue;
             }
-            if let Some(lock) = target_lock {
-                let lock_still_valid = now <= lock.locked_until
-                    && factions
-                        .get(lock.target)
-                        .ok()
-                        .is_some_and(|target_faction| teams.is_hostile(faction, target_faction));
-                if lock_still_valid {
-                    let current_matches_lock = matches!(
-                        combat_intent,
-                        Some(CombatIntent::Attack(target, IntentSource::Auto)) if *target == lock.target
-                    );
-                    if !current_matches_lock
-                        || !matches!(*state, UnitState::Attacking(target) if target == lock.target)
-                    {
-                        apply_auto_attack_intent(
-                            &mut commands,
-                            entity,
-                            lock.target,
-                            tf.translation,
-                            now,
-                        );
-                        *source = TaskSource::Auto;
-                    }
-                    continue;
-                }
-            }
-
-            if let Some(ref engagement) = opt_engagement {
-                if let Some(target) = engagement.target {
-                    let still_valid = now <= engagement.persistence_until
-                        && factions.get(target).ok().is_some_and(|target_faction| {
-                            teams.is_hostile(faction, target_faction)
-                        });
-                    if still_valid {
-                        if !matches!(*state, UnitState::Attacking(current) if current == target) {
-                            apply_auto_attack_intent(
-                                &mut commands,
-                                entity,
-                                target,
-                                engagement.anchor,
-                                now,
-                            );
-                            *source = TaskSource::Auto;
-                        }
-                        continue;
-                    }
-                }
-            }
-
             let mut best_score = f32::MAX;
             let mut best_target = None;
-            let mut current_score = None;
 
             spatial_grid.collect_radius_limited(
                 tf.translation,
@@ -437,13 +407,6 @@ fn decision_priority_system(
                             best_score = score;
                             best_target = Some(*target_entity);
                         }
-                        if opt_engagement
-                            .as_ref()
-                            .and_then(|engagement| engagement.target)
-                            == Some(*target_entity)
-                        {
-                            current_score = Some(score);
-                        }
                     }
                 } else {
                     // Fallback: nearest enemy
@@ -485,19 +448,6 @@ fn decision_priority_system(
             }
 
             if let Some(target) = best_target {
-                let should_switch = match (opt_engagement.as_ref(), current_score) {
-                    (Some(engagement), Some(cur_score))
-                        if engagement.target.is_some()
-                            && now <= engagement.persistence_until
-                            && target != engagement.target.unwrap() =>
-                    {
-                        best_score + combat_tuning.retarget_score_margin < cur_score
-                    }
-                    _ => true,
-                };
-                if !should_switch {
-                    continue;
-                }
                 apply_auto_attack_intent(&mut commands, entity, target, tf.translation, now);
                 *source = TaskSource::Auto;
             } else if matches!(
@@ -707,8 +657,7 @@ pub fn unit_state_executor_system(
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
-                    .remove::<AttackTarget>()
-                    .remove::<ChaseTimer>();
+                    .remove::<AttackTarget>();
                 reset_combat_state(&mut commands, entity);
                 // Transition source Manual → Auto once we're confirmed idle.
                 // The Moving→Idle path deliberately keeps source=Manual for
@@ -723,10 +672,7 @@ pub fn unit_state_executor_system(
 
             UnitState::HoldPosition => {
                 // Never move when holding position
-                commands
-                    .entity(entity)
-                    .remove::<MoveTarget>()
-                    .remove::<ChaseTimer>();
+                commands.entity(entity).remove::<MoveTarget>();
 
                 // Auto-attack enemies in weapon range (unless Passive stance)
                 if *stance != UnitStance::Passive {
@@ -770,34 +716,16 @@ pub fn unit_state_executor_system(
                             }
 
                             if let Some(target) = closest_target {
-                                // Set target lock so resolve_combat_intents picks it up
-                                // CombatIntent::Hold is already set — it will fire without moving
-                                set_intent_target_lock(
-                                    &mut commands,
-                                    entity,
-                                    target,
-                                    IntentSource::Auto,
-                                    now,
-                                    EngageMode::Hold,
-                                    tf.translation,
-                                );
+                                // HoldPosition: retarget without changing the standing Hold order.
+                                set_auto_target(&mut commands, entity, target, now);
                             } else {
-                                // No enemies in range — clear the active engagement target too.
-                                commands
-                                    .entity(entity)
-                                    .remove::<AttackTarget>()
-                                    .remove::<CombatTargetLock>()
-                                    .remove::<Engagement>();
+                                commands.entity(entity).remove::<AttackTarget>();
                             }
                         }
                     }
                 } else {
                     // Passive stance: no auto-attack
-                    commands
-                        .entity(entity)
-                        .remove::<AttackTarget>()
-                        .remove::<CombatTargetLock>()
-                        .remove::<Engagement>();
+                    commands.entity(entity).remove::<AttackTarget>();
                 }
             }
 
@@ -839,8 +767,7 @@ pub fn unit_state_executor_system(
                     commands
                         .entity(entity)
                         .remove::<AttackTarget>()
-                        .remove::<LeashOrigin>()
-                        .remove::<ChaseTimer>();
+                        .remove::<LeashOrigin>();
 
                     // Resume previous behavioral task if one exists
                     match task_queue.current.as_ref().map(|t| &t.task) {
@@ -1121,15 +1048,7 @@ pub fn unit_state_executor_system(
                         }
 
                         if let Some(target) = closest_target {
-                            set_intent_target_lock(
-                                &mut commands,
-                                entity,
-                                target,
-                                IntentSource::Manual,
-                                time.elapsed_secs_f64(),
-                                EngageMode::AttackMove,
-                                pos,
-                            );
+                            set_auto_target(&mut commands, entity, target, time.elapsed_secs_f64());
                             commands.entity(entity).remove::<MoveTarget>();
                         }
                     }

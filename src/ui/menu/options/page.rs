@@ -25,6 +25,7 @@ pub(crate) fn spawn_options_page(
         container,
         "OPTIONS",
         MenuButton(MenuAction::Back),
+        None,
         fonts,
         theme,
     );

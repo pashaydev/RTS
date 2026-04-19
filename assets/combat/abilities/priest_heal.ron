@@ -1,0 +1,13 @@
+(
+    id: "priest_heal",
+    display_name: "Heal",
+    range: 6.0,
+    windup_frames: 9,
+    recovery_frames: 9,
+    damage_point_frame: 6,
+    cast_time_secs: 0.3,
+    cooldown_secs: 4.0,
+    target_type: Unit,
+    target_filter: Ally,
+    effect: Heal(amount: 40.0),
+)

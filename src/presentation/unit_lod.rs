@@ -25,6 +25,7 @@ use crate::presentation::materials::impostor::{
 };
 use crate::presentation::model_assets::UnitModelAssets;
 use crate::types::*;
+use crate::world::lighting::{DayCycle, EntityLightConfig, EntityLightGrid, SunLight};
 
 pub struct UnitLodPlugin;
 
@@ -295,29 +296,178 @@ fn derive_impostor_state(
 /// time, yaw, and state-derived (row_offset, frame_count).
 pub fn impostor_sync_system(
     time: Res<Time>,
+    cycle: Res<DayCycle>,
+    entity_light_grid: Res<EntityLightGrid>,
+    entity_light_config: Res<EntityLightConfig>,
     goblin_impostor: Option<Res<GoblinImpostor>>,
+    ambient: Res<GlobalAmbientLight>,
     mut mats: ResMut<Assets<ImpostorMaterial>>,
+    sun_q: Query<(&DirectionalLight, &Transform), With<SunLight>>,
     units: Query<(
         &Transform,
+        &GlobalTransform,
         &ImpostorHandle,
         Option<&Health>,
         Option<&AttackTarget>,
         Option<&MoveTarget>,
+        Option<&MobTier>,
     )>,
 ) {
     let Some(gi) = goblin_impostor else { return };
     let t = time.elapsed_secs();
+    let (light_tint, shadow_tint, sun_direction, light_mix, top_light, bottom_light) =
+        impostor_lighting_params(&ambient, sun_q.single().ok());
 
-    for (tf, handle, health, attack, move_target) in &units {
+    for (tf, gtf, handle, health, attack, move_target, opt_tier) in &units {
         let state = derive_impostor_state(health, attack, move_target);
         let (row, fcount) = gi.lookup(state);
         let yaw = yaw_from_rotation(tf.rotation);
+        let local_visibility = impostor_local_visibility(
+            gtf.translation(),
+            &cycle,
+            &entity_light_grid,
+            &entity_light_config,
+        );
+
+        let tier = opt_tier.copied().unwrap_or_default();
+        let tier_rgb = tier.tint_rgb();
+        let tier_tint = Vec4::new(tier_rgb[0], tier_rgb[1], tier_rgb[2], 1.0);
 
         if let Some(mat) = mats.get_mut(&handle.0) {
             mat.params.time = t;
             mat.params.yaw_facing = yaw;
             mat.params.state_row_offset = row;
             mat.params.frame_count = fcount;
+            mat.params.light_tint = light_tint;
+            mat.params.shadow_tint = shadow_tint;
+            mat.params.sun_direction = sun_direction;
+            mat.params.light_mix = light_mix;
+            mat.params.top_light = top_light;
+            mat.params.bottom_light = bottom_light;
+            mat.params.local_visibility = local_visibility;
+            mat.params.wrap_amount = 0.35;
+            mat.params.rim_strength = 0.14 + local_visibility * 0.24;
+            mat.params.tier_tint = tier_tint;
         }
     }
+}
+
+fn impostor_lighting_params(
+    ambient: &GlobalAmbientLight,
+    sun: Option<(&DirectionalLight, &Transform)>,
+) -> (Vec4, Vec4, Vec4, f32, f32, f32) {
+    let ambient_rgba = ambient.color.to_linear().to_f32_array();
+    let ambient_rgb = Vec3::new(ambient_rgba[0], ambient_rgba[1], ambient_rgba[2]);
+    let ambient_strength = (ambient.brightness / 300.0).clamp(0.15, 1.25);
+
+    let (sun_rgb, sun_dir, sun_strength, sun_height) = match sun {
+        Some((sun, tf)) => {
+            let sun_rgba = sun.color.to_linear().to_f32_array();
+            let dir = -tf.forward().as_vec3();
+            (
+                Vec3::new(sun_rgba[0], sun_rgba[1], sun_rgba[2]),
+                dir,
+                (sun.illuminance / 6000.0).clamp(0.0, 1.1),
+                dir.y.clamp(0.0, 1.0),
+            )
+        }
+        None => (Vec3::ONE, Vec3::new(0.5, 0.7, 0.3), 0.0, 0.0),
+    };
+
+    // Keep impostors responsive to time-of-day while staying compatible
+    // with baked sprite shading. Ambient dominates at night; sun warmth
+    // pushes daytime and sunset coloration.
+    let daylight = (ambient_strength * 0.45 + sun_strength * 0.55).clamp(0.18, 1.0);
+    let lit_tint = (ambient_rgb * ambient_strength * 0.55 + sun_rgb * sun_strength * 0.45)
+        .clamp(Vec3::splat(0.18), Vec3::splat(1.15));
+    let shadow_tint = (ambient_rgb * (0.60 + ambient_strength * 0.20))
+        .clamp(Vec3::splat(0.12), Vec3::splat(0.95));
+
+    let top_light = 1.02 + sun_height * 0.12;
+    let bottom_light = 0.82 + ambient_strength * 0.10;
+
+    (
+        lit_tint.extend(1.0),
+        shadow_tint.extend(1.0),
+        sun_dir.normalize_or_zero().extend(0.0),
+        daylight,
+        top_light,
+        bottom_light.min(top_light),
+    )
+}
+
+fn impostor_local_visibility(
+    world_pos: Vec3,
+    cycle: &DayCycle,
+    grid: &EntityLightGrid,
+    config: &EntityLightConfig,
+) -> f32 {
+    if !config.enabled {
+        return 0.0;
+    }
+
+    let global_factor = entity_light_factor_for_impostors(cycle.time, config);
+    if global_factor <= 0.01 {
+        return 0.0;
+    }
+
+    let max_range = 25.0_f32;
+    let radius_cells = (max_range / grid.cell_size).ceil() as i32;
+    let cell = IVec2::new(
+        (world_pos.x / grid.cell_size).floor() as i32,
+        (world_pos.z / grid.cell_size).floor() as i32,
+    );
+
+    let mut visibility = 0.0_f32;
+    for dz in -radius_cells..=radius_cells {
+        for dx in -radius_cells..=radius_cells {
+            let Some(cluster) = grid.cells.get(&(cell + IVec2::new(dx, dz))) else {
+                continue;
+            };
+
+            let (range, weight) = if cluster.has_building {
+                (25.0_f32, 1.0_f32)
+            } else if cluster.has_unit {
+                (15.0_f32, 0.8_f32)
+            } else {
+                continue;
+            };
+
+            let dist = world_pos.distance(cluster.centroid);
+            if dist >= range {
+                continue;
+            }
+
+            let falloff = 1.0 - dist / range;
+            visibility = visibility.max(falloff * falloff * weight);
+        }
+    }
+
+    // Light pockets matter most when the scene is dark. During daytime
+    // they should barely change the result.
+    let darkness = (1.0 - global_factor).clamp(0.0, 1.0);
+    (visibility * darkness * 1.35).clamp(0.0, 1.0)
+}
+
+fn entity_light_factor_for_impostors(day_time: f32, config: &EntityLightConfig) -> f32 {
+    let night = config.night_factor;
+    let day = config.day_factor;
+    match day_time {
+        t if t < 0.20 => night,
+        t if t < 0.30 => {
+            let s = (t - 0.20) / 0.10;
+            night - smoothstep_impostor(s) * (night - day)
+        }
+        t if t < 0.70 => day,
+        t if t < 0.80 => {
+            let s = (t - 0.70) / 0.10;
+            day + smoothstep_impostor(s) * (night - day)
+        }
+        _ => night,
+    }
+}
+
+fn smoothstep_impostor(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }

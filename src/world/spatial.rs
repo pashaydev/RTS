@@ -23,7 +23,7 @@ impl Plugin for SpatialPlugin {
                     update_wall_grid,
                     remove_wall_grid_entities,
                 )
-                    .before(crate::simulation::combat::CombatCoreSet::Approach)
+                    .before(crate::simulation::combat::CombatSet::Approach)
                     .run_if(in_state(AppState::InGame)),
             );
     }

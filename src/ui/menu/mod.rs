@@ -1,3 +1,4 @@
+pub(crate) mod guide_popup;
 pub(crate) mod helpers;
 pub(crate) mod input;
 pub(crate) mod multiplayer;
@@ -354,5 +355,6 @@ impl Plugin for MenuPlugin {
             );
 
         app.add_plugins(pause_menu::PauseMenuPlugin);
+        app.add_plugins(guide_popup::GuidePopupPlugin);
     }
 }

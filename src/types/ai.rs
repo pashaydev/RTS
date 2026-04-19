@@ -130,25 +130,3 @@ impl Default for AiFactionConfig {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PatrolStateKind {
-    Idle,
-    Patrolling,
-    Chasing,
-    Attacking,
-    Returning,
-}
-
-#[derive(Component)]
-pub struct PatrolState {
-    pub state: PatrolStateKind,
-    pub center: Vec3,
-    pub radius: f32,
-    pub patrol_target: Option<Vec3>,
-    /// How long (seconds) this mob has been chasing a target.
-    pub chase_elapsed: f32,
-    /// Timestamp (elapsed_secs_f64) when the mob should leave idle and start patrolling.
-    pub idle_until: f64,
-    /// Timestamp when the current patrol began (for stuck detection).
-    pub patrol_started: f64,
-}

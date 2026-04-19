@@ -1,75 +1,104 @@
+//! Tower-defense night raid system.
+//!
+//! At Dusk, a `WaveAlert` is emitted for the upcoming Night with a count and
+//! direction. At Night entry, `ActiveWave` is set up; throughout the night,
+//! mobs drip-spawn one at a time at the map perimeter (biased toward the
+//! wave direction). Each mob picks a primary target on spawn (building > unit),
+//! then commits to combat. On the Night→Dawn transition, the active wave is
+//! cleared, surviving mobs are ordered to retreat off-map, and a per-night
+//! clear bonus is awarded if the player's Base survived.
+//!
+//! Determinism: every RNG used by spawn/composition/loot is seeded from
+//! `MapSeed ^ night_count.mul(PHI_U64)`; per-mob substreams are derived from
+//! the same seed using the entity-bits trick. No `rand::rng()`, no
+//! `Instant::now()`, no HashMap iteration in this module.
+
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand::Rng;
 use rand::SeedableRng;
 
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::presentation::model_assets::UnitModelAssets;
-use crate::simulation::combat::{
-    apply_auto_attack_intent, reset_combat_state, CombatBudgetState, CombatCoreSet,
-};
-use crate::simulation::items::ItemKind;
+use crate::simulation::combat::{apply_auto_attack_intent, apply_auto_move_intent, CombatSet};
+use crate::simulation::items::{ItemKind, SpawnItemPickup};
 use crate::types::*;
+use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
 use crate::world::ground::{is_in_mountain_border, BorderSettings, HeightMap};
 use crate::world::lighting::{DayCycle, DayPhase};
 
-// ── Night-wave tuning ────────────────────────────────────────────────────
-//
-// Changing these values changes simulation output. Saves / replays / lockstep
-// multiplayer sessions started before a change will diverge from ones started
-// after, because wave sizes and cluster layouts depend on them.
+// ── Constants ────────────────────────────────────────────────────────────
 
-const CLUSTER_MIN: usize = 3;
-const CLUSTER_MAX: usize = 5;
-const MIN_CLUSTER_SPACING: f32 = 40.0;
-const MAX_SAMPLE_ATTEMPTS_PER_MOB: u32 = 16;
-
-/// Golden-ratio constant (2^64 / φ), a well-studied multiplier for mixing
-/// integer seeds into well-distributed outputs.
+/// Golden-ratio constant (2^64 / φ), a well-distributed multiplier for
+/// mixing integer seeds.
 const PHI_U64: u64 = 0x9E3779B97F4A7C15;
+
+/// FixedUpdate runs at 30 Hz in this project.
+const TICKS_PER_SEC: u64 = 30;
+
+/// Hard cap on mob rescans across a single mob's lifetime (one for the
+/// initial primary death, one fallback).
+const MAX_RESCANS_PER_MOB: u8 = 2;
+
+// Note: rescan radius for retarget-on-death lives in `combat/death.rs`
+// because the rescan runs there, not here.
+
+/// Hard despawn timeout once a stranded mob enters retreat (kept aside in
+/// case future code wants a different timeout for stranded vs. dawn retreats).
+const STRAND_TIMEOUT_SECS: f32 = 10.0;
+
+/// Hard timeout for retreat at Dawn — mobs still on-map after this are
+/// despawned outright.
+const RETREAT_HARD_TIMEOUT_SECS: f32 = 30.0;
+
+/// Bias for building targets in the spawn-time scoring heuristic.
+const BUILDING_BIAS: f32 = -10.0;
+const STRATEGIC_BUILDING_BIAS: f32 = -20.0;
+
+// ── Plugin ───────────────────────────────────────────────────────────────
 
 pub struct MobsPlugin;
 
 impl Plugin for MobsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<NightWaveState>()
+            .add_message::<WaveAlert>()
             .add_systems(
                 FixedUpdate,
-                night_wave_spawn_system
-                    .in_set(SimSet::Ai)
-                    .before(CombatCoreSet::Approach)
-                    .run_if(in_state(AppState::InGame)),
-            )
-            .add_systems(
-                FixedUpdate,
-                (mob_patrol, mob_aggro, mob_leash)
+                (
+                    on_dusk_compose_wave,
+                    on_dawn_clear_wave,
+                    night_wave_drip_spawn,
+                    mob_recommit_to_primary,
+                    mob_strand_timeout,
+                    mob_retreat_despawn,
+                )
                     .chain()
                     .in_set(SimSet::Ai)
-                    .after(night_wave_spawn_system)
-                    .before(CombatCoreSet::Approach)
+                    .before(CombatSet::Approach)
                     .run_if(in_state(AppState::InGame)),
             );
     }
 }
 
-// ── Night wave state ─────────────────────────────────────────────────────
+// ── Wave state ───────────────────────────────────────────────────────────
 
-/// Authoritative, deterministic state for the escalating night-wave system.
-///
-/// All fields are read on every peer each FixedUpdate tick. Debug-tweak
-/// writes into this resource are single-player only (see
-/// `sync_night_wave_tweaks`) to avoid desync in lockstep multiplayer.
+/// Persistent state across the whole match. `active` is `Some(_)` only while
+/// a Night is in progress.
 #[derive(Resource)]
 pub struct NightWaveState {
     pub enabled: bool,
     pub night_count: u32,
-    pub prev_phase: DayPhase,
-    pub last_wave_size: u32,
-    pub last_wave_tick: u64,
-    pub base_count: f32,
-    pub growth_per_night: f32,
-    pub min_player_dist: f32,
+    /// True iff Dusk has fired and a wave is queued for the next Night.
+    pub dusk_pending: bool,
+    /// What the next-night wave will look like; populated at Dusk, consumed
+    /// when Night begins.
+    pub queued: Option<QueuedWave>,
+    pub active: Option<ActiveWave>,
+    /// Debug tweak: if set, force wave on the next FixedUpdate regardless of
+    /// phase. Used by `DebugTweaks`.
     pub force_wave: bool,
 }
 
@@ -78,142 +107,279 @@ impl Default for NightWaveState {
         Self {
             enabled: true,
             night_count: 0,
-            prev_phase: DayPhase::Day,
-            last_wave_size: 0,
-            last_wave_tick: 0,
-            base_count: 6.0,
-            growth_per_night: 3.0,
-            min_player_dist: 60.0,
+            dusk_pending: false,
+            queued: None,
+            active: None,
             force_wave: false,
         }
     }
 }
 
-#[derive(Component, Clone)]
-pub struct CampItemDrops {
-    pub items: Vec<ItemKind>,
+/// Wave plan computed at Dusk, instantiated at Night entry.
+#[derive(Clone, Debug)]
+pub struct QueuedWave {
+    pub night: u32,
+    pub total: u32,
+    pub spawn_interval_ticks: u64,
+    pub direction: WaveDirection,
+    /// Tier per spawn slot, indexed 0..total. Pre-shuffled so champions don't
+    /// always arrive last.
+    pub tier_order: Vec<MobTier>,
+    pub seed: u64,
 }
 
-// ── Spawn sampling ───────────────────────────────────────────────────────
-
-struct ClusterSpawn {
-    center: Vec3,
-    size: usize,
+#[derive(Debug)]
+pub struct ActiveWave {
+    pub night: u32,
+    pub total: u32,
+    pub spawned: u32,
+    pub killed: u32,
+    pub buildings_damaged: u32,
+    pub direction: WaveDirection,
+    pub spawn_interval_ticks: u64,
+    pub next_spawn_tick: u64,
+    pub tier_order: Vec<MobTier>,
+    pub seed: u64,
 }
 
-fn generate_wave_clusters(
-    rng: &mut StdRng,
-    half_map: f32,
-    total_mobs: u32,
-    min_player_dist: f32,
-    player_positions: &[Vec3],
-    biome_map: &BiomeMap,
-    border: BorderSettings,
-) -> Vec<ClusterSpawn> {
-    let mut clusters: Vec<ClusterSpawn> = Vec::new();
-    let min_player_dist_sq = min_player_dist * min_player_dist;
-    let min_cluster_dist_sq = MIN_CLUSTER_SPACING * MIN_CLUSTER_SPACING;
-
-    let mut remaining = total_mobs as i32;
-    while remaining > 0 {
-        let size = rng
-            .random_range(CLUSTER_MIN..=CLUSTER_MAX)
-            .min(remaining as usize);
-        let total_attempts = MAX_SAMPLE_ATTEMPTS_PER_MOB * size as u32;
-
-        let mut placed = false;
-        for _ in 0..total_attempts {
-            let x = rng.random_range(-half_map..half_map);
-            let z = rng.random_range(-half_map..half_map);
-
-            if is_in_mountain_border(x, z, half_map, border) {
-                continue;
-            }
-            if biome_map.get_biome(x, z) == Biome::Water {
-                continue;
-            }
-
-            let too_close_player = player_positions.iter().any(|p| {
-                let dx = x - p.x;
-                let dz = z - p.z;
-                dx * dx + dz * dz < min_player_dist_sq
-            });
-            if too_close_player {
-                continue;
-            }
-
-            let too_close_cluster = clusters.iter().any(|c| {
-                let dx = x - c.center.x;
-                let dz = z - c.center.z;
-                dx * dx + dz * dz < min_cluster_dist_sq
-            });
-            if too_close_cluster {
-                continue;
-            }
-
-            clusters.push(ClusterSpawn {
-                center: Vec3::new(x, 0.0, z),
-                size,
-            });
-            remaining -= size as i32;
-            placed = true;
-            break;
-        }
-
-        if !placed {
-            // Map is too crowded for this wave — bail out and take what we got.
-            break;
+impl ActiveWave {
+    fn from_queued(queued: QueuedWave, now_tick: u64) -> Self {
+        Self {
+            night: queued.night,
+            total: queued.total,
+            spawned: 0,
+            killed: 0,
+            buildings_damaged: 0,
+            direction: queued.direction,
+            spawn_interval_ticks: queued.spawn_interval_ticks,
+            // First mob spawns immediately on Night entry.
+            next_spawn_tick: now_tick,
+            tier_order: queued.tier_order,
+            seed: queued.seed,
         }
     }
-
-    clusters
 }
 
-/// Returns `Some(night_count)` if a wave should spawn this tick, else `None`.
-/// Always updates `prev_phase` and clears `force_wave`, so the detector stays
-/// idempotent even when the system is disabled mid-game.
-fn resolve_wave_trigger(wave: &mut NightWaveState, phase: DayPhase) -> Option<u32> {
-    let prev = wave.prev_phase;
-    wave.prev_phase = phase;
+// ── Wave composition ─────────────────────────────────────────────────────
 
-    let entered_night = prev != DayPhase::Night && phase == DayPhase::Night;
-    let force = std::mem::take(&mut wave.force_wave);
-
-    if !wave.enabled {
-        return None;
-    }
-    if !entered_night && !force {
-        return None;
-    }
-
-    wave.night_count += 1;
-    Some(wave.night_count)
+/// Total mobs and spawn cadence for a given night number. Plain hardcoded
+/// table — easy to tune without touching the spawn logic.
+fn compose_wave_count_and_cadence(night: u32) -> (u32, u64) {
+    let total = (8 + night.saturating_mul(2)).min(80);
+    // Interval ramps from 240t (8s) down to 60t (2s), reaching minimum at
+    // night 15.
+    let interval = 240u64.saturating_sub((night as u64).saturating_mul(12)).max(60);
+    (total, interval)
 }
 
-/// Collect positions of all living player-owned units and buildings. Used
-/// as an exclusion set when sampling spawn points. Iteration order doesn't
-/// affect determinism because consumers use `any()` / distance checks.
-fn gather_exclusion_points(
-    unit_tfs: &Query<(&Transform, &Faction), With<Unit>>,
-    building_tfs: &Query<(&Transform, &Faction), (With<Building>, Without<Unit>, Without<FloorTile>)>,
-) -> Vec<Vec3> {
-    let mut out = Vec::new();
-    for (tf, faction) in unit_tfs.iter() {
-        if *faction != Faction::Neutral {
-            out.push(tf.translation);
+/// Tier composition table: returns (runner_pct, veteran_pct, champion_pct)
+/// summing to 100. Veterans appear from night 3, Champions from night 6.
+fn tier_composition(night: u32) -> (u8, u8, u8) {
+    match night {
+        0..=2 => (100, 0, 0),
+        3..=5 => (70, 30, 0),
+        6..=8 => (50, 35, 15),
+        _ => (30, 45, 25),
+    }
+}
+
+fn compose_tier_order(rng: &mut StdRng, total: u32, night: u32) -> Vec<MobTier> {
+    let (runner_pct, veteran_pct, _champion_pct) = tier_composition(night);
+    let total_usize = total as usize;
+    let runners = (total_usize * runner_pct as usize + 50) / 100;
+    let veterans = (total_usize * veteran_pct as usize + 50) / 100;
+    // Champions take whatever's left so percentages always sum.
+    let champions = total_usize.saturating_sub(runners + veterans);
+
+    let mut order: Vec<MobTier> = Vec::with_capacity(total_usize);
+    order.extend(std::iter::repeat(MobTier::Runner).take(runners));
+    order.extend(std::iter::repeat(MobTier::Veteran).take(veterans));
+    order.extend(std::iter::repeat(MobTier::Champion).take(champions));
+    // Shuffle so high tiers don't all arrive last.
+    order.shuffle(rng);
+    order
+}
+
+fn pick_wave_direction(rng: &mut StdRng) -> WaveDirection {
+    // 25% chance of "all sides" wave; otherwise pick one of the four cardinals.
+    if rng.random_range(0..4u32) == 0 {
+        WaveDirection::All
+    } else {
+        match rng.random_range(0..4u32) {
+            0 => WaveDirection::North,
+            1 => WaveDirection::East,
+            2 => WaveDirection::South,
+            _ => WaveDirection::West,
         }
     }
-    for (tf, faction) in building_tfs.iter() {
-        if *faction != Faction::Neutral {
-            out.push(tf.translation);
-        }
-    }
-    out
 }
 
-// ── Spawn system ─────────────────────────────────────────────────────────
+// ── Dusk: compose & emit alert ───────────────────────────────────────────
 
-fn night_wave_spawn_system(
+fn on_dusk_compose_wave(
+    mut wave: ResMut<NightWaveState>,
+    map_seed: Res<MapSeed>,
+    mut dusk_rx: MessageReader<DuskBegan>,
+    mut wave_alert_tx: MessageWriter<WaveAlert>,
+    mut event_log: ResMut<GameEventLog>,
+    time: Res<Time<Fixed>>,
+) {
+    let mut fire = dusk_rx.read().count() > 0;
+    if wave.force_wave {
+        fire = true;
+        wave.force_wave = false;
+    }
+    if !fire || !wave.enabled {
+        return;
+    }
+
+    let next_night = wave.night_count + 1;
+    let seed = map_seed
+        .0
+        .wrapping_mul(1)
+        ^ (next_night as u64).wrapping_mul(PHI_U64);
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    let (total, interval_ticks) = compose_wave_count_and_cadence(next_night);
+    let direction = pick_wave_direction(&mut rng);
+    let tier_order = compose_tier_order(&mut rng, total, next_night);
+
+    let queued = QueuedWave {
+        night: next_night,
+        total,
+        spawn_interval_ticks: interval_ticks,
+        direction,
+        tier_order,
+        seed,
+    };
+
+    let alert = WaveAlert {
+        night: next_night,
+        incoming_count: total,
+        direction,
+    };
+    wave_alert_tx.write(alert);
+    event_log.push_with_level(
+        time.elapsed_secs(),
+        format!(
+            "Night {} approaching — {} attackers from the {}",
+            next_night,
+            total,
+            direction.label()
+        ),
+        EventCategory::Alert,
+        LogLevel::Warning,
+        None,
+        None,
+    );
+
+    wave.queued = Some(queued);
+    wave.dusk_pending = true;
+}
+
+// ── Dawn: clear active, retreat survivors, post summary ──────────────────
+
+#[allow(clippy::too_many_arguments)]
+fn on_dawn_clear_wave(
+    mut commands: Commands,
+    mut wave: ResMut<NightWaveState>,
+    mut dawn_rx: MessageReader<DawnBegan>,
+    mut event_log: ResMut<GameEventLog>,
+    time: Res<Time<Fixed>>,
+    sim_clock: Res<SimClock>,
+    config: Res<GameSetupConfig>,
+    surviving_mobs: Query<(Entity, &Transform), With<Mob>>,
+    mut all_resources: ResMut<AllPlayerResources>,
+    bases: Query<&Faction, (With<Building>, Without<Unit>, Without<FloorTile>)>,
+) {
+    if dawn_rx.read().count() == 0 {
+        return;
+    }
+    let Some(active) = wave.active.take() else {
+        return;
+    };
+
+    let half_map = config.map_size.world_size() / 2.0;
+    for (mob_entity, mob_tf) in surviving_mobs.iter() {
+        let pos = mob_tf.translation;
+        // Project the mob's XZ direction outward to the nearest edge.
+        let edge = nearest_map_edge_point(Vec2::new(pos.x, pos.z), half_map);
+        let edge_world = Vec3::new(edge.x, pos.y, edge.y);
+        apply_auto_move_intent(&mut commands, mob_entity, edge_world);
+        commands.entity(mob_entity).insert(RetreatingMob {
+            started_at_tick: sim_clock.tick,
+        });
+    }
+
+    // Per-night clear bonus: small reward to every player whose base survived.
+    let mut alive_factions: Vec<Faction> = Vec::new();
+    for faction in bases.iter() {
+        if matches!(faction, Faction::Neutral) {
+            continue;
+        }
+        if !alive_factions.contains(faction) {
+            alive_factions.push(*faction);
+        }
+    }
+    for f in &alive_factions {
+        if let Some(res) = all_resources.resources.get_mut(f) {
+            res.add(ResourceType::Gold, 50);
+            res.add(ResourceType::Wood, 30);
+        }
+        event_log.push(
+            time.elapsed_secs(),
+            format!(
+                "Night {} survived — {} killed, {} buildings damaged. Bonus: 50 Gold, 30 Wood",
+                active.night, active.killed, active.buildings_damaged
+            ),
+            EventCategory::Alert,
+            None,
+            Some(*f),
+        );
+    }
+
+    // Push a global notification toast as well so the local player sees it
+    // even when `bases` returns nothing for them yet.
+    commands.queue(move |world: &mut World| {
+        let now = world.resource::<Time>().elapsed_secs();
+        let mut notifications = world.resource_mut::<AllyNotifications>();
+        notifications.push(
+            AllyNotifyKind::Attacking,
+            format!(
+                "Night {} survived — {} killed",
+                active.night, active.killed
+            ),
+            None,
+            now,
+        );
+    });
+}
+
+fn nearest_map_edge_point(pos: Vec2, half_map: f32) -> Vec2 {
+    // Pick whichever map edge is closest along the dominant axis.
+    let dist_east = half_map - pos.x;
+    let dist_west = pos.x + half_map;
+    let dist_south = half_map - pos.y;
+    let dist_north = pos.y + half_map;
+    // Use a margin of 1.0 inside the edge so the unit reaches the border
+    // without the path planner refusing the goal.
+    let margin = 1.0_f32;
+    let m = dist_east.min(dist_west).min(dist_south).min(dist_north);
+    if (m - dist_east).abs() < 0.001 {
+        Vec2::new(half_map - margin, pos.y)
+    } else if (m - dist_west).abs() < 0.001 {
+        Vec2::new(-half_map + margin, pos.y)
+    } else if (m - dist_south).abs() < 0.001 {
+        Vec2::new(pos.x, half_map - margin)
+    } else {
+        Vec2::new(pos.x, -half_map + margin)
+    }
+}
+
+// ── Drip spawn ───────────────────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+fn night_wave_drip_spawn(
     mut commands: Commands,
     cache: Res<EntityVisualCache>,
     registry: Res<BlueprintRegistry>,
@@ -221,460 +387,481 @@ fn night_wave_spawn_system(
     height_map: Option<Res<HeightMap>>,
     biome_map: Option<Res<BiomeMap>>,
     config: Res<GameSetupConfig>,
-    map_seed: Res<MapSeed>,
     day_cycle: Res<DayCycle>,
     sim_clock: Res<SimClock>,
-    unit_tfs: Query<(&Transform, &Faction), With<Unit>>,
-    building_tfs: Query<(&Transform, &Faction), (With<Building>, Without<Unit>, Without<FloorTile>)>,
+    time: Res<Time<Fixed>>,
     mut wave: ResMut<NightWaveState>,
+    target_factions: Query<&Faction>,
+    target_units: Query<(Entity, &Transform, &Faction), With<Unit>>,
+    target_buildings: Query<
+        (Entity, &Transform, &Faction, Option<&EntityKind>),
+        (With<Building>, Without<Unit>, Without<FloorTile>),
+    >,
+    mut event_log: ResMut<GameEventLog>,
 ) {
-    let Some(night_num) = resolve_wave_trigger(&mut wave, day_cycle.phase) else {
+    if !wave.enabled {
         return;
-    };
+    }
     let (Some(height_map), Some(biome_map)) = (height_map, biome_map) else {
         return;
     };
 
-    let mut rng = StdRng::seed_from_u64(map_seed.0 ^ (night_num as u64).wrapping_mul(PHI_U64));
-
-    let total = (wave.base_count + wave.growth_per_night * night_num as f32)
-        .max(0.0)
-        .round() as u32;
-
-    if total == 0 {
-        wave.last_wave_size = 0;
-        wave.last_wave_tick = sim_clock.tick;
-        return;
-    }
-
-    let player_positions = gather_exclusion_points(&unit_tfs, &building_tfs);
-    let half_map = config.map_size.world_size() / 2.0;
-    let border = BorderSettings::from_map_size(config.map_size.world_size());
-
-    let clusters = generate_wave_clusters(
-        &mut rng,
-        half_map,
-        total,
-        wave.min_player_dist,
-        &player_positions,
-        &biome_map,
-        border,
-    );
-
-    let mut spawned: u32 = 0;
-    for cluster in &clusters {
-        spawned += spawn_night_cluster(
-            &mut commands,
-            &cache,
-            &registry,
-            unit_models.as_deref(),
-            &height_map,
-            cluster,
-            &mut rng,
-        );
-    }
-
-    wave.last_wave_size = spawned;
-    wave.last_wave_tick = sim_clock.tick;
-}
-
-fn spawn_night_cluster(
-    commands: &mut Commands,
-    cache: &EntityVisualCache,
-    registry: &BlueprintRegistry,
-    unit_models: Option<&UnitModelAssets>,
-    height_map: &HeightMap,
-    cluster: &ClusterSpawn,
-    rng: &mut StdRng,
-) -> u32 {
-    let center = Vec3::new(
-        cluster.center.x,
-        height_map.sample(cluster.center.x, cluster.center.z),
-        cluster.center.z,
-    );
-
-    let bp = registry.get(EntityKind::Goblin);
-    let base_patrol = bp
-        .mob_ai
-        .as_ref()
-        .map(|ai| ai.patrol_radius)
-        .unwrap_or(12.0);
-    let patrol_radius = base_patrol + cluster.size as f32 * 0.6;
-
-    let reward = cluster_reward();
-    let drops = cluster_item_drops(rng);
-
-    for i in 0..cluster.size {
-        let angle = (i as f32 / cluster.size as f32) * std::f32::consts::TAU;
-        let offset_r = patrol_radius * 0.35;
-        let x = center.x + angle.cos() * offset_r;
-        let z = center.z + angle.sin() * offset_r;
-
-        let entity = spawn_mob_member(
-            commands,
-            cache,
-            registry,
-            unit_models,
-            height_map,
-            EntityKind::Goblin,
-            Vec3::new(x, 0.0, z),
-            center,
-            patrol_radius,
-        );
-
-        if i == 0 {
-            commands.entity(entity).insert((reward.clone(), drops.clone()));
+    // Activate queued wave on Night entry.
+    if matches!(day_cycle.phase, DayPhase::Night) && wave.active.is_none() {
+        if let Some(queued) = wave.queued.take() {
+            wave.night_count = queued.night;
+            wave.dusk_pending = false;
+            wave.active = Some(ActiveWave::from_queued(queued, sim_clock.tick));
         }
     }
 
-    cluster.size as u32
+    // Outside Night, no spawning.
+    if !matches!(day_cycle.phase, DayPhase::Night) {
+        return;
+    }
+
+    let Some(active) = wave.active.as_mut() else {
+        return;
+    };
+    if active.spawned >= active.total {
+        return;
+    }
+    if sim_clock.tick < active.next_spawn_tick {
+        return;
+    }
+
+    let half_map = config.map_size.world_size() / 2.0;
+    let border = BorderSettings::from_map_size(config.map_size.world_size());
+
+    // Per-spawn RNG seeded from wave seed + spawn index — reproducible across
+    // peers without depending on system iteration order.
+    let spawn_seed = active.seed
+        ^ (active.spawned as u64).wrapping_mul(0xD1B5_4A32_D192_ED03)
+        ^ 0xFEED_FEED_FEED_FEED;
+    let mut rng = StdRng::seed_from_u64(spawn_seed);
+
+    let tier = active
+        .tier_order
+        .get(active.spawned as usize)
+        .copied()
+        .unwrap_or(MobTier::Runner);
+
+    // Bias spawn angle toward the wave direction (70% inside the cone, 30%
+    // scattered) unless direction is All.
+    let angle = pick_spawn_angle(&mut rng, active.direction);
+    let spawn_pos = pick_perimeter_spawn(
+        &mut rng,
+        angle,
+        half_map,
+        border,
+        biome_map.as_ref(),
+        height_map.as_ref(),
+    );
+    let Some(spawn_pos) = spawn_pos else {
+        // Could not find a valid perimeter point this tick — push the
+        // attempt forward by one interval and try again next tick.
+        active.next_spawn_tick = sim_clock.tick + 1;
+        return;
+    };
+
+    let entity = spawn_mob(
+        &mut commands,
+        &cache,
+        &registry,
+        unit_models.as_deref(),
+        &height_map,
+        spawn_pos,
+        tier,
+    );
+
+    let now = time.elapsed_secs_f64();
+    init_mob_engagement(
+        &mut commands,
+        entity,
+        spawn_pos,
+        now,
+        &target_units,
+        &target_buildings,
+        &target_factions,
+    );
+
+    // Telegraph: log every 4th spawn so the player sees a steady stream
+    // without spam.
+    if active.spawned % 4 == 0 {
+        event_log.push_with_level(
+            time.elapsed_secs(),
+            format!("Goblins emerging from the {}", active.direction.label()),
+            EventCategory::Combat,
+            LogLevel::Warning,
+            Some(spawn_pos),
+            None,
+        );
+    }
+
+    active.spawned += 1;
+    active.next_spawn_tick = sim_clock.tick + active.spawn_interval_ticks;
 }
 
-fn spawn_mob_member(
+fn pick_spawn_angle(rng: &mut StdRng, dir: WaveDirection) -> f32 {
+    use std::f32::consts::{PI, TAU};
+    match dir.primary_angle() {
+        Some(primary) => {
+            // 70% inside ±π/4 of primary; 30% anywhere on perimeter.
+            if rng.random_bool(0.7) {
+                let jitter = rng.random_range(-PI * 0.25..PI * 0.25);
+                (primary + jitter).rem_euclid(TAU)
+            } else {
+                rng.random_range(0.0..TAU)
+            }
+        }
+        None => rng.random_range(0.0..TAU),
+    }
+}
+
+fn pick_perimeter_spawn(
+    rng: &mut StdRng,
+    angle: f32,
+    half_map: f32,
+    border: BorderSettings,
+    biome_map: &BiomeMap,
+    _height_map: &HeightMap,
+) -> Option<Vec3> {
+    // Try the requested angle first, then nudge a few times if it's blocked.
+    for attempt in 0..6u32 {
+        let nudge = (attempt as f32) * 0.18 * if attempt % 2 == 0 { 1.0 } else { -1.0 };
+        let a = angle + nudge;
+        let radial = half_map - rng.random_range(2.0..5.0);
+        let x = a.cos() * radial;
+        let z = a.sin() * radial;
+        if is_in_mountain_border(x, z, half_map, border) {
+            continue;
+        }
+        if biome_map.get_biome(x, z) == Biome::Water {
+            continue;
+        }
+        return Some(Vec3::new(x, 0.0, z));
+    }
+    None
+}
+
+// ── Target selection ─────────────────────────────────────────────────────
+
+/// Pick the best initial target for a freshly spawned mob. Buildings outrank
+/// units (with Base/Storage outranking other buildings); ties broken by
+/// distance. Returns `None` only if the map has no hostile entities at all.
+pub fn pick_primary_target(
+    mob_pos: Vec3,
+    units: &Query<(Entity, &Transform, &Faction), With<Unit>>,
+    buildings: &Query<
+        (Entity, &Transform, &Faction, Option<&EntityKind>),
+        (With<Building>, Without<Unit>, Without<FloorTile>),
+    >,
+    _factions: &Query<&Faction>,
+) -> Option<(Entity, EngagementTargetKind)> {
+    let mut best_score = f32::MAX;
+    let mut best: Option<(Entity, EngagementTargetKind)> = None;
+
+    for (e, tf, faction, opt_kind) in buildings.iter() {
+        if matches!(faction, Faction::Neutral) {
+            continue;
+        }
+        let dist = mob_pos.distance(tf.translation);
+        let kind_bonus = match opt_kind.copied() {
+            Some(EntityKind::Base) | Some(EntityKind::Storage) => STRATEGIC_BUILDING_BIAS,
+            Some(EntityKind::Sawmill)
+            | Some(EntityKind::Mine)
+            | Some(EntityKind::OilRig)
+            | Some(EntityKind::Smelter)
+            | Some(EntityKind::Alchemist) => BUILDING_BIAS - 2.0,
+            Some(_) => BUILDING_BIAS,
+            None => 0.0,
+        };
+        let score = dist + kind_bonus;
+        if score < best_score {
+            best_score = score;
+            best = Some((e, EngagementTargetKind::Building));
+        }
+    }
+
+    for (e, tf, faction, _) in units.iter().map(|(e, tf, f)| (e, tf, f, ())) {
+        if matches!(faction, Faction::Neutral) {
+            continue;
+        }
+        let dist = mob_pos.distance(tf.translation);
+        let score = dist; // no bonus
+        if score < best_score {
+            best_score = score;
+            best = Some((e, EngagementTargetKind::Unit));
+        }
+    }
+
+    best
+}
+
+// ── Re-commit hook ───────────────────────────────────────────────────────
+
+/// After a detour fight ends (intercepting unit dies or runs off, mob's
+/// brain returns to Idle with no target), re-issue the original Attack
+/// order so the mob resumes its march.
+#[allow(clippy::too_many_arguments)]
+fn mob_recommit_to_primary(
+    mut commands: Commands,
+    time: Res<Time<Fixed>>,
+    mobs: Query<
+        (
+            Entity,
+            &Transform,
+            &MobEngagement,
+            &crate::simulation::combat::UnitBrain,
+            Option<&RecentCombatDamage>,
+        ),
+        (With<Mob>, Without<RetreatingMob>),
+    >,
+    targets_alive: Query<&Health>,
+) {
+    use crate::simulation::combat::{BrainState, Order};
+    let now = time.elapsed_secs_f64();
+
+    for (entity, tf, engagement, brain, recent_damage) in mobs.iter() {
+        // Don't disturb brains that are in any active combat phase.
+        if !matches!(brain.state, BrainState::Idle) {
+            continue;
+        }
+        // If we just got hit, retaliation will handle the response — don't
+        // override.
+        if recent_damage.is_some() {
+            continue;
+        }
+        // Skip if we're already attacking the primary.
+        if matches!(brain.order, Order::Attack(t) if t == engagement.primary) {
+            continue;
+        }
+        // Primary must still be alive. Death-handling re-targets are done in
+        // `mob_retarget_on_primary_death` (in death.rs); this hook only
+        // re-asserts the existing primary.
+        let alive = targets_alive
+            .get(engagement.primary)
+            .map(|h| h.current > 0.0)
+            .unwrap_or(false);
+        if !alive {
+            continue;
+        }
+        apply_auto_attack_intent(&mut commands, entity, engagement.primary, tf.translation, now);
+    }
+}
+
+/// Mobs that exhausted their rescans and have nothing left to do walk off
+/// the map edge. The retreat-despawn system tears them down on edge crossing
+/// or after `RETREAT_HARD_TIMEOUT_SECS`.
+fn mob_strand_timeout(
+    mut commands: Commands,
+    sim_clock: Res<SimClock>,
+    config: Res<GameSetupConfig>,
+    mobs: Query<
+        (
+            Entity,
+            &Transform,
+            &MobEngagement,
+            &crate::simulation::combat::UnitBrain,
+        ),
+        (With<Mob>, Without<RetreatingMob>),
+    >,
+) {
+    use crate::simulation::combat::{BrainState, Order};
+    let half_map = config.map_size.world_size() / 2.0;
+    for (entity, tf, engagement, brain) in mobs.iter() {
+        if engagement.rescans_used < MAX_RESCANS_PER_MOB {
+            continue;
+        }
+        if !matches!(brain.state, BrainState::Idle) {
+            continue;
+        }
+        if !matches!(brain.order, Order::Stop) {
+            continue;
+        }
+        let pos = tf.translation;
+        let edge = nearest_map_edge_point(Vec2::new(pos.x, pos.z), half_map);
+        let edge_world = Vec3::new(edge.x, pos.y, edge.y);
+        apply_auto_move_intent(&mut commands, entity, edge_world);
+        commands.entity(entity).insert(RetreatingMob {
+            started_at_tick: sim_clock.tick,
+        });
+    }
+    let _ = STRAND_TIMEOUT_SECS;
+}
+
+/// Remove `RetreatingMob` entities that crossed the map edge OR exceeded the
+/// hard timeout.
+fn mob_retreat_despawn(
+    mut commands: Commands,
+    config: Res<GameSetupConfig>,
+    sim_clock: Res<SimClock>,
+    retreating: Query<(Entity, &Transform, &RetreatingMob)>,
+) {
+    let half_map = config.map_size.world_size() / 2.0;
+    let edge = half_map - 1.0;
+    let timeout_ticks = (RETREAT_HARD_TIMEOUT_SECS * TICKS_PER_SEC as f32) as u64;
+    for (entity, tf, retreat) in retreating.iter() {
+        let off_map =
+            tf.translation.x.abs() > edge || tf.translation.z.abs() > edge;
+        let timed_out = sim_clock.tick.saturating_sub(retreat.started_at_tick) > timeout_ticks;
+        if off_map || timed_out {
+            commands.entity(entity).try_despawn();
+        }
+    }
+}
+
+// ── Spawn helpers ────────────────────────────────────────────────────────
+
+fn spawn_mob(
     commands: &mut Commands,
     cache: &EntityVisualCache,
     registry: &BlueprintRegistry,
     unit_models: Option<&UnitModelAssets>,
     height_map: &HeightMap,
-    kind: EntityKind,
     pos: Vec3,
-    patrol_center: Vec3,
-    patrol_radius: f32,
+    tier: MobTier,
 ) -> Entity {
-    let y_off = registry
-        .get(kind)
-        .movement
-        .as_ref()
-        .map(|m| m.y_offset)
-        .unwrap_or(0.0);
-
     let entity = spawn_from_blueprint(
         commands,
         cache,
-        kind,
+        EntityKind::Goblin,
         pos,
         registry,
         None,
         unit_models,
         height_map,
     );
+    apply_mob_tier(commands, entity, registry, height_map, pos, tier);
+    entity
+}
+
+/// Apply a tier (stat multipliers + visual scale) to a freshly spawned
+/// `EntityKind::Goblin`. Used by the wave drip spawn AND by the debug
+/// "Spawn at Camera" path so debug-spawned mobs look and behave like
+/// wave-spawned ones.
+pub fn apply_mob_tier(
+    commands: &mut Commands,
+    entity: Entity,
+    registry: &BlueprintRegistry,
+    height_map: &HeightMap,
+    pos: Vec3,
+    tier: MobTier,
+) {
+    let bp = registry.get(EntityKind::Goblin);
+    let y_off = bp.movement.as_ref().map(|m| m.y_offset).unwrap_or(0.0);
+    let visual_scale = bp.visual.scale * tier.visual_scale_mul();
+
+    // Stat multipliers — applied via deferred world mutation so we can read
+    // and write the components the blueprint just inserted.
+    let hp_mul = tier.hp_mul();
+    let dmg_mul = tier.damage_mul();
+    let move_mul = tier.move_mul();
+    commands.queue(move |world: &mut World| {
+        if let Some(mut h) = world.get_mut::<Health>(entity) {
+            h.max *= hp_mul;
+            h.current = h.max;
+        }
+        if let Some(mut d) = world.get_mut::<AttackDamage>(entity) {
+            d.0 *= dmg_mul;
+        }
+        if let Some(mut s) = world.get_mut::<UnitSpeed>(entity) {
+            s.0 *= move_mul;
+        }
+    });
 
     commands.entity(entity).insert((
-        PatrolState {
-            state: PatrolStateKind::Idle,
-            center: patrol_center,
-            radius: patrol_radius,
-            patrol_target: None,
-            chase_elapsed: 0.0,
-            idle_until: 0.0,
-            patrol_started: 0.0,
-        },
+        tier,
         Transform::from_translation(Vec3::new(
             pos.x,
             height_map.sample(pos.x, pos.z) + y_off,
             pos.z,
         ))
-        .with_scale(Vec3::splat(1.0)),
+        .with_scale(Vec3::splat(visual_scale)),
     ));
-
-    entity
 }
 
-fn cluster_reward() -> CampReward {
-    use crate::blueprints::ResourceCost;
-    CampReward {
-        resources: ResourceCost::new()
-            .with(ResourceType::Wood, 30)
-            .with(ResourceType::Copper, 15),
-    }
-}
-
-fn cluster_item_drops(rng: &mut StdRng) -> CampItemDrops {
-    use ItemKind::*;
-    let pool: &[ItemKind] = &[
-        PaddedVest,
-        KettleHelm,
-        PlainBand,
-        ArmingSword,
-        BattleStaff,
-        YewLongbow,
-    ];
-
-    let count = match rng.random_range(0..100) {
-        0..=1 => 3,
-        2..=11 => 2,
-        _ => 1,
-    };
-
-    let mut items = Vec::with_capacity(count);
-    for _ in 0..count {
-        let idx = rng.random_range(0..pool.len());
-        items.push(pool[idx]);
-    }
-
-    CampItemDrops { items }
-}
-
-fn mob_patrol(
-    mut commands: Commands,
-    time: Res<Time<Fixed>>,
-    nav_grid: Option<Res<crate::world::pathfinding::NavGrid>>,
-    mut mobs: Query<
-        (
-            Entity,
-            &Transform,
-            &mut PatrolState,
-            Option<&CombatIntent>,
-            Option<&CombatTargetLock>,
-            Option<&MoveTarget>,
-        ),
-        With<Mob>,
-    >,
-) {
-    let now = time.elapsed_secs_f64();
-    const PATROL_STUCK_SECS: f64 = 6.0;
-
-    for (entity, tf, mut patrol, intent, lock, move_target) in &mut mobs {
-        if matches!(
-            intent,
-            Some(CombatIntent::Attack(_, _) | CombatIntent::AttackMove(_, _))
-        ) || lock.is_some()
-        {
-            continue;
-        }
-
-        match patrol.state {
-            PatrolStateKind::Idle => {
-                if move_target.is_some() {
-                    commands.entity(entity).remove::<MoveTarget>();
-                }
-
-                if now < patrol.idle_until {
-                    continue;
-                }
-
-                let bits = entity.to_bits();
-                let seed = bits.wrapping_mul(2654435761) as f32;
-                let mut target = None;
-                for attempt in 0..4u32 {
-                    let angle =
-                        seed % std::f32::consts::TAU + (now as f32) * 0.3 + attempt as f32 * 1.57;
-                    let r = patrol.radius
-                        * (0.3 + ((seed * 0.7 + attempt as f32).sin() * 0.5 + 0.5) * 0.7);
-                    let candidate = Vec3::new(
-                        patrol.center.x + angle.cos() * r,
-                        0.0,
-                        patrol.center.z + angle.sin() * r,
-                    );
-
-                    let passable = nav_grid.as_ref().map_or(true, |grid| {
-                        grid.is_world_passable(candidate.x, candidate.z)
-                    });
-                    if passable {
-                        target = Some(candidate);
-                        break;
-                    }
-                }
-
-                let Some(target) = target else {
-                    patrol.idle_until = now + 3.0;
-                    continue;
-                };
-
-                patrol.patrol_target = Some(target);
-                patrol.patrol_started = now;
-                patrol.state = PatrolStateKind::Patrolling;
-
-                commands.entity(entity).insert(MoveTarget(target));
-            }
-            PatrolStateKind::Patrolling => {
-                if let Some(target) = patrol.patrol_target {
-                    let dist = Vec2::new(target.x - tf.translation.x, target.z - tf.translation.z)
-                        .length();
-
-                    if dist < 2.5 || (now - patrol.patrol_started) > PATROL_STUCK_SECS {
-                        patrol.state = PatrolStateKind::Idle;
-                        patrol.patrol_target = None;
-                        let idle_extra = (entity.to_bits() % 3000) as f64 / 1000.0;
-                        patrol.idle_until = now + 2.0 + idle_extra;
-                        commands.entity(entity).remove::<MoveTarget>();
-                    } else if move_target.is_none() {
-                        commands.entity(entity).insert(MoveTarget(target));
-                    }
-                }
-            }
-            PatrolStateKind::Returning => {
-                let dist = Vec2::new(
-                    patrol.center.x - tf.translation.x,
-                    patrol.center.z - tf.translation.z,
-                )
-                .length();
-                if dist < 3.0 {
-                    patrol.state = PatrolStateKind::Idle;
-                    patrol.idle_until = now + 1.0;
-                    commands.entity(entity).remove::<MoveTarget>();
-                } else if move_target.is_none() {
-                    commands.entity(entity).insert(MoveTarget(patrol.center));
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-fn mob_aggro(
-    mut commands: Commands,
-    time: Res<Time<Fixed>>,
-    combat_budget: Res<CombatBudget>,
-    mut budget_state: ResMut<CombatBudgetState>,
-    spatial: Res<crate::world::spatial::SpatialHashGrid>,
-    mut mobs: Query<
-        (
-            Entity,
-            &Transform,
-            &AggroRange,
-            Option<&CombatIntent>,
-            Option<&CombatTargetLock>,
-            Option<&mut CombatThinkTimer>,
-        ),
-        With<Mob>,
-    >,
-    unit_factions: Query<&Faction, With<Unit>>,
-    building_factions: Query<
-        &Faction,
+/// Init a mob's engagement: pick a primary target, store it on the entity,
+/// and issue the initial Attack intent. Public so the debug spawn path can
+/// call it after `spawn_from_blueprint`. If no hostile target exists, falls
+/// back to a Move toward map center so the mob doesn't sit idle forever.
+pub fn init_mob_engagement(
+    commands: &mut Commands,
+    entity: Entity,
+    pos: Vec3,
+    now: f64,
+    units: &Query<(Entity, &Transform, &Faction), With<Unit>>,
+    buildings: &Query<
+        (Entity, &Transform, &Faction, Option<&EntityKind>),
         (With<Building>, Without<Unit>, Without<FloorTile>),
     >,
-    mob_marker: Query<(), With<Mob>>,
+    factions: &Query<&Faction>,
 ) {
-    const PACK_ALERT_RADIUS: f32 = 15.0;
-    const PACK_ALERT_MAX: usize = 4;
-
-    let now = time.elapsed_secs_f64();
-    let mut candidates: Vec<(Entity, Vec3)> = Vec::new();
-    let mut pack_buf: Vec<(Entity, Vec3)> = Vec::new();
-
-    for (mob_entity, mob_tf, aggro, intent, lock, _) in &mut mobs {
-        if budget_state.target_rescans_this_frame >= combat_budget.max_target_rescans_per_frame {
-            continue;
-        }
-        if matches!(intent, Some(CombatIntent::Attack(_, _)))
-            && lock.is_some_and(|lock| now <= lock.locked_until)
-        {
-            continue;
-        }
-        let mob_pos = mob_tf.translation;
-
-        // Spatial radius query + faction filter. The grid contains units,
-        // mobs, and non-floor buildings — the closure keeps only non-neutral
-        // units and buildings (mobs are Neutral so they're filtered out too).
-        spatial.collect_radius_filter(mob_pos, aggro.0, &mut candidates, |entity| {
-            if let Ok(faction) = unit_factions.get(entity) {
-                return *faction != Faction::Neutral;
-            }
-            if let Ok(faction) = building_factions.get(entity) {
-                return *faction != Faction::Neutral;
-            }
-            false
+    if let Some((target, kind)) = pick_primary_target(pos, units, buildings, factions) {
+        commands.entity(entity).insert(MobEngagement {
+            primary: target,
+            primary_kind: kind,
+            rescans_used: 0,
         });
-
-        let mut closest_unit_dist_sq = f32::MAX;
-        let mut closest_unit: Option<Entity> = None;
-        let mut closest_building_dist_sq = f32::MAX;
-        let mut closest_building: Option<Entity> = None;
-
-        for (entity, pos) in candidates.iter().copied() {
-            let d_sq = mob_pos.distance_squared(pos);
-            if unit_factions.contains(entity) {
-                if d_sq < closest_unit_dist_sq {
-                    closest_unit_dist_sq = d_sq;
-                    closest_unit = Some(entity);
-                }
-            } else if building_factions.contains(entity)
-                && d_sq < closest_building_dist_sq
-            {
-                closest_building_dist_sq = d_sq;
-                closest_building = Some(entity);
-            }
-        }
-
-        let target = closest_unit.or(closest_building);
-        budget_state.target_rescans_this_frame += 1;
-
-        if let Some(target) = target {
-            apply_auto_attack_intent(&mut commands, mob_entity, target, mob_pos, now);
-
-            spatial.collect_radius_filter(
-                mob_pos,
-                PACK_ALERT_RADIUS,
-                &mut pack_buf,
-                |entity| entity != mob_entity && mob_marker.contains(entity),
-            );
-            for (other_entity, other_pos) in pack_buf.iter().take(PACK_ALERT_MAX).copied() {
-                apply_auto_attack_intent(&mut commands, other_entity, target, other_pos, now);
-            }
-        }
+        apply_auto_attack_intent(commands, entity, target, pos, now);
+    } else {
+        apply_auto_move_intent(commands, entity, Vec3::ZERO);
     }
 }
 
-fn mob_leash(
-    mut commands: Commands,
-    time: Res<Time<Fixed>>,
-    mut mobs: Query<
-        (
-            Entity,
-            &Transform,
-            &mut PatrolState,
-            Option<&CombatIntent>,
-            Option<&CombatTargetLock>,
-            Option<&AttackWindup>,
-            Option<&AttackRecovery>,
-        ),
-        With<Mob>,
-    >,
-    targets: Query<&Transform, Without<Mob>>,
-) {
-    const LEASH_DISTANCE: f32 = 40.0;
-    const MAX_CHASE_SECS: f32 = 15.0;
+// ── Loot helpers (called from death.rs) ──────────────────────────────────
 
-    for (mob_entity, tf, mut patrol, intent, lock, windup, recovery) in &mut mobs {
-        let target_entity = match intent {
-            Some(CombatIntent::Attack(target, _)) => Some(*target),
-            Some(CombatIntent::AttackMove(_, _)) => lock.map(|lock| lock.target),
-            _ => lock.map(|lock| lock.target),
-        };
-        if target_entity.is_none() {
-            if matches!(
-                patrol.state,
-                PatrolStateKind::Chasing | PatrolStateKind::Attacking
-            ) {
-                patrol.state = PatrolStateKind::Returning;
-            }
-            continue;
-        }
-        patrol.chase_elapsed += time.delta_secs();
-
-        let dist_from_home = Vec2::new(
-            tf.translation.x - patrol.center.x,
-            tf.translation.z - patrol.center.z,
-        )
-        .length();
-
-        let target_gone = target_entity.is_some_and(|target| !targets.contains(target));
-        if target_gone || dist_from_home > LEASH_DISTANCE || patrol.chase_elapsed > MAX_CHASE_SECS {
-            patrol.state = PatrolStateKind::Returning;
-            patrol.chase_elapsed = 0.0;
-            reset_combat_state(&mut commands, mob_entity);
-            commands
-                .entity(mob_entity)
-                .remove::<MoveTarget>()
-                .remove::<ChaseTimer>();
-            continue;
-        }
-
-        if windup.is_some() || recovery.is_some() {
-            patrol.state = PatrolStateKind::Attacking;
-        } else {
-            patrol.state = PatrolStateKind::Chasing;
-        }
+/// Determine what (if any) item to drop for a slain mob. Caller passes a
+/// per-mob deterministic RNG.
+pub fn goblin_drop_for(tier: MobTier, rng: &mut StdRng) -> Option<ItemKind> {
+    let drop_chance = match tier {
+        MobTier::Runner => 0.05,
+        MobTier::Veteran => 0.15,
+        MobTier::Champion => 0.30,
+    };
+    if !rng.random_bool(drop_chance) {
+        return None;
     }
+    let pool: &[ItemKind] = match tier {
+        MobTier::Runner => &[ItemKind::PaddedVest, ItemKind::KettleHelm, ItemKind::PlainBand],
+        MobTier::Veteran | MobTier::Champion => &[
+            ItemKind::ArmingSword,
+            ItemKind::BattleStaff,
+            ItemKind::YewLongbow,
+        ],
+    };
+    Some(pool[rng.random_range(0..pool.len())])
+}
+
+/// Build a per-mob RNG from the active wave seed plus the entity's bits, so
+/// drop rolls stay deterministic across peers without holding wave state in
+/// the death handler.
+pub fn per_mob_drop_rng(wave_seed: u64, entity: Entity) -> StdRng {
+    StdRng::seed_from_u64(wave_seed ^ entity.to_bits().wrapping_mul(PHI_U64))
+}
+
+/// Helper for death.rs to spawn a single drop pickup if the tier rolls.
+pub fn try_spawn_mob_drop(
+    spawns: &mut MessageWriter<SpawnItemPickup>,
+    wave_seed: u64,
+    entity: Entity,
+    tier: MobTier,
+    pos: Vec3,
+) {
+    let mut rng = per_mob_drop_rng(wave_seed, entity);
+    if let Some(item) = goblin_drop_for(tier, &mut rng) {
+        spawns.write(SpawnItemPickup {
+            item,
+            position: pos,
+            owner: None,
+            lifetime_secs: 90.0,
+        });
+    }
+}
+
+/// Read the active wave seed (for death-time drop rolls). Returns 0 if no
+/// wave is active — callers should treat 0 as "no wave context", drop
+/// nothing.
+pub fn active_wave_seed(wave: &NightWaveState) -> u64 {
+    wave.active.as_ref().map(|w| w.seed).unwrap_or(0)
 }

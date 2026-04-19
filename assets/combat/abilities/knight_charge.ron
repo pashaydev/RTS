@@ -1,0 +1,15 @@
+(
+    id: "knight_charge",
+    display_name: "Charge",
+    range: 8.0,
+    windup_frames: 6,
+    recovery_frames: 4,
+    damage_point_frame: 4,
+    cooldown_secs: 10.0,
+    target_type: Unit,
+    target_filter: Hostile,
+    effect: Sequence([
+        Displace(style: Dash, strength: 8.0),
+        ApplyBehavior(behavior: ChargeBuff(mult: 2.0), duration_secs: 2.0),
+    ]),
+)

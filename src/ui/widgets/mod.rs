@@ -64,6 +64,7 @@ pub mod resources_widget;
 pub mod selection_cards;
 pub mod selection_widget;
 pub mod tech_tree_widget;
+pub mod wave_banner_widget;
 pub mod widget_toolbar;
 
 pub use super::core;
@@ -93,6 +94,7 @@ impl Plugin for WidgetsPlugin {
             production_queue_widget::ProductionQueueWidgetPlugin,
             selection_widget::SelectionWidgetPlugin,
             actions_widget::ActionsWidgetPlugin,
+            wave_banner_widget::WaveBannerWidgetPlugin,
             ExternalWidgetFramesPlugin,
         ));
     }

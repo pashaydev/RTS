@@ -8,9 +8,9 @@ use bevy::prelude::*;
 use bevy::time::Fixed;
 
 use crate::types::{
-    AppState, Building, CullingSourceCamera, GameSetupConfig, GameWorld, GhostBuilding,
-    GraphicsSettings, ShadowQuality, UNIT_HIDE_DISTANCE, Unit, WallCornerPiece, WallPostPiece,
-    WallSegmentPiece,
+    AppState, Building, CullingSourceCamera, DawnBegan, DuskBegan, GameSetupConfig, GameWorld,
+    GhostBuilding, GraphicsSettings, ShadowQuality, UNIT_HIDE_DISTANCE, Unit, WallCornerPiece,
+    WallPostPiece, WallSegmentPiece,
 };
 
 pub struct LightingPlugin;
@@ -19,6 +19,8 @@ impl Plugin for LightingPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<EntityLightGrid>()
             .init_resource::<EntityLightConfig>()
+            .add_message::<DuskBegan>()
+            .add_message::<DawnBegan>()
             .add_systems(Startup, register_lighting_tweaks)
             .add_systems(OnEnter(AppState::InGame), setup_lighting)
             .add_systems(
@@ -387,12 +389,30 @@ fn apply_graphics_lighting_settings(
 
 // ── Day cycle advancement ──
 
-fn advance_day_cycle(mut cycle: ResMut<DayCycle>, time: Res<Time<Fixed>>) {
+fn advance_day_cycle(
+    mut cycle: ResMut<DayCycle>,
+    time: Res<Time<Fixed>>,
+    mut dusk: MessageWriter<DuskBegan>,
+    mut dawn: MessageWriter<DawnBegan>,
+) {
     if cycle.paused {
         return;
     }
+    let prev_phase = cycle.phase;
     let next_time = cycle.time + time.delta_secs() / cycle.cycle_duration;
     cycle.set_time(next_time);
+    let new_phase = cycle.phase;
+    if prev_phase != new_phase {
+        match new_phase {
+            DayPhase::Dusk => {
+                dusk.write(DuskBegan);
+            }
+            DayPhase::Dawn => {
+                dawn.write(DawnBegan);
+            }
+            _ => {}
+        }
+    }
 }
 
 // ── Sun / Ambient / Sky update ──

@@ -1,0 +1,16 @@
+(
+    id: "auto_ranged_bow",
+    display_name: "Bow Shot",
+    range: 12.0,
+    windup_frames: 14,
+    recovery_frames: 8,
+    damage_point_frame: 12,
+    cooldown_secs: 1.5,
+    target_type: Unit,
+    target_filter: Hostile,
+    effect: SpawnProjectile(
+        speed: 24.0,
+        orient_to_velocity: true,
+        on_impact: Damage(base: 10.0, damage_type: Pierce, falloff: false),
+    ),
+)

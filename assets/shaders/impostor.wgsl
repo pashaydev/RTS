@@ -24,9 +24,17 @@ struct ImpostorParams {
     total_rows: u32,
     directions: u32,
     fps: f32,
+    light_mix: f32,
+    top_light: f32,
+    bottom_light: f32,
+    light_tint: vec4<f32>,
+    shadow_tint: vec4<f32>,
+    sun_direction: vec4<f32>,
+    local_visibility: f32,
+    wrap_amount: f32,
+    rim_strength: f32,
     _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    tier_tint: vec4<f32>,
 };
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> params: ImpostorParams;
@@ -45,6 +53,8 @@ struct VOut {
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) direction: u32,
     @location(2) @interpolate(flat) frame: u32,
+    @location(3) @interpolate(flat) right: vec3<f32>,
+    @location(4) @interpolate(flat) facing: vec3<f32>,
 };
 
 const PI: f32 = 3.1415926535897932;
@@ -132,6 +142,8 @@ fn vertex(v: Vertex) -> VOut {
     out.uv = v.uv;
     out.direction = direction;
     out.frame = frame;
+    out.right = right;
+    out.facing = -horiz;
     return out;
 }
 
@@ -153,5 +165,45 @@ fn fragment(in: VOut) -> @location(0) vec4<f32> {
     if sample.a < 0.5 {
         discard;
     }
-    return sample;
+
+    // Sprite-space vertical grading helps the billboard feel less flat
+    // without fighting the lighting already baked into the atlas.
+    let vertical = clamp(in.uv.y, 0.0, 1.0);
+    let shade = mix(params.bottom_light, params.top_light, smoothstep(0.0, 1.0, vertical));
+
+    // Build a soft billboard-space pseudo normal so sun direction can
+    // produce left/right and top/bottom variation across the sprite.
+    let nx = (in.uv.x - 0.5) * 1.6;
+    let ny = (in.uv.y - 0.45) * 1.1;
+    let nz = sqrt(max(1.0 - nx * nx - ny * ny, 0.0));
+    let pseudo_local = normalize(vec3<f32>(nx, ny, nz));
+    let up = vec3<f32>(0.0, 1.0, 0.0);
+    let pseudo_world = normalize(
+        in.right * pseudo_local.x
+        + up * pseudo_local.y
+        + in.facing * pseudo_local.z
+    );
+
+    let sun_dir = normalize(params.sun_direction.xyz);
+    let wrap = clamp(
+        (dot(pseudo_world, sun_dir) + params.wrap_amount) / (1.0 + params.wrap_amount),
+        0.0,
+        1.0,
+    );
+    let directional = mix(0.72, 1.12, wrap);
+
+    // Rim light lifts silhouettes a bit in darkness and helps nearby
+    // mobs stay readable when they stand inside friendly light pools.
+    let rim = pow(1.0 - max(dot(pseudo_world, in.facing), 0.0), 2.0);
+    let visibility = clamp(params.local_visibility, 0.0, 1.0);
+
+    let lit = sample.rgb * params.light_tint.rgb * shade * directional;
+    let shadowed = sample.rgb * params.shadow_tint.rgb * mix(0.82, 1.0, visibility);
+    let mix_factor = clamp(max(params.light_mix, visibility * 0.95), 0.0, 1.0);
+    var color = mix(shadowed, lit, mix_factor);
+    color = color * mix(1.0, 1.22, visibility);
+    color = color + params.light_tint.rgb * rim * params.rim_strength * visibility;
+    // Per-mob tier tint: applied last so it modulates the lit+shadowed mix.
+    color = color * params.tier_tint.rgb;
+    return vec4<f32>(color, sample.a);
 }

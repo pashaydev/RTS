@@ -814,10 +814,10 @@ pub(crate) fn handle_unit_command_hotkeys(
             return;
         }
 
-        // --- Ability hotkeys (Q = first ability, W = second ability) ---
-        let ability_hotkey = if keys.just_pressed(KeyCode::KeyQ) {
+        // --- Ability hotkeys (T = first ability, Y = second ability) ---
+        let ability_hotkey = if keys.just_pressed(KeyCode::KeyT) {
             Some(0usize)
-        } else if keys.just_pressed(KeyCode::KeyW) {
+        } else if keys.just_pressed(KeyCode::KeyY) {
             Some(1usize)
         } else {
             None

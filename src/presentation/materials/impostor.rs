@@ -47,9 +47,24 @@ pub struct ImpostorParams {
     pub directions: u32,
     // -- 16 bytes --
     pub fps: f32,
+    pub light_mix: f32,
+    pub top_light: f32,
+    pub bottom_light: f32,
+    // -- 16 bytes --
+    pub light_tint: Vec4,
+    // -- 16 bytes --
+    pub shadow_tint: Vec4,
+    // -- 16 bytes --
+    pub sun_direction: Vec4,
+    // -- 16 bytes --
+    pub local_visibility: f32,
+    pub wrap_amount: f32,
+    pub rim_strength: f32,
     pub _pad0: f32,
-    pub _pad1: f32,
-    pub _pad2: f32,
+    // -- 16 bytes --
+    /// Per-tier multiplicative tint applied to the sampled atlas color.
+    /// `[1, 1, 1, 1]` for the default Runner tier.
+    pub tier_tint: Vec4,
 }
 
 impl Default for ImpostorParams {
@@ -64,9 +79,17 @@ impl Default for ImpostorParams {
             total_rows: 80,
             directions: 8,
             fps: 12.0,
+            light_mix: 1.0,
+            top_light: 1.08,
+            bottom_light: 0.92,
+            light_tint: Vec4::new(1.0, 1.0, 1.0, 1.0),
+            shadow_tint: Vec4::new(0.70, 0.74, 0.88, 1.0),
+            sun_direction: Vec4::new(0.5, 0.7, 0.3, 0.0),
+            local_visibility: 0.0,
+            wrap_amount: 0.35,
+            rim_strength: 0.18,
             _pad0: 0.0,
-            _pad1: 0.0,
-            _pad2: 0.0,
+            tier_tint: Vec4::new(1.0, 1.0, 1.0, 1.0),
         }
     }
 }

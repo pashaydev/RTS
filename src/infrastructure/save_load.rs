@@ -34,10 +34,7 @@ pub struct SaveLoadPlugin;
 
 impl Plugin for SaveLoadPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (handle_quicksave, handle_quickload).run_if(in_state(AppState::InGame)),
-        )
+        app
         .add_systems(Update, handle_save_game_exclusive)
         .add_systems(
             OnEnter(AppState::InGame),
@@ -1750,27 +1747,6 @@ fn chrono_now() -> String {
     format!("{}", secs)
 }
 
-// ── QUICKSAVE / QUICKLOAD ───────────────────────────────────────────────────
-
-fn handle_quicksave(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    net_role: Res<NetRole>,
-    mut commands: Commands,
-    overlay: Res<InGameOverlay>,
-) {
-    if *net_role != NetRole::Offline {
-        return;
-    }
-    if *overlay != InGameOverlay::None && *overlay != InGameOverlay::PauseMenu {
-        return;
-    }
-    if keyboard.just_pressed(KeyCode::F5) {
-        commands.insert_resource(SaveTrigger {
-            label: Some("Quicksave".to_string()),
-        });
-    }
-}
-
 /// Restore `GameSetupConfig` from save data so that `resolve_map_seed` and `spawn_ground`
 /// regenerate exactly the same terrain. Uses the resolved `save.map_seed` (not the
 /// potentially-zero value in `game_config.map_seed`) so random seeds are reproduced.
@@ -1823,45 +1799,6 @@ pub fn restore_config_from_save(config: &mut GameSetupConfig, save: &SaveData) {
     }
 }
 
-fn handle_quickload(
-    keyboard: Res<ButtonInput<KeyCode>>,
-    net_role: Res<NetRole>,
-    db: Res<GameDatabase>,
-    profile: Res<ActiveProfile>,
-    mut commands: Commands,
-    mut next_state: ResMut<NextState<AppState>>,
-    overlay: Res<InGameOverlay>,
-    mut config: ResMut<GameSetupConfig>,
-) {
-    if *net_role != NetRole::Offline {
-        return;
-    }
-    if *overlay != InGameOverlay::None && *overlay != InGameOverlay::PauseMenu {
-        return;
-    }
-    if keyboard.just_pressed(KeyCode::F9) {
-        let saves = db.list_saves(&profile.id);
-        if let Some(most_recent) = saves.first() {
-            if let Some(blob) = db.load_save(most_recent.id) {
-                match rmp_serde::from_slice::<SaveData>(&blob) {
-                    Ok(save_data) => {
-                        info!("Quickloading save id={}", most_recent.id);
-                        // Restore config (especially map_seed) so resolve_map_seed
-                        // regenerates the exact same terrain on OnEnter(InGame).
-                        restore_config_from_save(&mut config, &save_data);
-                        commands.insert_resource(PendingLoad { save_data });
-                        next_state.set(AppState::MainMenu);
-                        // The menu system will detect PendingLoad and immediately
-                        // transition to InGame, where load_saved_game runs.
-                    }
-                    Err(e) => {
-                        error!("Failed to deserialize save: {e}");
-                    }
-                }
-            }
-        }
-    }
-}
 
 // ── LOAD SYSTEM ─────────────────────────────────────────────────────────────
 

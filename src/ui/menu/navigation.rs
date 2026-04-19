@@ -276,16 +276,9 @@ pub(crate) fn menu_nav_focus_visuals(
 
     // Style newly focused items — only add focus ring (border + shadow).
     for entity in &focused {
-        commands.entity(entity).insert((
-            BorderColor::all(theme.colors.accent),
-            BoxShadow::new(
-                HIGHLIGHT,
-                Val::Px(0.0),
-                Val::Px(0.0),
-                Val::Px(0.0),
-                Val::Px(2.0),
-            ),
-        ));
+        commands
+            .entity(entity)
+            .insert((menu_focus_border(&theme), menu_focus_shadow()));
 
         // Highlight ArrowSelectorValueBg children when row is focused
         if let Ok(children) = children_q.get(entity) {

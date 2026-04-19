@@ -27,8 +27,8 @@ use crate::world::spatial::{SpatialHashGrid, WallSpatialGrid};
 
 /// Tracks keyboard focus index for pause menu navigation.
 #[derive(Resource, Default)]
-struct PauseNavFocus {
-    index: usize,
+pub(crate) struct PauseNavFocus {
+    pub(crate) index: usize,
 }
 
 pub struct PauseMenuPlugin;
@@ -89,7 +89,7 @@ impl Default for StatsTimer {
 
 // ── Escape Key Handler ──
 
-fn handle_escape_key(
+pub(crate) fn handle_escape_key(
     mut commands: Commands,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut overlay: ResMut<InGameOverlay>,
@@ -145,6 +145,9 @@ fn handle_escape_key(
         InGameOverlay::Spectating => {
             *overlay = InGameOverlay::PauseMenu;
             spawn_pause_overlay(&mut commands, &fonts, &theme, PausePanel::Main, *net_role);
+        }
+        InGameOverlay::HowToPlay => {
+            // Handled by guide_popup::handle_guide_escape
         }
     }
 }

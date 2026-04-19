@@ -121,6 +121,7 @@ impl Plugin for DebugPlugin {
                     sync_resource_debug_tweaks,
                     sync_item_debug_tweaks,
                     sync_night_wave_tweaks,
+                    sync_combat_tuning_tweaks,
                     sync_ai_debug_tweaks,
                     sync_network_debug_tweaks,
                     initialize_debug_folder_defaults,
@@ -380,6 +381,8 @@ const NET_CONN_FOLDER: &str = "Network/Connection";
 const NET_TRAFFIC_FOLDER: &str = "Network/Traffic";
 const GRASS_FOLDER: &str = "Visuals/Grass";
 const NIGHT_SPAWNS_FOLDER: &str = "Game/Night Spawns";
+const COMBAT_TUNING_FOLDER: &str = "Combat/Tuning";
+const COMBAT_STATE_FOLDER: &str = "Combat/State";
 
 fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
     let grass_defaults = GrassDebugSettings::default();
@@ -539,6 +542,117 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
 
     register_grass_debug_tweaks(&mut tweaks, &grass_defaults);
     register_night_wave_tweaks(&mut tweaks);
+    register_combat_tuning_tweaks(&mut tweaks);
+}
+
+// Combat tuning sliders. `CombatTuning` is read every FixedUpdate tick by the
+// combat pipeline — diverging values would desync lockstep peers. Sliders are
+// only mirrored back to the resource when `NetRole::Offline`; online sessions
+// see the authoritative values reflected read-only.
+fn register_combat_tuning_tweaks(tweaks: &mut DebugTweaks) {
+    let defaults = crate::types::CombatTuning::default();
+
+    // Stance multipliers (index 1 = Defensive, 2 = Aggressive; Passive is always 0).
+    tweaks.add_float(
+        COMBAT_TUNING_FOLDER,
+        "Scan Mul (Defensive)",
+        defaults.scan_multipliers[1],
+        0.0,
+        4.0,
+        0.05,
+    );
+    tweaks.add_float(
+        COMBAT_TUNING_FOLDER,
+        "Scan Mul (Aggressive)",
+        defaults.scan_multipliers[2],
+        0.0,
+        4.0,
+        0.05,
+    );
+    tweaks.add_float(
+        COMBAT_TUNING_FOLDER,
+        "Leash Dist (Defensive)",
+        defaults.leash_distances[1],
+        0.0,
+        80.0,
+        0.5,
+    );
+    tweaks.add_float(
+        COMBAT_TUNING_FOLDER,
+        "Leash Dist (Aggressive)",
+        defaults.leash_distances[2],
+        0.0,
+        200.0,
+        1.0,
+    );
+
+    // Target-lock timing.
+    tweaks.add_float(
+        COMBAT_TUNING_FOLDER,
+        "Manual Lock (s)",
+        defaults.manual_target_lock_secs,
+        0.0,
+        4.0,
+        0.05,
+    );
+    tweaks.add_float(
+        COMBAT_TUNING_FOLDER,
+        "Auto Lock (s)",
+        defaults.auto_target_lock_secs,
+        0.0,
+        4.0,
+        0.05,
+    );
+    tweaks.add_float(
+        COMBAT_TUNING_FOLDER,
+        "Retarget Grace (s)",
+        defaults.retarget_grace_secs,
+        0.0,
+        3.0,
+        0.05,
+    );
+    tweaks.add_float(
+        COMBAT_TUNING_FOLDER,
+        "Retarget Margin",
+        defaults.retarget_score_margin,
+        0.0,
+        2.0,
+        0.02,
+    );
+    tweaks.add_float(
+        COMBAT_TUNING_FOLDER,
+        "Range Buffer",
+        defaults.range_stay_buffer,
+        0.0,
+        2.0,
+        0.02,
+    );
+    tweaks.add_float(
+        COMBAT_TUNING_FOLDER,
+        "Ally Assist Range",
+        defaults.ally_alert_assist_range,
+        0.0,
+        60.0,
+        0.5,
+    );
+    tweaks.add_readonly(COMBAT_TUNING_FOLDER, "Status", "Offline: editable");
+
+    // Per-frame work counters, mirrored from CombatBudgetState.
+    tweaks.add_readonly(COMBAT_STATE_FOLDER, "Target Rescans / frame", "0");
+    tweaks.add_readonly(COMBAT_STATE_FOLDER, "Slot Refreshes / frame", "0");
+    tweaks.add_readonly(COMBAT_STATE_FOLDER, "Repath Requests / frame", "0");
+    // Chase timeouts live on `OrderSource` and are compile-time constants —
+    // shown read-only so the UI reflects what the sim actually uses.
+    tweaks.add_readonly(
+        COMBAT_STATE_FOLDER,
+        "Chase Timeouts (M/R/A)",
+        &format!(
+            "{:.0}s / {:.0}s / {:.0}s",
+            crate::types::OrderSource::Manual.chase_timeout_secs(),
+            crate::types::OrderSource::Retaliate.chase_timeout_secs(),
+            crate::types::OrderSource::Auto.chase_timeout_secs(),
+        ),
+    );
 }
 
 // Night-wave tuning sliders. These write into `NightWaveState`, which is
@@ -549,34 +663,10 @@ fn register_entity_debug_tweaks(mut tweaks: ResMut<DebugTweaks>) {
 fn register_night_wave_tweaks(tweaks: &mut DebugTweaks) {
     let defaults = crate::simulation::mobs::NightWaveState::default();
     tweaks.add_bool(NIGHT_SPAWNS_FOLDER, "Enabled", defaults.enabled);
-    tweaks.add_float(
-        NIGHT_SPAWNS_FOLDER,
-        "Base Count",
-        defaults.base_count,
-        0.0,
-        40.0,
-        1.0,
-    );
-    tweaks.add_float(
-        NIGHT_SPAWNS_FOLDER,
-        "Growth Per Night",
-        defaults.growth_per_night,
-        0.0,
-        20.0,
-        0.5,
-    );
-    tweaks.add_float(
-        NIGHT_SPAWNS_FOLDER,
-        "Min Player Distance",
-        defaults.min_player_dist,
-        10.0,
-        200.0,
-        5.0,
-    );
     tweaks.add_button(NIGHT_SPAWNS_FOLDER, "Force Wave Now");
     tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Night #", "0");
-    tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Last Wave Size", "0");
-    tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Last Spawn Tick", "--");
+    tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Wave Progress", "—");
+    tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Killed This Wave", "0");
     tweaks.add_readonly(NIGHT_SPAWNS_FOLDER, "Status", "Offline: editable");
 }
 
@@ -1285,6 +1375,7 @@ fn sync_camera_debug_tweaks(mut tweaks: ResMut<DebugTweaks>, mut tuning: ResMut<
     tweaks.set_float_if_changed(CAMERA_FOLDER, "Map Edge Margin", tuning.map_edge_margin);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn sync_entity_spawn_tweaks(
     mut commands: Commands,
     mut tweaks: ResMut<DebugTweaks>,
@@ -1293,16 +1384,34 @@ fn sync_entity_spawn_tweaks(
     time: Res<Time>,
     registry: Res<BlueprintRegistry>,
     cache: Res<EntityVisualCache>,
-    building_models: Option<Res<BuildingModelAssets>>,
-    unit_models: Option<Res<UnitModelAssets>>,
-    height_map: Option<Res<HeightMap>>,
+    // Bundle the three asset/world resources into a single SystemParam tuple
+    // so we stay under Bevy's 16-argument cap on `IntoSystem`.
+    spawn_assets: (
+        Option<Res<BuildingModelAssets>>,
+        Option<Res<UnitModelAssets>>,
+        Option<Res<HeightMap>>,
+    ),
     camera_q: Query<&RtsCamera>,
     cam_query: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mouse: Res<ButtonInput<MouseButton>>,
     panel_state: Res<DebugPanelState>,
     ui_press: Res<UiPressActive>,
+    mob_targets: (
+        Query<(Entity, &Transform, &Faction), With<crate::types::Unit>>,
+        Query<
+            (Entity, &Transform, &Faction, Option<&EntityKind>),
+            (
+                With<crate::types::Building>,
+                Without<crate::types::Unit>,
+                Without<crate::types::FloorTile>,
+            ),
+        >,
+        Query<&Faction>,
+    ),
 ) {
+    let (building_models, unit_models, height_map) = spawn_assets;
+    let (target_units, target_buildings, target_factions) = mob_targets;
     // Update click-to-spawn from toggle
     if let Some(v) = tweaks.get_bool(SPAWN_FOLDER, "Click to Place") {
         spawn_state.click_to_spawn = v;
@@ -1357,6 +1466,18 @@ fn sync_entity_spawn_tweaks(
                 hm,
             );
             commands.entity(entity).insert(faction);
+            finalize_debug_mob_spawn(
+                &mut commands,
+                entity,
+                kind,
+                pivot,
+                &registry,
+                hm,
+                time.elapsed_secs_f64(),
+                &target_units,
+                &target_buildings,
+                &target_factions,
+            );
             spawn_state.status_text = format!("Spawned {}!", kind.display_name());
             spawn_state.status_timer = 1.5;
         }
@@ -1381,10 +1502,61 @@ fn sync_entity_spawn_tweaks(
                 hm,
             );
             commands.entity(entity).insert(faction);
+            finalize_debug_mob_spawn(
+                &mut commands,
+                entity,
+                kind,
+                world_pos,
+                &registry,
+                hm,
+                time.elapsed_secs_f64(),
+                &target_units,
+                &target_buildings,
+                &target_factions,
+            );
             spawn_state.status_text = format!("Placed {}!", kind.display_name());
             spawn_state.status_timer = 1.0;
         }
     }
+}
+
+/// Mobs spawned via the debug panel need the same tier + engagement
+/// initialization as wave-spawned mobs, otherwise they have no MobTier
+/// (no tint), no MobEngagement (no auto-target), and just stand idle.
+#[allow(clippy::too_many_arguments)]
+fn finalize_debug_mob_spawn(
+    commands: &mut Commands,
+    entity: Entity,
+    kind: EntityKind,
+    pos: Vec3,
+    registry: &BlueprintRegistry,
+    height_map: &HeightMap,
+    now: f64,
+    units: &Query<(Entity, &Transform, &Faction), With<crate::types::Unit>>,
+    buildings: &Query<
+        (Entity, &Transform, &Faction, Option<&EntityKind>),
+        (
+            With<crate::types::Building>,
+            Without<crate::types::Unit>,
+            Without<crate::types::FloorTile>,
+        ),
+    >,
+    factions: &Query<&Faction>,
+) {
+    if !matches!(kind, EntityKind::Goblin) {
+        return;
+    }
+    crate::simulation::mobs::apply_mob_tier(
+        commands,
+        entity,
+        registry,
+        height_map,
+        pos,
+        crate::types::MobTier::Runner,
+    );
+    crate::simulation::mobs::init_mob_engagement(
+        commands, entity, pos, now, units, buildings, factions,
+    );
 }
 
 fn sync_runtime_debug_tweaks(
@@ -1448,15 +1620,6 @@ fn sync_night_wave_tweaks(
         if let Some(v) = tweaks.get_bool(NIGHT_SPAWNS_FOLDER, "Enabled") {
             wave.enabled = v;
         }
-        if let Some(v) = tweaks.get_float(NIGHT_SPAWNS_FOLDER, "Base Count") {
-            wave.base_count = v;
-        }
-        if let Some(v) = tweaks.get_float(NIGHT_SPAWNS_FOLDER, "Growth Per Night") {
-            wave.growth_per_night = v;
-        }
-        if let Some(v) = tweaks.get_float(NIGHT_SPAWNS_FOLDER, "Min Player Distance") {
-            wave.min_player_dist = v;
-        }
 
         for (folder, label) in &pressed.pressed {
             if folder == NIGHT_SPAWNS_FOLDER && label == "Force Wave Now" {
@@ -1464,20 +1627,7 @@ fn sync_night_wave_tweaks(
             }
         }
     } else {
-        // Reflect authoritative state back into the sliders so readers see
-        // the real values, not stale UI state.
         tweaks.set_bool_if_changed(NIGHT_SPAWNS_FOLDER, "Enabled", wave.enabled);
-        tweaks.set_float_if_changed(NIGHT_SPAWNS_FOLDER, "Base Count", wave.base_count);
-        tweaks.set_float_if_changed(
-            NIGHT_SPAWNS_FOLDER,
-            "Growth Per Night",
-            wave.growth_per_night,
-        );
-        tweaks.set_float_if_changed(
-            NIGHT_SPAWNS_FOLDER,
-            "Min Player Distance",
-            wave.min_player_dist,
-        );
     }
 
     // Readonly readouts always reflect state.
@@ -1486,15 +1636,137 @@ fn sync_night_wave_tweaks(
         "Night #",
         &wave.night_count.to_string(),
     );
+    let (progress, killed) = match wave.active.as_ref() {
+        Some(active) => (
+            format!("{}/{}", active.spawned, active.total),
+            active.killed.to_string(),
+        ),
+        None => ("—".to_string(), "0".to_string()),
+    };
+    tweaks.set_readonly_if_changed(NIGHT_SPAWNS_FOLDER, "Wave Progress", &progress);
+    tweaks.set_readonly_if_changed(NIGHT_SPAWNS_FOLDER, "Killed This Wave", &killed);
+}
+
+fn sync_combat_tuning_tweaks(
+    mut tweaks: ResMut<DebugTweaks>,
+    mut tuning: ResMut<crate::types::CombatTuning>,
+    budget_state: Res<crate::simulation::combat::CombatBudgetState>,
+    net_role: Option<Res<crate::infrastructure::multiplayer::NetRole>>,
+) {
+    let offline = net_role
+        .as_deref()
+        .map(|role| *role == crate::infrastructure::multiplayer::NetRole::Offline)
+        .unwrap_or(true);
+
+    let status = if offline {
+        "Offline: editable"
+    } else {
+        "Online: sliders read-only (desync-safe)"
+    };
+    tweaks.set_readonly_if_changed(COMBAT_TUNING_FOLDER, "Status", status);
+
+    if offline {
+        // Slider → resource writes.
+        if let Some(v) = tweaks.get_float(COMBAT_TUNING_FOLDER, "Scan Mul (Defensive)") {
+            tuning.scan_multipliers[1] = v;
+        }
+        if let Some(v) = tweaks.get_float(COMBAT_TUNING_FOLDER, "Scan Mul (Aggressive)") {
+            tuning.scan_multipliers[2] = v;
+        }
+        if let Some(v) = tweaks.get_float(COMBAT_TUNING_FOLDER, "Leash Dist (Defensive)") {
+            tuning.leash_distances[1] = v;
+        }
+        if let Some(v) = tweaks.get_float(COMBAT_TUNING_FOLDER, "Leash Dist (Aggressive)") {
+            tuning.leash_distances[2] = v;
+        }
+        if let Some(v) = tweaks.get_float(COMBAT_TUNING_FOLDER, "Manual Lock (s)") {
+            tuning.manual_target_lock_secs = v;
+        }
+        if let Some(v) = tweaks.get_float(COMBAT_TUNING_FOLDER, "Auto Lock (s)") {
+            tuning.auto_target_lock_secs = v;
+        }
+        if let Some(v) = tweaks.get_float(COMBAT_TUNING_FOLDER, "Retarget Grace (s)") {
+            tuning.retarget_grace_secs = v;
+        }
+        if let Some(v) = tweaks.get_float(COMBAT_TUNING_FOLDER, "Retarget Margin") {
+            tuning.retarget_score_margin = v;
+        }
+        if let Some(v) = tweaks.get_float(COMBAT_TUNING_FOLDER, "Range Buffer") {
+            tuning.range_stay_buffer = v;
+        }
+        if let Some(v) = tweaks.get_float(COMBAT_TUNING_FOLDER, "Ally Assist Range") {
+            tuning.ally_alert_assist_range = v;
+        }
+    } else {
+        // Reflect authoritative values back so online viewers see reality.
+        tweaks.set_float_if_changed(
+            COMBAT_TUNING_FOLDER,
+            "Scan Mul (Defensive)",
+            tuning.scan_multipliers[1],
+        );
+        tweaks.set_float_if_changed(
+            COMBAT_TUNING_FOLDER,
+            "Scan Mul (Aggressive)",
+            tuning.scan_multipliers[2],
+        );
+        tweaks.set_float_if_changed(
+            COMBAT_TUNING_FOLDER,
+            "Leash Dist (Defensive)",
+            tuning.leash_distances[1],
+        );
+        tweaks.set_float_if_changed(
+            COMBAT_TUNING_FOLDER,
+            "Leash Dist (Aggressive)",
+            tuning.leash_distances[2],
+        );
+        tweaks.set_float_if_changed(
+            COMBAT_TUNING_FOLDER,
+            "Manual Lock (s)",
+            tuning.manual_target_lock_secs,
+        );
+        tweaks.set_float_if_changed(
+            COMBAT_TUNING_FOLDER,
+            "Auto Lock (s)",
+            tuning.auto_target_lock_secs,
+        );
+        tweaks.set_float_if_changed(
+            COMBAT_TUNING_FOLDER,
+            "Retarget Grace (s)",
+            tuning.retarget_grace_secs,
+        );
+        tweaks.set_float_if_changed(
+            COMBAT_TUNING_FOLDER,
+            "Retarget Margin",
+            tuning.retarget_score_margin,
+        );
+        tweaks.set_float_if_changed(
+            COMBAT_TUNING_FOLDER,
+            "Range Buffer",
+            tuning.range_stay_buffer,
+        );
+        tweaks.set_float_if_changed(
+            COMBAT_TUNING_FOLDER,
+            "Ally Assist Range",
+            tuning.ally_alert_assist_range,
+        );
+    }
+
+    // Per-frame state readouts. These reflect last frame's counters — the
+    // budget resource is reset at the top of each FixedUpdate Command set.
     tweaks.set_readonly_if_changed(
-        NIGHT_SPAWNS_FOLDER,
-        "Last Wave Size",
-        &wave.last_wave_size.to_string(),
+        COMBAT_STATE_FOLDER,
+        "Target Rescans / frame",
+        &budget_state.target_rescans_this_frame.to_string(),
     );
     tweaks.set_readonly_if_changed(
-        NIGHT_SPAWNS_FOLDER,
-        "Last Spawn Tick",
-        &wave.last_wave_tick.to_string(),
+        COMBAT_STATE_FOLDER,
+        "Slot Refreshes / frame",
+        &budget_state.slot_refreshes_this_frame.to_string(),
+    );
+    tweaks.set_readonly_if_changed(
+        COMBAT_STATE_FOLDER,
+        "Repath Requests / frame",
+        &budget_state.repath_requests_this_frame.to_string(),
     );
 }
 

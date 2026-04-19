@@ -1,4 +1,3 @@
-pub mod abilities;
 pub mod ages;
 pub mod ai;
 pub mod buildings;
@@ -24,12 +23,17 @@ impl PluginGroup for SimulationPlugins {
             .add(selection::SelectionPlugin)
             .add(resources::ResourcesPlugin)
             .add(buildings::BuildingsPlugin)
-            .add(combat::CombatPlugin)
             .add(combat::CombatIntentsPlugin)
-            .add(combat::CombatBudgetPlugin)
             .add(combat::CombatProjectilesPlugin)
-            .add(combat::CombatSlotsPlugin)
-            .add(abilities::AbilitiesPlugin)
+            .add(combat::AbilityRegistryPlugin)
+            .add(combat::CombatBrainPlugin)
+            .add(combat::CombatAbilityPlugin)
+            .add(combat::CombatBehaviorPlugin)
+            .add(combat::CombatApproachPlugin)
+            .add(combat::CombatTargetingPlugin)
+            .add(combat::CombatRetaliationPlugin)
+            .add(combat::CombatLeashPlugin)
+            .add(combat::CombatDeathPlugin)
             .add(mobs::MobsPlugin)
             .add(items::ItemsPlugin)
             .add(ai::AiPlugin)

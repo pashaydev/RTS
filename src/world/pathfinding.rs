@@ -107,6 +107,10 @@ pub struct NavGridDirty {
     pub full: bool,
     /// Buildings added this frame — only stamp their footprints (fast path).
     pub added: Vec<(Vec3, f32, f32)>, // (pos, footprint radius+padding, margin_radius)
+    /// Terrain regions whose heights changed (e.g. floor flattening). Each entry
+    /// re-samples heights + terrain base costs in the area and re-stamps any
+    /// overlapping building/wall obstacles.
+    pub terrain_updated: Vec<(Vec2, f32)>, // (center xz, radius)
 }
 
 pub struct PathRequest {
@@ -365,83 +369,21 @@ fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut comm
         }
     }
 
-    // Mark terrain costs from biome and height
+    // Mark terrain costs from biome and height.
     for gz in 0..grid_size {
         for gx in 0..grid_size {
             let idx = gz * grid_size + gx;
-            let wx = gx as f32 * step - half_map;
-            let wz = gz as f32 * step - half_map;
-
-            if wx.abs() > playable_half || wz.abs() > playable_half {
-                costs[idx] = 0;
-                continue;
-            }
-
-            let biome = biome_map.get_biome(wx, wz);
-            let h = heights[idx];
-
-            // Check slope to all 8 neighbours. At NAV_GRID_STEP=2.5,
-            // MAX_STEP_HEIGHT_DELTA=1.8 corresponds to ~36° — anything steeper is a cliff.
-            let max_slope = MAX_STEP_HEIGHT_DELTA;
-            let steep_slope = 1.0; // height diff that starts adding noticeable cost
-            let mut max_diff: f32 = 0.0;
-            // Sub-sample the midpoint between cells too, so cliffs that fall
-            // between grid nodes still register as impassable.
-            for dz in -1i32..=1 {
-                for dx in -1i32..=1 {
-                    if dx == 0 && dz == 0 {
-                        continue;
-                    }
-                    let nx = gx as i32 + dx;
-                    let nz = gz as i32 + dz;
-                    if nx < 0 || nz < 0 || nx >= grid_size as i32 || nz >= grid_size as i32 {
-                        continue;
-                    }
-                    let nh = heights[nz as usize * grid_size + nx as usize];
-                    let diag_scale = if dx != 0 && dz != 0 { 1.4142 } else { 1.0 };
-                    let normalized = (h - nh).abs() / diag_scale;
-                    if normalized > max_diff {
-                        max_diff = normalized;
-                    }
-                    // Mid-point sub-sample (catches sub-grid cliffs)
-                    let mwx = wx + dx as f32 * step * 0.5;
-                    let mwz = wz + dz as f32 * step * 0.5;
-                    let mh = height_map.sample(mwx, mwz);
-                    let mid_diff = (h - mh).abs() * 2.0 / diag_scale;
-                    if mid_diff > max_diff {
-                        max_diff = mid_diff;
-                    }
-                }
-            }
-
-            if max_diff > max_slope {
-                costs[idx] = 0; // impassable cliff
-                continue;
-            }
-
-            match biome {
-                Biome::Water => {
-                    costs[idx] = 0; // impassable
-                }
-                Biome::Mountain => {
-                    // Mountains are passable but expensive
-                    if h > 8.0 {
-                        costs[idx] = 0; // too steep
-                    } else {
-                        costs[idx] = 20;
-                    }
-                }
-                _ => {
-                    // Height gradient cost + slope penalty
-                    let height_cost = (h.abs() * 2.0).min(30.0) as u8;
-                    let slope_cost = if max_diff > steep_slope {
-                        ((max_diff - steep_slope) * 10.0).min(30.0) as u8
-                    } else {
-                        0
-                    };
-                    costs[idx] = 1 + height_cost + slope_cost;
-                }
-            }
+            costs[idx] = compute_cell_terrain_cost(
+                &heights,
+                &height_map,
+                &biome_map,
+                gx,
+                gz,
+                grid_size,
+                step,
+                half_map,
+                playable_half,
+            );
         }
     }
 
@@ -456,6 +398,86 @@ fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut comm
         revision: 1,
     });
     commands.insert_resource(NavGridDirty::default());
+}
+
+/// Terrain-only cost for a single nav-grid cell. Matches the pass in `build_nav_grid`
+/// so partial refreshes produce identical values to a full rebuild.
+fn compute_cell_terrain_cost(
+    heights: &[f32],
+    height_map: &HeightMap,
+    biome_map: &BiomeMap,
+    gx: usize,
+    gz: usize,
+    grid_size: usize,
+    step: f32,
+    half_map: f32,
+    playable_half: f32,
+) -> u8 {
+    let idx = gz * grid_size + gx;
+    let wx = gx as f32 * step - half_map;
+    let wz = gz as f32 * step - half_map;
+
+    if wx.abs() > playable_half || wz.abs() > playable_half {
+        return 0;
+    }
+
+    let biome = biome_map.get_biome(wx, wz);
+    let h = heights[idx];
+
+    // Check slope to all 8 neighbours. At NAV_GRID_STEP=2.5,
+    // MAX_STEP_HEIGHT_DELTA=1.8 corresponds to ~36° — anything steeper is a cliff.
+    let max_slope = MAX_STEP_HEIGHT_DELTA;
+    let steep_slope = 1.0;
+    let mut max_diff: f32 = 0.0;
+    for dz in -1i32..=1 {
+        for dx in -1i32..=1 {
+            if dx == 0 && dz == 0 {
+                continue;
+            }
+            let nx = gx as i32 + dx;
+            let nz = gz as i32 + dz;
+            if nx < 0 || nz < 0 || nx >= grid_size as i32 || nz >= grid_size as i32 {
+                continue;
+            }
+            let nh = heights[nz as usize * grid_size + nx as usize];
+            let diag_scale = if dx != 0 && dz != 0 { 1.4142 } else { 1.0 };
+            let normalized = (h - nh).abs() / diag_scale;
+            if normalized > max_diff {
+                max_diff = normalized;
+            }
+            let mwx = wx + dx as f32 * step * 0.5;
+            let mwz = wz + dz as f32 * step * 0.5;
+            let mh = height_map.sample(mwx, mwz);
+            let mid_diff = (h - mh).abs() * 2.0 / diag_scale;
+            if mid_diff > max_diff {
+                max_diff = mid_diff;
+            }
+        }
+    }
+
+    if max_diff > max_slope {
+        return 0;
+    }
+
+    match biome {
+        Biome::Water => 0,
+        Biome::Mountain => {
+            if h > 8.0 {
+                0
+            } else {
+                20
+            }
+        }
+        _ => {
+            let height_cost = (h.abs() * 2.0).min(30.0) as u8;
+            let slope_cost = if max_diff > steep_slope {
+                ((max_diff - steep_slope) * 10.0).min(30.0) as u8
+            } else {
+                0
+            };
+            1 + height_cost + slope_cost
+        }
+    }
 }
 
 /// Track nav grid changes. New buildings use a fast incremental stamp;
@@ -508,26 +530,30 @@ fn refresh_nav_grid(
     mut nav_grid: ResMut<NavGrid>,
     buildings: Query<(&Transform, &BuildingFootprint, &BuildingState), With<Building>>,
     wall_grid: Res<WallSpatialGrid>,
+    height_map: Res<HeightMap>,
+    biome_map: Res<BiomeMap>,
 ) {
     let has_adds = !dirty.added.is_empty();
+    let has_terrain = !dirty.terrain_updated.is_empty();
     let needs_full = dirty.full;
 
-    if !needs_full && !has_adds {
+    if !needs_full && !has_adds && !has_terrain {
         return;
     }
 
     let gs = nav_grid.grid_size;
+    let step = nav_grid.step;
 
     if needs_full {
         // ── Full rebuild (building removed / state changed) ──
         dirty.full = false;
         dirty.added.clear();
+        dirty.terrain_updated.clear();
 
         // Reset to cached terrain costs.
         for i in 0..nav_grid.costs.len() {
             nav_grid.costs[i] = nav_grid.terrain_base_costs[i];
         }
-        let step = nav_grid.step;
 
         // Stamp ALL building footprints.
         for (tf, footprint, state) in &buildings {
@@ -548,6 +574,83 @@ fn refresh_nav_grid(
             }
         }
     } else {
+        // ── Partial terrain refresh (floors flattening ground, etc.) ──
+        if has_terrain {
+            let areas: Vec<(Vec2, f32)> = dirty.terrain_updated.drain(..).collect();
+            let half_map = nav_grid.half_map;
+            let playable_half = playable_half_map(height_map.map_size);
+
+            // Re-sample heights first — extra margin so slope checks against
+            // neighbours use the new data on both sides of the boundary.
+            let height_margin = step * 2.0;
+            for (center, radius) in &areas {
+                let expanded = *radius + height_margin;
+                let (min_gx, min_gz) =
+                    nav_grid.world_to_grid(center.x - expanded, center.y - expanded);
+                let (max_gx, max_gz) =
+                    nav_grid.world_to_grid(center.x + expanded, center.y + expanded);
+                for gz in min_gz..=max_gz.min(gs - 1) {
+                    for gx in min_gx..=max_gx.min(gs - 1) {
+                        let wx = gx as f32 * step - half_map;
+                        let wz = gz as f32 * step - half_map;
+                        let idx = nav_grid.index(gx, gz);
+                        nav_grid.heights[idx] = height_map.sample(wx, wz);
+                    }
+                }
+            }
+
+            // Recompute terrain base cost and overwrite costs in the affected
+            // region. Any building/wall that overlaps is re-stamped below, so
+            // obstacle coverage is preserved.
+            for (center, radius) in &areas {
+                let (min_gx, min_gz) = nav_grid.world_to_grid(center.x - *radius, center.y - *radius);
+                let (max_gx, max_gz) = nav_grid.world_to_grid(center.x + *radius, center.y + *radius);
+                for gz in min_gz..=max_gz.min(gs - 1) {
+                    for gx in min_gx..=max_gx.min(gs - 1) {
+                        let idx = nav_grid.index(gx, gz);
+                        let new_cost = compute_cell_terrain_cost(
+                            &nav_grid.heights,
+                            &height_map,
+                            &biome_map,
+                            gx,
+                            gz,
+                            gs,
+                            step,
+                            half_map,
+                            playable_half,
+                        );
+                        nav_grid.terrain_base_costs[idx] = new_cost;
+                        nav_grid.costs[idx] = new_cost;
+                    }
+                }
+            }
+
+            // Re-stamp any obstacle whose footprint overlaps an affected area.
+            for (tf, footprint, state) in &buildings {
+                if *state != BuildingState::Complete
+                    && *state != BuildingState::UnderConstruction
+                {
+                    continue;
+                }
+                let radius = footprint.0 + 0.8;
+                let margin_radius = radius + step;
+                if !obstacle_overlaps_any(tf.translation, margin_radius, &areas) {
+                    continue;
+                }
+                stamp_obstacle(&mut nav_grid, tf.translation, radius, margin_radius, gs);
+            }
+            for cells in wall_grid.cells.values() {
+                for &(_entity, wall_pos, wall_fp, _faction, _stable_id) in cells {
+                    let radius = wall_fp + 0.6;
+                    let margin_radius = radius + step;
+                    if !obstacle_overlaps_any(wall_pos, margin_radius, &areas) {
+                        continue;
+                    }
+                    stamp_obstacle(&mut nav_grid, wall_pos, radius, margin_radius, gs);
+                }
+            }
+        }
+
         // ── Incremental: only stamp newly added buildings (fast path) ──
         let added: Vec<_> = dirty.added.drain(..).collect();
         for (pos, radius, margin_radius) in added {
@@ -556,6 +659,15 @@ fn refresh_nav_grid(
     }
 
     nav_grid.revision = nav_grid.revision.wrapping_add(1).max(1);
+}
+
+fn obstacle_overlaps_any(pos: Vec3, margin_radius: f32, areas: &[(Vec2, f32)]) -> bool {
+    areas.iter().any(|(center, radius)| {
+        let dx = pos.x - center.x;
+        let dz = pos.z - center.y;
+        let reach = radius + margin_radius;
+        dx * dx + dz * dz <= reach * reach
+    })
 }
 
 fn invalidate_paths_on_nav_revision(

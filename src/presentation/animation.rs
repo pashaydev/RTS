@@ -198,12 +198,7 @@ fn drive_animations(
             &EntityKind,
             Option<&UnitState>,
             Option<&MoveTarget>,
-            Option<&AttackTarget>,
-            Option<&AttackRange>,
-            Option<&PatrolState>,
-            Option<&AttackWindup>,
-            Option<&AttackRecovery>,
-            Option<&CastingAbility>,
+            Option<&crate::simulation::combat::UnitBrain>,
             &Transform,
             Option<&MovementSmoothing>,
         ),
@@ -234,16 +229,14 @@ fn drive_animations(
         kind,
         unit_state,
         move_target,
-        attack_target,
-        attack_range,
-        patrol_state,
-        attack_windup,
-        attack_recovery,
-        casting_ability,
+        brain,
         my_tf,
         opt_smoothing,
     ) in &mut anim_controllers
     {
+        use crate::simulation::combat::BrainState;
+        let brain_state = brain.map(|b| b.state);
+        let brain_target = brain.and_then(|b| b.target);
         // Tick cooldown before any throttle skip so cooldown still advances
         // for skipped frames.
         controller.change_cooldown = (controller.change_cooldown - dt).max(0.0);
@@ -261,7 +254,6 @@ fn drive_animations(
             }
         }
 
-        let patrol_kind = patrol_state.map(|p| p.state);
         let desired = if health.current <= 0.0 {
             // Randomize death variant based on entity index for variety
             if anim_ref.0.to_bits() % 2 == 0 {
@@ -272,8 +264,11 @@ fn drive_animations(
         } else if hit_reactions.get(anim_entity).is_ok() {
             // Brief hit reaction flinch
             AnimState::Damage
-        } else if casting_ability.is_some() {
-            // Currently casting an ability — use CastA for casters, AttackA for melee
+        } else if matches!(
+            brain_state,
+            Some(BrainState::CastPrep | BrainState::Channeling)
+        ) {
+            // Pre-windup cast prep / channel
             if matches!(kind, EntityKind::Mage | EntityKind::Priest) {
                 AnimState::CastA
             } else {
@@ -311,39 +306,24 @@ fn drive_animations(
             )
         }) {
             AnimState::Walk
-        } else if matches!(
-            patrol_kind,
-            Some(
-                PatrolStateKind::Patrolling | PatrolStateKind::Chasing | PatrolStateKind::Returning
-            )
-        ) {
-            AnimState::Walk
-        } else if attack_windup.is_some() {
+        } else if matches!(brain_state, Some(BrainState::Windup | BrainState::Impact)) {
             if matches!(kind, EntityKind::Mage | EntityKind::Priest) {
                 AnimState::CastA
             } else {
                 AnimState::AttackA
             }
-        } else if attack_recovery.is_some() {
+        } else if matches!(brain_state, Some(BrainState::Recovery)) {
             AnimState::Idle
-        } else if matches!(patrol_kind, Some(PatrolStateKind::Attacking)) {
-            AnimState::AttackA
-        } else if let Some(at) = attack_target {
-            if let Ok(target_tf) = target_transforms.get(at.0) {
-                let dist = my_tf.translation.distance(target_tf.translation);
-                let range = attack_range.map(|r| r.0).unwrap_or(2.0);
-                if dist <= range * 1.5 {
-                    // Use CastA for staff-type casters, AttackA for others
-                    if matches!(kind, EntityKind::Mage | EntityKind::Priest) {
-                        AnimState::CastA
-                    } else {
-                        AnimState::AttackA
-                    }
-                } else {
-                    AnimState::Walk
-                }
-            } else {
+        } else if matches!(brain_state, Some(BrainState::InRange)) {
+            // Target in range but between swings — stance idle.
+            AnimState::Idle
+        } else if let Some(t) = brain_target {
+            if matches!(brain_state, Some(BrainState::Chasing))
+                && target_transforms.get(t).is_ok()
+            {
                 AnimState::Walk
+            } else {
+                AnimState::Idle
             }
         } else if move_target.is_some() {
             // Pick Walk vs Run with hysteresis to prevent oscillation
@@ -433,8 +413,7 @@ fn face_movement_direction(
                 &mut Transform,
                 Option<&MoveTarget>,
                 Option<&NavPath>,
-                Option<&AttackTarget>,
-                Option<&PatrolState>,
+                Option<&crate::simulation::combat::UnitBrain>,
                 Option<&IdleBehavior>,
                 Option<&UnitState>,
             ),
@@ -458,19 +437,18 @@ fn face_movement_direction(
         mut transform,
         move_target,
         nav_path,
-        attack_target,
-        patrol_state,
+        brain,
         idle_behavior,
         unit_state,
     ) in &mut queries.p1()
     {
-        let target_pos = if let Some(at) = attack_target {
-            if at.0 != entity {
-                // Try unit positions first, then non-unit (buildings, etc.)
+        let attack_target_entity = brain.and_then(|b| b.target);
+        let target_pos = if let Some(t) = attack_target_entity {
+            if t != entity {
                 unit_positions
-                    .get(&at.0)
+                    .get(&t)
                     .copied()
-                    .or_else(|| non_unit_transforms.get(at.0).ok().map(|tf| tf.translation))
+                    .or_else(|| non_unit_transforms.get(t).ok().map(|tf| tf.translation))
             } else {
                 None
             }
@@ -480,15 +458,6 @@ fn face_movement_direction(
                 .get(*building)
                 .ok()
                 .map(|tf| tf.translation)
-        } else if let Some(patrol) = patrol_state {
-            match patrol.state {
-                PatrolStateKind::Patrolling => patrol.patrol_target,
-                PatrolStateKind::Returning => Some(patrol.center),
-                PatrolStateKind::Chasing | PatrolStateKind::Attacking => {
-                    patrol.patrol_target.or(Some(patrol.center))
-                }
-                _ => None,
-            }
         } else if let Some(nav) = nav_path {
             nav.waypoints
                 .get(nav.current_index)
@@ -540,7 +509,6 @@ fn idle_fidget_system(
         (
             With<Unit>,
             Without<MoveTarget>,
-            Without<AttackTarget>,
             Without<FrustumCulled>,
         ),
     >,
@@ -588,7 +556,6 @@ fn idle_breathing_system(
         (
             With<Unit>,
             Without<MoveTarget>,
-            Without<AttackTarget>,
             Without<FrustumCulled>,
         ),
     >,

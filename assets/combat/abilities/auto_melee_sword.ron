@@ -1,0 +1,22 @@
+// Smoke-test ability (Phase 1).
+// Placeholder values — real stats are transcribed per-unit when the
+// pipeline goes live. This file's only job today is to exercise the RON loader.
+(
+    id: "auto_melee_sword",
+    display_name: "Sword Attack",
+    range: 1.5,
+    min_range: 0.0,
+    windup_frames: 10,
+    recovery_frames: 10,
+    damage_point_frame: 6,
+    cooldown_secs: 0.8,
+    cast_time_secs: 0.0,
+    target_type: Unit,
+    target_filter: Hostile,
+    resource_cost: {},
+    effect: Damage(
+        base: 12.0,
+        damage_type: Melee,
+        falloff: false,
+    ),
+)

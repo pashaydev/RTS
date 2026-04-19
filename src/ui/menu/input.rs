@@ -188,6 +188,11 @@ pub(crate) fn rebuild_slot_cards(
             commands.entity(child).try_despawn();
         }
         for i in 0..4 {
+            let nav_rows = if is_multiplayer {
+                Some(super::new_game::host_lobby_slot_nav(i))
+            } else {
+                None
+            };
             super::new_game::spawn_slot_card(
                 commands,
                 container,
@@ -195,6 +200,7 @@ pub(crate) fn rebuild_slot_cards(
                 config,
                 is_multiplayer,
                 lobby_players,
+                nav_rows,
                 theme,
             );
         }

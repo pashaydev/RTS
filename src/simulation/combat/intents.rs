@@ -1,32 +1,32 @@
+//! Order-entry API for external call-sites (selection, AI, mobs, UI, multiplayer).
+//!
+//! External code holds `&mut Commands` but typically not `&mut Query<UnitBrain>`,
+//! so these helpers deferred-mutate `UnitBrain` via `Commands::queue`, writing
+//! the canonical `Order` + `OrderSource` + `target_lock_until` fields. They run
+//! inline on `Commands::apply` — no extra system, no component mirroring.
+//!
+//! Also hosts `CombatIntentsPlugin`, which initialises the combat tuning /
+//! budget / slot-cache resources shared across the combat pipeline.
+
 use bevy::prelude::*;
-use bevy::time::Fixed;
 
-use crate::types::*;
+use crate::types::{
+    CombatBudget, CombatStatsDebug, CombatTuning, MeleeSlotCache, OrderSource, TaskSource,
+};
 
-const DEFAULT_COMMAND_BUFFER_TTL_SECS: f64 = 0.35;
-const DEFAULT_MANUAL_TARGET_LOCK_SECS: f64 = 1.5;
-const DEFAULT_AUTO_TARGET_LOCK_SECS: f64 = 1.1;
+use super::brain::{BrainState, Order, UnitBrain};
 
-fn make_engagement(
-    target: Option<Entity>,
-    source: IntentSource,
-    mode: EngageMode,
-    anchor: Vec3,
-    issue_time: f64,
-    persistence_secs: f64,
-) -> Engagement {
-    Engagement {
-        target,
-        source,
-        mode,
-        anchor,
-        acquired_at: issue_time,
-        last_confirmed_at: issue_time,
-        persistence_until: issue_time + persistence_secs,
-        status: EngageStatus::Acquiring,
-    }
+/// Per-tick budget counters used by AI/combat systems to cap re-path & slot refresh work.
+#[derive(Resource, Default)]
+pub struct CombatBudgetState {
+    pub repath_requests_this_frame: usize,
+    pub slot_refreshes_this_frame: usize,
+    pub target_rescans_this_frame: usize,
 }
 
+/// Initialises shared combat resources (tuning, budget counters, slot cache,
+/// debug stats) and the per-tick budget-reset system. Registered as the first
+/// combat plugin so dependent plugins find the resources already in place.
 pub struct CombatIntentsPlugin;
 
 impl Plugin for CombatIntentsPlugin {
@@ -34,14 +34,65 @@ impl Plugin for CombatIntentsPlugin {
         app.init_resource::<CombatTuning>()
             .init_resource::<CombatBudget>()
             .init_resource::<CombatStatsDebug>()
+            .init_resource::<CombatBudgetState>()
             .init_resource::<MeleeSlotCache>()
             .add_systems(
                 FixedUpdate,
-                cleanup_expired_combat_state
-                    .in_set(SimSet::Command)
-                    .run_if(in_state(AppState::InGame)),
+                reset_combat_budget_state
+                    .in_set(crate::types::SimSet::Command)
+                    .run_if(in_state(crate::types::AppState::InGame)),
             );
     }
+}
+
+fn reset_combat_budget_state(mut state: ResMut<CombatBudgetState>) {
+    state.repath_requests_this_frame = 0;
+    state.slot_refreshes_this_frame = 0;
+    state.target_rescans_this_frame = 0;
+}
+
+const DEFAULT_MANUAL_TARGET_LOCK_SECS: f64 = 1.5;
+const DEFAULT_AUTO_TARGET_LOCK_SECS: f64 = 1.1;
+
+fn queue_set_order(
+    commands: &mut Commands,
+    entity: Entity,
+    order: Order,
+    source: OrderSource,
+    issue_time: f64,
+    lock_secs: f64,
+) {
+    let order_for_closure = order.clone();
+    commands.queue(move |world: &mut World| {
+        let target = match &order_for_closure {
+            Order::Attack(t) | Order::Follow(t) => Some(*t),
+            _ => None,
+        };
+        let anchor = match &order_for_closure {
+            Order::Move(p) | Order::AttackMove(p) => Some(*p),
+            _ => None,
+        };
+        let Some(mut brain) = world.get_mut::<UnitBrain>(entity) else {
+            return;
+        };
+        brain.order = order_for_closure;
+        brain.order_source = source;
+        brain.issued_at = issue_time;
+        if let Some(t) = target {
+            brain.target = Some(t);
+            brain.target_lock_until = issue_time + lock_secs;
+        }
+        if anchor.is_some() {
+            brain.anchor = anchor;
+        }
+        // resolve_orders recomputes BrainState from Order; for stop/hold we
+        // short-circuit to Idle so in-flight animation doesn't linger.
+        if matches!(brain.order, Order::Stop | Order::Hold) {
+            if !brain.is_action_blocked() && !matches!(brain.state, BrainState::Dying) {
+                brain.state = BrainState::Idle;
+            }
+        }
+    });
 }
 
 pub fn apply_manual_move_intent(
@@ -50,25 +101,15 @@ pub fn apply_manual_move_intent(
     destination: Vec3,
     issue_time: f64,
 ) {
-    let mut ec = commands.entity(entity);
-    ec.insert(TaskSource::Manual)
-        .insert(CombatIntent::Move(destination))
-        .insert(CombatOrder::new(
-            CombatGoal::Move(destination),
-            OrderSource::Manual,
-            issue_time,
-        ))
-        .insert(BufferedCommand {
-            kind: BufferedCommandKind::Move(destination),
-            issue_time,
-            expires_at: Some(issue_time + DEFAULT_COMMAND_BUFFER_TTL_SECS),
-        })
-        .remove::<CombatTargetLock>()
-        .remove::<Engagement>()
-        .remove::<AttackCommit>()
-        .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>()
-        .remove::<PreferredResource>();
+    commands.entity(entity).insert(TaskSource::Manual);
+    queue_set_order(
+        commands,
+        entity,
+        Order::Move(destination),
+        OrderSource::Manual,
+        issue_time,
+        DEFAULT_MANUAL_TARGET_LOCK_SECS,
+    );
 }
 
 pub fn apply_manual_attack_intent(
@@ -77,36 +118,15 @@ pub fn apply_manual_attack_intent(
     target: Entity,
     issue_time: f64,
 ) {
-    let mut ec = commands.entity(entity);
-    ec.insert(TaskSource::Manual)
-        .insert(CombatIntent::Attack(target, IntentSource::Manual))
-        .insert(CombatOrder::new(
-            CombatGoal::Attack(target),
-            OrderSource::Manual,
-            issue_time,
-        ))
-        .insert(BufferedCommand {
-            kind: BufferedCommandKind::Attack(target),
-            issue_time,
-            expires_at: Some(issue_time + DEFAULT_COMMAND_BUFFER_TTL_SECS),
-        })
-        .insert(CombatTargetLock {
-            target,
-            locked_until: issue_time + DEFAULT_MANUAL_TARGET_LOCK_SECS,
-            source: IntentSource::Manual,
-        })
-        .insert(make_engagement(
-            Some(target),
-            IntentSource::Manual,
-            EngageMode::Direct,
-            Vec3::ZERO,
-            issue_time,
-            DEFAULT_MANUAL_TARGET_LOCK_SECS,
-        ))
-        .remove::<AttackCommit>()
-        .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>()
-        .remove::<PreferredResource>();
+    commands.entity(entity).insert(TaskSource::Manual);
+    queue_set_order(
+        commands,
+        entity,
+        Order::Attack(target),
+        OrderSource::Manual,
+        issue_time,
+        DEFAULT_MANUAL_TARGET_LOCK_SECS,
+    );
 }
 
 pub fn apply_manual_attack_move_intent(
@@ -115,115 +135,61 @@ pub fn apply_manual_attack_move_intent(
     destination: Vec3,
     issue_time: f64,
 ) {
-    let mut ec = commands.entity(entity);
-    ec.insert(TaskSource::Manual)
-        .insert(CombatIntent::AttackMove(destination, IntentSource::Manual))
-        .insert(
-            CombatOrder::new(
-                CombatGoal::AttackMove(destination),
-                OrderSource::Manual,
-                issue_time,
-            )
-            .with_anchor(destination),
-        )
-        .insert(BufferedCommand {
-            kind: BufferedCommandKind::AttackMove(destination),
-            issue_time,
-            expires_at: Some(issue_time + DEFAULT_COMMAND_BUFFER_TTL_SECS),
-        })
-        .insert(make_engagement(
-            None,
-            IntentSource::Manual,
-            EngageMode::AttackMove,
-            destination,
-            issue_time,
-            DEFAULT_MANUAL_TARGET_LOCK_SECS,
-        ))
-        .remove::<CombatTargetLock>()
-        .remove::<AttackCommit>()
-        .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>()
-        .remove::<PreferredResource>();
+    commands.entity(entity).insert(TaskSource::Manual);
+    queue_set_order(
+        commands,
+        entity,
+        Order::AttackMove(destination),
+        OrderSource::Manual,
+        issue_time,
+        DEFAULT_MANUAL_TARGET_LOCK_SECS,
+    );
 }
 
 pub fn apply_manual_hold_intent(commands: &mut Commands, entity: Entity, issue_time: f64) {
-    let mut ec = commands.entity(entity);
-    ec.insert(TaskSource::Manual)
-        .insert(CombatIntent::Hold)
-        .insert(CombatOrder::new(
-            CombatGoal::Hold,
-            OrderSource::Manual,
-            issue_time,
-        ))
-        .insert(BufferedCommand {
-            kind: BufferedCommandKind::Hold,
-            issue_time,
-            expires_at: Some(issue_time + DEFAULT_COMMAND_BUFFER_TTL_SECS),
-        })
-        .insert(make_engagement(
-            None,
-            IntentSource::Manual,
-            EngageMode::Hold,
-            Vec3::ZERO,
-            issue_time,
-            DEFAULT_MANUAL_TARGET_LOCK_SECS,
-        ))
-        .remove::<CombatTargetLock>()
-        .remove::<AttackCommit>()
-        .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>()
-        .remove::<PreferredResource>();
+    commands.entity(entity).insert(TaskSource::Manual);
+    queue_set_order(
+        commands,
+        entity,
+        Order::Hold,
+        OrderSource::Manual,
+        issue_time,
+        DEFAULT_MANUAL_TARGET_LOCK_SECS,
+    );
 }
 
 pub fn clear_combat_intent(commands: &mut Commands, entity: Entity, issue_time: f64) {
-    let mut ec = commands.entity(entity);
-    ec.insert(CombatIntent::None)
-        .insert(CombatOrder::new(
-            CombatGoal::Stop,
-            OrderSource::Manual,
-            issue_time,
-        ))
-        .insert(BufferedCommand {
-            kind: BufferedCommandKind::Stop,
-            issue_time,
-            expires_at: Some(issue_time + DEFAULT_COMMAND_BUFFER_TTL_SECS),
-        })
-        .remove::<CombatTargetLock>()
-        .remove::<Engagement>()
-        .remove::<AttackCommit>()
-        .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>();
+    queue_set_order(
+        commands,
+        entity,
+        Order::Stop,
+        OrderSource::Manual,
+        issue_time,
+        0.0,
+    );
 }
 
 pub fn reset_combat_state(commands: &mut Commands, entity: Entity) {
-    commands
-        .entity(entity)
-        .insert(CombatIntent::None)
-        .insert(CombatOrder::new(CombatGoal::Stop, OrderSource::Auto, 0.0))
-        .remove::<BufferedCommand>()
-        .remove::<CombatTargetLock>()
-        .remove::<Engagement>()
-        .remove::<AttackCommit>()
-        .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>();
+    queue_set_order(
+        commands,
+        entity,
+        Order::Stop,
+        OrderSource::Auto,
+        0.0,
+        0.0,
+    );
 }
 
 pub fn apply_auto_move_intent(commands: &mut Commands, entity: Entity, destination: Vec3) {
-    commands
-        .entity(entity)
-        .insert(TaskSource::Auto)
-        .insert(CombatIntent::Move(destination))
-        .insert(CombatOrder::new(
-            CombatGoal::Move(destination),
-            OrderSource::Auto,
-            0.0,
-        ))
-        .remove::<BufferedCommand>()
-        .remove::<CombatTargetLock>()
-        .remove::<Engagement>()
-        .remove::<AttackCommit>()
-        .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>();
+    commands.entity(entity).insert(TaskSource::Auto);
+    queue_set_order(
+        commands,
+        entity,
+        Order::Move(destination),
+        OrderSource::Auto,
+        0.0,
+        DEFAULT_AUTO_TARGET_LOCK_SECS,
+    );
 }
 
 pub fn apply_auto_attack_intent(
@@ -236,93 +202,25 @@ pub fn apply_auto_attack_intent(
     commands
         .entity(entity)
         .insert(TaskSource::Auto)
-        .insert(CombatIntent::Attack(target, IntentSource::Auto))
-        .insert(
-            CombatOrder::new(CombatGoal::Attack(target), OrderSource::Auto, issue_time)
-                .with_anchor(anchor),
-        )
-        .insert(CombatTargetLock {
-            target,
-            locked_until: issue_time + DEFAULT_AUTO_TARGET_LOCK_SECS,
-            source: IntentSource::Auto,
-        })
-        .insert(make_engagement(
-            Some(target),
-            IntentSource::Auto,
-            EngageMode::Direct,
-            anchor,
-            issue_time,
-            DEFAULT_AUTO_TARGET_LOCK_SECS,
-        ))
-        .insert(LeashOrigin(anchor))
-        .remove::<BufferedCommand>()
-        .remove::<AttackCommit>()
-        .remove::<PathBlockedTimer>()
-        .remove::<SlotClaim>();
+        .insert(crate::types::LeashOrigin(anchor));
+    queue_set_order(
+        commands,
+        entity,
+        Order::Attack(target),
+        OrderSource::Auto,
+        issue_time,
+        DEFAULT_AUTO_TARGET_LOCK_SECS,
+    );
 }
 
-pub fn set_intent_target_lock(
-    commands: &mut Commands,
-    entity: Entity,
-    target: Entity,
-    source: IntentSource,
-    issue_time: f64,
-    mode: EngageMode,
-    anchor: Vec3,
-) {
-    let lock_secs = match source {
-        IntentSource::Manual => DEFAULT_MANUAL_TARGET_LOCK_SECS,
-        IntentSource::Auto => DEFAULT_AUTO_TARGET_LOCK_SECS,
-    };
-    commands.entity(entity).insert(CombatTargetLock {
-        target,
-        locked_until: issue_time + lock_secs,
-        source,
-    });
-    commands.entity(entity).insert(Engagement {
-        target: Some(target),
-        source,
-        mode,
-        anchor,
-        acquired_at: issue_time,
-        last_confirmed_at: issue_time,
-        persistence_until: issue_time + lock_secs,
-        status: EngageStatus::Acquiring,
-    });
-}
-
-fn cleanup_expired_combat_state(
-    mut commands: Commands,
-    time: Res<Time<Fixed>>,
-    mut stats: ResMut<CombatStatsDebug>,
-    buffered_commands: Query<(Entity, &BufferedCommand)>,
-    target_locks: Query<(Entity, &CombatTargetLock)>,
-    slot_claims: Query<Entity, With<SlotClaim>>,
-) {
-    let now = time.elapsed_secs_f64();
-    let mut expired_buffers = 0_u64;
-    let mut expired_locks = 0_u64;
-
-    for (entity, buffered) in &buffered_commands {
-        if buffered
-            .expires_at
-            .is_some_and(|expires_at| now >= expires_at)
-        {
-            commands.entity(entity).remove::<BufferedCommand>();
-            expired_buffers += 1;
+/// Retarget a unit *without* changing its current `Order`. Used by HoldPosition
+/// and AttackMove auto-aggro scans that pick a new target but leave the standing
+/// order intact.
+pub fn set_auto_target(commands: &mut Commands, entity: Entity, target: Entity, issue_time: f64) {
+    commands.queue(move |world: &mut World| {
+        if let Some(mut brain) = world.get_mut::<UnitBrain>(entity) {
+            brain.target = Some(target);
+            brain.target_lock_until = issue_time + DEFAULT_AUTO_TARGET_LOCK_SECS;
         }
-    }
-
-    for (entity, lock) in &target_locks {
-        if now >= lock.locked_until {
-            commands.entity(entity).remove::<CombatTargetLock>();
-            expired_locks += 1;
-        }
-    }
-
-    stats.buffered_commands_active = buffered_commands.iter().count();
-    stats.target_locks_active = target_locks.iter().count();
-    stats.slot_claims_active = slot_claims.iter().count();
-    stats.expired_buffered_commands += expired_buffers;
-    stats.expired_target_locks += expired_locks;
+    });
 }

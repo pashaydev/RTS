@@ -50,33 +50,11 @@ pub enum CombatIntent {
 }
 
 // ---------------------------------------------------------------------------
-// 4b. CombatOrder / CombatGoal / OrderSource — future unified state (Step 3/4)
+// 4b. OrderSource — priority/origin of a UnitBrain.order
 // ---------------------------------------------------------------------------
-//
-// `CombatOrder` is the forward-looking unified entry-state component. It is
-// written by every order-entry path (manual clicks, auto-aggro, ability casts,
-// damage retaliation) and is intended to replace `CombatIntent` + `Engagement`
-// + `CombatTargetLock` once the pipeline migrates to read it directly (Step 4).
-//
-// For now it is *mirrored* alongside the legacy components so that:
-//   - downstream combat systems continue to work unchanged
-//   - save_load can migrate incrementally
-//   - Step 4 can start reading `CombatOrder` without churning entry-sites again
 
-/// What a unit is ordered to do.
-#[derive(Clone, Copy, PartialEq, Debug, Default)]
-pub enum CombatGoal {
-    #[default]
-    Stop,
-    Move(Vec3),
-    Attack(Entity),
-    AttackMove(Vec3),
-    Hold,
-}
-
-/// Priority/origin of a `CombatOrder`. Used to unify the manual-vs-auto rules
-/// (chase timeouts, grace windows, lock TTLs) that are currently duplicated
-/// across `unit_ai.rs`, `intents.rs`, and `combat/core.rs`.
+/// Priority/origin of the current `UnitBrain.order`. Drives manual-vs-auto
+/// preemption rules (chase timeouts, lock TTLs, retaliation windows).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum OrderSource {
     /// Direct player command. Highest priority; cannot be preempted by auto.
@@ -86,115 +64,25 @@ pub enum OrderSource {
     Auto,
     /// Reflexive retaliation to incoming damage. Priority sits between Auto and Manual.
     Retaliate,
-    /// Triggered by ability casts (e.g. Knight Charge locking a target).
-    Ability,
 }
 
 impl OrderSource {
     /// Upper bound on how long this order is allowed to chase a fleeing target
-    /// before giving up. Replaces the manual-10s / auto-6s hard-coded branch
-    /// in `core.rs` approach logic.
+    /// without ever closing to attack range. approach_target resets the timer
+    /// whenever the unit enters the attack band, so these numbers only fire
+    /// when the unit is genuinely stuck — blocked by terrain, losing a foot
+    /// race, or pathing around obstacles without converging.
     pub fn chase_timeout_secs(self) -> f32 {
         match self {
-            OrderSource::Manual => 10.0,
-            OrderSource::Retaliate => 8.0,
-            OrderSource::Ability => 6.0,
-            OrderSource::Auto => 6.0,
+            OrderSource::Manual => 20.0,
+            OrderSource::Retaliate => 15.0,
+            OrderSource::Auto => 12.0,
         }
     }
 }
 
-/// Unified combat order. Set by every order-entry site; consumed by the
-/// combat pipeline (post Step 4). Until Step 4 lands this is mirrored alongside
-/// the legacy `CombatIntent` / `Engagement` / `CombatTargetLock` components.
-#[derive(Component, Clone, Copy, PartialEq, Debug)]
-pub struct CombatOrder {
-    pub goal: CombatGoal,
-    pub source: OrderSource,
-    /// Origin anchor for leashing (AttackMove destination, Hold position,
-    /// mob camp center, auto-aggro start point).
-    pub anchor: Option<Vec3>,
-    /// Wall-clock time this order was issued. Used for grace windows and
-    /// staleness checks.
-    pub issued_at: f64,
-}
-
-impl CombatOrder {
-    #[inline]
-    pub fn new(goal: CombatGoal, source: OrderSource, issued_at: f64) -> Self {
-        Self {
-            goal,
-            source,
-            anchor: None,
-            issued_at,
-        }
-    }
-
-    #[inline]
-    pub fn with_anchor(mut self, anchor: Vec3) -> Self {
-        self.anchor = Some(anchor);
-        self
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum EngageMode {
-    #[default]
-    Direct,
-    AttackMove,
-    Hold,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum EngageStatus {
-    #[default]
-    Acquiring,
-    Approaching,
-    InBand,
-    Windup,
-    Recovery,
-    Blocked,
-}
-
-/// Authoritative runtime combat state for a unit or mob.
-#[derive(Component, Clone, Copy, PartialEq, Debug)]
-pub struct Engagement {
-    pub target: Option<Entity>,
-    pub source: IntentSource,
-    pub mode: EngageMode,
-    pub anchor: Vec3,
-    pub acquired_at: f64,
-    pub last_confirmed_at: f64,
-    pub persistence_until: f64,
-    pub status: EngageStatus,
-}
-
 // ---------------------------------------------------------------------------
-// 5. BufferedCommandKind
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum BufferedCommandKind {
-    Move(Vec3),
-    Attack(Entity),
-    AttackMove(Vec3),
-    Hold,
-    Stop,
-}
-
-// ---------------------------------------------------------------------------
-// 6. BufferedCommand
-// ---------------------------------------------------------------------------
-
-#[derive(Component, Clone, Copy, PartialEq, Debug)]
-pub struct BufferedCommand {
-    pub kind: BufferedCommandKind,
-    pub issue_time: f64,
-    pub expires_at: Option<f64>,
-}
-
-// ---------------------------------------------------------------------------
-// 7. CombatPhase
+// 5. CombatPhase
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
@@ -212,47 +100,7 @@ pub enum CombatPhase {
 }
 
 // ---------------------------------------------------------------------------
-// 8. CombatTargetLock
-// ---------------------------------------------------------------------------
-
-#[derive(Component, Clone, Copy, PartialEq, Debug)]
-pub struct CombatTargetLock {
-    pub target: Entity,
-    pub locked_until: f64,
-    pub source: IntentSource,
-}
-
-// ---------------------------------------------------------------------------
-// 9. AttackCommit
-// ---------------------------------------------------------------------------
-
-#[derive(Component, Clone, Copy, PartialEq, Debug)]
-pub struct AttackCommit {
-    pub target: Entity,
-    pub commit_time: f64,
-    pub release_time: f64,
-}
-
-// ---------------------------------------------------------------------------
-// 10. EngagementAnchor
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-#[derive(Component, Clone, Copy, PartialEq, Debug)]
-pub struct EngagementAnchor(pub Vec3);
-
-// ---------------------------------------------------------------------------
-// 11. PathBlockedTimer
-// ---------------------------------------------------------------------------
-
-#[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
-pub struct PathBlockedTimer {
-    pub blocked_since: Option<f64>,
-    pub retry_after: Option<f64>,
-}
-
-// ---------------------------------------------------------------------------
-// 12. CombatThinkTimer
+// 6. CombatThinkTimer
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
@@ -263,18 +111,7 @@ pub struct CombatThinkTimer {
 }
 
 // ---------------------------------------------------------------------------
-// 13. SlotClaim
-// ---------------------------------------------------------------------------
-
-#[derive(Component, Clone, Copy, PartialEq, Debug)]
-pub struct SlotClaim {
-    pub target: Entity,
-    pub slot_index: u16,
-    pub last_valid_time: f64,
-}
-
-// ---------------------------------------------------------------------------
-// 14. MeleeSlotProfile
+// 7. MeleeSlotProfile
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
@@ -631,41 +468,6 @@ impl ReservedIncomingDamage {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 36. AttackWindup
-// ---------------------------------------------------------------------------
-
-#[derive(Component, Clone, Copy, Debug)]
-pub struct AttackWindup {
-    pub target: Entity,
-    pub remaining_secs: f32,
-}
-
-// ---------------------------------------------------------------------------
-// 37. AttackRecovery
-// ---------------------------------------------------------------------------
-
-#[derive(Component, Clone, Copy, Debug)]
-pub struct AttackRecovery {
-    pub remaining_secs: f32,
-}
-
-// ---------------------------------------------------------------------------
-// 38. ChaseTimer
-// ---------------------------------------------------------------------------
-
-#[derive(Component, Clone, Debug)]
-pub struct ChaseTimer {
-    pub elapsed: f32,
-    pub max_secs: f32,
-}
-
-#[derive(Component, Clone, Copy, Debug)]
-pub struct MeleeContact {
-    pub target: Entity,
-    pub sticky_until: f64,
-}
-
 /// Emitted whenever damage is actually applied to a target.
 ///
 /// Single source-of-truth observable for post-damage systems (replication,
@@ -793,14 +595,141 @@ impl DamageType {
 #[derive(Component)]
 pub struct Mob;
 
-// ---------------------------------------------------------------------------
-// 47. CampReward
-// ---------------------------------------------------------------------------
-
-#[derive(Component, Clone)]
-pub struct CampReward {
-    pub resources: crate::blueprints::ResourceCost,
+/// Stat tier applied at spawn time. The blueprint defines the base Goblin
+/// stats; the tier multiplies HP / damage / move speed and tints the impostor.
+/// Visual differentiation is the only reason `Veteran` and `Champion` exist as
+/// separate variants — there is one mob kind (`EntityKind::Goblin`).
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum MobTier {
+    #[default]
+    Runner,
+    Veteran,
+    Champion,
 }
+
+impl MobTier {
+    pub fn hp_mul(self) -> f32 {
+        match self {
+            MobTier::Runner => 1.0,
+            MobTier::Veteran => 1.8,
+            MobTier::Champion => 3.0,
+        }
+    }
+    pub fn damage_mul(self) -> f32 {
+        match self {
+            MobTier::Runner => 1.0,
+            MobTier::Veteran => 1.4,
+            MobTier::Champion => 2.0,
+        }
+    }
+    pub fn move_mul(self) -> f32 {
+        match self {
+            MobTier::Runner => 1.05,
+            MobTier::Veteran => 1.0,
+            MobTier::Champion => 0.9,
+        }
+    }
+    /// Visual scale multiplier applied to the impostor billboard.
+    pub fn visual_scale_mul(self) -> f32 {
+        match self {
+            MobTier::Runner => 1.0,
+            MobTier::Veteran => 1.05,
+            MobTier::Champion => 1.3,
+        }
+    }
+    /// Multiplicative RGB tint applied to the impostor sample.
+    pub fn tint_rgb(self) -> [f32; 3] {
+        match self {
+            MobTier::Runner => [1.0, 1.0, 1.0],
+            MobTier::Veteran => [0.85, 0.78, 0.72], // darker
+            MobTier::Champion => [1.15, 0.78, 0.65], // redder
+        }
+    }
+}
+
+/// Whether a mob's primary engagement target is a building (preferred) or a unit.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EngagementTargetKind {
+    Building,
+    Unit,
+}
+
+/// What a mob committed to when it spawned. The combat layer drives the actual
+/// fight; this component re-asserts the original goal once a detour
+/// (retaliation, intercepted unit) ends.
+///
+/// `rescans_used` is capped at 2 across the mob's lifetime — when the original
+/// target dies, the mob gets one rescan; if the second target also dies, the
+/// mob is "stranded" and walks off the map edge.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct MobEngagement {
+    pub primary: Entity,
+    pub primary_kind: EngagementTargetKind,
+    pub rescans_used: u8,
+}
+
+/// Marker for a mob that is retreating off-map at Dawn. Despawn-on-edge is
+/// driven by `mob_retreat_despawn_system`.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct RetreatingMob {
+    /// Tick when the retreat order was issued — used to enforce the hard
+    /// despawn timeout if the mob never makes it to the edge.
+    pub started_at_tick: u64,
+}
+
+/// Cardinal direction the wave concentrates around. `All` means the wave
+/// scatters around the perimeter without bias.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WaveDirection {
+    North,
+    East,
+    South,
+    West,
+    All,
+}
+
+impl WaveDirection {
+    pub fn label(self) -> &'static str {
+        match self {
+            WaveDirection::North => "north",
+            WaveDirection::East => "east",
+            WaveDirection::South => "south",
+            WaveDirection::West => "west",
+            WaveDirection::All => "all sides",
+        }
+    }
+    /// Angle in radians (0 = +X = east, π/2 = +Z = south in our convention).
+    /// Returned as `Some` when there is a primary direction; `None` for All.
+    pub fn primary_angle(self) -> Option<f32> {
+        use std::f32::consts::PI;
+        match self {
+            WaveDirection::East => Some(0.0),
+            WaveDirection::South => Some(0.5 * PI),
+            WaveDirection::West => Some(PI),
+            WaveDirection::North => Some(1.5 * PI),
+            WaveDirection::All => None,
+        }
+    }
+}
+
+/// Pre-night warning emitted on the Day→Dusk transition. The wave banner
+/// widget renders this; the event log records it; sim systems may use the
+/// `night` field to coordinate.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct WaveAlert {
+    pub night: u32,
+    pub incoming_count: u32,
+    pub direction: WaveDirection,
+}
+
+/// Day→Dusk transition message. Wave compose runs on receipt.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct DuskBegan;
+
+/// Night→Dawn transition message. Drives surviving-mob retreat and the
+/// post-night summary toast.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct DawnBegan;
 
 // ---------------------------------------------------------------------------
 // 48. ExplosiveProp

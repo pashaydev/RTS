@@ -6,9 +6,7 @@ use super::helpers::*;
 use crate::infrastructure::database::{ActiveProfile, GameDatabase};
 use crate::types::*;
 use crate::ui::fonts::UiFonts;
-use crate::ui::theme::{
-    Theme, BG_ELEVATED, HIGHLIGHT, HIGHLIGHT_SUBTLE, TEAM_COLORS, TEXT_PRIMARY,
-};
+use crate::ui::theme::{Theme, BG_ELEVATED, TEAM_COLORS, TEXT_PRIMARY};
 
 use super::multiplayer;
 use super::*;
@@ -578,16 +576,9 @@ pub(crate) fn update_selector_visuals(
         }
 
         if should_be_selected {
-            commands.entity(entity).insert((
-                BorderColor::all(HIGHLIGHT),
-                BoxShadow::new(
-                    HIGHLIGHT_SUBTLE,
-                    Val::Px(0.0),
-                    Val::Px(0.0),
-                    Val::Px(0.0),
-                    Val::Px(4.0),
-                ),
-            ));
+            commands
+                .entity(entity)
+                .insert((menu_focus_border(&theme), menu_focus_shadow()));
         } else {
             commands
                 .entity(entity)

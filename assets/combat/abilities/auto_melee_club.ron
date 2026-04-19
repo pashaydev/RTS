@@ -1,0 +1,16 @@
+(
+    id: "auto_melee_club",
+    display_name: "Club Attack",
+    range: 1.4,
+    windup_frames: 12,
+    recovery_frames: 12,
+    damage_point_frame: 8,
+    cooldown_secs: 1.0,
+    target_type: Unit,
+    target_filter: Hostile,
+    effect: Damage(
+        base: 8.0,
+        damage_type: Melee,
+        falloff: false,
+    ),
+)

@@ -65,6 +65,20 @@ pub struct RandomizeSeedButton;
 #[derive(Component)]
 pub struct SlotCardsContainer;
 
+pub(crate) fn menu_focus_border(theme: &Theme) -> BorderColor {
+    BorderColor::all(theme.colors.accent)
+}
+
+pub(crate) fn menu_focus_shadow() -> BoxShadow {
+    BoxShadow::new(
+        HIGHLIGHT,
+        Val::Px(0.0),
+        Val::Px(0.0),
+        Val::Px(0.0),
+        Val::Px(2.0),
+    )
+}
+
 // ── Panel ──
 
 pub fn spawn_menu_panel(commands: &mut Commands, _theme: &Theme) -> Entity {
@@ -252,6 +266,7 @@ pub fn spawn_page_header<B: Bundle>(
     container: Entity,
     title: &str,
     back_marker: B,
+    nav_index: Option<usize>,
     fonts: &UiFonts,
     theme: &Theme,
 ) {
@@ -264,21 +279,23 @@ pub fn spawn_page_header<B: Bundle>(
             ..default()
         })
         .with_children(|parent| {
-            parent
-                .spawn((
+            let mut back_btn = parent.spawn((
                     back_marker,
                     Button,
                     ui_components::compact_button_node(12.0, 6.0),
                     ui_components::ghost_button_chrome(theme, ui_components::UiTone::Neutral),
-                ))
-                .with_children(|btn| {
-                    btn.spawn((
-                        Text::new("<< BACK"),
-                        fonts::body_emphasis(fonts, theme.typography.medium),
-                        TextColor(theme.colors.text_secondary),
-                        Pickable::IGNORE,
-                    ));
-                });
+                ));
+            if let Some(idx) = nav_index {
+                back_btn.insert(NavFocusable(idx));
+            }
+            back_btn.with_children(|btn| {
+                btn.spawn((
+                    Text::new("<< BACK"),
+                    fonts::body_emphasis(fonts, theme.typography.medium),
+                    TextColor(theme.colors.text_secondary),
+                    Pickable::IGNORE,
+                ));
+            });
 
             parent.spawn((
                 Text::new(title),

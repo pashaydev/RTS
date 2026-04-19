@@ -1,13 +1,18 @@
 use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline, OutlineStencil, OutlineVolume};
+use rand::rngs::StdRng;
 use rand::Rng;
+use rand::SeedableRng;
 
 use crate::blueprints::types::*;
 use crate::blueprints::EntityVisualCache;
 use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
 use crate::types::*;
 use crate::world::ground::HeightMap;
+
+/// Mixing constant used to scatter entity-bits into substream seeds.
+const PHI_U64: u64 = 0x9E3779B97F4A7C15;
 
 pub fn spawn_from_blueprint(
     commands: &mut Commands,
@@ -121,6 +126,13 @@ pub fn spawn_from_blueprint_with_faction(
         ));
     }
 
+    // Cosmetic per-entity randomness (display name, animation phase) is
+    // derived from the entity bits so playback / lockstep / replays stay
+    // bit-identical. The thread-local `rand::rng()` of the old code was a
+    // desync hazard.
+    let cosmetic_seed = entity_cmds.id().to_bits().wrapping_mul(PHI_U64);
+    let mut rng = StdRng::seed_from_u64(cosmetic_seed);
+
     // Category markers
     match kind.category() {
         EntityCategory::Unit | EntityCategory::Siege | EntityCategory::Summon => {
@@ -136,7 +148,6 @@ pub fn spawn_from_blueprint_with_faction(
                 EntityKind::Catapult => TacticalRole::SiegeSupport,
                 _ => TacticalRole::Standard,
             };
-            let mut rng = rand::rng();
             entity_cmds.insert((
                 Unit,
                 UnitDisplayName(random_unit_display_name(kind, &mut rng)),
@@ -169,20 +180,23 @@ pub fn spawn_from_blueprint_with_faction(
                 },
             ));
 
-            // Assign abilities based on unit kind
-            let abilities: Vec<AbilityId> = match kind {
-                EntityKind::Knight => vec![AbilityId::KnightCharge],
-                EntityKind::Mage => vec![AbilityId::MageFireball, AbilityId::MageFrostNova],
-                EntityKind::Priest => vec![AbilityId::PriestHeal, AbilityId::PriestHolySmite],
-                EntityKind::Catapult => vec![AbilityId::CatapultAoeBoulder],
-                _ => vec![],
-            };
-            if !abilities.is_empty() {
-                entity_cmds.insert(UnitAbilities::new(abilities));
-            }
+            // New pipeline: UnitBrain + Abilities (RON-backed).
+            let default_ability = default_ability_for(kind);
+            let castable = castable_abilities_for(kind);
+            entity_cmds.insert((
+                crate::simulation::combat::UnitBrain::default(),
+                crate::simulation::combat::Abilities::new(default_ability, castable),
+            ));
         }
         EntityCategory::Mob => {
             entity_cmds.insert((Mob, FogHideable::Mob));
+            // Mobs run through the same UnitBrain pipeline as player units.
+            let default_ability = default_ability_for(kind);
+            let castable = castable_abilities_for(kind);
+            entity_cmds.insert((
+                crate::simulation::combat::UnitBrain::default(),
+                crate::simulation::combat::Abilities::new(default_ability, castable),
+            ));
         }
         EntityCategory::Building => {
             let footprint = crate::simulation::buildings::footprint_for_kind(kind);
@@ -373,11 +387,11 @@ pub fn spawn_from_blueprint_with_faction(
         }
     }
 
-    // Combat stats
+    // Combat stats — HP + targeting data + display-only damage/range stats.
+    // Combat timing (cooldowns, windup, damage point) lives on the ability
+    // loaded from RON. AttackDamage/AttackRange are kept here as display-only
+    // mirrors of the blueprint values so the selection UI can show them.
     if let Some(ref combat) = bp.combat {
-        let attack_profile = default_attack_profile(kind, combat);
-        let combat_fx = default_combat_fx(kind, combat);
-        let attack_timing = default_attack_timing(kind, combat);
         let targeting_profile = default_targeting_profile(kind);
         let threat_value = default_threat_value(kind);
         entity_cmds.insert((
@@ -387,15 +401,7 @@ pub fn spawn_from_blueprint_with_faction(
             },
             AttackDamage(combat.damage),
             AttackRange(combat.attack_range),
-            AttackCooldown {
-                ready_in: combat.attack_cooldown_secs * 0.35,
-                interval: combat.attack_cooldown_secs,
-            },
-            attack_profile,
-            combat_fx,
             kind.armor_type(),
-            kind.damage_type(),
-            attack_timing,
             targeting_profile,
             threat_value,
             ReservedIncomingDamage::default(),
@@ -403,9 +409,7 @@ pub fn spawn_from_blueprint_with_faction(
         if let Some(aggro) = combat.aggro_range {
             entity_cmds.insert(AggroRange(aggro));
         }
-        // `IsRanged` marker removed — ranged-ness is derived from `AttackProfile.projectile_speed`.
     } else {
-        // Buildings without combat stats still need armor type + threat value for targeting
         entity_cmds.insert((kind.armor_type(), default_threat_value(kind)));
     }
 
@@ -432,18 +436,11 @@ pub fn spawn_from_blueprint_with_faction(
         entity_cmds.insert(VisionRange(vision.range));
     }
 
-    // Mob AI
-    if let Some(ref _ai) = bp.mob_ai {
-        entity_cmds.insert(PatrolState {
-            state: PatrolStateKind::Idle,
-            center: Vec3::new(pos.x, height_map.sample(pos.x, pos.z), pos.z),
-            radius: bp.mob_ai.as_ref().unwrap().patrol_radius,
-            patrol_target: None,
-            chase_elapsed: 0.0,
-            idle_until: 0.0,
-            patrol_started: 0.0,
-        });
-    }
+    // Mob AI: TD wave system drives mob behavior via combat orders + the
+    // `MobEngagement` component installed by `mobs::spawn_mob`. No patrol
+    // state needed — kept this branch as a deliberate empty hook so the
+    // `mob_ai` block in blueprint RONs still parses for future use.
+    let _ = bp.mob_ai.as_ref();
 
     let entity_id = entity_cmds.id();
 
@@ -513,6 +510,37 @@ pub fn spawn_from_blueprint_with_faction(
     }
 
     entity_id
+}
+
+/// Ability each unit uses for its default auto-attack. Keys the RON file
+/// in `assets/combat/abilities/<id>.ron`.
+fn default_ability_for(kind: EntityKind) -> crate::simulation::combat::AbilityId {
+    use crate::simulation::combat::AbilityId;
+    let s = match kind {
+        EntityKind::Goblin => "auto_melee_club",
+        EntityKind::Archer => "auto_ranged_bow",
+        EntityKind::Catapult => "auto_catapult_aoe",
+        EntityKind::BallistaTower => "auto_siege_ballista",
+        _ => "auto_melee_sword",
+    };
+    AbilityId::new(s)
+}
+
+/// Player-triggered castables, shown in UI buttons. Empty for most units.
+fn castable_abilities_for(kind: EntityKind) -> Vec<crate::simulation::combat::AbilityId> {
+    use crate::simulation::combat::AbilityId;
+    match kind {
+        EntityKind::Knight => vec![AbilityId::new("knight_charge")],
+        EntityKind::Mage => vec![
+            AbilityId::new("mage_fireball"),
+            AbilityId::new("mage_frost_nova"),
+        ],
+        EntityKind::Priest => vec![
+            AbilityId::new("priest_heal"),
+            AbilityId::new("priest_smite"),
+        ],
+        _ => Vec::new(),
+    }
 }
 
 // ── Build visual cache from registry ──

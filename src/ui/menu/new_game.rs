@@ -25,6 +25,14 @@ pub(crate) struct ResourceDensityOptionDot(usize);
 #[derive(Component)]
 pub(crate) struct ResourceDensityOptionLabel(usize);
 
+pub(crate) const HOST_LOBBY_SLOT_NAV_START: usize = 10;
+pub(crate) const SLOT_NAV_ROWS_PER_CARD: usize = 3;
+
+pub(crate) fn host_lobby_slot_nav(slot_index: usize) -> (usize, usize, usize) {
+    let base = HOST_LOBBY_SLOT_NAV_START + slot_index * SLOT_NAV_ROWS_PER_CARD;
+    (base, base + 1, base + 2)
+}
+
 pub(crate) fn spawn_new_game_page(
     commands: &mut Commands,
     container: Entity,
@@ -83,7 +91,7 @@ pub(crate) fn spawn_new_game_page(
     commands.entity(overview).add_child(slots_wrap);
 
     for i in 0..4 {
-        spawn_slot_card(commands, slots_wrap, i, config, false, None, theme);
+        spawn_slot_card(commands, slots_wrap, i, config, false, None, None, theme);
     }
 
     let team_idx = match config.team_mode {
@@ -992,9 +1000,15 @@ pub(crate) fn spawn_slot_card(
     config: &GameSetupConfig,
     is_multiplayer: bool,
     lobby_players: Option<&[crate::infrastructure::multiplayer::LobbyPlayer]>,
+    nav_rows: Option<(usize, usize, usize)>,
     theme: &Theme,
 ) {
     let slot = config.slots[slot_index];
+    let (type_nav, difficulty_nav, team_nav) = nav_rows
+        .map(|(type_nav, difficulty_nav, team_nav)| {
+            (Some(type_nav), Some(difficulty_nav), Some(team_nav))
+        })
+        .unwrap_or((None, None, None));
     let is_you = is_multiplayer
         && slot_index == config.local_player_slot
         && matches!(slot, SlotOccupant::Human);
@@ -1178,14 +1192,22 @@ pub(crate) fn spawn_slot_card(
                         }),
                     ));
 
-                    info.spawn(Node {
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        column_gap: Val::Px(6.0),
-                        flex_wrap: FlexWrap::Wrap,
-                        ..default()
-                    })
-                    .with_children(|tags| {
+                    let mut type_row = info.spawn((
+                        Node {
+                            flex_direction: FlexDirection::Row,
+                            align_items: AlignItems::Center,
+                            column_gap: Val::Px(6.0),
+                            flex_wrap: FlexWrap::Wrap,
+                            padding: UiRect::vertical(Val::Px(1.0)),
+                            border: UiRect::left(Val::Px(2.0)),
+                            ..default()
+                        },
+                        BorderColor::all(Color::NONE),
+                    ));
+                    if let Some(idx) = type_nav {
+                        type_row.insert(NavFocusable(idx));
+                    }
+                    type_row.with_children(|tags| {
                         for (i, opt) in type_options.iter().enumerate() {
                             let active = i == type_idx;
                             tags.spawn((
@@ -1240,13 +1262,30 @@ pub(crate) fn spawn_slot_card(
                                 ));
                             });
                         }
+                    });
 
-                        if let SlotOccupant::Ai(difficulty) = slot {
-                            let diff_idx = match difficulty {
-                                AiDifficulty::Easy => 0,
-                                AiDifficulty::Medium => 1,
-                                AiDifficulty::Hard => 2,
-                            };
+                    if let SlotOccupant::Ai(difficulty) = slot {
+                        let diff_idx = match difficulty {
+                            AiDifficulty::Easy => 0,
+                            AiDifficulty::Medium => 1,
+                            AiDifficulty::Hard => 2,
+                        };
+                        let mut diff_row = info.spawn((
+                            Node {
+                                flex_direction: FlexDirection::Row,
+                                align_items: AlignItems::Center,
+                                column_gap: Val::Px(6.0),
+                                flex_wrap: FlexWrap::Wrap,
+                                padding: UiRect::vertical(Val::Px(1.0)),
+                                border: UiRect::left(Val::Px(2.0)),
+                                ..default()
+                            },
+                            BorderColor::all(Color::NONE),
+                        ));
+                        if let Some(idx) = difficulty_nav {
+                            diff_row.insert(NavFocusable(idx));
+                        }
+                        diff_row.with_children(|tags| {
                             for (i, opt) in ["EASY", "STANDARD", "HARD"].iter().enumerate() {
                                 let active = i == diff_idx;
                                 tags.spawn((
@@ -1291,17 +1330,17 @@ pub(crate) fn spawn_slot_card(
                                     ));
                                 });
                             }
-                        } else {
-                            tags.spawn((
-                                Text::new(state_badge),
-                                TextFont {
-                                    font_size: 8.0,
-                                    ..default()
-                                },
-                                TextColor(theme.colors.text_disabled.with_alpha(0.7)),
-                            ));
-                        }
-                    });
+                        });
+                    } else {
+                        info.spawn((
+                            Text::new(state_badge),
+                            TextFont {
+                                font_size: 8.0,
+                                ..default()
+                            },
+                            TextColor(theme.colors.text_disabled.with_alpha(0.7)),
+                        ));
+                    }
                 });
 
                 row.spawn(Node {
@@ -1331,13 +1370,21 @@ pub(crate) fn spawn_slot_card(
                     ));
 
                     if !matches!(slot, SlotOccupant::Closed | SlotOccupant::Open) {
-                        right
-                            .spawn(Node {
+                        let mut team_row = right.spawn((
+                            Node {
                                 flex_direction: FlexDirection::Row,
                                 column_gap: Val::Px(5.0),
                                 margin: UiRect::top(Val::Px(2.0)),
+                                padding: UiRect::left(Val::Px(4.0)),
+                                border: UiRect::left(Val::Px(2.0)),
                                 ..default()
-                            })
+                            },
+                            BorderColor::all(Color::NONE),
+                        ));
+                        if let Some(idx) = team_nav {
+                            team_row.insert(NavFocusable(idx));
+                        }
+                        team_row
                             .with_children(|teams| {
                                 let current_team = config.player_teams[slot_index] as usize;
                                 for ti in 0..4 {

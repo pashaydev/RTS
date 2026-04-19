@@ -14,6 +14,7 @@ use crate::world::ground::{
     apply_terrain_shape_op, foundation_radii, sync_ground_mesh_partial, HeightMap, TerrainShapeOp,
     TerrainSurfaceDirtyArea, TerrainSurfaceDirtyQueue,
 };
+use crate::world::pathfinding::NavGridDirty;
 
 use super::{
     auto_tile_piece, biome_requirement_text, blocks_construction_overlap,
@@ -1699,11 +1700,12 @@ pub(crate) fn confirm_floor_plot(
     terrain_and_decos: (
         ResMut<crate::world::ground::TerrainShapeSyncState>,
         ResMut<TerrainSurfaceDirtyQueue>,
+        ResMut<NavGridDirty>,
     ),
     bush_decorations: Query<(Entity, &Transform), With<Decoration>>,
 ) {
     let (cache, registry, obstacle_grid) = resources_and_queries;
-    let (mut sync_state, mut dirty_areas) = terrain_and_decos;
+    let (mut sync_state, mut dirty_areas, mut nav_dirty) = terrain_and_decos;
     let (camera_q, windows, graphics) = viewport;
     if !matches!(placement.mode, PlacementMode::PlotFloor) || placement.awaiting_release {
         return;
@@ -1800,6 +1802,14 @@ pub(crate) fn confirm_floor_plot(
         center: Vec2::new(cx, cz),
         radius: outer_radius,
     });
+
+    if changed {
+        // Tell the nav grid to re-evaluate this region so slopes that are now
+        // flat become walkable and cost is refreshed.
+        nav_dirty
+            .terrain_updated
+            .push((Vec2::new(cx, cz), outer_radius));
+    }
 
     spawn_floor_grid_cells(
         &mut commands,

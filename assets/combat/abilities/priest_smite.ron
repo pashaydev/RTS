@@ -1,0 +1,16 @@
+(
+    id: "priest_smite",
+    display_name: "Holy Smite",
+    range: 8.0,
+    windup_frames: 12,
+    recovery_frames: 10,
+    damage_point_frame: 10,
+    cooldown_secs: 5.0,
+    target_type: Unit,
+    target_filter: Hostile,
+    effect: Conditional(
+        predicate: TargetIsUndead,
+        then: Damage(base: 50.0, damage_type: Magic, falloff: false),
+        otherwise: Some(Damage(base: 25.0, damage_type: Magic, falloff: false)),
+    ),
+)

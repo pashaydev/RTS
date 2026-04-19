@@ -534,6 +534,7 @@ pub enum InGameOverlay {
     PauseConfirmEndMatch,
     DeathScreen,
     Spectating,
+    HowToPlay,
 }
 
 /// Run-condition: returns true only when no overlay is active (player can issue commands).
@@ -565,6 +566,28 @@ pub struct MatchStartTime(pub f64);
 
 #[derive(Component)]
 pub struct PauseOverlayRoot;
+
+#[derive(Component)]
+pub struct GuideOverlayRoot;
+
+#[derive(Component)]
+pub struct GuideContentArea;
+
+#[derive(Component)]
+pub struct GuidePageDots;
+
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct GuideState {
+    pub page: usize,
+    pub is_multiplayer: bool,
+}
+
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub enum GuideButton {
+    Back,
+    Next,
+    Close,
+}
 
 #[derive(Component)]
 pub struct DeathScreenRoot;

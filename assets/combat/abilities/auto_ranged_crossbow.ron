@@ -1,0 +1,16 @@
+(
+    id: "auto_ranged_crossbow",
+    display_name: "Crossbow Bolt",
+    range: 9.0,
+    windup_frames: 18,
+    recovery_frames: 10,
+    damage_point_frame: 16,
+    cooldown_secs: 1.8,
+    target_type: Unit,
+    target_filter: Hostile,
+    effect: SpawnProjectile(
+        speed: 22.0,
+        orient_to_velocity: true,
+        on_impact: Damage(base: 14.0, damage_type: Pierce, falloff: false),
+    ),
+)

@@ -14,7 +14,6 @@ use super::{MenuAction, MenuButton, MenuStatusBar};
 
 const MENU_BUTTON_WIDTH: f32 = 400.0;
 const MENU_BUTTON_HEIGHT: f32 = 48.0;
-const ACCENT_BAR_WIDTH: f32 = 3.0;
 const STATUS_BAR_HEIGHT: f32 = 36.0;
 const STATUS_ICON_SIZE: f32 = 24.0;
 const STATUS_ICON_INNER: f32 = 16.0;
@@ -119,19 +118,6 @@ pub(crate) fn spawn_accent_menu_button(
         ec.insert(NavFocusable(idx));
     }
     ec.with_children(|parent| {
-        // Gold left accent bar
-        parent.spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                top: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                width: Val::Px(ACCENT_BAR_WIDTH),
-                ..default()
-            },
-            BackgroundColor(theme.colors.prestige.with_alpha(0.6)),
-            Pickable::IGNORE,
-        ));
         parent.spawn((
             Text::new(label),
             fonts::heading(fonts, theme.typography.button),
@@ -142,7 +128,7 @@ pub(crate) fn spawn_accent_menu_button(
     ec.id()
 }
 
-// ── Quit Menu Button (teal-tinted accent) ──
+// ── Quit Menu Button ──
 
 pub(crate) fn spawn_quit_menu_button(
     commands: &mut Commands,
@@ -170,19 +156,6 @@ pub(crate) fn spawn_quit_menu_button(
         ec.insert(NavFocusable(idx));
     }
     ec.with_children(|parent| {
-        // Teal left accent bar
-        parent.spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                top: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                width: Val::Px(ACCENT_BAR_WIDTH),
-                ..default()
-            },
-            BackgroundColor(theme.colors.accent.with_alpha(0.7)),
-            Pickable::IGNORE,
-        ));
         parent.spawn((
             Text::new(label),
             fonts::heading(fonts, theme.typography.button),
