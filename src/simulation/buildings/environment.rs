@@ -844,7 +844,7 @@ fn clear_vegetation_in_radius(
             continue;
         };
         if strip_triangles_in_radius(mesh, bx, bz, clear_r2, 0.0, 0.0) {
-            commands.entity(chunk_entity).despawn();
+            commands.entity(chunk_entity).try_despawn();
         }
     }
 
@@ -873,7 +873,7 @@ fn clear_vegetation_in_radius(
             continue;
         };
         if strip_triangles_in_radius(mesh, bx, bz, clear_r2, ox, oz) {
-            commands.entity(chunk_entity).despawn();
+            commands.entity(chunk_entity).try_despawn();
         }
     }
 }

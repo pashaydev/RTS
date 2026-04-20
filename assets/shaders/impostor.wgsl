@@ -33,7 +33,7 @@ struct ImpostorParams {
     local_visibility: f32,
     wrap_amount: f32,
     rim_strength: f32,
-    _pad0: f32,
+    loop_animation: f32,
     tier_tint: vec4<f32>,
 };
 
@@ -135,7 +135,12 @@ fn vertex(v: Vertex) -> VOut {
     // per-instance seconds offset so a crowd doesn't animate in lockstep.
     let fcount = max(params.frame_count, 1u);
     let frame_f = (params.time + params.time_phase) * params.fps;
-    let frame = u32(floor(frame_f)) % fcount;
+    let frame_i = u32(floor(frame_f));
+    let frame = select(
+        min(frame_i, fcount - 1u),
+        frame_i % fcount,
+        params.loop_animation > 0.5,
+    );
 
     var out: VOut;
     out.position = position_world_to_clip(world_pos);

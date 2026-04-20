@@ -130,8 +130,13 @@ impl Plugin for NetBridgePlugin {
         app.init_resource::<NetworkIdCounter>()
             .init_resource::<EntityNetMap>()
             .add_systems(OnEnter(AppState::InGame), reset_network_identity)
+            // Runs at the start of every simulated fixed tick so every peer
+            // walks the same ECS state (lockstep) and assigns identical
+            // NetworkIds. Running in `Update` is not lockstep-synchronized:
+            // different peers can call it against different tick-counts of
+            // state and produce divergent id assignments.
             .add_systems(
-                Update,
+                FixedFirst,
                 assign_network_ids.run_if(in_state(AppState::InGame)),
             );
     }

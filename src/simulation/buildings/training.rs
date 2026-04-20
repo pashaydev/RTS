@@ -471,7 +471,8 @@ pub(super) fn update_completed_buildings_tracker(
 ) {
     let mut per_faction: std::collections::HashMap<Faction, Vec<EntityKind>> =
         std::collections::HashMap::new();
-    let mut founded: std::collections::HashMap<Faction, bool> = std::collections::HashMap::new();
+    let mut founded: std::collections::BTreeMap<Faction, bool> =
+        std::collections::BTreeMap::new();
 
     for (kind, state, faction) in &buildings {
         if *kind == EntityKind::Base {

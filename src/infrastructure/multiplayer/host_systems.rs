@@ -326,6 +326,7 @@ pub fn execute_input_command(
                         commands
                             .entity(ecs_entity)
                             .remove::<AttackTarget>()
+                            .remove::<PreferredResource>()
                             .insert(MoveTarget(pos))
                             .insert(TaskSource::Manual);
                         if let Ok(mut queue) = task_queues.get_mut(ecs_entity) {

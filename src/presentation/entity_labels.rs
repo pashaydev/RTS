@@ -1278,12 +1278,12 @@ fn entity_label_system(
         }
     }
     for e in stale_labels {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
 
     // Despawn all leader lines (recreated each frame for focus labels)
     for line_entity in &existing_lines {
-        commands.entity(line_entity).despawn();
+        commands.entity(line_entity).try_despawn();
     }
 
     // Sync each intent
@@ -1356,7 +1356,7 @@ fn entity_label_system(
                         &children_q,
                         &mut label_parts,
                     ) {
-                        commands.entity(label_entity).despawn();
+                        commands.entity(label_entity).try_despawn();
                         spawn_focus_label(&mut commands, f, rect, &theme, &ui_fonts);
                     }
                 } else {

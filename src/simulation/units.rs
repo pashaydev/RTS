@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityKind, EntityVisualCache,
 };
+use crate::infrastructure::net_bridge::NetworkId;
 use crate::presentation::model_assets::UnitModelAssets;
 use crate::types::*;
 use crate::world::ground::HeightMap;
@@ -31,16 +32,17 @@ impl Plugin for UnitsPlugin {
                         crate::infrastructure::save_load::PendingLoad,
                     >)),
             )
+            // Movement must run in FixedUpdate so every peer advances
+            // Transform by the same fixed timestep regardless of local
+            // framerate. Running these in Update / PostUpdate with
+            // `Time<Fixed>.delta_secs()` made the per-real-second distance
+            // framerate-dependent, which desynced lockstep immediately.
             .add_systems(
-                Update,
-                (move_units, steer_avoidance)
+                FixedUpdate,
+                (move_units, steer_avoidance, snap_units_to_terrain)
                     .chain()
                     .in_set(SimSet::Movement)
                     .run_if(in_state(AppState::InGame)),
-            )
-            .add_systems(
-                PostUpdate,
-                snap_units_to_terrain.run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -65,7 +67,7 @@ pub fn apply_game_config(
     ai_controlled.factions = ai_facs;
 
     // Setup teams
-    let mut team_map = std::collections::HashMap::new();
+    let mut team_map = std::collections::BTreeMap::new();
     match config.team_mode {
         TeamMode::FFA => {
             for (i, &faction) in factions.iter().enumerate() {
@@ -216,6 +218,7 @@ fn steer_avoidance(
         (
             Entity,
             &mut Transform,
+            Option<&NetworkId>,
             Option<&MoveTarget>,
             Option<&UnitState>,
             Option<&AttackTarget>,
@@ -226,6 +229,7 @@ fn steer_avoidance(
         (Or<(With<Unit>, With<Mob>)>, Without<Building>),
     >,
     move_targets: Query<&MoveTarget, Or<(With<Unit>, With<Mob>)>>,
+    net_ids: Query<&NetworkId, Or<(With<Unit>, With<Mob>)>>,
     buildings: Query<
         (Entity, &Transform, &BuildingFootprint),
         (With<Building>, Without<Unit>, Without<FloorTile>),
@@ -247,6 +251,7 @@ fn steer_avoidance(
     for (
         entity,
         mut transform,
+        network_id,
         move_target,
         unit_state,
         attack_target,
@@ -319,9 +324,11 @@ fn steer_avoidance(
 
             if dist < 0.01 {
                 // Nearly perfectly overlapping — push in a deterministic direction based on entity IDs
-                let angle = (entity.to_bits().wrapping_sub(other_e.to_bits()) % 360) as f32
-                    * std::f32::consts::TAU
-                    / 360.0;
+                let my_stable = network_id.map_or(entity.index().index(), |id| id.0);
+                let other_stable = net_ids.get(*other_e).map_or(other_e.index().index(), |id| id.0);
+                let angle =
+                    (my_stable.wrapping_sub(other_stable) % 360) as f32 * std::f32::consts::TAU
+                        / 360.0;
                 separation += Vec3::new(angle.cos(), 0.0, angle.sin()) * 1.4;
             } else if dist < hard_push_radius {
                 // Very close — strong quadratic push to prevent stacking

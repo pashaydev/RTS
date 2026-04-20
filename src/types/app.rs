@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 // ── Random Name Pool ──
 
@@ -173,15 +173,20 @@ impl Faction {
 }
 
 /// Team configuration — factions with the same team number are allied.
+///
+/// Uses `BTreeMap` so iteration order is deterministic across peers. Under
+/// `HashMap` the process-local random hash seed made iteration order differ
+/// between the host and clients, which is a latent desync source the moment
+/// any code path iterates this map (today only `.get()` is used).
 #[derive(Resource)]
 pub struct TeamConfig {
-    pub teams: HashMap<Faction, u8>,
+    pub teams: BTreeMap<Faction, u8>,
 }
 
 impl Default for TeamConfig {
     fn default() -> Self {
         // Default: FFA — each faction on its own team
-        let mut teams = HashMap::new();
+        let mut teams = BTreeMap::new();
         teams.insert(Faction::Player1, 0);
         teams.insert(Faction::Player2, 1);
         teams.insert(Faction::Player3, 2);

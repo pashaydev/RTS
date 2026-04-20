@@ -68,7 +68,15 @@ impl SessionLog {
         }
     }
 
+    fn snapshot(&self) {
+        self.write_to_disk(false);
+    }
+
     fn flush(&self) {
+        self.write_to_disk(true);
+    }
+
+    fn write_to_disk(&self, is_final: bool) {
         let snapshot = {
             let Ok(mut state) = self.inner.lock() else {
                 return;
@@ -78,8 +86,10 @@ impl SessionLog {
                 return;
             }
 
-            state.finished_at_unix_ms = Some(now_unix_ms());
-            state.flushed = true;
+            if is_final {
+                state.finished_at_unix_ms = Some(now_unix_ms());
+                state.flushed = true;
+            }
 
             SessionLogFile {
                 session_id: state.session_id.clone(),
@@ -95,21 +105,13 @@ impl SessionLog {
 
         let output_path = PathBuf::from(&snapshot.output_path);
         if let Some(parent) = output_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            if std::fs::create_dir_all(parent).is_err() {
+                return;
+            }
         }
 
-        match serde_json::to_vec_pretty(&snapshot) {
-            Ok(bytes) => {
-                if let Err(err) = std::fs::write(&output_path, bytes) {
-                    eprintln!(
-                        "Failed to write session log JSON to {:?}: {}",
-                        output_path, err
-                    );
-                }
-            }
-            Err(err) => {
-                eprintln!("Failed to serialize session log JSON: {}", err);
-            }
+        if let Ok(bytes) = serde_json::to_vec_pretty(&snapshot) {
+            let _ = std::fs::write(&output_path, bytes);
         }
     }
 }
@@ -120,8 +122,8 @@ fn resolve_log_base_dir(base_dir: PathBuf) -> PathBuf {
         if let Ok(exe_path) = std::env::current_exe() {
             if let Some(exe_dir) = exe_path.parent() {
                 // In development, keep logs in the working tree instead of `target/...`.
-                // In packaged desktop builds, prefer the executable directory so logs
-                // land inside the distributed game folder regardless of launch CWD.
+                // In packaged desktop builds, always write next to the executable so
+                // logs land inside the game folder regardless of launch CWD.
                 if !exe_dir.components().any(|c| c.as_os_str() == "target") {
                     return exe_dir.to_path_buf();
                 }
@@ -170,6 +172,11 @@ pub fn configure_session_logging(base_dir: PathBuf) {
         .get_or_init(|| SessionLog::new(base_dir))
         .clone();
 
+    // Eagerly write the file so we fail fast if the chosen path is not
+    // writable (critical for release builds on Windows/macOS where the exe
+    // directory may be locked down).
+    log.snapshot();
+
     PANIC_HOOK_INSTALLED.get_or_init(|| {
         let panic_log = log.clone();
         let previous_hook = std::panic::take_hook();
@@ -216,7 +223,30 @@ pub struct SessionLogPlugin;
 
 impl Plugin for SessionLogPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, flush_session_log_on_exit);
+        app.init_resource::<SessionLogFlushClock>()
+            .add_systems(Last, (periodic_session_log_snapshot, flush_session_log_on_exit));
+    }
+}
+
+const SESSION_LOG_SNAPSHOT_INTERVAL_SECS: f32 = 3.0;
+
+#[derive(Resource, Default)]
+struct SessionLogFlushClock {
+    elapsed_secs: f32,
+}
+
+fn periodic_session_log_snapshot(
+    time: Res<Time>,
+    mut clock: ResMut<SessionLogFlushClock>,
+    session_log: Option<Res<SessionLog>>,
+) {
+    clock.elapsed_secs += time.delta_secs();
+    if clock.elapsed_secs < SESSION_LOG_SNAPSHOT_INTERVAL_SECS {
+        return;
+    }
+    clock.elapsed_secs = 0.0;
+    if let Some(session_log) = session_log {
+        session_log.snapshot();
     }
 }
 

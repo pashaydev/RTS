@@ -60,7 +60,8 @@ pub struct ImpostorParams {
     pub local_visibility: f32,
     pub wrap_amount: f32,
     pub rim_strength: f32,
-    pub _pad0: f32,
+    /// `1.0` for looping states, `0.0` for one-shot states like death.
+    pub loop_animation: f32,
     // -- 16 bytes --
     /// Per-tier multiplicative tint applied to the sampled atlas color.
     /// `[1, 1, 1, 1]` for the default Runner tier.
@@ -88,7 +89,7 @@ impl Default for ImpostorParams {
             local_visibility: 0.0,
             wrap_amount: 0.35,
             rim_strength: 0.18,
-            _pad0: 0.0,
+            loop_animation: 1.0,
             tier_tint: Vec4::new(1.0, 1.0, 1.0, 1.0),
         }
     }

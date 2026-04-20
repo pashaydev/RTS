@@ -23,7 +23,11 @@ use bevy_matchbox::prelude::MatchboxSocket;
 use game_state::message::{ClientMessage, ServerMessage};
 
 use crate::blueprints::EntityKind;
-use crate::types::{AllPlayerResources, Faction, Health, ResourceType, SimClock, UnitState};
+use crate::infrastructure::net_bridge::{EntityNetMap, NetworkId};
+use crate::types::{
+    AllPlayerResources, AttackTarget, Carrying, Faction, Health, MoveTarget, PreferredResource,
+    ResourceType, SimClock, TaskQueue, UnitState,
+};
 
 use super::matchbox_transport::{broadcast_reliable, send_to_host};
 use super::transport::MatchboxInbox;
@@ -123,6 +127,18 @@ fn unit_state_tag(state: &UnitState) -> u8 {
     }
 }
 
+fn queued_task_tag(task: &crate::types::QueuedTask) -> u8 {
+    match task {
+        crate::types::QueuedTask::Move(_) => 0,
+        crate::types::QueuedTask::AttackMove(_) => 1,
+        crate::types::QueuedTask::Attack(_) => 2,
+        crate::types::QueuedTask::Gather(_) => 3,
+        crate::types::QueuedTask::Build(_) => 4,
+        crate::types::QueuedTask::Patrol(_) => 5,
+        crate::types::QueuedTask::HoldPosition => 6,
+    }
+}
+
 // ── Resources ───────────────────────────────────────────────────────────────
 
 /// The most recently computed local world-state checksum.
@@ -204,6 +220,7 @@ pub fn compute_world_checksum(
     role: Res<NetRole>,
     host: Option<Res<HostNetState>>,
     client: Option<Res<ClientNetState>>,
+    net_map: Option<Res<EntityNetMap>>,
     all_resources: Res<AllPlayerResources>,
     mut sync: ResMut<SyncChecksum>,
     mut snapshot: ResMut<LatestChecksumSnapshot>,
@@ -213,8 +230,14 @@ pub fn compute_world_checksum(
         &Transform,
         &Faction,
         &EntityKind,
+        Option<&NetworkId>,
         Option<&Health>,
         Option<&UnitState>,
+        Option<&MoveTarget>,
+        Option<&AttackTarget>,
+        Option<&Carrying>,
+        Option<&TaskQueue>,
+        Option<&PreferredResource>,
     )>,
 ) {
     // Offline: nothing to compare against, skip the work.
@@ -232,7 +255,7 @@ pub fn compute_world_checksum(
         return;
     }
 
-    let world = snapshot_world(tick, &entities, &all_resources);
+    let world = snapshot_world(tick, &entities, net_map.as_deref(), &all_resources);
     let checksum = hash_snapshot(&world);
     sync.tick = tick;
     sync.checksum = checksum;
@@ -298,6 +321,7 @@ fn local_player_id(role: &NetRole, client: Option<&ClientNetState>) -> u8 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct EntityRecord {
+    net_id: u32,
     kind_idx: u16,
     faction_idx: u8,
     qx: i32,
@@ -306,6 +330,14 @@ struct EntityRecord {
     health_q: i32,
     max_health_q: i32,
     unit_state_tag: u8,
+    move_qx: i32,
+    move_qz: i32,
+    attack_target_id: u32,
+    carrying_amount: u32,
+    carrying_type: u8,
+    queue_current_tag: u8,
+    queue_len: u16,
+    preferred_resource: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -321,16 +353,59 @@ fn snapshot_world(
         &Transform,
         &Faction,
         &EntityKind,
+        Option<&NetworkId>,
         Option<&Health>,
         Option<&UnitState>,
+        Option<&MoveTarget>,
+        Option<&AttackTarget>,
+        Option<&Carrying>,
+        Option<&TaskQueue>,
+        Option<&PreferredResource>,
     )>,
+    net_map: Option<&EntityNetMap>,
     all_resources: &AllPlayerResources,
 ) -> WorldSnapshot {
     let mut records: Vec<EntityRecord> = entities
         .iter()
-        .map(|(transform, faction, kind, health, unit_state)| {
+        .map(
+            |(
+                transform,
+                faction,
+                kind,
+                net_id,
+                health,
+                unit_state,
+                move_target,
+                attack_target,
+                carrying,
+                task_queue,
+                preferred_resource,
+            )| {
             let pos = transform.translation;
+            let move_target = move_target.map(|target| target.0);
+            let attack_target_id = attack_target
+                .and_then(|target| net_map.and_then(|map| map.to_net.get(&target.0).copied()))
+                .unwrap_or(u32::MAX);
+            let (carrying_amount, carrying_type) = carrying
+                .map(|carrying| {
+                    (
+                        carrying.amount,
+                        carrying.resource_type.map_or(u8::MAX, |rt| rt.index() as u8),
+                    )
+                })
+                .unwrap_or((0, u8::MAX));
+            let (queue_current_tag, queue_len) = task_queue
+                .map(|queue| {
+                    (
+                        queue.current
+                            .as_ref()
+                            .map_or(u8::MAX, |entry| queued_task_tag(&entry.task)),
+                        queue.queue.len().min(u16::MAX as usize) as u16,
+                    )
+                })
+                .unwrap_or((u8::MAX, 0));
             EntityRecord {
+                net_id: net_id.map_or(u32::MAX, |id| id.0),
                 kind_idx: kind.to_index(),
                 faction_idx: faction.to_net_index(),
                 qx: quantize(pos.x),
@@ -339,8 +414,18 @@ fn snapshot_world(
                 health_q: health.map(|h| quantize(h.current)).unwrap_or(i32::MIN),
                 max_health_q: health.map(|h| quantize(h.max)).unwrap_or(i32::MIN),
                 unit_state_tag: unit_state.map(unit_state_tag).unwrap_or(u8::MAX),
+                move_qx: move_target.map(|pos| quantize(pos.x)).unwrap_or(i32::MIN),
+                move_qz: move_target.map(|pos| quantize(pos.z)).unwrap_or(i32::MIN),
+                attack_target_id,
+                carrying_amount,
+                carrying_type,
+                queue_current_tag,
+                queue_len,
+                preferred_resource: preferred_resource
+                    .map_or(u8::MAX, |pref| pref.0.index() as u8),
             }
-        })
+        },
+        )
         .collect();
     records.sort();
 
@@ -371,6 +456,7 @@ fn hash_snapshot(snapshot: &WorldSnapshot) -> u64 {
     hasher.write_u32(snapshot.records.len() as u32);
 
     for rec in &snapshot.records {
+        hasher.write_u32(rec.net_id);
         hasher.write_u16(rec.kind_idx);
         hasher.write_u8(rec.faction_idx);
         hasher.write_i32(rec.qx);
@@ -379,6 +465,14 @@ fn hash_snapshot(snapshot: &WorldSnapshot) -> u64 {
         hasher.write_i32(rec.health_q);
         hasher.write_i32(rec.max_health_q);
         hasher.write_u8(rec.unit_state_tag);
+        hasher.write_i32(rec.move_qx);
+        hasher.write_i32(rec.move_qz);
+        hasher.write_u32(rec.attack_target_id);
+        hasher.write_u32(rec.carrying_amount);
+        hasher.write_u8(rec.carrying_type);
+        hasher.write_u8(rec.queue_current_tag);
+        hasher.write_u16(rec.queue_len);
+        hasher.write_u8(rec.preferred_resource);
     }
 
     for (faction_idx, resources) in &snapshot.resources {
@@ -433,6 +527,19 @@ fn render_snapshot(
                 rec.max_health_q.to_string()
             },
             rec.unit_state_tag,
+        );
+        let _ = writeln!(
+            out,
+            "net={} move=({},{}) atk={} carry={}:{} queue={}+{} pref={}",
+            rec.net_id,
+            rec.move_qx,
+            rec.move_qz,
+            rec.attack_target_id,
+            rec.carrying_amount,
+            rec.carrying_type,
+            rec.queue_current_tag,
+            rec.queue_len,
+            rec.preferred_resource,
         );
     }
 
@@ -497,15 +604,15 @@ pub fn check_desync(
             tick, sync.checksum, remote_checksum, player_id
         );
 
-        // let first_for_this_tick = desync.tick != tick;
-        // desync.tick = tick;
-        // desync.local_checksum = sync.checksum;
-        // desync.remote_checksum = remote_checksum;
-        // desync.remote_player_id = player_id;
+        let first_for_this_tick = desync.tick != tick;
+        desync.tick = tick;
+        desync.local_checksum = sync.checksum;
+        desync.remote_checksum = remote_checksum;
+        desync.remote_player_id = player_id;
 
-        // if first_for_this_tick {
-        //     dump_world_state(tick, &role, client.as_deref(), Some(snapshot.as_ref()));
-        // }
+        if first_for_this_tick {
+            dump_world_state(tick, &role, client.as_deref(), Some(snapshot.as_ref()));
+        }
     }
     pending.reports = keep;
 }

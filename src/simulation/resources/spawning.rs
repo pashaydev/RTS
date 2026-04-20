@@ -628,10 +628,16 @@ pub(super) fn spawn_resource_nodes(
     info!("Resource node counts: {:?}", resource_counts);
 }
 
+/// Per-entity RNG substream tag for tree-fall fall-direction. Keeping this
+/// tag distinct from other per-entity substreams ensures consuming the
+/// tree-fall RNG can't shift any other sequence.
+const TREE_FALL_RNG_TAG: u64 = 0x7A11_FA11_7A11_FA11;
+
 pub(super) fn deplete_resource_nodes(
     mut commands: Commands,
     mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
     time: Res<Time<Fixed>>,
+    game_rng: Res<GameRng>,
     nodes: Query<(
         Entity,
         &ResourceNode,
@@ -660,7 +666,8 @@ pub(super) fn deplete_resource_nodes(
 
             let kind = match node.resource_type {
                 ResourceType::Wood => {
-                    let angle = rand::random::<f32>() * std::f32::consts::TAU;
+                    let mut rng = game_rng.fork(entity.to_bits() ^ TREE_FALL_RNG_TAG);
+                    let angle = rng.random::<f32>() * std::f32::consts::TAU;
                     DepletionKind::TreeFall {
                         fall_direction: Vec3::new(angle.cos(), 0.0, angle.sin()),
                     }

@@ -1,7 +1,6 @@
 use bevy::ecs::entity::Entities;
 use bevy::ecs::lifecycle::RemovedComponents;
 use bevy::prelude::*;
-use bevy::tasks::{block_on, poll_once, AsyncComputeTaskPool, Task};
 use bevy::time::Fixed;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
@@ -48,9 +47,6 @@ pub struct NavRequestTracker {
     pub latest_request_id: u64,
     pub last_goal: Option<Vec3>,
 }
-
-#[derive(Component)]
-struct NavPathTask(Task<AsyncPathResult>);
 
 // ── Resources ──
 
@@ -138,13 +134,6 @@ impl PathRequestIds {
     }
 }
 
-struct AsyncPathResult {
-    request_id: u64,
-    nav_revision: u64,
-    goal: Vec3,
-    path: Option<Vec<(f32, f32)>>,
-}
-
 // ── Plugin ──
 
 pub struct PathfindingPlugin;
@@ -171,8 +160,7 @@ impl Plugin for PathfindingPlugin {
                 invalidate_paths_on_nav_revision,
                 detect_stuck_units,
                 queue_path_requests,
-                spawn_pathfinding_tasks,
-                collect_completed_path_tasks,
+                process_pathfinding_requests,
             )
                 .chain()
                 .in_set(SimSet::Spatial)
@@ -210,8 +198,7 @@ fn handle_move_target_updates(
                 let mut entity_commands = commands.entity(entity);
                 entity_commands
                     .remove::<NavPath>()
-                    .remove::<NavPending>()
-                    .remove::<NavPathTask>();
+                    .remove::<NavPending>();
                 queue.requests.retain(|r| r.entity != entity);
 
                 if let Some(mut tracker) = tracker {
@@ -228,7 +215,6 @@ fn handle_move_target_updates(
                 entity_commands
                     .remove::<NavPath>()
                     .remove::<NavPending>()
-                    .remove::<NavPathTask>()
                     .remove::<NavRequestTracker>();
                 queue.requests.retain(|r| r.entity != entity);
             }
@@ -241,7 +227,6 @@ fn cleanup_orphan_paths(
     mut commands: Commands,
     pathed: Query<Entity, (With<NavPath>, Without<MoveTarget>)>,
     pending: Query<Entity, (With<NavPending>, Without<MoveTarget>)>,
-    path_tasks: Query<Entity, (With<NavPathTask>, Without<MoveTarget>)>,
     stuck: Query<Entity, (With<StuckTimer>, Without<MoveTarget>)>,
     mut queue: ResMut<PathRequestQueue>,
 ) {
@@ -249,21 +234,12 @@ fn cleanup_orphan_paths(
         commands
             .entity(entity)
             .remove::<NavPath>()
-            .remove::<NavPathTask>()
             .remove::<NavRequestTracker>();
     }
     for entity in &pending {
         commands
             .entity(entity)
             .remove::<NavPending>()
-            .remove::<NavPathTask>()
-            .remove::<NavRequestTracker>();
-        queue.requests.retain(|r| r.entity != entity);
-    }
-    for entity in &path_tasks {
-        commands
-            .entity(entity)
-            .remove::<NavPathTask>()
             .remove::<NavRequestTracker>();
         queue.requests.retain(|r| r.entity != entity);
     }
@@ -271,8 +247,7 @@ fn cleanup_orphan_paths(
         commands
             .entity(entity)
             .remove::<StuckTimer>()
-            .remove::<NavRequestTracker>()
-            .remove::<NavPathTask>();
+            .remove::<NavRequestTracker>();
     }
 }
 
@@ -685,8 +660,7 @@ fn invalidate_paths_on_nav_revision(
         commands
             .entity(entity)
             .remove::<NavPath>()
-            .remove::<NavPending>()
-            .remove::<NavPathTask>();
+            .remove::<NavPending>();
     }
 }
 
@@ -727,7 +701,6 @@ fn queue_path_requests(
             Without<NavPath>,
             Without<NavDirect>,
             Without<NavPending>,
-            Without<NavPathTask>,
         ),
     >,
 ) {
@@ -782,10 +755,15 @@ fn queue_path_requests(
     }
 }
 
-/// Spawn async pathfinding jobs from the request queue.
-fn spawn_pathfinding_tasks(
+/// Resolve queued path requests synchronously inside the fixed-step sim.
+///
+/// This keeps path availability deterministic: every peer computes and applies
+/// the same requests in the same tick order, instead of observing machine-
+/// dependent async task completion timing.
+fn process_pathfinding_requests(
     mut commands: Commands,
     mut queue: ResMut<PathRequestQueue>,
+    height_map: Res<HeightMap>,
     nav_grid: Res<NavGrid>,
     trackers: Query<&NavRequestTracker>,
     entities: &Entities,
@@ -812,71 +790,31 @@ fn spawn_pathfinding_tasks(
             continue;
         }
 
-        let grid = nav_grid.clone();
-        let task = AsyncComputeTaskPool::get().spawn(async move {
-            AsyncPathResult {
-                request_id: request.request_id,
-                nav_revision: request.nav_revision,
-                goal: request.goal,
-                path: find_path(&grid, request.start, request.goal),
-            }
-        });
-        commands.entity(request.entity).insert(NavPathTask(task));
-
-        processed += 1;
-    }
-}
-
-fn collect_completed_path_tasks(
-    mut commands: Commands,
-    height_map: Res<HeightMap>,
-    nav_grid: Res<NavGrid>,
-    mut tasks: Query<
-        (
-            Entity,
-            &mut NavPathTask,
-            &NavRequestTracker,
-            Option<&MoveTarget>,
-        ),
-        Or<(With<Unit>, With<Mob>)>,
-    >,
-) {
-    for (entity, mut task, tracker, move_target) in &mut tasks {
-        let Some(result) = block_on(poll_once(&mut task.0)) else {
+        let Some(path) = find_path(&nav_grid, request.start, request.goal) else {
+            commands.entity(request.entity).remove::<NavPending>();
+            processed += 1;
             continue;
         };
 
-        let mut entity_commands = commands.entity(entity);
-        entity_commands.remove::<NavPathTask>();
-        entity_commands.remove::<NavPending>();
-
-        if tracker.latest_request_id != result.request_id
-            || nav_grid.revision != result.nav_revision
-            || move_target.is_none_or(|target| {
-                Vec2::new(target.0.x - result.goal.x, target.0.z - result.goal.z).length_squared()
-                    > 0.01
+        let waypoints: Vec<Vec3> = path
+            .into_iter()
+            .skip(1)
+            .map(|(wx, wz)| {
+                let y = height_map.sample(wx, wz);
+                Vec3::new(wx, y, wz)
             })
-        {
-            continue;
+            .collect();
+
+        let mut entity_commands = commands.entity(request.entity);
+        entity_commands.remove::<NavPending>();
+        if !waypoints.is_empty() {
+            entity_commands.insert(NavPath {
+                waypoints,
+                current_index: 0,
+            });
         }
 
-        if let Some(path) = result.path {
-            let waypoints: Vec<Vec3> = path
-                .into_iter()
-                .skip(1)
-                .map(|(wx, wz)| {
-                    let y = height_map.sample(wx, wz);
-                    Vec3::new(wx, y, wz)
-                })
-                .collect();
-
-            if !waypoints.is_empty() {
-                entity_commands.insert(NavPath {
-                    waypoints,
-                    current_index: 0,
-                });
-            }
-        }
+        processed += 1;
     }
 }
 

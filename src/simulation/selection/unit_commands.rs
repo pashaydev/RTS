@@ -343,7 +343,6 @@ pub(crate) fn handle_right_click_move(
                                 .entity(*entity)
                                 .remove::<AttackTarget>()
                                 .remove::<MoveTarget>()
-                                .remove::<PreferredResource>()
                                 .insert(UnitState::MovingToBuild(target_entity))
                                 .insert(TaskSource::Manual)
                                 .remove::<ManualIdleSince>();
@@ -503,7 +502,6 @@ pub(crate) fn handle_right_click_move(
                                 .entity(*entity)
                                 .remove::<AttackTarget>()
                                 .remove::<MoveTarget>()
-                                .remove::<PreferredResource>()
                                 .insert(UnitState::MovingToBuild(site_entity))
                                 .insert(TaskSource::Manual)
                                 .remove::<ManualIdleSince>();
@@ -746,10 +744,7 @@ pub(crate) fn handle_unit_command_hotkeys(
                         entity,
                         assignment.map(|assignment| assignment.0),
                     );
-                    commands
-                        .entity(entity)
-                        .remove::<PreferredResource>()
-                        .insert(grace);
+                    commands.entity(entity).insert(grace);
                 } else {
                     commands
                         .entity(entity)
@@ -991,7 +986,6 @@ pub(crate) fn handle_unit_command_hotkeys(
                     commands
                         .entity(*entity)
                         .remove::<AttackTarget>()
-                        .remove::<PreferredResource>()
                         .insert(MoveTarget(point))
                         .insert(UnitState::Patrolling {
                             target: point,

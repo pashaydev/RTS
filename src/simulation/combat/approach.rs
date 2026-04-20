@@ -8,6 +8,7 @@
 use bevy::prelude::*;
 use bevy::time::Fixed;
 
+use crate::infrastructure::net_bridge::NetworkId;
 use crate::types::{
     app::Faction, AppState, Building, BuildingFootprint, CombatTuning, Mob, MoveTarget, TeamConfig,
     Unit,
@@ -55,13 +56,13 @@ fn desired_approach_pos(
     target_radius: f32,
     max_range: f32,
     min_range: f32,
-    attacker: Entity,
+    stable_attacker_id: u32,
 ) -> Vec3 {
     let away = Vec2::new(attacker_pos.x - target_pos.x, attacker_pos.z - target_pos.z);
     let dir = if away.length_squared() > 0.0001 {
         away.normalize()
     } else {
-        let angle = (attacker.to_bits() % 360) as f32 * std::f32::consts::TAU / 360.0;
+        let angle = (stable_attacker_id % 360) as f32 * std::f32::consts::TAU / 360.0;
         Vec2::new(angle.cos(), angle.sin())
     };
     // Stand well inside the attack band. For abilities with a minimum range
@@ -95,6 +96,7 @@ pub fn approach_target(
             &Faction,
             &mut UnitBrain,
             &Abilities,
+            Option<&NetworkId>,
             Option<&MoveTarget>,
         ),
         Or<(With<Unit>, With<Mob>)>,
@@ -108,7 +110,7 @@ pub fn approach_target(
     // threshold (0.7u) — otherwise units flip Chasing↔InRange every tick.
     let tolerance = tuning.range_stay_buffer.max(0.5);
 
-    for (entity, tf, faction, mut brain, abilities, opt_move_target) in &mut attackers {
+    for (entity, tf, faction, mut brain, abilities, net_id, opt_move_target) in &mut attackers {
         // Commit / dying / stunned: approach does not touch movement.
         if brain.is_committed() || brain.is_action_blocked() {
             continue;
@@ -210,7 +212,7 @@ pub fn approach_target(
                 target_radius,
                 max_range,
                 min_range,
-                entity,
+                net_id.map_or(entity.index().index(), |id| id.0),
             );
             if opt_move_target.map_or(true, |m| m.0.distance(approach) > 0.9) {
                 commands.entity(entity).insert(MoveTarget(approach));
@@ -234,4 +236,3 @@ pub fn approach_target(
         }
     }
 }
-

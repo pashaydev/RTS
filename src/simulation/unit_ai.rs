@@ -3,6 +3,7 @@ use bevy::time::Fixed;
 use std::f32::consts::TAU;
 
 use crate::blueprints::EntityKind;
+use crate::infrastructure::net_bridge::NetworkId;
 use crate::simulation::buildings::is_wall_like_kind;
 use crate::simulation::combat::{
     apply_auto_attack_intent, apply_auto_move_intent, apply_manual_attack_intent,
@@ -38,7 +39,8 @@ impl Plugin for UnitAiPlugin {
                     UnitAiSet::Leash,
                     UnitAiSet::Heal,
                 )
-                    .chain(),
+                    .chain()
+                    .in_set(SimSet::Ai),
             )
             .add_systems(
                 FixedUpdate,
@@ -610,6 +612,7 @@ pub fn unit_state_executor_system(
             &mut UnitState,
             &mut TaskSource,
             &mut TaskQueue,
+            Option<&NetworkId>,
             &EntityKind,
             &Faction,
             Option<&MoveTarget>,
@@ -642,6 +645,7 @@ pub fn unit_state_executor_system(
         mut state,
         mut source,
         mut task_queue,
+        network_id,
         _kind,
         faction,
         move_target,
@@ -916,7 +920,9 @@ pub fn unit_state_executor_system(
                         } else {
                             // Walk toward an offset outside the footprint
                             let stand_dist = footprint.0 + if is_wall_like { 0.75 } else { 1.5 };
-                            let angle = (entity.index_u32() as f32 * 2.399) % TAU;
+                            let stable_id =
+                                network_id.map_or(entity.index().index(), |id| id.0);
+                            let angle = (stable_id as f32 * 2.399) % TAU;
                             let offset =
                                 Vec3::new(angle.cos() * stand_dist, 0.0, angle.sin() * stand_dist);
                             let target_pos = build_tf.translation + offset;

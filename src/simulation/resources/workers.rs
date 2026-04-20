@@ -187,7 +187,7 @@ pub(super) fn worker_ai_system(
                 }
                 // Check for nearby unfinished buildings first (prioritize construction)
                 let auto_build_range = 20.0;
-                let mut closest_site: Option<(Entity, f32, u32, Vec3)> = None;
+                let mut site_candidates: Vec<(i32, u32, Entity)> = Vec::new();
                 for (site_entity, site_tf, site_state, site_faction, site_net_id) in
                     &params.construction_sites
                 {
@@ -200,27 +200,11 @@ pub(super) fn worker_ai_system(
                     if dist >= auto_build_range {
                         continue;
                     }
-                    let candidate = (
-                        site_entity,
-                        dist,
-                        site_net_id.map(|id| id.0).unwrap_or(u32::MAX),
-                        site_tf.translation,
-                    );
-                    if closest_site.as_ref().is_none_or(|current| {
-                        worker_candidate_cmp(
-                            candidate.1,
-                            candidate.2,
-                            candidate.3,
-                            current.1,
-                            current.2,
-                            current.3,
-                        )
-                        .is_lt()
-                    }) {
-                        closest_site = Some(candidate);
-                    }
+                    let net_id = site_net_id.map(|id| id.0).unwrap_or(u32::MAX);
+                    site_candidates.push((quantize_distance(dist), net_id, site_entity));
                 }
-                if let Some((site, _, _, _)) = closest_site {
+                site_candidates.sort_by_key(|&(q, id, _)| (q, id));
+                if let Some(&(_, _, site)) = site_candidates.first() {
                     *state = UnitState::MovingToBuild(site);
                 } else if let Some(node) = preferred_resource.and_then(|pref| {
                     find_nearest_node_of_type(
@@ -251,7 +235,7 @@ pub(super) fn worker_ai_system(
                 // Interrupt auto-gathering for nearby construction (only if not carrying)
                 if *source == TaskSource::Auto && carrying.amount == 0 {
                     let auto_build_range = 20.0;
-                    let mut closest_site: Option<(Entity, f32, u32, Vec3)> = None;
+                    let mut site_candidates: Vec<(i32, u32, Entity)> = Vec::new();
                     for (site_entity, site_tf, site_state, site_faction, site_net_id) in
                         &params.construction_sites
                     {
@@ -264,27 +248,11 @@ pub(super) fn worker_ai_system(
                         if dist >= auto_build_range {
                             continue;
                         }
-                        let candidate = (
-                            site_entity,
-                            dist,
-                            site_net_id.map(|id| id.0).unwrap_or(u32::MAX),
-                            site_tf.translation,
-                        );
-                        if closest_site.as_ref().is_none_or(|current| {
-                            worker_candidate_cmp(
-                                candidate.1,
-                                candidate.2,
-                                candidate.3,
-                                current.1,
-                                current.2,
-                                current.3,
-                            )
-                            .is_lt()
-                        }) {
-                            closest_site = Some(candidate);
-                        }
+                        let net_id = site_net_id.map(|id| id.0).unwrap_or(u32::MAX);
+                        site_candidates.push((quantize_distance(dist), net_id, site_entity));
                     }
-                    if let Some((site, _, _, _)) = closest_site {
+                    site_candidates.sort_by_key(|&(q, id, _)| (q, id));
+                    if let Some(&(_, _, site)) = site_candidates.first() {
                         commands.entity(entity).remove::<MoveTarget>();
                         *state = UnitState::MovingToBuild(site);
                         continue;
@@ -658,7 +626,7 @@ pub(super) fn worker_ai_system(
                 }
 
                 // Try a different depot that accepts our resource type and has space
-                let mut best_depot: Option<(Entity, f32, u32, Vec3)> = None;
+                let mut best_depot: Option<(Entity, f32, u32)> = None;
                 for (dp_entity, dp_tf, dp_state, dp_faction, _dp_kind, _dp_fp, dp_net_id) in
                     &params.deposit_points
                 {
@@ -682,24 +650,15 @@ pub(super) fn worker_ai_system(
                         dp_entity,
                         dist,
                         dp_net_id.map(|id| id.0).unwrap_or(u32::MAX),
-                        dp_tf.translation,
                     );
                     if best_depot.as_ref().is_none_or(|current| {
-                        worker_candidate_cmp(
-                            candidate.1,
-                            candidate.2,
-                            candidate.3,
-                            current.1,
-                            current.2,
-                            current.3,
-                        )
-                        .is_lt()
+                        worker_candidate_cmp(candidate.1, candidate.2, current.1, current.2).is_lt()
                     }) {
                         best_depot = Some(candidate);
                     }
                 }
 
-                if let Some((new_depot, _, _, _)) = best_depot {
+                if let Some((new_depot, _, _)) = best_depot {
                     let (_, depot_tf, _, _, depot_kind, depot_fp, _) =
                         params.deposit_points.get(new_depot).unwrap();
                     let target = building_worker_interaction_target(
@@ -897,7 +856,7 @@ fn find_nearest_node(
         &Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>,
     >,
 ) -> Option<Entity> {
-    let mut closest_node: Option<(Entity, f32, u32, Vec3)> = None;
+    let mut candidates: Vec<(i32, u32, Entity)> = Vec::new();
     for (node_entity, node_tf, yard_tag, node_net_id) in all_nodes {
         if yard_tag.is_some() {
             continue;
@@ -916,27 +875,15 @@ fn find_nearest_node(
                 }
             }
         }
-        let candidate = (
-            node_entity,
-            dist,
-            node_net_id.map(|id| id.0).unwrap_or(u32::MAX),
-            node_tf.translation,
+        debug_assert!(
+            node_net_id.is_some(),
+            "ResourceNode missing NetworkId during worker scan"
         );
-        if closest_node.as_ref().is_none_or(|current| {
-            worker_candidate_cmp(
-                candidate.1,
-                candidate.2,
-                candidate.3,
-                current.1,
-                current.2,
-                current.3,
-            )
-            .is_lt()
-        }) {
-            closest_node = Some(candidate);
-        }
+        let net_id = node_net_id.map(|id| id.0).unwrap_or(u32::MAX);
+        candidates.push((quantize_distance(dist), net_id, node_entity));
     }
-    closest_node.map(|(entity, _, _, _)| entity)
+    candidates.sort_by_key(|&(q, id, _)| (q, id));
+    candidates.first().map(|&(_, _, e)| e)
 }
 
 /// Unbounded scan for the nearest node of a specific resource type, filtered
@@ -972,7 +919,7 @@ fn find_nearest_node_of_type(
         (With<DepositPoint>, Without<Unit>),
     >,
 ) -> Option<Entity> {
-    let mut closest_node: Option<(Entity, f32, u32, Vec3)> = None;
+    let mut candidates: Vec<(i32, u32, Entity)> = Vec::new();
     for (node_entity, node_tf, yard_tag, node_net_id) in all_nodes {
         if yard_tag.is_some() {
             continue;
@@ -995,27 +942,15 @@ fn find_nearest_node_of_type(
             continue;
         }
         let dist = pos.distance(node_tf.translation);
-        let candidate = (
-            node_entity,
-            dist,
-            node_net_id.map(|id| id.0).unwrap_or(u32::MAX),
-            node_tf.translation,
+        debug_assert!(
+            node_net_id.is_some(),
+            "ResourceNode missing NetworkId during worker scan"
         );
-        if closest_node.as_ref().is_none_or(|current| {
-            worker_candidate_cmp(
-                candidate.1,
-                candidate.2,
-                candidate.3,
-                current.1,
-                current.2,
-                current.3,
-            )
-            .is_lt()
-        }) {
-            closest_node = Some(candidate);
-        }
+        let net_id = node_net_id.map(|id| id.0).unwrap_or(u32::MAX);
+        candidates.push((quantize_distance(dist), net_id, node_entity));
     }
-    closest_node.map(|(entity, _, _, _)| entity)
+    candidates.sort_by_key(|&(q, id, _)| (q, id));
+    candidates.first().map(|&(_, _, e)| e)
 }
 
 /// Spawn a short burst of gather particles when a worker extracts resources from a node.
@@ -1147,7 +1082,7 @@ pub(super) fn find_nearest_deposit_for(
         &Query<(&Transform, Option<&mut StorageInventory>), (With<DepositPoint>, Without<Unit>)>,
     >,
 ) -> Option<Entity> {
-    let mut closest: Option<(Entity, f32, u32, Vec3)> = None;
+    let mut closest: Option<(Entity, f32, u32)> = None;
     for (entity, tf, state, depot_faction, _, _, net_id) in deposit_points {
         if *state != BuildingState::Complete || depot_faction != faction {
             continue;
@@ -1165,52 +1100,33 @@ pub(super) fn find_nearest_deposit_for(
             }
         }
         let dist = pos.distance(tf.translation);
-        let candidate = (
-            entity,
-            dist,
-            net_id.map(|id| id.0).unwrap_or(u32::MAX),
-            tf.translation,
-        );
+        let candidate = (entity, dist, net_id.map(|id| id.0).unwrap_or(u32::MAX));
         if closest.as_ref().is_none_or(|current| {
-            worker_candidate_cmp(
-                candidate.1,
-                candidate.2,
-                candidate.3,
-                current.1,
-                current.2,
-                current.3,
-            )
-            .is_lt()
+            worker_candidate_cmp(candidate.1, candidate.2, current.1, current.2).is_lt()
         }) {
             closest = Some(candidate);
         }
     }
-    closest.map(|(entity, _, _, _)| entity)
+    closest.map(|(entity, _, _)| entity)
 }
 
 fn worker_candidate_cmp(
     left_dist: f32,
     left_id: u32,
-    left_pos: Vec3,
     right_dist: f32,
     right_id: u32,
-    right_pos: Vec3,
 ) -> std::cmp::Ordering {
     left_dist
         .total_cmp(&right_dist)
         .then_with(|| left_id.cmp(&right_id))
-        .then_with(|| ordered_f32_bits(left_pos.x).cmp(&ordered_f32_bits(right_pos.x)))
-        .then_with(|| ordered_f32_bits(left_pos.y).cmp(&ordered_f32_bits(right_pos.y)))
-        .then_with(|| ordered_f32_bits(left_pos.z).cmp(&ordered_f32_bits(right_pos.z)))
 }
 
-fn ordered_f32_bits(value: f32) -> u32 {
-    let bits = value.to_bits();
-    if bits & 0x8000_0000 == 0 {
-        bits | 0x8000_0000
-    } else {
-        !bits
-    }
+/// Quantize a distance in world units to 1 mm precision as an `i32`. Matches
+/// the checksum quantization so that worker picks sort identically across
+/// peers even when floating-point paths differ by a ULP.
+#[inline]
+fn quantize_distance(dist: f32) -> i32 {
+    (dist * 1000.0) as i32
 }
 
 pub(super) fn building_worker_interaction_target(

@@ -24,6 +24,7 @@ use crate::presentation::materials::impostor::{
     GoblinImpostor, ImpostorAnimState, ImpostorMaterial, ImpostorParams,
 };
 use crate::presentation::model_assets::UnitModelAssets;
+use crate::simulation::combat::BrainState;
 use crate::types::*;
 use crate::world::lighting::{DayCycle, EntityLightConfig, EntityLightGrid, SunLight};
 
@@ -273,23 +274,99 @@ fn sprite_fill_px(meta: &crate::presentation::materials::impostor::ImpostorAtlas
 }
 
 /// Derive the impostor anim state from gameplay components. Minimal
-/// priority chain — no AnimationController needed because the state is
-/// stripped on LOD swap.
+/// atlas state from the same gameplay signals the 3D animation controller
+/// uses. The atlas is smaller than the rigged set, so richer 3D states get
+/// collapsed onto Idle / Walk / Run / Attack / Death.
 fn derive_impostor_state(
+    unit_state: Option<&UnitState>,
     health: Option<&Health>,
+    brain: Option<&crate::simulation::combat::UnitBrain>,
     attack_target: Option<&AttackTarget>,
     move_target: Option<&MoveTarget>,
+    smoothing: Option<&MovementSmoothing>,
+    unit_speed: Option<&UnitSpeed>,
+    target_exists: bool,
+    was_running: bool,
 ) -> ImpostorAnimState {
     if health.map_or(false, |h| h.current <= 0.0) {
         return ImpostorAnimState::Death;
     }
-    if attack_target.is_some() {
+
+    let brain_state = brain.map(|b| b.state);
+    let brain_target = brain.and_then(|b| b.target);
+
+    if matches!(
+        brain_state,
+        Some(BrainState::CastPrep | BrainState::Channeling | BrainState::Windup | BrainState::Impact)
+    ) || attack_target.is_some()
+    {
         return ImpostorAnimState::Attack;
     }
-    if move_target.is_some() {
+
+    if unit_state.map_or(false, |s| matches!(s, UnitState::Building(_))) {
+        return ImpostorAnimState::Attack;
+    }
+
+    if unit_state.map_or(false, |s| matches!(s, UnitState::Gathering(_))) {
+        return if move_target.is_some() {
+            ImpostorAnimState::Walk
+        } else {
+            ImpostorAnimState::Attack
+        };
+    }
+
+    if let Some(UnitState::AssignedGathering { phase, .. }) = unit_state {
+        return match phase {
+            AssignedPhase::Harvesting { .. } | AssignedPhase::Depositing { .. } => {
+                ImpostorAnimState::Attack
+            }
+            _ if move_target.is_some() => ImpostorAnimState::Walk,
+            _ => ImpostorAnimState::Idle,
+        };
+    }
+
+    if unit_state.map_or(false, |s| {
+        matches!(
+            s,
+            UnitState::MovingToBuild(_)
+                | UnitState::MovingToPlot(_)
+                | UnitState::ReturningToDeposit { .. }
+                | UnitState::AttackMoving(_)
+                | UnitState::Patrolling { .. }
+                | UnitState::Moving(_)
+        )
+    }) {
         return ImpostorAnimState::Walk;
     }
+
+    if matches!(brain_state, Some(BrainState::Chasing)) && brain_target.is_some() && target_exists {
+        return ImpostorAnimState::Walk;
+    }
+
+    if move_target.is_some() {
+        // Match the 3D Walk/Run split with the same hysteresis thresholds.
+        const RUN_THRESHOLD_UP: f32 = 0.6;
+        const RUN_THRESHOLD_DOWN: f32 = 0.45;
+        let threshold = if was_running {
+            RUN_THRESHOLD_DOWN
+        } else {
+            RUN_THRESHOLD_UP
+        };
+        let use_run = smoothing.zip(unit_speed).map_or(false, |(sm, us)| {
+            sm.current_speed > us.0 * threshold
+        });
+        return if use_run {
+            ImpostorAnimState::Run
+        } else {
+            ImpostorAnimState::Walk
+        };
+    }
+
     ImpostorAnimState::Idle
+}
+
+fn impostor_phase_seed(entity: Entity) -> f32 {
+    (entity.to_bits().wrapping_mul(0x9E3779B97F4A7C15) >> 33) as f32 / (1u64 << 31) as f32
 }
 
 /// Per-frame sync: update every impostor's uniform block with current
@@ -303,23 +380,71 @@ pub fn impostor_sync_system(
     ambient: Res<GlobalAmbientLight>,
     mut mats: ResMut<Assets<ImpostorMaterial>>,
     sun_q: Query<(&DirectionalLight, &Transform), With<SunLight>>,
+    target_transforms: Query<&Transform, Without<ImpostorSprite>>,
+    unit_speeds: Query<&UnitSpeed>,
     units: Query<(
+        Entity,
         &Transform,
         &GlobalTransform,
         &ImpostorHandle,
+        Option<&UnitState>,
         Option<&Health>,
+        Option<&crate::simulation::combat::UnitBrain>,
         Option<&AttackTarget>,
         Option<&MoveTarget>,
+        Option<&MovementSmoothing>,
         Option<&MobTier>,
     )>,
 ) {
     let Some(gi) = goblin_impostor else { return };
-    let t = time.elapsed_secs();
     let (light_tint, shadow_tint, sun_direction, light_mix, top_light, bottom_light) =
         impostor_lighting_params(&ambient, sun_q.single().ok());
 
-    for (tf, gtf, handle, health, attack, move_target, opt_tier) in &units {
-        let state = derive_impostor_state(health, attack, move_target);
+    for (
+        entity,
+        tf,
+        gtf,
+        handle,
+        unit_state,
+        health,
+        brain,
+        attack,
+        move_target,
+        smoothing,
+        opt_tier,
+    ) in
+        &units
+    {
+        let prev_state = mats
+            .get(&handle.0)
+            .map(|mat| {
+                let idle = gi.lookup(ImpostorAnimState::Idle).0;
+                let walk = gi.lookup(ImpostorAnimState::Walk).0;
+                let run = gi.lookup(ImpostorAnimState::Run).0;
+                match mat.params.state_row_offset {
+                    row if row == run => ImpostorAnimState::Run,
+                    row if row == walk => ImpostorAnimState::Walk,
+                    row if row == idle => ImpostorAnimState::Idle,
+                    _ => ImpostorAnimState::Idle,
+                }
+            })
+            .unwrap_or(ImpostorAnimState::Idle);
+        let was_running = prev_state == ImpostorAnimState::Run;
+        let target_exists = brain
+            .and_then(|b| b.target)
+            .map_or(false, |target| target_transforms.get(target).is_ok());
+        let unit_speed = unit_speeds.get(entity).ok();
+        let state = derive_impostor_state(
+            unit_state,
+            health,
+            brain,
+            attack,
+            move_target,
+            smoothing,
+            unit_speed,
+            target_exists,
+            was_running,
+        );
         let (row, fcount) = gi.lookup(state);
         let yaw = yaw_from_rotation(tf.rotation);
         let local_visibility = impostor_local_visibility(
@@ -332,12 +457,30 @@ pub fn impostor_sync_system(
         let tier = opt_tier.copied().unwrap_or_default();
         let tier_rgb = tier.tint_rgb();
         let tier_tint = Vec4::new(tier_rgb[0], tier_rgb[1], tier_rgb[2], 1.0);
+        let loop_animation = if state == ImpostorAnimState::Death {
+            0.0
+        } else {
+            1.0
+        };
+        let phase = if matches!(
+            state,
+            ImpostorAnimState::Idle | ImpostorAnimState::Walk | ImpostorAnimState::Run
+        ) {
+            impostor_phase_seed(entity)
+        } else {
+            0.0
+        };
 
         if let Some(mat) = mats.get_mut(&handle.0) {
-            mat.params.time = t;
+            if mat.params.state_row_offset != row {
+                mat.params.time = 0.0;
+            } else {
+                mat.params.time += time.delta_secs();
+            }
             mat.params.yaw_facing = yaw;
             mat.params.state_row_offset = row;
             mat.params.frame_count = fcount;
+            mat.params.time_phase = phase;
             mat.params.light_tint = light_tint;
             mat.params.shadow_tint = shadow_tint;
             mat.params.sun_direction = sun_direction;
@@ -347,6 +490,7 @@ pub fn impostor_sync_system(
             mat.params.local_visibility = local_visibility;
             mat.params.wrap_amount = 0.35;
             mat.params.rim_strength = 0.14 + local_visibility * 0.24;
+            mat.params.loop_animation = loop_animation;
             mat.params.tier_tint = tier_tint;
         }
     }

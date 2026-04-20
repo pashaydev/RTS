@@ -51,7 +51,12 @@ impl Plugin for ResourcesPlugin {
                         >)),
                 ),
             )
-            .add_systems(FixedUpdate, workers::worker_ai_system)
+            .add_systems(
+                FixedUpdate,
+                workers::worker_ai_system
+                    .in_set(SimSet::Economy)
+                    .run_if(in_state(AppState::InGame)),
+            )
             .add_systems(
                 FixedUpdate,
                 (

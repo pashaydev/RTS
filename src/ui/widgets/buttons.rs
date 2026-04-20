@@ -735,7 +735,7 @@ pub fn handle_assign_worker_button(
     assigned_workers_q: Query<&AssignedWorkers>,
     active_player: Res<ActivePlayer>,
     height_map: Res<crate::world::ground::HeightMap>,
-    time: Res<Time>,
+    time: Res<Time<bevy::time::Fixed>>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -800,7 +800,6 @@ pub fn handle_assign_worker_button(
             commands
                 .entity(worker_entity)
                 .remove::<AttackTarget>()
-                .remove::<PreferredResource>()
                 .remove::<ManualIdleSince>();
             if let Ok(mut queue) = worker_queries.p2().get_mut(worker_entity) {
                 queue.clear();
@@ -1196,7 +1195,7 @@ pub fn handle_hold_position_button(
     active_player: Res<ActivePlayer>,
     mut next_task_id: ResMut<NextTaskId>,
     mut cmd_mode: ResMut<CommandMode>,
-    time: Res<Time>,
+    time: Res<Time<bevy::time::Fixed>>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -1251,7 +1250,7 @@ pub fn handle_stop_button(
     >,
     active_player: Res<ActivePlayer>,
     mut cmd_mode: ResMut<CommandMode>,
-    time: Res<Time>,
+    time: Res<Time<bevy::time::Fixed>>,
     mut ui_clicked: ResMut<UiClickedThisFrame>,
     mut ui_press: ResMut<UiPressActive>,
 ) {
@@ -1285,10 +1284,7 @@ pub fn handle_stop_button(
                     entity,
                     assignment.map(|assignment| assignment.0),
                 );
-                commands
-                    .entity(entity)
-                    .remove::<PreferredResource>()
-                    .insert(grace);
+                commands.entity(entity).insert(grace);
             } else {
                 commands
                     .entity(entity)
@@ -1375,7 +1371,6 @@ pub fn handle_formation_button(
 }
 
 pub fn handle_prefer_resource_button(
-    mut commands: Commands,
     interactions: Query<&Interaction, (Changed<Interaction>, With<PreferResourceButton>)>,
     mut online: OnlineInputParams,
     selected: Query<
@@ -1402,7 +1397,7 @@ pub fn handle_prefer_resource_button(
             .unwrap_or(SelectedWorkerPreference::Off)
             .cycle_target();
 
-        if online.submit.submit(
+        online.submit.submit(
             selected
                 .iter()
                 .filter(|(_, faction, kind, _)| {
@@ -1412,23 +1407,7 @@ pub fn handle_prefer_resource_button(
             vec![InputCommand::SetPreferredResource {
                 resource: next.map(|rt| rt.index() as u8).unwrap_or(u8::MAX),
             }],
-        ) {
-            continue;
-        }
-
-        for (entity, faction, kind, _) in &selected {
-            if *faction != active_player.0 || *kind != EntityKind::Worker {
-                continue;
-            }
-            match next {
-                Some(rt) => {
-                    commands.entity(entity).insert(PreferredResource(rt));
-                }
-                None => {
-                    commands.entity(entity).remove::<PreferredResource>();
-                }
-            }
-        }
+        );
     }
 }
 

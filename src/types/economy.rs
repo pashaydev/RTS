@@ -2,7 +2,7 @@
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::app::Faction;
 use crate::blueprints::{EntityKind, ResourceCost};
@@ -242,9 +242,12 @@ impl AllCompletedBuildings {
 }
 
 /// Tracks whether each faction has completed its first base.
+///
+/// Uses `BTreeMap` so serialization order (save files) and any future
+/// iteration paths are deterministic across peers.
 #[derive(Resource, Default)]
 pub struct FactionBaseState {
-    pub founded: HashMap<Faction, bool>,
+    pub founded: BTreeMap<Faction, bool>,
 }
 
 impl FactionBaseState {
