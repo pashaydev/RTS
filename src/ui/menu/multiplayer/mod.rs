@@ -1,3 +1,6 @@
+//! Multiplayer menu submodule: lobby, network config, connection pages,
+//! and the networking glue that binds lobby UI to the transport layer.
+
 pub(crate) mod config;
 pub(crate) mod lobby;
 pub(crate) mod networking;

@@ -1,3 +1,6 @@
+//! Water mesh, wave animation, and fog-texture patching where the
+//! water plane meets the terrain.
+
 use std::collections::{HashMap, VecDeque};
 
 use bevy::mesh::{Indices, PrimitiveTopology};

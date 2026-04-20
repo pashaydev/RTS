@@ -1,3 +1,6 @@
+//! New-game setup page: difficulty, map size, faction, AI count, team
+//! mode, and starting resources — writes to `GameSetupConfig`.
+
 use bevy::prelude::*;
 
 use super::helpers::*;

@@ -373,6 +373,11 @@ pub struct GameSetupConfig {
     pub night_spawn_intensity: NightSpawnIntensity,
     pub starting_resources_mult: f32,
     pub map_seed: u64, // 0 = random
+    /// Match-wide simulation speed multiplier. Set from `GameplaySettings` for
+    /// the host; clients inherit it via the lobby config broadcast so every
+    /// peer's lockstep-simulation systems (day cycle, etc.) use the same
+    /// divisor — keeps deterministic state identical across peers.
+    pub game_speed: f32,
 }
 
 impl Default for GameSetupConfig {
@@ -395,6 +400,7 @@ impl Default for GameSetupConfig {
             night_spawn_intensity: NightSpawnIntensity::default(),
             starting_resources_mult: 1.0,
             map_seed: 0,
+            game_speed: default_game_speed(),
         }
     }
 }
@@ -741,6 +747,42 @@ impl Default for GraphicsSettings {
         }
     }
 }
+
+// ── Gameplay Settings ──
+
+/// User-preference gameplay knobs that persist across sessions.
+///
+/// `game_speed` is applied via `Time::<Virtual>::set_relative_speed`, which
+/// scales both `FixedUpdate` tick frequency and `Update` deltas — no sim code
+/// needs to be touched. Forced to 1.0 while online to keep lockstep peers
+/// synchronized (the gate is wall-clock driven).
+#[derive(Resource, Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GameplaySettings {
+    #[serde(default = "default_game_speed")]
+    pub game_speed: f32,
+}
+
+fn default_game_speed() -> f32 {
+    2.5
+}
+
+impl Default for GameplaySettings {
+    fn default() -> Self {
+        Self {
+            game_speed: default_game_speed(),
+        }
+    }
+}
+
+/// Discrete speed options exposed in the Options menu.
+pub const GAME_SPEED_OPTIONS: &[(f32, &str)] = &[
+    (0.5, "0.5x"),
+    (1.0, "1x"),
+    (1.5, "1.5x"),
+    (2.0, "2x"),
+    (2.5, "2.5x"),
+    (3.0, "3x"),
+];
 
 /// Dynamic resolution list populated from monitor video modes at runtime.
 #[derive(Resource, Clone, Debug)]

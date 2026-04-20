@@ -1,3 +1,6 @@
+//! AI fast-response layer: threat detection, defense coordination,
+//! scouting, and enemy intel tracking between strategy ticks.
+
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use std::collections::HashSet;

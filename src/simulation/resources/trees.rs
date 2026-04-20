@@ -1,3 +1,6 @@
+//! Tree growth lifecycle (sapling → growing → mature), reproduction via
+//! seeding, and occlusion culling inside building interiors.
+
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use rand::Rng;

@@ -1,3 +1,6 @@
+//! Menu state management systems: page transitions, monitor queries,
+//! and option save/load wiring for the menu plugin.
+
 use bevy::prelude::*;
 use bevy::window::Monitor;
 use bevy::window::PrimaryMonitor;
@@ -21,6 +24,7 @@ pub(crate) fn spawn_menu(
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
     audio_settings: Res<crate::infrastructure::audio::AudioSettings>,
+    gameplay: Res<GameplaySettings>,
     resolutions: Res<AvailableResolutions>,
     fonts: Res<UiFonts>,
     early_exit: (
@@ -99,6 +103,7 @@ pub(crate) fn spawn_menu(
         &config,
         &graphics,
         &audio_settings,
+        &gameplay,
         &resolutions,
         &fonts,
         &lobby,
@@ -119,6 +124,7 @@ fn dispatch_page(
     config: &GameSetupConfig,
     graphics: &GraphicsSettings,
     audio_settings: &crate::infrastructure::audio::AudioSettings,
+    gameplay: &GameplaySettings,
     resolutions: &AvailableResolutions,
     fonts: &UiFonts,
     lobby: &LobbyState,
@@ -139,6 +145,7 @@ fn dispatch_page(
             container,
             graphics,
             audio_settings,
+            gameplay,
             resolutions,
             fonts,
             theme,
@@ -185,9 +192,14 @@ pub(crate) fn refresh_menu_page(
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
     theme: Res<Theme>,
-    extras: (Res<GameDatabase>, Res<ActiveProfile>, Res<AssetServer>),
+    extras: (
+        Res<GameDatabase>,
+        Res<ActiveProfile>,
+        Res<AssetServer>,
+        Res<GameplaySettings>,
+    ),
 ) {
-    let (db, profile, asset_server) = extras;
+    let (db, profile, asset_server, gameplay) = extras;
 
     if !page.is_changed() {
         return;
@@ -220,6 +232,7 @@ pub(crate) fn refresh_menu_page(
         &config,
         &graphics,
         &audio_settings,
+        &gameplay,
         &resolutions,
         &fonts,
         &lobby,
@@ -249,9 +262,14 @@ pub(crate) fn rebuild_dirty_menu(
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
     theme: Res<Theme>,
-    extras: (Res<GameDatabase>, Res<ActiveProfile>, Res<AssetServer>),
+    extras: (
+        Res<GameDatabase>,
+        Res<ActiveProfile>,
+        Res<AssetServer>,
+        Res<GameplaySettings>,
+    ),
 ) {
-    let (db, profile, asset_server) = extras;
+    let (db, profile, asset_server, gameplay) = extras;
 
     if dirty.is_none() {
         return;
@@ -285,6 +303,7 @@ pub(crate) fn rebuild_dirty_menu(
         &config,
         &graphics,
         &audio_settings,
+        &gameplay,
         &resolutions,
         &fonts,
         &lobby,
@@ -318,6 +337,7 @@ pub(crate) fn apply_window_settings_on_menu_enter(
 pub(crate) fn update_selector_visuals(
     config: Res<GameSetupConfig>,
     graphics: Res<GraphicsSettings>,
+    gameplay: Res<GameplaySettings>,
     resolutions: Res<AvailableResolutions>,
     page: Res<MenuPage>,
     preferred_faction: Option<Res<super::PreferredFaction>>,
@@ -473,6 +493,9 @@ pub(crate) fn update_selector_visuals(
             SelectorField::UiScale => UI_SCALE_OPTIONS
                 .get(selector.index)
                 .map_or(false, |&(v, _)| (v - graphics.ui_scale).abs() < 0.01),
+            SelectorField::GameSpeed => GAME_SPEED_OPTIONS
+                .get(selector.index)
+                .map_or(false, |&(v, _)| (v - gameplay.game_speed).abs() < 0.01),
             SelectorField::ThemeMode => {
                 selector.index
                     == match graphics.theme_mode {

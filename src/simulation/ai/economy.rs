@@ -1,3 +1,6 @@
+//! AI economy: worker assignments, building placement/construction,
+//! wall spawning, and resource-gathering decisions.
+
 use bevy::prelude::*;
 use bevy::time::Fixed;
 

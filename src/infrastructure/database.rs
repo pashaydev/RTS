@@ -10,7 +10,7 @@ use crate::infrastructure::multiplayer::NetRole;
 use crate::simulation::victory::VictoryState;
 use crate::types::{
     ActivePlayer, AiDifficulty, AllPlayerResources, AppState, Faction, FactionStats,
-    GameSetupConfig, GraphicsSettings, MatchStartTime, SlotOccupant,
+    GameSetupConfig, GameplaySettings, GraphicsSettings, MatchStartTime, SlotOccupant,
 };
 
 // ── Plugin ──────────────────────────────────────────────────────────────────
@@ -27,6 +27,7 @@ impl Plugin for DatabasePlugin {
                 sync_settings_to_db.run_if(
                     resource_changed::<GraphicsSettings>
                         .or(resource_changed::<crate::infrastructure::audio::AudioSettings>)
+                        .or(resource_changed::<GameplaySettings>)
                         .or(resource_changed::<crate::ui::core::framework::WidgetRegistry>),
                 ),
             );
@@ -41,6 +42,7 @@ pub fn init_early() -> (
     ActiveProfile,
     GraphicsSettings,
     crate::infrastructure::audio::AudioSettings,
+    GameplaySettings,
 ) {
     let db = GameDatabase::open();
     let profile = db.get_or_create_active_profile();
@@ -50,7 +52,10 @@ pub fn init_early() -> (
     let audio = db
         .load_settings_blob::<crate::infrastructure::audio::AudioSettings>("audio")
         .unwrap_or_default();
-    (db, profile, graphics, audio)
+    let gameplay = db
+        .load_settings_blob::<GameplaySettings>("gameplay")
+        .unwrap_or_default();
+    (db, profile, graphics, audio, gameplay)
 }
 
 // ── Resources ───────────────────────────────────────────────────────────────
@@ -1182,6 +1187,7 @@ fn sync_settings_to_db(
     db: Res<GameDatabase>,
     graphics: Res<GraphicsSettings>,
     audio: Res<crate::infrastructure::audio::AudioSettings>,
+    gameplay: Res<GameplaySettings>,
     widget_registry: Res<crate::ui::core::framework::WidgetRegistry>,
 ) {
     if !db.is_available() {
@@ -1197,6 +1203,12 @@ fn sync_settings_to_db(
     if audio.is_changed() {
         if let Ok(json) = serde_json::to_string_pretty(&*audio) {
             db.save_setting("audio", "_blob", &json);
+        }
+    }
+
+    if gameplay.is_changed() {
+        if let Ok(json) = serde_json::to_string_pretty(&*gameplay) {
+            db.save_setting("gameplay", "_blob", &json);
         }
     }
 

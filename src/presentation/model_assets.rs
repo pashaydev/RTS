@@ -1,3 +1,6 @@
+//! `ModelAssetsPlugin`: loads TTP unit/building/tree meshes and animations
+//! and extracts per-type animation graphs for the animation system.
+
 use bevy::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;

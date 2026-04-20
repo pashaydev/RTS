@@ -1,3 +1,6 @@
+//! `CullingPlugin`: frustum culling pipeline — syncs camera AABB,
+//! marks visible entities, and hides distant ones to save draw calls.
+
 use bevy::camera::primitives::{Frustum, Sphere as FrustumSphere};
 use bevy::ecs::lifecycle::RemovedComponents;
 use bevy::prelude::*;

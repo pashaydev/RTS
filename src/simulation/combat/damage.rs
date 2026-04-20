@@ -1,3 +1,6 @@
+//! Centralized damage application: routes every damage source through
+//! armor multipliers and writes the recent-damage memory for retaliation.
+
 use bevy::prelude::*;
 
 use crate::types::{ArmorType, DamageType, Health, RecentCombatDamage, ReservedIncomingDamage};

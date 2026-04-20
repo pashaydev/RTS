@@ -1,3 +1,6 @@
+//! `AttentionPlugin`: health popups, damage numbers, under-attack icon,
+//! and worker-status overlay — surface short-lived UI for world events.
+
 use bevy::prelude::*;
 
 use crate::blueprints::EntityKind;

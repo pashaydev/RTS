@@ -1,3 +1,6 @@
+//! `AiPlugin`: orchestrates the enemy AI by aggregating snapshot,
+//! strategy, economy, military, and tactical subsystems with dirty flags.
+
 mod economy;
 mod helpers;
 mod military;

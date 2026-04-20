@@ -1,3 +1,6 @@
+//! Initial terrain + water mesh spawn and texture baking at game start,
+//! reading `MapSeed` and `GameSetupConfig` for procedural generation.
+
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::prelude::*;

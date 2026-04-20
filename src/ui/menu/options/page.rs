@@ -1,3 +1,6 @@
+//! Options page layout: sliders, toggles, and dropdowns rendered for the
+//! graphics/audio/gameplay sections.
+
 use bevy::prelude::*;
 
 use super::resolution_index;
@@ -16,6 +19,7 @@ pub(crate) fn spawn_options_page(
     container: Entity,
     graphics: &GraphicsSettings,
     audio_settings: &crate::infrastructure::audio::AudioSettings,
+    gameplay: &GameplaySettings,
     resolutions: &AvailableResolutions,
     fonts: &UiFonts,
     theme: &Theme,
@@ -267,6 +271,26 @@ pub(crate) fn spawn_options_page(
         theme,
     );
 
+    // ── Gameplay Section ──
+
+    spawn_animated_section_divider(commands, container, "GAMEPLAY", fonts, theme);
+
+    let speed_labels: Vec<&str> = GAME_SPEED_OPTIONS.iter().map(|&(_, s)| s).collect();
+    let speed_idx = GAME_SPEED_OPTIONS
+        .iter()
+        .position(|&(v, _)| (v - gameplay.game_speed).abs() < 0.01)
+        .unwrap_or(4);
+    spawn_selector_row(
+        commands,
+        container,
+        "Game Speed:",
+        &speed_labels,
+        speed_idx,
+        SelectorField::GameSpeed,
+        Some(15),
+        theme,
+    );
+
     // ── Save Button (hidden until settings change) ──
 
     let save_btn = spawn_styled_button(
@@ -278,7 +302,7 @@ pub(crate) fn spawn_options_page(
         ),
         true,
         fonts,
-        Some(15),
+        Some(16),
         theme,
     );
     commands.entity(container).add_child(save_btn);

@@ -1,3 +1,6 @@
+//! Grass chunk rendering, fog-of-war reveal tracking for world props, and
+//! biome-aware decoration spawning.
+
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};

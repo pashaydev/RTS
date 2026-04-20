@@ -164,6 +164,7 @@ pub fn execute_input_command(
     workers: &[BuildWorkerSnapshot],
     obstacle_grid: &ObstacleGrid,
     registry: &BlueprintRegistry,
+    pending_lockstep_builds: &mut ResMut<PendingLockstepBuilds>,
 ) {
     let input_faction = lobby
         .players
@@ -554,7 +555,9 @@ pub fn execute_input_command(
                     },
                 );
                 let Some((worker_entity, _)) =
-                    find_best_worker_for_build(worker_iter, faction, build_pos)
+                    find_best_worker_for_build(worker_iter, faction, build_pos, |e| {
+                        net_map.to_net.get(&e).copied()
+                    })
                 else {
                     continue;
                 };
@@ -660,6 +663,37 @@ pub fn execute_input_command(
                         }
                     }
                 }
+            }
+            InputCommand::BuildWall { cells } => {
+                let Some(faction) = input_faction else {
+                    continue;
+                };
+                if cells.is_empty() {
+                    continue;
+                }
+                let grid_cells: Vec<(i32, i32)> = cells.iter().map(|c| (c[0], c[1])).collect();
+                pending_lockstep_builds.walls.push(PendingWallBuild {
+                    faction,
+                    cells: grid_cells,
+                });
+            }
+            InputCommand::BuildGate { cell } => {
+                let Some(faction) = input_faction else {
+                    continue;
+                };
+                pending_lockstep_builds.gates.push(PendingGateBuild {
+                    faction,
+                    cell: (cell[0], cell[1]),
+                });
+            }
+            InputCommand::BuildFloor { cell } => {
+                let Some(faction) = input_faction else {
+                    continue;
+                };
+                pending_lockstep_builds.floors.push(PendingFloorBuild {
+                    faction,
+                    cell: (cell[0], cell[1]),
+                });
             }
             _ => {
                 debug!("Unhandled command: {:?}", cmd);

@@ -1,3 +1,6 @@
+//! Worker AI loop: seeking nodes, gathering accumulation, deposit
+//! delivery to buildings, and carried-inventory persistence.
+
 use bevy::ecs::system::SystemParam;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;

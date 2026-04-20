@@ -1,3 +1,6 @@
+//! `MinimapPlugin`: renders the 200×200 minimap with fog, units,
+//! buildings, and the current camera viewport rectangle.
+
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::prelude::*;

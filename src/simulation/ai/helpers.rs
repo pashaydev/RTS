@@ -1,3 +1,6 @@
+//! Goal-aware resource picker and utility functions shared across the AI
+//! economy/military/tactical subsystems.
+
 use bevy::prelude::*;
 use std::collections::HashMap;
 

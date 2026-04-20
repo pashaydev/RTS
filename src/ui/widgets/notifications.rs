@@ -1,3 +1,6 @@
+//! Transient toast notifications: unit ready, resources low, under
+//! attack, wave incoming — short-lived HUD messages with fade-out.
+
 use bevy::prelude::*;
 
 use super::core::constants::*;

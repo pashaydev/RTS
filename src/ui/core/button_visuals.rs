@@ -1,3 +1,6 @@
+//! Button visuals: material, padding, hue, shading, and hover/press
+//! texture generation used by all UI buttons.
+
 use bevy::prelude::*;
 
 use crate::types::*;

@@ -1,3 +1,6 @@
+//! `GameAudioPlugin`: loads the audio settings resource, wires music/SFX
+//! channel markers, and plays sound effects in response to game events.
+
 use bevy::audio::Volume;
 use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;

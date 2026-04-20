@@ -1,3 +1,6 @@
+//! Shared UI utilities and trait impls (e.g. color-palette getters,
+//! layout helpers) consumed by both widgets and menu pages.
+
 use bevy::prelude::*;
 
 use super::constants::*;

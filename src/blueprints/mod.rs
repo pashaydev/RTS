@@ -1,3 +1,6 @@
+//! Data-driven entity definitions. Re-exports the blueprint asset loader,
+//! registry builder, spawn helpers, and visual cache.
+
 pub mod asset;
 mod plugin;
 mod registry;

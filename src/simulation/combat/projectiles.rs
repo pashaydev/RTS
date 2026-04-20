@@ -1,3 +1,6 @@
+//! In-flight projectile motion, impact event dispatch, on-impact effect
+//! resolution, and visual attachment for ranged attacks and abilities.
+
 use bevy::prelude::*;
 use bevy::time::Fixed;
 

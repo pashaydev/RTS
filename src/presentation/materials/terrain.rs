@@ -1,3 +1,6 @@
+//! Terrain PBR material extension: triplanar texturing, slope erosion,
+//! and biome blend layers driven by the height/biome maps.
+
 use bevy::{
     pbr::{ExtendedMaterial, MaterialExtension, StandardMaterial},
     prelude::*,

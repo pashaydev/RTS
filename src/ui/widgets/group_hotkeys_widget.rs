@@ -1,3 +1,6 @@
+//! Control-group hotkeys widget: assign/recall selection groups (1-0)
+//! via keyboard shortcuts with visual slot indicators.
+
 use bevy::prelude::*;
 
 use super::core::constants::*;

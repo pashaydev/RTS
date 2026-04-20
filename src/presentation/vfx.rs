@@ -1,3 +1,6 @@
+//! `VfxPlugin`: particle effects for impacts, blood, dust, gather,
+//! summons, attacks, and screen shake.
+
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 

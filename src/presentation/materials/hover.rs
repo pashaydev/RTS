@@ -1,3 +1,6 @@
+//! Silhouette-glow overlay material applied to hovered units and
+//! buildings so they stand out under the cursor.
+
 use bevy::{
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderType},

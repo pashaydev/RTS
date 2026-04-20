@@ -1,3 +1,6 @@
+//! `FogPlugin`: line-of-sight visibility grid with Display/Explored
+//! states; updates the fog texture consumed by the fog material.
+
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
 use bevy::light::{NotShadowCaster, NotShadowReceiver};

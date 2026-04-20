@@ -1,3 +1,6 @@
+//! AI state machine (Founding → EarlyEconomy → Expanding → Attacking)
+//! and the build-queue planner that drives economy/military subsystems.
+
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use std::collections::HashMap;

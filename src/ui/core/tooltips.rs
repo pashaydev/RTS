@@ -1,3 +1,6 @@
+//! Tooltip spawn, position, and hover/hold fade-in — the single owner of
+//! tooltip geometry for every widget.
+
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 

@@ -1,3 +1,6 @@
+//! Perlin-noise terrain sampler, `MapSeed` resolution, and biome
+//! distribution used by generation and the resource spawner.
+
 use bevy::prelude::*;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 

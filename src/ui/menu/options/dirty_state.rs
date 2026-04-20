@@ -1,3 +1,6 @@
+//! Tracks unsaved setting changes so Apply / Revert / Discard buttons
+//! know whether there is pending work.
+
 use bevy::prelude::*;
 
 use crate::types::*;
@@ -13,6 +16,7 @@ pub(crate) fn capture_options_snapshot(
     page: Res<MenuPage>,
     graphics: Res<GraphicsSettings>,
     audio_settings: Res<crate::infrastructure::audio::AudioSettings>,
+    gameplay: Res<GameplaySettings>,
     mut commands: Commands,
     snapshot: Option<Res<super::super::OptionsSnapshot>>,
 ) {
@@ -25,6 +29,7 @@ pub(crate) fn capture_options_snapshot(
             commands.insert_resource(super::super::OptionsSnapshot {
                 graphics: graphics.clone(),
                 audio: audio_settings.clone(),
+                gameplay: gameplay.clone(),
             });
         }
     } else {
@@ -40,6 +45,7 @@ pub(crate) fn toggle_save_button_visibility(
     page: Res<MenuPage>,
     graphics: Res<GraphicsSettings>,
     audio_settings: Res<crate::infrastructure::audio::AudioSettings>,
+    gameplay: Res<GameplaySettings>,
     snapshot: Option<Res<super::super::OptionsSnapshot>>,
     mut save_btns: Query<&mut Visibility, With<super::super::SaveSettingsButton>>,
 ) {
@@ -47,7 +53,9 @@ pub(crate) fn toggle_save_button_visibility(
         return;
     }
     let dirty = if let Some(ref snap) = snapshot {
-        *graphics != snap.graphics || *audio_settings != snap.audio
+        *graphics != snap.graphics
+            || *audio_settings != snap.audio
+            || *gameplay != snap.gameplay
     } else {
         false
     };

@@ -2,6 +2,7 @@
 
 mod construction;
 mod environment;
+mod lockstep_builds;
 mod placement;
 mod training;
 mod upgrades;
@@ -33,6 +34,7 @@ impl Plugin for BuildingsPlugin {
             .init_resource::<WallGrid>()
             .init_resource::<FloorGrid>()
             .init_resource::<ObstacleGrid>()
+            .init_resource::<PendingLockstepBuilds>()
             .add_systems(Startup, placement::create_ghost_materials)
             .add_systems(
                 FixedUpdate,
@@ -63,6 +65,9 @@ impl Plugin for BuildingsPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    lockstep_builds::apply_pending_wall_builds,
+                    lockstep_builds::apply_pending_gate_builds,
+                    lockstep_builds::apply_pending_floor_builds,
                     construction::pending_build_arrival_system,
                     construction::build_site_preparation_system,
                     construction::pending_build_cleanup_system,
@@ -129,6 +134,12 @@ fn worker_availability_priority(
 }
 
 /// Find the best available worker for a build task at `build_pos`.
+///
+/// Iteration order over the ECS is not portable between peers, so after
+/// priority+distance comparison we break ties on `NetworkId` — a stable
+/// per-peer identity assigned deterministically in `FixedFirst`. Without a
+/// tie-breaker two workers at exactly the same distance could be picked
+/// differently on different peers, triggering a lockstep desync.
 pub(crate) fn find_best_worker_for_build<'a>(
     workers: impl Iterator<
         Item = (
@@ -141,6 +152,7 @@ pub(crate) fn find_best_worker_for_build<'a>(
     >,
     faction: Faction,
     build_pos: Vec3,
+    network_id_of: impl Fn(Entity) -> Option<u32>,
 ) -> Option<(Entity, u8)> {
     let mut faction_workers: Vec<(Entity, Vec3, &UnitState)> = Vec::new();
     let mut build_counts: std::collections::HashMap<Entity, u32> = std::collections::HashMap::new();
@@ -158,20 +170,28 @@ pub(crate) fn find_best_worker_for_build<'a>(
         }
     }
 
-    let mut best: Option<(Entity, u8, f32)> = None;
+    let mut best: Option<(Entity, u8, f32, u32)> = None;
     for &(w_entity, w_pos, w_state) in &faction_workers {
         let Some(prio) = worker_availability_priority(w_state, &build_counts) else {
             continue;
         };
         let dist = w_pos.distance(build_pos);
-        let dominated = best.map_or(false, |(_, best_prio, best_dist)| {
-            prio > best_prio || (prio == best_prio && dist >= best_dist)
+        // Unmapped workers lose ties to mapped ones (u32::MAX sorts last).
+        let net_id = network_id_of(w_entity).unwrap_or(u32::MAX);
+        let dominated = best.map_or(false, |(_, best_prio, best_dist, best_net_id)| {
+            if prio != best_prio {
+                return prio > best_prio;
+            }
+            if dist != best_dist {
+                return dist >= best_dist;
+            }
+            net_id >= best_net_id
         });
         if !dominated {
-            best = Some((w_entity, prio, dist));
+            best = Some((w_entity, prio, dist, net_id));
         }
     }
-    best.map(|(e, prio, _)| (e, prio))
+    best.map(|(e, prio, _, _)| (e, prio))
 }
 
 fn has_available_worker_for_build<'a>(
@@ -187,7 +207,9 @@ fn has_available_worker_for_build<'a>(
     faction: Faction,
     build_pos: Vec3,
 ) -> bool {
-    find_best_worker_for_build(workers, faction, build_pos).is_some()
+    // Tie-breaking isn't important here: this is a boolean yes/no probe for
+    // the placement preview, not a deterministic assignment decision.
+    find_best_worker_for_build(workers, faction, build_pos, |_| None).is_some()
 }
 
 /// When reassigning a worker away from their current task, clean up the old building's
@@ -541,5 +563,85 @@ pub fn biome_requirement_text(kind: EntityKind) -> Option<&'static str> {
         EntityKind::Mine => Some("Mine must be placed on Mountain, Wetland, or Desert"),
         EntityKind::OilRig => Some("Oil Rig must be placed on Water"),
         _ => Some("Cannot place on Water"),
+    }
+}
+
+#[cfg(test)]
+mod worker_selection_tests {
+    use super::*;
+
+    /// Two idle workers at identical distance are only resolved by the
+    /// `NetworkId` tie-breaker. Without it, two peers could pick different
+    /// workers depending on ECS iteration order — that's the lockstep desync
+    /// vector we're guarding against here.
+    #[test]
+    fn idle_tie_breaks_on_network_id_lowest_wins() {
+        let worker_a = Entity::from_raw_u32(10).unwrap();
+        let worker_b = Entity::from_raw_u32(11).unwrap();
+
+        // Both at (0,0,0), same build target → exactly tied on distance.
+        let tf = Transform::from_xyz(0.0, 0.0, 0.0);
+        let state = UnitState::Idle;
+        let faction = Faction::Player1;
+        let kind = EntityKind::Worker;
+
+        let workers_ab: Vec<(Entity, &Transform, &UnitState, &Faction, &EntityKind)> = vec![
+            (worker_a, &tf, &state, &faction, &kind),
+            (worker_b, &tf, &state, &faction, &kind),
+        ];
+        let workers_ba: Vec<(Entity, &Transform, &UnitState, &Faction, &EntityKind)> = vec![
+            (worker_b, &tf, &state, &faction, &kind),
+            (worker_a, &tf, &state, &faction, &kind),
+        ];
+
+        // Deterministic network IDs: worker_a=5, worker_b=7. Lowest wins.
+        let net_id = |entity: Entity| match entity {
+            e if e == worker_a => Some(5u32),
+            e if e == worker_b => Some(7u32),
+            _ => None,
+        };
+
+        let picked_forward =
+            find_best_worker_for_build(workers_ab.into_iter(), faction, Vec3::ZERO, net_id);
+        let picked_reverse =
+            find_best_worker_for_build(workers_ba.into_iter(), faction, Vec3::ZERO, net_id);
+
+        assert_eq!(picked_forward.map(|p| p.0), Some(worker_a));
+        assert_eq!(
+            picked_forward.map(|p| p.0),
+            picked_reverse.map(|p| p.0),
+            "iteration order must not change the pick when NetworkId is stable"
+        );
+    }
+
+    /// Distance still dominates over NetworkId when distances differ — the
+    /// tie-breaker only kicks in on exact equality.
+    #[test]
+    fn distance_beats_network_id_when_not_tied() {
+        let near = Entity::from_raw_u32(1).unwrap();
+        let far = Entity::from_raw_u32(2).unwrap();
+
+        let tf_near = Transform::from_xyz(0.0, 0.0, 0.0);
+        let tf_far = Transform::from_xyz(100.0, 0.0, 0.0);
+        let state = UnitState::Idle;
+        let faction = Faction::Player1;
+        let kind = EntityKind::Worker;
+
+        // Give `far` a LOWER network id — if it mattered over distance it
+        // would win. It must not.
+        let net_id = |entity: Entity| match entity {
+            e if e == near => Some(99u32),
+            e if e == far => Some(1u32),
+            _ => None,
+        };
+
+        let workers: Vec<(Entity, &Transform, &UnitState, &Faction, &EntityKind)> = vec![
+            (near, &tf_near, &state, &faction, &kind),
+            (far, &tf_far, &state, &faction, &kind),
+        ];
+
+        let picked =
+            find_best_worker_for_build(workers.into_iter(), faction, Vec3::ZERO, net_id);
+        assert_eq!(picked.map(|p| p.0), Some(near));
     }
 }

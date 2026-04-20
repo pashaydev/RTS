@@ -1,3 +1,6 @@
+//! `UiPlugin`: composes the UI layer — core (shared, every state), menu
+//! (MainMenu), widgets (InGame HUD), and attention overlays.
+
 pub mod attention;
 pub mod core;
 pub mod menu;

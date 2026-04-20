@@ -1,3 +1,6 @@
+//! AI data types: brain state, goals, constants, helper predicates, and
+//! personality/difficulty enums used by strategy and tactical ticks.
+
 use bevy::prelude::*;
 use std::collections::HashMap;
 

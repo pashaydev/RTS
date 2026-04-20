@@ -1,3 +1,6 @@
+//! Lobby UI: player list, readiness state, slot allocation, kick/leave
+//! controls, and chat area for the multiplayer pre-game screen.
+
 use std::sync::atomic::Ordering;
 
 use bevy::prelude::*;

@@ -1,3 +1,6 @@
+//! Fog-of-war post-process material that blends the visibility grid into
+//! the rendered frame (shrouds unexplored/unseen areas).
+
 use bevy::{
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderType},

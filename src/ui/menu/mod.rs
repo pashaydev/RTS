@@ -1,3 +1,6 @@
+//! `MenuPlugin`: title, options, new-game, multiplayer, pause-menu, and
+//! guide popup pages; systems gated on `AppState::MainMenu`.
+
 pub(crate) mod guide_popup;
 pub(crate) mod helpers;
 pub(crate) mod input;
@@ -181,6 +184,7 @@ pub(crate) struct MenuDirty;
 pub(crate) struct OptionsSnapshot {
     pub graphics: GraphicsSettings,
     pub audio: crate::infrastructure::audio::AudioSettings,
+    pub gameplay: GameplaySettings,
 }
 
 /// Whether the confirm-popup overlay is currently shown on the Options page.

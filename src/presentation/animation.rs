@@ -1,3 +1,6 @@
+//! `AnimationPlugin`: drives GLTF rig state machine with hysteresis, idle
+//! breathing, and turn-lean based on unit movement and combat state.
+
 use bevy::prelude::*;
 
 use crate::blueprints::EntityKind;

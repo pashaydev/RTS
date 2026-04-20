@@ -1,3 +1,6 @@
+//! `SessionLogPlugin`: tracing layer that collects JSON-formatted log events
+//! plus panic hook, so each run writes a structured session log to disk.
+
 use bevy::app::AppExit;
 use bevy::ecs::message::MessageReader;
 use bevy::log::tracing::{self, Event, Subscriber};

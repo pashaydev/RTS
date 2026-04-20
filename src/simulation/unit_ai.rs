@@ -1,3 +1,6 @@
+//! Per-unit reactive decisions: threat response, retreat, auto-engage,
+//! leash enforcement, hotspot tracking, priest auto-heal.
+
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use std::f32::consts::TAU;

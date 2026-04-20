@@ -267,6 +267,7 @@ pub struct LockstepApplyContext<'w, 's> {
     building_state: Query<'w, 's, (&'static Faction, Has<BuildingPaused>), With<Building>>,
     tower_auto_attack: Query<'w, 's, &'static mut TowerAutoAttackEnabled, With<Building>>,
     obstacle_grid: Res<'w, ObstacleGrid>,
+    pending_lockstep_builds: ResMut<'w, PendingLockstepBuilds>,
 }
 
 // ── Systems ─────────────────────────────────────────────────────────────────
@@ -364,6 +365,7 @@ pub fn lockstep_apply_tick_inputs(
             &workers,
             &exec.obstacle_grid,
             &exec.registry,
+            &mut exec.pending_lockstep_builds,
         );
     }
     buffer.last_applied_tick = Some(clock.tick);

@@ -1,3 +1,6 @@
+//! Action panel for building selections: place buildings, set rally,
+//! queue production, and cancel/demolish controls.
+
 use bevy::prelude::*;
 
 use super::actions_widget::BuildGridButton;

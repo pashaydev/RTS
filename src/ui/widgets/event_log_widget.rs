@@ -1,3 +1,6 @@
+//! Scrolling event log widget: kills, structures lost/built, tech
+//! unlocks, and milestone callouts for the current match.
+
 use bevy::prelude::*;
 use std::collections::VecDeque;
 

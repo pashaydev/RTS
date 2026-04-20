@@ -1,3 +1,6 @@
+//! Loads/saves debug tweak values to and from SQLite and applies them on
+//! startup so session-to-session tuning sticks.
+
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

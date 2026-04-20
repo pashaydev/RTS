@@ -1,3 +1,6 @@
+//! `LightingPlugin`: day/night cycle, dynamic lights, and the entity
+//! light grid that feeds the impostor material for distant mobs.
+
 use std::collections::{HashMap, HashSet};
 
 use bevy::camera::primitives::{Frustum, Sphere as FrustumSphere};
@@ -392,14 +395,20 @@ fn apply_graphics_lighting_settings(
 fn advance_day_cycle(
     mut cycle: ResMut<DayCycle>,
     time: Res<Time<Fixed>>,
+    config: Res<GameSetupConfig>,
     mut dusk: MessageWriter<DuskBegan>,
     mut dawn: MessageWriter<DawnBegan>,
 ) {
     if cycle.paused {
         return;
     }
+    // Scale by match-wide game_speed so the cycle advances at real seconds:
+    // sim-tick delta (1/30s) is multiplied by game_speed wall-clock ticks/sec,
+    // so dividing here cancels the virtual-time speedup and `cycle_duration`
+    // remains the wall-clock duration regardless of game speed.
+    let speed = config.game_speed.max(0.1);
     let prev_phase = cycle.phase;
-    let next_time = cycle.time + time.delta_secs() / cycle.cycle_duration;
+    let next_time = cycle.time + time.delta_secs() / (cycle.cycle_duration * speed);
     cycle.set_time(next_time);
     let new_phase = cycle.phase;
     if prev_phase != new_phase {

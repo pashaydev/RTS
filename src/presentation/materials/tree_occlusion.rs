@@ -1,3 +1,6 @@
+//! Per-tree depth pass that hides tree interiors when the camera angle
+//! shows them through buildings, avoiding visual clipping.
+
 use bevy::{
     pbr::{ExtendedMaterial, MaterialExtension, StandardMaterial},
     prelude::*,

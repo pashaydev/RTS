@@ -1,3 +1,6 @@
+//! Item definition registry: requirements, restrictions, beam colors,
+//! and per-item metadata loaded at startup.
+
 use bevy::prelude::*;
 use std::collections::HashMap;
 

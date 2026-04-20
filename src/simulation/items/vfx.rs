@@ -1,3 +1,6 @@
+//! Item VFX: conditional procs and persistent visual state triggered by
+//! combat hits or pickup events (e.g. equipped-item auras).
+
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use std::f32::consts::PI;

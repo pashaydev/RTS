@@ -1,3 +1,6 @@
+//! Water PBR material: waves, reflections, transparency, and time-based
+//! animation used by the ocean/lake plane in the world module.
+
 use bevy::{
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderType},

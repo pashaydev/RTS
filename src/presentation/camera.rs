@@ -1,3 +1,6 @@
+//! `CameraPlugin`: spawns the RTS isometric camera with pan, zoom,
+//! edge-scroll, and post-effects; owns the off-screen render target.
+
 use bevy::asset::RenderAssetUsages;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::RenderTarget;

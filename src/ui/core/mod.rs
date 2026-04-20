@@ -1,3 +1,6 @@
+//! `UiCorePlugin`: shared UI layer that runs in every `AppState` —
+//! framework, interactions, tooltips, animations, fonts, HUD scaffold.
+
 pub mod animations;
 pub mod button_visuals;
 pub mod components;

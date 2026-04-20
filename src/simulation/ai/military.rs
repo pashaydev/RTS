@@ -1,3 +1,6 @@
+//! AI military: unit training queues, army composition, squad staging,
+//! and attack orders dispatched against enemy targets.
+
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use std::collections::HashMap;

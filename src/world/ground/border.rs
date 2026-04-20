@@ -1,3 +1,6 @@
+//! Mountain-border mesh generation and topology constraints: hems the
+//! playable area with impassable ridges.
+
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use rand::{Rng, SeedableRng};

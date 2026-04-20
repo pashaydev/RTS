@@ -1,3 +1,6 @@
+//! `SpatialPlugin`: spatial hashing and broad-phase spatial queries used
+//! by targeting, collision checks, and AI range scans.
+
 use bevy::ecs::lifecycle::RemovedComponents;
 use bevy::prelude::*;
 use std::collections::HashMap;

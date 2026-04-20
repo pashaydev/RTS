@@ -1,3 +1,6 @@
+//! Unit/tech production queue widget: shows active and queued items
+//! with ETA bars for the currently selected building.
+
 use bevy::prelude::*;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::BTreeMap;

@@ -1,3 +1,6 @@
+//! Marker `Component`s for debug-UI widgets (text readouts, buttons,
+//! sliders, toggles) used by build and update systems.
+
 use bevy::prelude::*;
 
 #[derive(Component)]

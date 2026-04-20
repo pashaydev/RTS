@@ -1,3 +1,6 @@
+//! Drag-selection box, click/double-click detection, subgroup cycling,
+//! and multi-unit selection logic.
+
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 #[cfg(not(target_arch = "wasm32"))]

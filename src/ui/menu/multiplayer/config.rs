@@ -1,3 +1,6 @@
+//! Per-player network config (name, color, ready state) surfaced to the
+//! lobby page; feeds into `GameSetupConfig` when the match starts.
+
 use crate::infrastructure::multiplayer::{LobbyPlayer, LobbyState};
 use crate::types::*;
 
@@ -24,7 +27,13 @@ pub(crate) struct SerializableGameConfig {
     #[serde(default)]
     pub night_spawn_intensity: u8,
     pub starting_resources_mult: f32,
+    #[serde(default = "default_game_speed_serialized")]
+    pub game_speed: f32,
     pub seat_assignments: Vec<SeatAssignment>,
+}
+
+fn default_game_speed_serialized() -> f32 {
+    2.5
 }
 
 impl SerializableGameConfig {
@@ -80,6 +89,7 @@ impl SerializableGameConfig {
             day_cycle_secs: config.day_cycle_secs,
             night_spawn_intensity: config.night_spawn_intensity.index() as u8,
             starting_resources_mult: config.starting_resources_mult,
+            game_speed: config.game_speed,
             seat_assignments,
         }
     }
@@ -116,6 +126,7 @@ impl SerializableGameConfig {
         config.night_spawn_intensity =
             NightSpawnIntensity::from_index(self.night_spawn_intensity as usize);
         config.starting_resources_mult = self.starting_resources_mult;
+        config.game_speed = self.game_speed;
     }
 
     pub(crate) fn apply_to_lobby(&self, lobby: &mut LobbyState) {

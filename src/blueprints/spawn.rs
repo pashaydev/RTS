@@ -1,3 +1,6 @@
+//! `spawn_from_blueprint[_with_faction]`: materializes a blueprint entry into
+//! the ECS with faction, visuals, combat/move components, and cosmetic RNG.
+
 use bevy::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::{AsyncSceneInheritOutline, InheritOutline, OutlineStencil, OutlineVolume};

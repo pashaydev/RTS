@@ -1,3 +1,6 @@
+//! Spawns the debug-panel node tree (FPS, entity count, day cycle, tweak
+//! tree) when the panel is toggled on.
+
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
 use bevy::prelude::*;
 

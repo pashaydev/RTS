@@ -1,3 +1,6 @@
+//! `PresentationPlugins`: rendering layer composing camera, animation,
+//! LOD, VFX, pathvis, entity labels, minimap, cursor, and custom materials.
+
 pub mod animation;
 pub mod camera;
 pub mod cursor;

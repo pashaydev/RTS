@@ -1,3 +1,6 @@
+//! Hover, click, and hold-complete events; selection mode and command
+//! entry plumbing shared across widgets.
+
 use bevy::ecs::message::MessageWriter;
 use bevy::prelude::*;
 

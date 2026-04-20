@@ -1,3 +1,6 @@
+//! `TweakValue` and `TweakEntry` — the data model for the debug parameter
+//! hierarchy surfaced by the debug panel and persisted by config.
+
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

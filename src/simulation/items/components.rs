@@ -1,3 +1,6 @@
+//! Item data components: `ItemKind`, category enum
+//! (Armor/Helmet/Ring/Sword/Staff/Bow), and per-unit inventory slots.
+
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 

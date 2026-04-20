@@ -1,3 +1,6 @@
+//! `EntityLabelPlugin`: world-space labels (name, HP, progress) with
+//! clustering, a layout solver, and leader lines when labels are displaced.
+
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;

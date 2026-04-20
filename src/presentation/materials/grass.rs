@@ -1,3 +1,6 @@
+//! Animated grass shader extension with wind, bend, and distance LOD;
+//! driven by per-cell instancing from the terrain grass system.
+
 use bevy::{
     pbr::{ExtendedMaterial, MaterialExtension, StandardMaterial},
     prelude::*,

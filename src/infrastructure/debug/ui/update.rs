@@ -1,3 +1,6 @@
+//! Per-frame refresh of debug-panel text (FPS, entity count, day cycle) and
+//! slider/toggle visual state from the current tweak values.
+
 use bevy::prelude::*;
 
 use crate::infrastructure::debug::model::{DebugTweaks, TweakValue};

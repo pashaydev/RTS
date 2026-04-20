@@ -1,3 +1,6 @@
+//! Action panel for unit selections: move, attack, gather, ability
+//! buttons driven by the currently selected unit kinds.
+
 use bevy::prelude::*;
 
 use super::core::constants::*;

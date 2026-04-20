@@ -1,3 +1,6 @@
+//! Menu screen stack (title → options/new-game/lobby → back) and the
+//! page-transition system that rebuilds the menu root on navigation.
+
 use bevy::ecs::message::MessageWriter;
 use bevy::prelude::*;
 
@@ -25,6 +28,7 @@ pub(crate) fn menu_keyboard_nav(
     snapshot: Option<Res<super::OptionsSnapshot>>,
     graphics: Res<GraphicsSettings>,
     audio_settings: Res<crate::infrastructure::audio::AudioSettings>,
+    gameplay: Res<GameplaySettings>,
     mut popup_state: ResMut<super::ConfirmPopupState>,
 ) {
     // Don't navigate if a text input is focused
@@ -42,7 +46,9 @@ pub(crate) fn menu_keyboard_nav(
         // On Options page, check for unsaved changes before leaving
         if matches!(*page, MenuPage::Options) {
             if let Some(ref snap) = snapshot {
-                let dirty = *graphics != snap.graphics || *audio_settings != snap.audio;
+                let dirty = *graphics != snap.graphics
+                    || *audio_settings != snap.audio
+                    || *gameplay != snap.gameplay;
                 if dirty {
                     popup_state.active = true;
                     return;

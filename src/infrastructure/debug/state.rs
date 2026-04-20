@@ -1,3 +1,6 @@
+//! Transient debug-panel state: which folders are expanded, slider drag,
+//! button focus, and FPS metrics used by the update systems.
+
 use bevy::prelude::*;
 
 #[derive(Resource)]

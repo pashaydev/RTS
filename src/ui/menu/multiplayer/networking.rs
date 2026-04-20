@@ -1,3 +1,6 @@
+//! Lobby-level network glue: forwards Matchbox socket state into the
+//! lobby UI and relays lobby actions back to the transport.
+
 use bevy::prelude::*;
 use bevy_matchbox::prelude::*;
 

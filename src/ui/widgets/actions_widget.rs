@@ -1,3 +1,6 @@
+//! Action palette aggregator: routes to unit or building action panels
+//! based on the current selection and exposes the `BuildGridButton` type.
+
 use bevy::prelude::*;
 
 use super::core::framework::WidgetId;

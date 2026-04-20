@@ -1,3 +1,6 @@
+//! Multi-unit selection cards: per-unit health bars and ability icons
+//! laid out in the selection widget when multiple units are selected.
+
 use bevy::prelude::*;
 use std::collections::HashMap;
 

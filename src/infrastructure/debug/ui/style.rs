@@ -1,3 +1,5 @@
+//! Color palettes and formatting helpers shared by debug-panel widgets.
+
 use bevy::prelude::*;
 
 pub(crate) fn debug_control_surface() -> Color {

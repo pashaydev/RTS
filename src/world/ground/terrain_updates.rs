@@ -1,3 +1,6 @@
+//! Incremental terrain sculpting (shape operations from buildings and
+//! mining) and mesh re-sync so the ground matches the authoritative heightmap.
+
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 
@@ -36,27 +39,37 @@ pub fn enqueue_building_terrain_updates(
         (With<Building>, Added<Building>),
     >,
     height_map: Res<HeightMap>,
-    net_role: Option<Res<crate::infrastructure::multiplayer::NetRole>>,
     mut queue: ResMut<TerrainShapeUpdateQueue>,
 ) {
-    if matches!(
-        net_role.as_deref(),
-        Some(crate::infrastructure::multiplayer::NetRole::Client)
-    ) {
-        return;
-    }
+    // Collect first, then order deterministically by (x,z,footprint). Both
+    // host and client run this so all peers produce the same height map —
+    // any divergence in ECS iteration order would otherwise make processed
+    // ops differ between peers when they overlap.
+    let mut additions: Vec<TerrainShapeOp> = new_buildings
+        .iter()
+        .filter_map(|(transform, kind, footprint)| {
+            if !crate::simulation::buildings::uses_terrain_foundation(*kind) {
+                return None;
+            }
+            let center = transform.translation.xz();
+            Some(TerrainShapeOp {
+                center: [center.x, center.y],
+                footprint: footprint.0,
+                target_height: height_map.foundation_target_height(center.x, center.y, footprint.0),
+            })
+        })
+        .collect();
 
-    for (transform, kind, footprint) in &new_buildings {
-        if !crate::simulation::buildings::uses_terrain_foundation(*kind) {
-            continue;
-        }
+    additions.sort_by(|a, b| {
+        a.center[0]
+            .to_bits()
+            .cmp(&b.center[0].to_bits())
+            .then(a.center[1].to_bits().cmp(&b.center[1].to_bits()))
+            .then(a.footprint.to_bits().cmp(&b.footprint.to_bits()))
+    });
 
-        let center = transform.translation.xz();
-        queue.pending.push_back(TerrainShapeOp {
-            center: [center.x, center.y],
-            footprint: footprint.0,
-            target_height: height_map.foundation_target_height(center.x, center.y, footprint.0),
-        });
+    for op in additions {
+        queue.pending.push_back(op);
     }
 }
 
@@ -66,7 +79,6 @@ pub fn process_terrain_shape_update_queue(
     mut height_map: ResMut<HeightMap>,
     mut sync_state: ResMut<TerrainShapeSyncState>,
     mut dirty_areas: ResMut<TerrainSurfaceDirtyQueue>,
-    net_role: Option<Res<crate::infrastructure::multiplayer::NetRole>>,
     ground_q: Query<&Mesh3d, With<Ground>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
@@ -74,10 +86,6 @@ pub fn process_terrain_shape_update_queue(
         return;
     }
 
-    let is_client = matches!(
-        net_role.as_deref(),
-        Some(crate::infrastructure::multiplayer::NetRole::Client)
-    );
     let Some(update) = queue.pending.pop_front() else {
         return;
     };
@@ -118,9 +126,7 @@ pub fn process_terrain_shape_update_queue(
 
     sync_state.applied_history.insert(update.clone());
     sync_state.applied_history_ordered.push(update.clone());
-    if !is_client {
-        sync_state.pending_network.push(update);
-    }
+    sync_state.pending_network.push(update);
 }
 
 pub fn apply_terrain_shape_op(height_map: &mut HeightMap, update: &TerrainShapeOp) -> bool {
@@ -268,5 +274,104 @@ pub fn paint_floor_blend_on_ground(
             // Take min with existing alpha so overlapping floors merge correctly
             colors[idx][3] = colors[idx][3].min(floor_factor);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sort_ops(ops: &mut [TerrainShapeOp]) {
+        ops.sort_by(|a, b| {
+            a.center[0]
+                .to_bits()
+                .cmp(&b.center[0].to_bits())
+                .then(a.center[1].to_bits().cmp(&b.center[1].to_bits()))
+                .then(a.footprint.to_bits().cmp(&b.footprint.to_bits()))
+        });
+    }
+
+    /// Different input permutations of the same op set must yield identical
+    /// order after the deterministic sort — that's what lets every peer end
+    /// up with the same `TerrainShapeUpdateQueue` contents and the same
+    /// heightmap after processing.
+    #[test]
+    fn terrain_op_sort_is_permutation_stable() {
+        let a = TerrainShapeOp {
+            center: [1.5, -2.0],
+            footprint: 3.0,
+            target_height: 0.5,
+        };
+        let b = TerrainShapeOp {
+            center: [-4.0, 6.0],
+            footprint: 2.5,
+            target_height: 1.0,
+        };
+        let c = TerrainShapeOp {
+            center: [1.5, 0.0],
+            footprint: 3.0,
+            target_height: -0.5,
+        };
+
+        let mut p1 = vec![a, b, c];
+        let mut p2 = vec![c, a, b];
+        let mut p3 = vec![b, c, a];
+
+        sort_ops(&mut p1);
+        sort_ops(&mut p2);
+        sort_ops(&mut p3);
+
+        assert_eq!(p1, p2);
+        assert_eq!(p2, p3);
+    }
+
+    fn flat_heightmap(grid_size: usize, step: f32) -> HeightMap {
+        HeightMap {
+            heights: vec![0.0; grid_size * grid_size],
+            natural_heights: vec![0.0; grid_size * grid_size],
+            grid_size,
+            step,
+            map_size: step * (grid_size as f32 - 1.0),
+            half_map: step * (grid_size as f32 - 1.0) * 0.5,
+        }
+    }
+
+    /// Under deterministic ordering, applying the same sorted op set on two
+    /// fresh heightmaps yields byte-identical results. This is the property
+    /// lockstep peers rely on for unit-Y sampling to converge.
+    #[test]
+    fn applying_sorted_ops_converges_across_permutations() {
+        // Two ops whose inner regions fully overlap → target_height dominates
+        // inside, transition region is order-sensitive outside.
+        let op_a = TerrainShapeOp {
+            center: [0.0, 0.0],
+            footprint: 1.5,
+            target_height: 1.0,
+        };
+        let op_b = TerrainShapeOp {
+            center: [0.5, 0.2],
+            footprint: 1.5,
+            target_height: -0.5,
+        };
+
+        let mut hm1 = flat_heightmap(16, 1.0);
+        let mut hm2 = flat_heightmap(16, 1.0);
+
+        let mut order1 = vec![op_a, op_b];
+        let mut order2 = vec![op_b, op_a];
+        sort_ops(&mut order1);
+        sort_ops(&mut order2);
+
+        for op in &order1 {
+            apply_terrain_shape_op(&mut hm1, op);
+        }
+        for op in &order2 {
+            apply_terrain_shape_op(&mut hm2, op);
+        }
+
+        assert_eq!(
+            hm1.heights, hm2.heights,
+            "sorted ops must produce identical heightmaps on all peers"
+        );
     }
 }

@@ -499,8 +499,14 @@ fn reset_multiplayer_sync(
     mut pending_local_input: ResMut<lockstep::PendingLocalInput>,
     mut pending_input_broadcasts: ResMut<client::apply::PendingInputBroadcasts>,
     mut pending_events: ResMut<client::apply::PendingNetEvents>,
+    config: Res<GameSetupConfig>,
 ) {
     lockstep_buffer.reset();
+    // Scale input delay by game speed so the wall-clock buffer stays ~100ms
+    // regardless of speed — at 2.5x the sim-tick rate is 75 Hz, so a plain
+    // 3-tick delay would be only 40 ms and stall on typical network latency.
+    let scale = config.game_speed.max(1.0).ceil() as u64;
+    lockstep_buffer.input_delay = lockstep::DEFAULT_INPUT_DELAY.saturating_mul(scale).max(1);
     pending_local_input.batches.clear();
     pending_input_broadcasts.inputs.clear();
     pending_events.events.clear();

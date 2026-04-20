@@ -1,3 +1,6 @@
+//! `SimulationPlugins`: deterministic gameplay rules — units, selection,
+//! resources, buildings, combat, mobs, items, AI, victory, ages progression.
+
 pub mod ages;
 pub mod ai;
 pub mod buildings;

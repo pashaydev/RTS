@@ -1,3 +1,6 @@
+//! Top toolbar widget that hosts pinned HUD elements (resources bar,
+//! minimap toggle, widget manager) and routes toolbar clicks to targets.
+
 use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
 

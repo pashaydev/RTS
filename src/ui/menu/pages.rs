@@ -1,3 +1,6 @@
+//! Individual menu page panels (title, settings, options, lobby view)
+//! built from the shared helpers — the visual scaffolding of each screen.
+
 use bevy::prelude::*;
 
 use super::helpers::*;

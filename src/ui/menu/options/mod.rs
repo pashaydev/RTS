@@ -1,3 +1,6 @@
+//! Options/settings menu: graphics, audio, and gameplay submodules plus
+//! apply/revert dirty-state tracking.
+
 mod dirty_state;
 mod page;
 mod systems;

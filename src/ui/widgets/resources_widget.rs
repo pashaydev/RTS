@@ -1,3 +1,6 @@
+//! Resource counters widget with income rates: raw resources always
+//! visible, processed resources revealed once the player stocks any.
+
 use bevy::prelude::*;
 
 use super::core::constants::*;

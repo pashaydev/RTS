@@ -48,6 +48,7 @@ pub enum SelectorField {
     SfxVolume,
     PreferredFaction,
     ThemeMode,
+    GameSpeed,
 }
 
 #[derive(Component)]

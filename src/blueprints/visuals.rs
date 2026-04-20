@@ -1,3 +1,6 @@
+//! Builds the renderable `VisualCache` (meshes + materials) and floor-piece
+//! geometry from registry entries at startup.
+
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use bevy::render::render_resource::PrimitiveTopology;

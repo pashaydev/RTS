@@ -74,6 +74,15 @@ pub enum InputCommand {
     /// Toggle auto-attack on a defensive tower.
     #[serde(rename = "auto_attack")]
     ToggleAutoAttack { building_id: EntityId },
+    /// Place a run of wall grid cells. Cells are in `WallGrid` coordinates.
+    #[serde(rename = "build_wall")]
+    BuildWall { cells: Vec<[i32; 2]> },
+    /// Convert an existing owned wall segment at `cell` into a gatehouse.
+    #[serde(rename = "build_gate")]
+    BuildGate { cell: [i32; 2] },
+    /// Paint a single floor tile at `cell`. Brush mode issues one per input.
+    #[serde(rename = "build_floor")]
+    BuildFloor { cell: [i32; 2] },
 }
 
 /// Player input for a single tick.
@@ -452,6 +461,29 @@ mod tests {
             let bytes = codec::encode(msg).unwrap();
             let decoded: ClientMessage = codec::decode(&bytes).unwrap();
             assert_eq!(*msg, decoded, "Failed roundtrip for {:?}", msg);
+        }
+    }
+
+    #[test]
+    fn build_wall_gate_floor_roundtrip() {
+        let inputs = vec![
+            InputCommand::BuildWall {
+                cells: vec![[1, 2], [3, 4], [-5, 0]],
+            },
+            InputCommand::BuildGate { cell: [7, -3] },
+            InputCommand::BuildFloor { cell: [0, 0] },
+        ];
+        for cmd in inputs {
+            let wrapped = PlayerInput {
+                player_id: 1,
+                tick: 10,
+                entity_ids: Vec::new(),
+                commands: vec![cmd.clone()],
+            };
+            let bytes = codec::encode(&wrapped).unwrap();
+            let decoded: PlayerInput = codec::decode(&bytes).unwrap();
+            assert_eq!(decoded.commands.len(), 1);
+            assert_eq!(decoded.commands[0], cmd);
         }
     }
 

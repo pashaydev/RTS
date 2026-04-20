@@ -1,3 +1,5 @@
+//! Core `UnitBrain` FSM: the `Order` enum, `BrainState`, order resolver,
+//! and `CombatSet` pipeline ordering consumed by targeting/approach/ability.
 
 use bevy::prelude::*;
 use bevy::time::Fixed;

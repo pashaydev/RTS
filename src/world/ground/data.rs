@@ -1,3 +1,6 @@
+//! Height-map data model: shape operations, distance functions, and
+//! caches used by generation and incremental terrain updates.
+
 use std::collections::{HashSet, VecDeque};
 
 use bevy::prelude::*;

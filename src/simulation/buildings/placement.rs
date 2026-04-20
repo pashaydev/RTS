@@ -242,7 +242,7 @@ fn wall_layout_grid_cells(start: Vec3, end: Vec3) -> Vec<(i32, i32)> {
 
 /// Compute the cost for placing walls at the given grid cells.
 /// Uses a merged grid (existing + proposed) to determine piece types.
-fn wall_cost_from_cells(
+pub(super) fn wall_cost_for_cells(
     proposed: &[(i32, i32)],
     existing_grid: &WallGrid,
     registry: &BlueprintRegistry,
@@ -313,7 +313,7 @@ fn floor_layout_grid_cells(start: Vec3, end: Vec3) -> Vec<(i32, i32)> {
     cells
 }
 
-fn floor_cost_from_cells(
+pub(super) fn floor_cost_for_cells(
     cells: &[(i32, i32)],
     floor_grid: &FloorGrid,
     registry: &BlueprintRegistry,
@@ -784,7 +784,7 @@ pub(crate) fn update_wall_plot_preview(
         .iter()
         .map(|&(gx, gz)| WallGrid::grid_to_world(gx, gz))
         .collect();
-    wall_preview.total_cost = wall_cost_from_cells(&new_cells, &wall_grid, &registry);
+    wall_preview.total_cost = wall_cost_for_cells(&new_cells, &wall_grid, &registry);
     wall_preview.valid = true;
 
     // Build merged set for neighbor lookups (existing grid + proposed cells)
@@ -1341,7 +1341,8 @@ pub(crate) fn confirm_placement(
     let worker_iter = workers
         .iter()
         .map(|(e, tf, state, fac, kind, _)| (e, tf, state, fac, kind));
-    let Some((worker_entity, _)) = find_best_worker_for_build(worker_iter, faction, build_pos)
+    let Some((worker_entity, _)) =
+        find_best_worker_for_build(worker_iter, faction, build_pos, |_| None)
     else {
         placement.hint_text = Some("No workers available!".to_string());
         return;
@@ -1454,6 +1455,7 @@ pub(crate) fn confirm_wall_plot(
     building_models: Option<Res<BuildingModelAssets>>,
     workers: Query<(Entity, &Transform, &UnitState, &Faction, &EntityKind), With<Unit>>,
     obstacle_grid: Res<ObstacleGrid>,
+    mut online: PlacementOnlineParams,
 ) {
     let (camera_q, windows, graphics) = viewport;
     if !matches!(placement.mode, PlacementMode::PlotWall { .. }) || placement.awaiting_release {
@@ -1490,10 +1492,42 @@ pub(crate) fn confirm_wall_plot(
 
     let faction = active_player.0;
     let wall_pos = wall_preview.snapped_points[0];
+
+    // Convert snapped world points back to grid cells, filtering out any newly blocked.
+    // Done up-front so both the online and offline paths share identical filtering.
+    let cells: Vec<(i32, i32)> = wall_preview
+        .snapped_points
+        .iter()
+        .map(|p| WallGrid::world_to_grid(*p))
+        .filter(|(gx, gz)| !obstacle_grid.is_cell_blocked(*gx, *gz))
+        .collect();
+    if cells.is_empty() {
+        clear_wall_preview(&mut commands, &mut wall_preview);
+        placement.mode = PlacementMode::None;
+        placement.hint_text = Some("Wall path blocked by trees".to_string());
+        return;
+    }
+
+    // Online: route through lockstep so every peer applies the same spawn
+    // and worker assignment in the same tick.
+    if *online.net_role != crate::infrastructure::multiplayer::NetRole::Offline {
+        let net_cells: Vec<[i32; 2]> = cells.iter().map(|(x, z)| [*x, *z]).collect();
+        online.pending_local_input.push(
+            Vec::new(),
+            vec![game_state::message::InputCommand::BuildWall { cells: net_cells }],
+        );
+        clear_wall_preview(&mut commands, &mut wall_preview);
+        placement.mode = PlacementMode::None;
+        placement.preview_entity = None;
+        placement.hint_text = None;
+        return;
+    }
+
     let worker_iter = workers
         .iter()
         .map(|(e, tf, state, fac, kind)| (e, tf, state, fac, kind));
-    let Some((worker_entity, _)) = find_best_worker_for_build(worker_iter, faction, wall_pos)
+    let Some((worker_entity, _)) =
+        find_best_worker_for_build(worker_iter, faction, wall_pos, |_| None)
     else {
         placement.hint_text = Some("All workers are busy".to_string());
         return;
@@ -1507,20 +1541,6 @@ pub(crate) fn confirm_wall_plot(
     wall_preview
         .total_cost
         .deduct(all_resources.get_mut(&faction));
-
-    // Convert snapped world points back to grid cells, filtering out any newly blocked
-    let cells: Vec<(i32, i32)> = wall_preview
-        .snapped_points
-        .iter()
-        .map(|p| WallGrid::world_to_grid(*p))
-        .filter(|(gx, gz)| !obstacle_grid.is_cell_blocked(*gx, *gz))
-        .collect();
-    if cells.is_empty() {
-        clear_wall_preview(&mut commands, &mut wall_preview);
-        placement.mode = PlacementMode::None;
-        placement.hint_text = Some("Wall path blocked by trees".to_string());
-        return;
-    }
 
     let spawned_entities = spawn_wall_grid_cells(
         &mut commands,
@@ -1580,6 +1600,7 @@ pub(crate) fn confirm_gate_plot(
     >,
     registry: Res<BlueprintRegistry>,
     workers: Query<(Entity, &Transform, &UnitState, &Faction, &EntityKind), With<Unit>>,
+    mut online: PlacementOnlineParams,
 ) {
     let (camera_q, windows, graphics) = viewport;
     if placement.mode != PlacementMode::PlotGate || !mouse.just_pressed(MouseButton::Left) {
@@ -1612,6 +1633,24 @@ pub(crate) fn confirm_gate_plot(
         placement.hint_text = Some("Gatehouse must replace an owned wall segment".to_string());
         return;
     };
+
+    // Online: route through lockstep so every peer resolves the conversion
+    // against its own authoritative state.
+    if *online.net_role != crate::infrastructure::multiplayer::NetRole::Offline {
+        online.pending_local_input.push(
+            Vec::new(),
+            vec![game_state::message::InputCommand::BuildGate {
+                cell: [grid_coord.0, grid_coord.1],
+            }],
+        );
+        if let Some(preview) = placement.preview_entity.take() {
+            commands.entity(preview).try_despawn();
+        }
+        placement.mode = PlacementMode::None;
+        placement.awaiting_release = false;
+        placement.hint_text = None;
+        return;
+    }
 
     let bp = registry.get(EntityKind::Gatehouse);
     let worker_entity = workers
@@ -1703,6 +1742,7 @@ pub(crate) fn confirm_floor_plot(
         ResMut<NavGridDirty>,
     ),
     bush_decorations: Query<(Entity, &Transform), With<Decoration>>,
+    mut online: PlacementOnlineParams,
 ) {
     let (cache, registry, obstacle_grid) = resources_and_queries;
     let (mut sync_state, mut dirty_areas, mut nav_dirty) = terrain_and_decos;
@@ -1739,9 +1779,18 @@ pub(crate) fn confirm_floor_plot(
         return;
     }
 
+    // Online: route a single cell paint per tick through lockstep.
+    if *online.net_role != crate::infrastructure::multiplayer::NetRole::Offline {
+        online.pending_local_input.push(
+            Vec::new(),
+            vec![game_state::message::InputCommand::BuildFloor { cell: [gx, gz] }],
+        );
+        return;
+    }
+
     let faction = active_player.0;
     let cells = vec![(gx, gz)];
-    let cell_cost = floor_cost_from_cells(&cells, &floor_grid, &registry);
+    let cell_cost = floor_cost_for_cells(&cells, &floor_grid, &registry);
     let player_res = all_resources.get(&faction);
     if !cell_cost.can_afford(player_res) {
         placement.hint_text = Some("Not enough resources".to_string());

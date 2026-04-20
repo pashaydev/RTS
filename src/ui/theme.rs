@@ -1,3 +1,6 @@
+//! Theme palette, typography, and spacing scales for both Iron (dark)
+//! and Parchment (light) modes. Central source of UI styling constants.
+
 use bevy::prelude::*;
 
 // ─────────────────────────────────────────────────────────────────────────────

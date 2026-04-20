@@ -1,3 +1,6 @@
+//! `BlueprintPlugin`: inserts the entity blueprint registry and visual cache
+//! as resources at `PreStartup` so spawn systems can query them.
+
 use bevy::prelude::*;
 
 use crate::blueprints::{build_registry, build_visual_cache};

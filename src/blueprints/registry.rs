@@ -1,3 +1,6 @@
+//! Hardcoded blueprint definitions for every unit, building, mob, and siege
+//! piece — stats, costs, visuals, and behavioral profiles.
+
 use bevy::prelude::*;
 use std::collections::HashMap;
 

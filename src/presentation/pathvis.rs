@@ -1,3 +1,6 @@
+//! `PathVisPlugin`: animates dashed paths from selected units to their
+//! move, attack, or patrol targets.
+
 use std::collections::HashMap;
 
 use bevy::ecs::entity::Entities;

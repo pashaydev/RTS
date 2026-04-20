@@ -1,3 +1,6 @@
+//! Detects the local LAN IP and external/public IP and flags interfaces
+//! that look like VPN tunnels so the lobby UI can warn the user.
+
 use std::net::UdpSocket;
 
 pub fn detect_lan_ip() -> Option<String> {

@@ -1,3 +1,6 @@
+//! Reusable UI marker components — borders, backgrounds, shadows, hover
+//! state — used by the widget framework and higher-level widgets.
+
 use bevy::prelude::*;
 
 use crate::types::{ButtonAnimState, ButtonStyle};

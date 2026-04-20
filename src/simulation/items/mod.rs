@@ -1,3 +1,6 @@
+//! `ItemsPlugin`: asset registration, pickup/equip flow, inventory slots,
+//! category conflicts, and unit-type filtering for ground loot.
+
 pub mod components;
 pub mod messages;
 pub mod registry;

@@ -1,3 +1,6 @@
+//! Order queue helpers: allocate task IDs, push/clear queued orders, and
+//! advance task state used by the brain and selection command dispatch.
+
 use crate::types::*;
 
 fn allocate_task_id(next_task_id: &mut NextTaskId) -> u64 {

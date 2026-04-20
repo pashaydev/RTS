@@ -1,3 +1,6 @@
+//! Auto-harvest buildings and production chains (ore → smelter → metal):
+//! worker rotation, input/output buffers, timed cycles, upkeep deductions.
+
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use std::collections::HashMap;

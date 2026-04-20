@@ -1,3 +1,6 @@
+//! `DebugPlugin`: orchestrates the debug tweak UI, FPS tracking, entity
+//! spawn helpers, and persistence of tweak values to SQLite.
+
 mod config;
 mod model;
 mod state;

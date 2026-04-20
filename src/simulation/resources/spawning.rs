@@ -1,3 +1,6 @@
+//! Biome-seeded placement of resource nodes (wood/ore/stone), depletion
+//! tracking, and procedural spawning of secondary tiers.
+
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::time::Fixed;

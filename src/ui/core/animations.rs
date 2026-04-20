@@ -1,3 +1,6 @@
+//! Easing curves and color/position transitions used for UI enter/exit
+//! animations, hover tilts, and button press feedback.
+
 use bevy::prelude::*;
 
 use crate::types::*;

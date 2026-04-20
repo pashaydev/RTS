@@ -1,3 +1,6 @@
+//! In-game HUD widgets: resources, selection, actions, production queue,
+//! army overview, event log, tech tree, hotkeys, notifications, and more.
+
 /// Generates a system that spawns a widget frame when `WidgetGridArea` is added.
 /// Widgets are parented to the grid area (below the header bar).
 macro_rules! widget_spawn_system {

@@ -1,3 +1,6 @@
+//! `SelectionPlugin`: drag-selection, picking, player command parsing,
+//! and hover/inspect UI for the locally controlled player.
+
 mod click_select;
 mod picking;
 mod unit_commands;

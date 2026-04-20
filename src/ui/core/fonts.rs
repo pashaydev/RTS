@@ -1,3 +1,6 @@
+//! Font asset loading (Noto Serif, Roboto Mono) and reusable style
+//! recipes applied to UI text throughout the app.
+
 use bevy::prelude::*;
 use bevy::text::Font;
 

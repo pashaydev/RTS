@@ -1,3 +1,6 @@
+//! `UnitsPlugin`: player unit spawning, movement, steering avoidance,
+//! terrain snap, formation setup, and `GameSetupConfig` application.
+
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use std::collections::HashSet;

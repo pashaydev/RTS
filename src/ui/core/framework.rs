@@ -1,3 +1,6 @@
+//! Widget framework: registry, drag/resize/edit, 12×8 grid layout,
+//! scrolling, and per-widget tooltip management.
+
 use bevy::ecs::message::MessageReader;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;

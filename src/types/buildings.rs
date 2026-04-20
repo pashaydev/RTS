@@ -538,3 +538,33 @@ pub struct GhostMaterialApplied;
 /// Marker for the child entity holding a building's GLTF scene.
 #[derive(Component)]
 pub struct BuildingSceneChild;
+
+/// Deterministic build commands parsed out of lockstep input that mutate
+/// wall/floor grid state. `execute_input_command` only has a narrow set of
+/// query/resource params; anything that needs full `WallGrid`/`FloorGrid`/
+/// `HeightMap` access gets buffered here and drained by a later system in
+/// the same FixedUpdate tick, preserving single-tick determinism.
+#[derive(Resource, Default)]
+pub struct PendingLockstepBuilds {
+    pub walls: Vec<PendingWallBuild>,
+    pub gates: Vec<PendingGateBuild>,
+    pub floors: Vec<PendingFloorBuild>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingWallBuild {
+    pub faction: Faction,
+    pub cells: Vec<(i32, i32)>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingGateBuild {
+    pub faction: Faction,
+    pub cell: (i32, i32),
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingFloorBuild {
+    pub faction: Faction,
+    pub cell: (i32, i32),
+}

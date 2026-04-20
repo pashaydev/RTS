@@ -1,3 +1,6 @@
+//! `GroundPlugin`: procedural terrain mesh, water plane, height map,
+//! biome map, mountain border, and terrain texture atlas.
+
 mod border;
 mod data;
 mod generation;

@@ -1,3 +1,6 @@
+//! Primary unit/building selection panel: portrait, stats, health, and
+//! ability row for the focused entity (delegates to selection_cards for N>1).
+
 use bevy::prelude::*;
 
 use super::core::components as ui_components;

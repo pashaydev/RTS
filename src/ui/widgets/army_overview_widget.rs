@@ -1,3 +1,6 @@
+//! Army composition widget: counts by unit tier, recent losses, and
+//! quick-select groups for the player's fielded army.
+
 use bevy::prelude::*;
 
 use super::core::constants::*;

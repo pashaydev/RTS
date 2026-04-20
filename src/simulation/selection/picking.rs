@@ -1,3 +1,6 @@
+//! Ray-cast picking (sphere and AABB), per-entity click filter, hover
+//! rings, and cycle-pick ordering for stacked entities.
+
 use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;

@@ -1,3 +1,6 @@
+//! UDP-based LAN discovery: broadcasts and listens for host beacons so
+//! clients can find a multiplayer host on the local network.
+
 use std::io;
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -1,3 +1,6 @@
+//! App bootstrap: configures Bevy plugins, asset path, fixed 30 Hz sim clock,
+//! system set ordering, lockstep gate, and the `AppState` state machine.
+
 mod blueprints;
 mod infrastructure;
 mod presentation;
@@ -14,7 +17,9 @@ use bevy::window::PresentMode;
 #[cfg(not(target_arch = "wasm32"))]
 use bevy_mod_outline::OutlinePlugin;
 
-use types::{AppState, GameFlowSet, GameRng, GameSetupConfig, MapSeed, SimClock, SimSet};
+use types::{
+    AppState, GameFlowSet, GameRng, GameSetupConfig, GameplaySettings, MapSeed, SimClock, SimSet,
+};
 
 const GAMEPLAY_FIXED_HZ: f64 = 30.0;
 
@@ -46,8 +51,9 @@ fn main() {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
     );
 
-    // Open database early so settings (graphics, audio) are loaded before window creation.
-    let (db, profile, mut graphics, audio_settings) = infrastructure::database::init_early();
+    // Open database early so settings (graphics, audio, gameplay) are loaded before window creation.
+    let (db, profile, mut graphics, audio_settings, gameplay_settings) =
+        infrastructure::database::init_early();
 
     // On WASM, use the browser viewport size so hover coordinates match from the start.
     // The DB-stored resolution is a desktop value that causes a mismatch until a resize event.
@@ -210,6 +216,19 @@ fn main() {
         .insert_resource(db)
         .insert_resource(profile)
         .insert_resource(audio_settings)
+        .insert_resource(gameplay_settings)
+        .add_systems(
+            Update,
+            mirror_gameplay_speed_to_config
+                .run_if(in_state(AppState::MainMenu))
+                .run_if(resource_changed::<GameplaySettings>),
+        )
+        .add_systems(
+            Update,
+            apply_game_speed.run_if(
+                resource_changed::<GameplaySettings>.or(resource_changed::<GameSetupConfig>),
+            ),
+        )
         .add_plugins(infrastructure::InfraPlugins)
         .add_plugins(blueprints::BlueprintPlugin)
         .add_plugins(world::WorldPlugins)
@@ -236,5 +255,37 @@ pub(crate) fn advance_sim_clock(mut clock: ResMut<SimClock>) {
 fn reseed_game_rng(map_seed: Option<Res<MapSeed>>, mut rng: ResMut<GameRng>) {
     if let Some(seed) = map_seed {
         rng.reseed(seed.0);
+    }
+}
+
+/// Mirrors the user's `GameplaySettings.game_speed` preference into
+/// `GameSetupConfig.game_speed` so the host broadcasts its chosen speed to
+/// clients alongside map size, seed, etc. Clients' local `GameplaySettings`
+/// is overwritten in `GameSetupConfig` by the host's value when the lobby
+/// config arrives — so every peer runs the same match speed.
+fn mirror_gameplay_speed_to_config(
+    gameplay: Res<GameplaySettings>,
+    mut config: ResMut<GameSetupConfig>,
+) {
+    if (config.game_speed - gameplay.game_speed).abs() > f32::EPSILON {
+        config.game_speed = gameplay.game_speed;
+    }
+}
+
+/// Applies the match-wide game speed by scaling `Time::<Virtual>`.
+///
+/// `Time::<Fixed>` is driven by virtual time, so `FixedUpdate` runs
+/// proportionally more ticks per real second — all movement/combat/production
+/// timers speed up uniformly without touching simulation code.
+///
+/// Reads from `GameSetupConfig` so host-broadcast values take effect on all
+/// peers; lockstep stays deterministic because every peer agrees on one speed.
+fn apply_game_speed(
+    config: Res<GameSetupConfig>,
+    mut virtual_time: ResMut<Time<bevy::time::Virtual>>,
+) {
+    let target = config.game_speed.clamp(0.1, 8.0) as f64;
+    if (virtual_time.relative_speed_f64() - target).abs() > f64::EPSILON {
+        virtual_time.set_relative_speed_f64(target);
     }
 }

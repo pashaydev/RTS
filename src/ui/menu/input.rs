@@ -1,3 +1,6 @@
+//! Keyboard and gamepad input navigation within the menu tree (focus
+//! traversal, confirm/cancel, shortcut accept).
+
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
 
@@ -33,11 +36,12 @@ pub(crate) fn handle_menu_buttons(
         ResMut<crate::ui::core::framework::WidgetRegistry>,
         Option<Res<super::OptionsSnapshot>>,
         ResMut<super::ConfirmPopupState>,
+        ResMut<GameplaySettings>,
     ),
     mut loading_texts: Query<&mut Text, With<super::BeginCampaignText>>,
 ) {
     let (db, profile) = db_and_profile;
-    let (mut widget_registry, snapshot, mut popup_state) = options_state;
+    let (mut widget_registry, snapshot, mut popup_state, mut gameplay) = options_state;
     for event in click_events.read() {
         let Ok(btn) = buttons.get(event.entity) else {
             continue;
@@ -73,6 +77,7 @@ pub(crate) fn handle_menu_buttons(
                 commands.insert_resource(super::OptionsSnapshot {
                     graphics: graphics.clone(),
                     audio: audio_settings.clone(),
+                    gameplay: gameplay.clone(),
                 });
             }
             MenuAction::SaveAndLeave => {
@@ -89,6 +94,7 @@ pub(crate) fn handle_menu_buttons(
                 if let Some(ref snap) = snapshot {
                     *graphics = snap.graphics.clone();
                     *audio_settings = snap.audio.clone();
+                    *gameplay = snap.gameplay.clone();
                     theme.set_mode(snap.graphics.theme_mode);
                 }
                 popup_state.active = false;
@@ -213,6 +219,7 @@ pub(crate) fn handle_selector_clicks(
     all_selectors: Query<&MenuSelector>,
     mut config: ResMut<GameSetupConfig>,
     mut graphics: ResMut<GraphicsSettings>,
+    mut gameplay: ResMut<GameplaySettings>,
     resolutions: Res<AvailableResolutions>,
     mut lobby: Option<ResMut<LobbyState>>,
     host_state: Option<Res<HostNetState>>,
@@ -446,6 +453,11 @@ pub(crate) fn handle_selector_clicks(
             }
             SelectorField::MusicVolume | SelectorField::SfxVolume => {
                 // Handled by volume_slider_system.
+            }
+            SelectorField::GameSpeed => {
+                if selector.index < GAME_SPEED_OPTIONS.len() {
+                    gameplay.game_speed = GAME_SPEED_OPTIONS[selector.index].0;
+                }
             }
             SelectorField::MapSeed => {
                 // Handled by randomize_seed_system

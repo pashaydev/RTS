@@ -1,3 +1,6 @@
+//! `WorldPlugins`: the physical world — ground, fog of war, lighting,
+//! culling, spatial hash, and pathfinding.
+
 pub mod culling;
 pub mod fog;
 pub mod ground;

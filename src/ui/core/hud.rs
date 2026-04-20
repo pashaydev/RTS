@@ -1,3 +1,6 @@
+//! HUD assembly and lifecycle: spawns the widget tree on entering
+//! `AppState::InGame` and tears it down on exit.
+
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 

@@ -1,3 +1,6 @@
+//! `InfraPlugins`: composes session-level plumbing — logging, database,
+//! debug tweak panel, save/load, network bridge, multiplayer, and audio.
+
 pub mod audio;
 pub mod database;
 pub mod debug;

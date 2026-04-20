@@ -1,3 +1,6 @@
+//! Tech tree widget: shows unlock states, research queues, and cost
+//! tooltips for each age-gated upgrade the player can research.
+
 use bevy::prelude::*;
 
 use super::core::framework::WidgetId;

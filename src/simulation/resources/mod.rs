@@ -1,3 +1,6 @@
+//! `ResourcesPlugin`: economy simulation — processing (production chains),
+//! spawning nodes, trees, workers, terrain decoration, carried totals.
+
 mod processing;
 mod spawning;
 pub(crate) mod terrain;

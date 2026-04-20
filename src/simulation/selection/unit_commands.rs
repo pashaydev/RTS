@@ -1,3 +1,6 @@
+//! Player right-click commands: move, formation, ability targeting,
+//! build orders, and task queueing dispatch into the brain pipeline.
+
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use bevy::window::PrimaryWindow;

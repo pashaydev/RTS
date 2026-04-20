@@ -1,3 +1,6 @@
+//! Item pickup/spawn request messages and the failure-reason enum
+//! consumed by the items pipeline and UI notifications.
+
 use bevy::prelude::*;
 
 use crate::types::Faction;

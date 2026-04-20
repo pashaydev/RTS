@@ -1,3 +1,6 @@
+//! Input handling for the debug panel: folder expand/collapse, slider drag,
+//! button clicks, and toggle flips that mutate `DebugTweaks`.
+
 use bevy::prelude::*;
 
 use crate::infrastructure::debug::config::save_debug_config;

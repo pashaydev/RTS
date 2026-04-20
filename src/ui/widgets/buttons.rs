@@ -1,3 +1,6 @@
+//! Shared button component library used by in-game widgets (action,
+//! production, selection); handlers emit the corresponding input commands.
+
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use game_state::message::InputCommand;
@@ -1372,6 +1375,7 @@ pub fn handle_formation_button(
 
 pub fn handle_prefer_resource_button(
     interactions: Query<&Interaction, (Changed<Interaction>, With<PreferResourceButton>)>,
+    mut commands: Commands,
     mut online: OnlineInputParams,
     selected: Query<
         (Entity, &Faction, &EntityKind, Option<&PreferredResource>),
@@ -1397,17 +1401,34 @@ pub fn handle_prefer_resource_button(
             .unwrap_or(SelectedWorkerPreference::Off)
             .cycle_target();
 
-        online.submit.submit(
-            selected
-                .iter()
-                .filter(|(_, faction, kind, _)| {
-                    **faction == active_player.0 && **kind == EntityKind::Worker
-                })
-                .map(|(entity, _, _, _)| entity),
-            vec![InputCommand::SetPreferredResource {
-                resource: next.map(|rt| rt.index() as u8).unwrap_or(u8::MAX),
-            }],
-        );
+        if *online.net_role != NetRole::Offline {
+            online.submit.submit(
+                selected
+                    .iter()
+                    .filter(|(_, faction, kind, _)| {
+                        **faction == active_player.0 && **kind == EntityKind::Worker
+                    })
+                    .map(|(entity, _, _, _)| entity),
+                vec![InputCommand::SetPreferredResource {
+                    resource: next.map(|rt| rt.index() as u8).unwrap_or(u8::MAX),
+                }],
+            );
+            continue;
+        }
+
+        for (entity, faction, kind, _) in &selected {
+            if *faction != active_player.0 || *kind != EntityKind::Worker {
+                continue;
+            }
+            match next {
+                Some(resource) => {
+                    commands.entity(entity).insert(PreferredResource(resource));
+                }
+                None => {
+                    commands.entity(entity).remove::<PreferredResource>();
+                }
+            }
+        }
     }
 }
 

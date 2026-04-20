@@ -1,3 +1,6 @@
+//! In-game pause overlay: resume, settings, quit-to-menu — toggleable
+//! during `AppState::InGame` without tearing down the world.
+
 use bevy::ecs::message::{MessageReader, MessageWriter};
 use bevy::prelude::*;
 

@@ -1,3 +1,6 @@
+//! `PathfindingPlugin`: navigation-mesh generation, A* query worker,
+//! and dynamic obstacle updates triggered by buildings and terrain edits.
+
 use bevy::ecs::entity::Entities;
 use bevy::ecs::lifecycle::RemovedComponents;
 use bevy::prelude::*;

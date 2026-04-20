@@ -1,3 +1,6 @@
+//! Multiplayer menu screens: host/join connect, in-lobby waiting,
+//! loading/transition — each rendered via the shared helper widgets.
+
 use bevy::prelude::*;
 
 use super::super::helpers::*;

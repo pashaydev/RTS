@@ -1,3 +1,6 @@
+//! Graphics/audio/gameplay settings persistence and HUD sync:
+//! apply changes to the running window/mixer and write them to SQLite.
+
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::window::{Monitor, PresentMode};

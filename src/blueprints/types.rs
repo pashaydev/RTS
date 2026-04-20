@@ -1,3 +1,6 @@
+//! Blueprint data model: `EntityKind`, `Blueprint`, `VisualCache`, and the
+//! default combat/movement/vision profiles consumed by the spawner.
+
 use bevy::prelude::*;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
