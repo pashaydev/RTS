@@ -326,6 +326,7 @@ fn rebuild_ai_world_snapshot_full(
     }
 
     for faction_snapshot in snapshot.factions.values_mut() {
+        sort_faction_snapshot_vecs(faction_snapshot);
         update_military_center(faction_snapshot);
     }
 
@@ -378,6 +379,7 @@ fn rebuild_faction_snapshot(
     }
 
     if let Some(faction_snapshot) = snapshot.factions.get_mut(&faction) {
+        sort_faction_snapshot_vecs(faction_snapshot);
         update_military_center(faction_snapshot);
     }
 }
@@ -435,10 +437,48 @@ fn push_unit_snapshot(
     index.units.insert(entity, *faction);
 }
 
+/// Sort the snapshot's per-faction vecs into a deterministic order.
+///
+/// `push_unit_snapshot` and the building loops fill these vecs by walking
+/// Bevy queries in archetype order — NOT portable across peers. Downstream
+/// consumers either iterate the vecs serially (worker assignment) or fold
+/// floating-point positions into sums (military_center, fallback base
+/// position, threat centers). FP addition isn't associative, so the same
+/// positions in a different order produce different sums and desync.
+///
+/// Sorting once at snapshot-build time fixes every downstream consumer
+/// at the source. We sort by transform bits — those are part of the
+/// simulated world state and identical on every peer under lockstep.
+/// Two entities at the *exact* same position would tie here; that's a
+/// rare edge case (units overlap briefly during spawn / formation) and
+/// further consumers that care about identity in that case must use
+/// `NetworkId` themselves. We deliberately do NOT fall back to
+/// `entity.index()` here — that's a Bevy allocation detail and would
+/// reintroduce the cross-peer divergence we're trying to remove.
+fn sort_faction_snapshot_vecs(faction_snapshot: &mut FactionWorldSnapshot) {
+    fn pos_key(p: Vec3) -> (u32, u32, u32) {
+        (p.x.to_bits(), p.y.to_bits(), p.z.to_bits())
+    }
+    faction_snapshot
+        .worker_entities
+        .sort_by_key(|(_, p)| pos_key(*p));
+    faction_snapshot
+        .military_entities
+        .sort_by_key(|(_, _, p)| pos_key(*p));
+    faction_snapshot
+        .building_positions
+        .sort_by_key(|p| pos_key(*p));
+    // `unit_entities` is consumed only as a HashSet (membership test) so its
+    // order doesn't affect sim outcomes — leave it alone to save the sort.
+}
+
 fn update_military_center(faction_snapshot: &mut FactionWorldSnapshot) {
     faction_snapshot.military_center = if faction_snapshot.military_entities.is_empty() {
         None
     } else {
+        // Sort first so the FP sum is order-stable across peers (FP addition
+        // is not associative). `military_entities` is built by iterating a
+        // Bevy query in archetype order, which is not portable.
         let sum = faction_snapshot
             .military_entities
             .iter()

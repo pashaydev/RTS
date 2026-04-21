@@ -166,7 +166,15 @@ fn decision_priority_system(
     >,
     factions: Query<&Faction>,
     building_check: Query<(), With<Building>>,
-    deposit_points: Query<(Entity, &Transform, &Faction), (With<DepositPoint>, Without<Unit>)>,
+    deposit_points: Query<
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&NetworkId>,
+        ),
+        (With<DepositPoint>, Without<Unit>),
+    >,
     target_data: Query<(
         &Health,
         &ArmorType,
@@ -291,19 +299,26 @@ fn decision_priority_system(
         {
             // Only trigger retreat if currently being attacked (in Attacking state or being hit)
             if matches!(*state, UnitState::Attacking(_)) {
-                // Find nearest allied deposit point to retreat toward
-                let mut nearest_depot: Option<(Vec3, f32)> = None;
-                for (_depot_entity, depot_tf, depot_faction) in &deposit_points {
+                // Find nearest allied deposit point to retreat toward.
+                // Tie-break on (quantized_distance, NetworkId) so two peers
+                // pick the same depot when distances are tied.
+                let mut nearest_key: Option<(i64, u32)> = None;
+                let mut nearest_pos: Option<Vec3> = None;
+                for (_depot_entity, depot_tf, depot_faction, depot_net_id) in &deposit_points {
                     if !teams.is_allied(faction, depot_faction) {
                         continue;
                     }
                     let dist = tf.translation.distance(depot_tf.translation);
-                    if nearest_depot.is_none() || dist < nearest_depot.unwrap().1 {
-                        nearest_depot = Some((depot_tf.translation, dist));
+                    let quantized = (dist * 1000.0).round() as i64;
+                    let nid = depot_net_id.map(|id| id.0).unwrap_or(u32::MAX);
+                    let key = (quantized, nid);
+                    if nearest_key.map_or(true, |b| key < b) {
+                        nearest_key = Some(key);
+                        nearest_pos = Some(depot_tf.translation);
                     }
                 }
 
-                if let Some((retreat_pos, _)) = nearest_depot {
+                if let Some(retreat_pos) = nearest_pos {
                     apply_auto_move_intent(&mut commands, entity, retreat_pos);
                     commands
                         .entity(entity)
@@ -921,10 +936,15 @@ pub fn unit_state_executor_system(
                             commands.entity(entity).remove::<MoveTarget>();
                             *state = UnitState::Building(building);
                         } else {
-                            // Walk toward an offset outside the footprint
+                            // Walk toward an offset outside the footprint.
+                            // Until NetworkId is assigned we fall back to a
+                            // neutral angle (0) — the builder will re-path
+                            // next tick once its NetworkId lands, and every
+                            // peer makes the same "neutral" choice because
+                            // the NetworkId assignment runs in FixedFirst
+                            // before this system.
                             let stand_dist = footprint.0 + if is_wall_like { 0.75 } else { 1.5 };
-                            let stable_id =
-                                network_id.map_or(entity.index().index(), |id| id.0);
+                            let stable_id = network_id.map(|id| id.0).unwrap_or(0);
                             let angle = (stable_id as f32 * 2.399) % TAU;
                             let offset =
                                 Vec3::new(angle.cos() * stand_dist, 0.0, angle.sin() * stand_dist);

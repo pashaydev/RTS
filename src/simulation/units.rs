@@ -326,13 +326,21 @@ fn steer_avoidance(
             };
 
             if dist < 0.01 {
-                // Nearly perfectly overlapping — push in a deterministic direction based on entity IDs
-                let my_stable = network_id.map_or(entity.index().index(), |id| id.0);
-                let other_stable = net_ids.get(*other_e).map_or(other_e.index().index(), |id| id.0);
-                let angle =
-                    (my_stable.wrapping_sub(other_stable) % 360) as f32 * std::f32::consts::TAU
+                // Nearly perfectly overlapping — push in a deterministic
+                // direction based on NetworkId. Until a NetworkId is
+                // assigned (first tick after spawn) we cannot produce a
+                // peer-consistent angle, so we skip the overlap jitter for
+                // that tick. It's visually equivalent to "wait one frame
+                // for avoidance to kick in" — both peers skip identically
+                // because both lack the NetworkId at the same tick.
+                if let (Some(my_id), Ok(other_id)) =
+                    (network_id, net_ids.get(*other_e))
+                {
+                    let angle = (my_id.0.wrapping_sub(other_id.0) % 360) as f32
+                        * std::f32::consts::TAU
                         / 360.0;
-                separation += Vec3::new(angle.cos(), 0.0, angle.sin()) * 1.4;
+                    separation += Vec3::new(angle.cos(), 0.0, angle.sin()) * 1.4;
+                }
             } else if dist < hard_push_radius {
                 // Very close — strong quadratic push to prevent stacking
                 let weight = ((hard_push_radius - dist) / hard_push_radius).powi(2) * 2.2 + 0.8;

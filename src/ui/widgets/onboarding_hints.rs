@@ -3,14 +3,12 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
-use super::core::constants::*;
 use super::core::hud::MainHudRoot;
 use crate::types::*;
 use crate::ui::theme;
 
-pub struct HintsWidgetPlugin;
-
-impl Plugin for HintsWidgetPlugin {
+pub struct OnboardingHintsPlugin;
+impl Plugin for OnboardingHintsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<HintState>()
             .add_systems(Update, hints_system.run_if(in_state(AppState::InGame)));

@@ -10,9 +10,8 @@ use crate::types::AppState;
 use crate::ui::fonts::{self, UiFonts};
 use crate::ui::theme::{self, Theme};
 
-pub struct WidgetToolbarPlugin;
-
-impl Plugin for WidgetToolbarPlugin {
+pub struct WidgetVisibilityToolbarPlugin;
+impl Plugin for WidgetVisibilityToolbarPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,

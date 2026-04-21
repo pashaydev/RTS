@@ -311,7 +311,7 @@ pub(super) fn construction_progress_system(
     workers: Query<&UnitState, With<Unit>>,
     children_q: Query<&Children>,
     scene_child_q: Query<Entity, With<BuildingSceneChild>>,
-    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
+    mut event_log: ResMut<crate::ui::widgets::event_log_widget::GameEventLog>,
     mut sfx: bevy::ecs::message::MessageWriter<PlaySfx>,
     mut hammer_timer: Local<f32>,
 ) {
@@ -473,7 +473,7 @@ pub(super) fn construction_progress_system(
             event_log.push(
                 time.elapsed_secs(),
                 format!("{} construction complete", kind.display_name()),
-                crate::ui::event_log_widget::EventCategory::Construction,
+                crate::ui::widgets::event_log_widget::EventCategory::Construction,
                 Some(transform.translation),
                 Some(*faction),
             );

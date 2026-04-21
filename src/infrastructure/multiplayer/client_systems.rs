@@ -13,7 +13,7 @@ use crate::types::*;
 use super::debug_tap;
 use super::transport::{self, MatchboxInbox};
 use super::{ClientNetState, NetRole, NetStats};
-use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
+use crate::ui::widgets::event_log_widget::{EventCategory, GameEventLog, LogLevel};
 
 /// Timer for sending periodic pings to the host (keeps VPN/Hamachi tunnels alive
 /// and feeds the RTT estimator).
@@ -197,7 +197,7 @@ pub fn client_send_ping(
 mod tests {
     use super::*;
     use crate::types::AppState;
-    use crate::ui::event_log_widget::GameEventLog;
+    use crate::ui::widgets::event_log_widget::GameEventLog;
 
     #[test]
     fn client_handle_disconnect_returns_to_menu_and_clears_role() {

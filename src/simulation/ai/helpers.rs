@@ -191,11 +191,20 @@ pub fn update_threat(threats: &mut Vec<ThreatEntry>, pos: Vec3, strength: f32, g
 pub fn pick_strategic_target(
     base_pos: Vec3,
     threats: &[ThreatEntry],
-    enemy_buildings: &Query<(&Faction, &Transform), (With<Building>, Without<FloorTile>)>,
+    enemy_buildings: &Query<
+        (
+            &Faction,
+            &Transform,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        (With<Building>, Without<FloorTile>),
+    >,
     teams: &TeamConfig,
     faction: &Faction,
 ) -> Option<Vec3> {
-    // Priority 1: active threats near base (most recent, closest)
+    // Priority 1: active threats near base (most recent, closest).
+    // Tie-break on position bits so two equidistant threats always resolve
+    // the same way on every peer.
     let mut near_threats: Vec<&ThreatEntry> = threats
         .iter()
         .filter(|t| {
@@ -203,10 +212,21 @@ pub fn pick_strategic_target(
         })
         .collect();
     near_threats.sort_by(|a, b| {
-        a.position
-            .distance(base_pos)
-            .partial_cmp(&b.position.distance(base_pos))
-            .unwrap()
+        let da = (a.position.distance(base_pos) * 1000.0) as i64;
+        let db = (b.position.distance(base_pos) * 1000.0) as i64;
+        da.cmp(&db)
+            .then_with(|| {
+                (
+                    a.position.x.to_bits(),
+                    a.position.y.to_bits(),
+                    a.position.z.to_bits(),
+                )
+                    .cmp(&(
+                        b.position.x.to_bits(),
+                        b.position.y.to_bits(),
+                        b.position.z.to_bits(),
+                    ))
+            })
     });
     if let Some(threat) = near_threats.first() {
         return Some(threat.position);
@@ -218,45 +238,73 @@ pub fn pick_strategic_target(
         .filter(|t| t.estimated_strength > 0.0)
         .collect();
     valid_threats.sort_by(|a, b| {
-        a.estimated_strength
-            .partial_cmp(&b.estimated_strength)
-            .unwrap()
+        let sa = (a.estimated_strength * 1000.0) as i64;
+        let sb = (b.estimated_strength * 1000.0) as i64;
+        sa.cmp(&sb).then_with(|| {
+            (
+                a.position.x.to_bits(),
+                a.position.y.to_bits(),
+                a.position.z.to_bits(),
+            )
+                .cmp(&(
+                    b.position.x.to_bits(),
+                    b.position.y.to_bits(),
+                    b.position.z.to_bits(),
+                ))
+        })
     });
     if let Some(threat) = valid_threats.first() {
         return Some(threat.position);
     }
 
-    // Priority 3: nearest enemy building
-    let mut best: Option<(Vec3, f32)> = None;
-    for (f, tf) in enemy_buildings.iter() {
+    // Priority 3: nearest enemy building, with stable tie-break.
+    let mut best_key: Option<(i64, u32)> = None;
+    let mut best_pos: Option<Vec3> = None;
+    for (f, tf, net_id) in enemy_buildings.iter() {
         if !teams.is_hostile(faction, f) || *f == Faction::Neutral {
             continue;
         }
         let d = base_pos.distance(tf.translation);
-        if best.is_none() || d < best.unwrap().1 {
-            best = Some((tf.translation, d));
+        let quantized = (d * 1000.0).round() as i64;
+        let nid = net_id.map(|id| id.0).unwrap_or(u32::MAX);
+        let key = (quantized, nid);
+        if best_key.map_or(true, |b| key < b) {
+            best_key = Some(key);
+            best_pos = Some(tf.translation);
         }
     }
-    best.map(|(pos, _)| pos)
+    best_pos
 }
 
 pub fn find_enemy_resource_area(
-    buildings: &Query<(&Faction, &Transform), (With<Building>, Without<FloorTile>)>,
+    buildings: &Query<
+        (
+            &Faction,
+            &Transform,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        (With<Building>, Without<FloorTile>),
+    >,
     teams: &TeamConfig,
     faction: &Faction,
 ) -> Option<Vec3> {
-    let mut best: Option<(Vec3, f32)> = None;
+    let mut best_key: Option<(i64, u32)> = None;
+    let mut best_pos: Option<Vec3> = None;
     let origin = Vec3::ZERO;
-    for (f, tf) in buildings.iter() {
+    for (f, tf, net_id) in buildings.iter() {
         if !teams.is_hostile(faction, f) || *f == Faction::Neutral {
             continue;
         }
         let d = origin.distance(tf.translation);
-        if best.is_none() || d < best.unwrap().1 {
-            best = Some((tf.translation, d));
+        let quantized = (d * 1000.0).round() as i64;
+        let nid = net_id.map(|id| id.0).unwrap_or(u32::MAX);
+        let key = (quantized, nid);
+        if best_key.map_or(true, |b| key < b) {
+            best_key = Some(key);
+            best_pos = Some(tf.translation);
         }
     }
-    best.map(|(pos, _)| {
+    best_pos.map(|pos| {
         let to_center = (Vec3::ZERO - pos).normalize_or_zero();
         pos + to_center * 30.0
     })

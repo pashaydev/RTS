@@ -638,7 +638,7 @@ const TREE_FALL_RNG_TAG: u64 = 0x7A11_FA11_7A11_FA11;
 
 pub(super) fn deplete_resource_nodes(
     mut commands: Commands,
-    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
+    mut event_log: ResMut<crate::ui::widgets::event_log_widget::GameEventLog>,
     time: Res<Time<Fixed>>,
     game_rng: Res<GameRng>,
     nodes: Query<(
@@ -662,14 +662,23 @@ pub(super) fn deplete_resource_nodes(
             event_log.push(
                 time.elapsed_secs(),
                 format!("{} node depleted", node.resource_type.display_name()),
-                crate::ui::event_log_widget::EventCategory::Resource,
+                crate::ui::widgets::event_log_widget::EventCategory::Resource,
                 Some(transform.translation),
                 None,
             );
 
             let kind = match node.resource_type {
                 ResourceType::Wood => {
-                    let mut rng = game_rng.fork(entity.to_bits() ^ TREE_FALL_RNG_TAG);
+                    // Seed from the tree's transform bits — entity bits are
+                    // a Bevy allocation detail and differ between peers.
+                    // Position is part of the simulated world state and is
+                    // identical on every peer under lockstep, so the
+                    // resulting fall direction matches.
+                    let pos_tag = (transform.translation.x.to_bits() as u64)
+                        .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                        ^ (transform.translation.z.to_bits() as u64)
+                            .wrapping_mul(0xBF58_476D_1CE4_E5B9);
+                    let mut rng = game_rng.fork(pos_tag ^ TREE_FALL_RNG_TAG);
                     let angle = rng.random::<f32>() * std::f32::consts::TAU;
                     DepletionKind::TreeFall {
                         fall_direction: Vec3::new(angle.cos(), 0.0, angle.sin()),
@@ -698,6 +707,17 @@ pub(super) fn deplete_resource_nodes(
 }
 
 /// Processing buildings periodically spawn new resource nodes nearby.
+///
+/// # Determinism
+///
+/// We consume the shared [`GameRng`] to pick random angles / distances / tree
+/// variants. Bevy query iteration order is archetype-dependent and can
+/// differ between peers (or between runs on one peer after archetype
+/// churn), so iterating `&mut buildings` while advancing the shared RNG
+/// would produce different sequences across peers. To stay deterministic
+/// we collect entity ids, sort by `NetworkId` (then by a stable transform
+/// tie-break), and process buildings in that order — every peer walks the
+/// same sequence of rng calls.
 pub(super) fn resource_respawn_system(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
@@ -706,13 +726,43 @@ pub(super) fn resource_respawn_system(
     model_assets: Res<ModelAssets>,
     node_mats: Res<ResourceNodeMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut buildings: Query<(&Transform, &mut ResourceRespawnConfig, &BuildingState), With<Building>>,
+    mut buildings: Query<
+        (
+            Entity,
+            &Transform,
+            &mut ResourceRespawnConfig,
+            &BuildingState,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        With<Building>,
+    >,
     existing_nodes: Query<(&Transform, &ResourceNode), Without<Building>>,
     growing_resources: Query<(&Transform, &GrowingResource), Without<Building>>,
     building_positions: Query<&Transform, (With<Building>, Without<ResourceNode>)>,
 ) {
-    for (building_tf, mut config, state) in &mut buildings {
-        if *state != BuildingState::Complete {
+    let mut ordered: Vec<(u32, u32, u32, u32, Entity)> = buildings
+        .iter()
+        .map(|(entity, tf, _, _, net_id)| {
+            let nid = net_id.map(|id| id.0).unwrap_or(u32::MAX);
+            (
+                nid,
+                tf.translation.x.to_bits(),
+                tf.translation.y.to_bits(),
+                tf.translation.z.to_bits(),
+                entity,
+            )
+        })
+        .collect();
+    ordered.sort_by_key(|(nid, x, y, z, _)| (*nid, *x, *y, *z));
+
+    for (_, _, _, _, building_entity) in ordered {
+        let Ok((_e, building_tf, mut config, state, _nid)) = buildings.get_mut(building_entity)
+        else {
+            continue;
+        };
+        let building_tf = *building_tf;
+        let state = *state;
+        if state != BuildingState::Complete {
             continue;
         }
 

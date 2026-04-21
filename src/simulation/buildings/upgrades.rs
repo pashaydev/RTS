@@ -71,7 +71,7 @@ pub(super) fn building_upgrade_system(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
     registry: Res<BlueprintRegistry>,
-    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
+    mut event_log: ResMut<crate::ui::widgets::event_log_widget::GameEventLog>,
     building_models: Option<Res<BuildingModelAssets>>,
     vfx_assets: Option<Res<VfxAssets>>,
     mut buildings: Query<
@@ -303,7 +303,7 @@ pub(super) fn building_upgrade_system(
         event_log.push(
             time.elapsed_secs(),
             format!("{} upgraded to L{}", kind.display_name(), new_level),
-            crate::ui::event_log_widget::EventCategory::Upgrade,
+            crate::ui::widgets::event_log_widget::EventCategory::Upgrade,
             Some(transform.translation),
             Some(*faction),
         );
@@ -327,7 +327,7 @@ pub(super) fn demolish_system(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
     registry: Res<BlueprintRegistry>,
-    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
+    mut event_log: ResMut<crate::ui::widgets::event_log_widget::GameEventLog>,
     mut all_resources: ResMut<AllPlayerResources>,
     mut wall_grid: ResMut<WallGrid>,
     mut floor_grid: ResMut<FloorGrid>,
@@ -357,7 +357,7 @@ pub(super) fn demolish_system(
             event_log.push(
                 time.elapsed_secs(),
                 format!("{} demolished", kind.display_name()),
-                crate::ui::event_log_widget::EventCategory::Demolish,
+                crate::ui::widgets::event_log_widget::EventCategory::Demolish,
                 Some(transform.translation),
                 Some(*faction),
             );

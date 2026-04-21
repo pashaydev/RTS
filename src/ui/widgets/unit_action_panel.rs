@@ -1,4 +1,4 @@
-//! Action panel for unit selections: move, attack, gather, ability
+//! Action panel for unit selections: move, attack, gather, and ability
 //! buttons driven by the currently selected unit kinds.
 
 use bevy::prelude::*;

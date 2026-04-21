@@ -763,7 +763,7 @@ pub struct GameplaySettings {
 }
 
 fn default_game_speed() -> f32 {
-    2.5
+    1.5
 }
 
 impl Default for GameplaySettings {

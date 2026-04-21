@@ -33,7 +33,7 @@ pub(crate) struct SerializableGameConfig {
 }
 
 fn default_game_speed_serialized() -> f32 {
-    2.5
+    1.5
 }
 
 impl SerializableGameConfig {

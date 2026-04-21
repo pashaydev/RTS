@@ -206,13 +206,17 @@ pub fn approach_target(
                 continue;
             }
 
+            // Until NetworkId is assigned we use 0 so every peer makes the
+            // same choice; `assign_network_ids` runs in FixedFirst ahead of
+            // combat, so ids are present for everything spawned before this
+            // tick.
             let approach = desired_approach_pos(
                 tf.translation,
                 target_tf.translation,
                 target_radius,
                 max_range,
                 min_range,
-                net_id.map_or(entity.index().index(), |id| id.0),
+                net_id.map(|id| id.0).unwrap_or(0),
             );
             if opt_move_target.map_or(true, |m| m.0.distance(approach) > 0.9) {
                 commands.entity(entity).insert(MoveTarget(approach));

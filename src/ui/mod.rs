@@ -7,15 +7,8 @@ pub mod menu;
 pub mod theme;
 pub mod widgets;
 
-// Compatibility re-exports keep existing `crate::ui::*` paths working
 #[allow(unused_imports)]
 pub use core::{fonts, framework as widget_framework, shared};
-#[allow(unused_imports)]
-pub use widgets::{
-    actions_widget, army_overview_widget, event_log_widget, group_hotkeys_widget, hints_widget,
-    notifications, production_queue_widget, resources_widget, selection_widget, tech_tree_widget,
-    widget_toolbar,
-};
 
 use bevy::app::PluginGroupBuilder;
 use bevy::prelude::*;
@@ -32,10 +25,11 @@ use bevy::prelude::*;
 ///   Gating is applied per-system inside `menu::MenuPlugin` so the plugin
 ///   set stays composable.
 /// - **Runtime** ([`widgets::WidgetsPlugin`], [`attention::AttentionPlugin`]):
-///   resources header, actions, selection, production queue, army overview,
-///   tech tree, event log, hints, notifications — gated on
+///   dockable panels (selection, actions, production queue, army overview,
+///   tech tree, event log), plus HUD-root overlays and bars (header,
+///   onboarding hints, notifications, wave alerts) — gated on
 ///   [`crate::types::AppState::InGame`], again per-system inside the
-///   widget plugins.
+///   runtime plugins.
 ///
 /// Each sub-plugin already owns its own state gating; this comment documents
 /// the invariant so future work can add plugin-level `configure_sets` with

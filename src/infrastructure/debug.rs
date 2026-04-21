@@ -1414,9 +1414,23 @@ fn sync_entity_spawn_tweaks(
     panel_state: Res<DebugPanelState>,
     ui_press: Res<UiPressActive>,
     mob_targets: (
-        Query<(Entity, &Transform, &Faction), With<crate::types::Unit>>,
         Query<
-            (Entity, &Transform, &Faction, Option<&EntityKind>),
+            (
+                Entity,
+                &Transform,
+                &Faction,
+                Option<&crate::infrastructure::net_bridge::NetworkId>,
+            ),
+            With<crate::types::Unit>,
+        >,
+        Query<
+            (
+                Entity,
+                &Transform,
+                &Faction,
+                Option<&EntityKind>,
+                Option<&crate::infrastructure::net_bridge::NetworkId>,
+            ),
             (
                 With<crate::types::Building>,
                 Without<crate::types::Unit>,
@@ -1425,9 +1439,22 @@ fn sync_entity_spawn_tweaks(
         >,
         Query<&Faction>,
     ),
+    net_role: Option<Res<crate::infrastructure::multiplayer::NetRole>>,
 ) {
     let (building_models, unit_models, height_map) = spawn_assets;
     let (target_units, target_buildings, target_factions) = mob_targets;
+    // Entity spawns modify the ECS world — mutating it locally in a
+    // networked match desyncs every peer.
+    let offline = net_role
+        .as_deref()
+        .map(|role| *role == crate::infrastructure::multiplayer::NetRole::Offline)
+        .unwrap_or(true);
+    if !offline {
+        spawn_state.click_to_spawn = false;
+        tweaks.set_bool_if_changed(SPAWN_FOLDER, "Click to Place", false);
+        tweaks.set_readonly_if_changed(SPAWN_FOLDER, "Status", "Read-only online (sim state)");
+        return;
+    }
     // Update click-to-spawn from toggle
     if let Some(v) = tweaks.get_bool(SPAWN_FOLDER, "Click to Place") {
         spawn_state.click_to_spawn = v;
@@ -1548,9 +1575,23 @@ fn finalize_debug_mob_spawn(
     registry: &BlueprintRegistry,
     height_map: &HeightMap,
     now: f64,
-    units: &Query<(Entity, &Transform, &Faction), With<crate::types::Unit>>,
+    units: &Query<
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        With<crate::types::Unit>,
+    >,
     buildings: &Query<
-        (Entity, &Transform, &Faction, Option<&EntityKind>),
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&EntityKind>,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
         (
             With<crate::types::Building>,
             Without<crate::types::Unit>,
@@ -1820,7 +1861,22 @@ fn sync_resource_debug_tweaks(
     mut tweaks: ResMut<DebugTweaks>,
     pressed: Res<DebugButtonPressed>,
     mut all_resources: ResMut<AllPlayerResources>,
+    net_role: Option<Res<crate::infrastructure::multiplayer::NetRole>>,
 ) {
+    // `AllPlayerResources` is part of the deterministic simulation hash, so
+    // mutating it locally in a networked match would desync every peer.
+    let offline = net_role
+        .as_deref()
+        .map(|role| *role == crate::infrastructure::multiplayer::NetRole::Offline)
+        .unwrap_or(true);
+    if !offline {
+        tweaks.set_readonly_if_changed(
+            RESOURCES_FOLDER,
+            "Status",
+            "Read-only online (sim state)",
+        );
+        return;
+    }
     let faction_idx = tweaks
         .get_cycle_selected(RESOURCES_FOLDER, "Faction")
         .unwrap_or(0);
@@ -1872,7 +1928,14 @@ fn sync_item_debug_tweaks(
     windows: Query<&Window, With<PrimaryWindow>>,
     selected_inventories: Query<&UnitInventory, With<Selected>>,
     mut item_spawns: MessageWriter<SpawnItemPickup>,
+    net_role: Option<Res<crate::infrastructure::multiplayer::NetRole>>,
 ) {
+    // Item pickups exist in the simulated world and are part of the
+    // deterministic sim-state hash. Disable spawn-at-camera/cursor online.
+    let offline = net_role
+        .as_deref()
+        .map(|role| *role == crate::infrastructure::multiplayer::NetRole::Offline)
+        .unwrap_or(true);
     let inventories: Vec<&UnitInventory> = selected_inventories.iter().collect();
     tweaks.set_readonly_if_changed(
         ITEMS_SELECTED_FOLDER,
@@ -1901,6 +1964,15 @@ fn sync_item_debug_tweaks(
         equipped_items.join(", ")
     };
     tweaks.set_readonly_if_changed(ITEMS_SELECTED_FOLDER, "Items", &items_text);
+
+    if !offline {
+        tweaks.set_readonly_if_changed(
+            ITEMS_SPAWN_FOLDER,
+            "Status",
+            "Read-only online (sim state)",
+        );
+        return;
+    }
 
     for (folder, label) in &pressed.pressed {
         if folder != ITEMS_SPAWN_FOLDER {
@@ -1949,6 +2021,7 @@ fn sync_entity_selected_tweaks(
     selected_q: Query<(Entity, &EntityKind), With<Selected>>,
     mut health_q: Query<(Entity, &mut Health), With<Selected>>,
     mut speed_q: Query<&mut UnitSpeed, With<Selected>>,
+    net_role: Option<Res<crate::infrastructure::multiplayer::NetRole>>,
 ) {
     // Update count
     let count = selected_q.iter().count();
@@ -1965,6 +2038,15 @@ fn sync_entity_selected_tweaks(
         } else {
             tweaks.set_readonly_if_changed(SELECTED_FOLDER, "Type", "Mixed");
         }
+    }
+
+    // Health/speed/despawn are sim-state mutations; skip them online.
+    let offline = net_role
+        .as_deref()
+        .map(|role| *role == crate::infrastructure::multiplayer::NetRole::Offline)
+        .unwrap_or(true);
+    if !offline {
+        return;
     }
 
     // Handle buttons

@@ -8,6 +8,7 @@ use crate::blueprints::{
     spawn_from_blueprint_with_faction, BlueprintRegistry, EntityCategory, EntityKind,
     EntityVisualCache, LevelBonus,
 };
+use crate::infrastructure::net_bridge::NetworkId;
 use crate::presentation::model_assets::UnitModelAssets;
 use crate::types::*;
 use crate::world::ground::HeightMap;
@@ -24,28 +25,46 @@ pub(super) fn eject_units_from_buildings(
     >,
     nav_grid: Option<Res<crate::world::pathfinding::NavGrid>>,
     all_buildings: Query<(Entity, &Transform, &BuildingFootprint, &BuildingState), With<Building>>,
-    mut units: Query<(Entity, &mut Transform), (Or<(With<Unit>, With<Mob>)>, Without<Building>)>,
+    mut units: Query<
+        (Entity, &mut Transform, Option<&NetworkId>),
+        (Or<(With<Unit>, With<Mob>)>, Without<Building>),
+    >,
 ) {
     for (building_entity, building_tf, footprint) in &new_buildings {
         let building_pos = building_tf.translation;
         let eject_radius = footprint.0 + 1.0;
 
-        for (unit_entity, mut unit_tf) in &mut units {
-            let diff = unit_tf.translation - building_pos;
-            let flat_dist = Vec2::new(diff.x, diff.z).length();
-            if flat_dist < eject_radius {
-                let safe_pos = find_trained_unit_spawn_position(
-                    building_entity,
-                    building_pos,
-                    footprint.0,
-                    unit_entity.to_bits() as u32,
-                    nav_grid.as_deref(),
-                    &all_buildings,
-                );
+        // Collect the ejection list in a deterministic order so every peer
+        // processes displaced units in the same sequence. Using NetworkId
+        // (falling back to u32::MAX for anything not yet assigned) keeps
+        // the ordering stable even across different archetype layouts.
+        let mut trapped: Vec<(u32, Entity, Vec3)> = units
+            .iter()
+            .filter_map(|(entity, tf, net_id)| {
+                let diff = tf.translation - building_pos;
+                let flat_dist = Vec2::new(diff.x, diff.z).length();
+                if flat_dist >= eject_radius {
+                    return None;
+                }
+                Some((net_id.map(|id| id.0).unwrap_or(u32::MAX), entity, tf.translation))
+            })
+            .collect();
+        trapped.sort_by_key(|(net, _, _)| *net);
+
+        for (spawn_index, unit_entity, _pos) in trapped {
+            let safe_pos = find_trained_unit_spawn_position(
+                building_entity,
+                building_pos,
+                footprint.0,
+                spawn_index,
+                nav_grid.as_deref(),
+                &all_buildings,
+            );
+            if let Ok((_, mut unit_tf, _)) = units.get_mut(unit_entity) {
                 unit_tf.translation.x = safe_pos.x;
                 unit_tf.translation.z = safe_pos.z;
-                commands.entity(unit_entity).insert(MoveTarget(safe_pos));
             }
+            commands.entity(unit_entity).insert(MoveTarget(safe_pos));
         }
     }
 }
@@ -74,6 +93,7 @@ pub(super) fn tower_auto_attack(
             &Faction,
             Option<&TargetingProfile>,
             Option<&DamageType>,
+            Option<&NetworkId>,
         ),
         With<Building>,
     >,
@@ -86,6 +106,7 @@ pub(super) fn tower_auto_attack(
             &ArmorType,
             Option<&ThreatValue>,
             Option<&mut ReservedIncomingDamage>,
+            Option<&NetworkId>,
         ),
         Or<(With<Mob>, With<Unit>)>,
     >,
@@ -107,6 +128,7 @@ pub(super) fn tower_auto_attack(
         tower_faction,
         opt_profile,
         opt_dmg_type,
+        tower_net_id,
     ) in &mut towers
     {
         if !kind.uses_tower_auto_attack() || *state != BuildingState::Complete {
@@ -126,12 +148,21 @@ pub(super) fn tower_auto_attack(
         }
 
         let mut best_score = f32::MAX;
+        let mut best_key: Option<(i64, u32)> = None; // (quantized_score*1e3, target_net_id)
         let mut best_target: Option<(Entity, f32)> = None; // (entity, travel_dist)
         let tower_dmg_type = opt_dmg_type.copied().unwrap_or(DamageType::Pierce);
         let minimum_range = attack_timing.map_or(0.0, |timing| timing.minimum_range);
 
-        for (target_entity, target_tf, target_faction, t_health, t_armor, t_threat, t_reserved) in
-            hostiles.iter()
+        for (
+            target_entity,
+            target_tf,
+            target_faction,
+            t_health,
+            t_armor,
+            t_threat,
+            t_reserved,
+            target_net_id,
+        ) in hostiles.iter()
         {
             if !teams.is_hostile(tower_faction, target_faction) {
                 continue;
@@ -151,6 +182,7 @@ pub(super) fn tower_auto_attack(
                 continue;
             }
 
+            let target_nid_key = target_net_id.map(|id| id.0).unwrap_or(u32::MAX);
             if let Some(profile) = opt_profile {
                 let reserved_total = t_reserved.as_ref().map_or(0.0, |r| r.total());
                 if let Some(score) = crate::simulation::combat::target_score(
@@ -167,19 +199,31 @@ pub(super) fn tower_auto_attack(
                         target_reserved_damage: reserved_total,
                     },
                 ) {
-                    if score < best_score {
+                    // Quantize the float score to 1e-3 so ties on the
+                    // score round to the same bucket on every peer; within
+                    // that bucket, smaller NetworkId wins. This replaces
+                    // "first through the query wins" which was Bevy
+                    // iteration-order dependent.
+                    let quantized = (score * 1000.0).round() as i64;
+                    let key = (quantized, target_nid_key);
+                    if best_key.map_or(true, |b| key < b) {
                         best_score = score;
+                        best_key = Some(key);
                         best_target = Some((target_entity, surface_dist));
                     }
                 }
             } else {
-                // Fallback: nearest enemy
-                if surface_dist < best_score {
+                // Fallback: nearest enemy, tie-broken by NetworkId.
+                let quantized = (surface_dist * 1000.0).round() as i64;
+                let key = (quantized, target_nid_key);
+                if best_key.map_or(true, |b| key < b) {
                     best_score = surface_dist;
+                    best_key = Some(key);
                     best_target = Some((target_entity, surface_dist));
                 }
             }
         }
+        let _ = best_score;
 
         if let Some((target_entity, travel_dist)) = best_target {
             cooldown.ready_in = cooldown.interval;
@@ -187,7 +231,7 @@ pub(super) fn tower_auto_attack(
             // Add damage reservation on target
             let projectile_speed = attack_profile.projectile_speed.max(8.0);
             let ttl = travel_dist / projectile_speed + attack_profile.windup_secs + 0.35;
-            if let Ok((_, _, _, _, _, _, Some(mut reserved))) = hostiles.get_mut(target_entity) {
+            if let Ok((_, _, _, _, _, _, Some(mut reserved), _)) = hostiles.get_mut(target_entity) {
                 reserved.reservations.push((tower_entity, damage.0, ttl));
             }
 
@@ -226,7 +270,12 @@ pub(super) fn tower_auto_attack(
                 } else {
                     Quat::IDENTITY
                 };
-                let scene = proj_res.scene_for(visual_kind, tower_entity.to_bits() as usize);
+                // Pick a projectile model variant from a stable id so every
+                // peer agrees on the visual. NetworkId is the portable key;
+                // we only fall back to 0 before the id lands (cosmetic
+                // variation for a single tick).
+                let variant_key = tower_net_id.map(|id| id.0 as usize).unwrap_or(0);
+                let scene = proj_res.scene_for(visual_kind, variant_key);
                 commands.spawn((
                     proj_component,
                     SceneRoot(scene),
@@ -341,7 +390,7 @@ pub(super) fn training_queue_system(
         ),
         With<Building>,
     >,
-    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
+    mut event_log: ResMut<crate::ui::widgets::event_log_widget::GameEventLog>,
 ) {
     let mut used_by_faction: std::collections::HashMap<Faction, u32> =
         std::collections::HashMap::new();
@@ -439,7 +488,7 @@ pub(super) fn training_queue_system(
                 event_log.push(
                     time.elapsed_secs(),
                     format!("{} trained", unit_kind.display_name()),
-                    crate::ui::event_log_widget::EventCategory::Training,
+                    crate::ui::widgets::event_log_widget::EventCategory::Training,
                     Some(spawn_pos),
                     Some(*building_faction),
                 );

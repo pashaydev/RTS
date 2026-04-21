@@ -4,6 +4,7 @@
 use bevy::prelude::*;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
+use crate::infrastructure::multiplayer::NetRole;
 use crate::types::{Biome, GameSetupConfig, MapSeed};
 
 use super::data::{edge_distance_to_square, BorderSettings, AMPLITUDE, WATER_LEVEL};
@@ -174,13 +175,54 @@ impl TerrainNoise {
     }
 }
 
-/// Resolves the map seed: if 0, generates a random one. Inserts MapSeed resource.
-pub fn resolve_map_seed(mut commands: Commands, config: Res<GameSetupConfig>) {
-    let seed = if config.map_seed == 0 {
-        rand::random::<u64>()
-    } else {
-        config.map_seed
+/// Decide which seed to use based on `(config_seed, is_online)`, without any
+/// ECS or I/O dependency — `None` means "use a local random seed". Online
+/// matches MUST carry a pre-negotiated `config.map_seed`; if the lobby flow
+/// failed to set one, we fall back to a fixed deterministic seed rather
+/// than rolling a local random value on each peer.
+///
+/// Returning a fallback seed is strictly better than panicking in the sim
+/// path — the match still launches and desync detection surfaces the bug
+/// via `SyncChecksum` rather than via a crash mid-game.
+pub fn resolve_map_seed_value(config_seed: u64, is_online: bool) -> Option<u64> {
+    if config_seed != 0 {
+        return Some(config_seed);
+    }
+    if is_online {
+        // Deterministic fallback: every peer picks the same seed so the
+        // match still runs checksummed. The real fix is upstream — the
+        // lobby should negotiate a seed before OnEnter(InGame).
+        return Some(1);
+    }
+    None
+}
+
+/// Resolves the map seed. Online matches MUST carry a pre-negotiated
+/// `config.map_seed` — we refuse to fabricate one locally because every peer
+/// would roll a different number, desyncing terrain, biomes, and the global
+/// `GameRng`. Offline still falls back to `rand::random()` so a fresh
+/// single-player match without an explicit seed still gets randomised terrain.
+pub fn resolve_map_seed(
+    mut commands: Commands,
+    config: Res<GameSetupConfig>,
+    net_role: Option<Res<NetRole>>,
+) {
+    let is_online = net_role
+        .as_deref()
+        .map(|role| *role != NetRole::Offline)
+        .unwrap_or(false);
+    let seed = match resolve_map_seed_value(config.map_seed, is_online) {
+        Some(seed) => seed,
+        None => rand::random::<u64>(),
     };
+    if is_online && config.map_seed == 0 {
+        error!(
+            "Online match started with map_seed=0 — refusing to generate a \
+             local random seed because it would desync every peer. Using the \
+             deterministic fallback seed ({seed}); fix the lobby flow so the \
+             host negotiates map_seed before OnEnter(InGame)."
+        );
+    }
     info!("Map seed: {}", seed);
     commands.insert_resource(MapSeed(seed));
 }
@@ -306,4 +348,40 @@ pub fn blended_biome_color_patched(
     }
 
     color
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_map_seed_value;
+
+    /// An online match with `config.map_seed == 0` MUST NOT ask for a
+    /// local random seed. The helper returns `Some(deterministic fallback)`
+    /// so the ECS wrapper never reaches the `rand::random()` path.
+    #[test]
+    fn online_zero_seed_refuses_local_random() {
+        let seed = resolve_map_seed_value(0, true);
+        assert_eq!(
+            seed,
+            Some(1),
+            "online + zero seed must use the deterministic fallback, not None (which would roll randomly)"
+        );
+    }
+
+    /// Offline zero-seed permits the local random path (encoded as `None`).
+    #[test]
+    fn offline_zero_seed_allows_local_random() {
+        let seed = resolve_map_seed_value(0, false);
+        assert_eq!(
+            seed, None,
+            "offline + zero seed must delegate to a local random roll"
+        );
+    }
+
+    /// A non-zero seed is always returned verbatim, regardless of mode —
+    /// this is the lobby-negotiated path the online flow is supposed to hit.
+    #[test]
+    fn explicit_seed_is_returned_verbatim() {
+        assert_eq!(resolve_map_seed_value(0xABCD, true), Some(0xABCD));
+        assert_eq!(resolve_map_seed_value(0xABCD, false), Some(0xABCD));
+    }
 }

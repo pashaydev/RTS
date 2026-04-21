@@ -20,7 +20,7 @@ use crate::ui::fonts::UiFonts;
 use crate::ui::theme::{self, Theme};
 use crate::ui::widgets::event_log_widget::{EventLogRenderState, GameEventLog};
 use crate::ui::widgets::group_hotkeys_widget::ControlGroups;
-use crate::ui::widgets::hints_widget::HintState;
+use crate::ui::widgets::onboarding_hints::HintState;
 use crate::world::fog::{FogTextureUploadState, FogTextures, FogTweakSettings};
 use crate::world::ground::{
     TerrainShapeSyncState, TerrainShapeUpdateQueue, TerrainSurfaceDirtyQueue,

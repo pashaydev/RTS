@@ -47,11 +47,31 @@ pub(super) fn spawn_saplings_system(
         return;
     }
 
+    // NOTE (determinism): we collect mature tree positions and sort them on
+    // stable terms before consuming the shared `game_rng`. Bevy query
+    // iteration order is archetype-dependent and can differ between peers
+    // (or between runs within one peer when archetypes reshuffle). Iterating
+    // unordered while advancing the shared RNG would immediately desync the
+    // sim across peers. Quantizing the transform bits + sorting gives us a
+    // portable, deterministic ordering before any RNG consumption.
     let rng = &mut game_rng.rng;
-    let trees: Vec<Vec3> = mature_trees.iter().map(|t| t.translation).collect();
+    let mut trees: Vec<Vec3> = mature_trees.iter().map(|t| t.translation).collect();
     if trees.is_empty() {
         return;
     }
+    trees.sort_by(|a, b| {
+        let a_key = (
+            a.x.to_bits(),
+            a.y.to_bits(),
+            a.z.to_bits(),
+        );
+        let b_key = (
+            b.x.to_bits(),
+            b.y.to_bits(),
+            b.z.to_bits(),
+        );
+        a_key.cmp(&b_key)
+    });
 
     // Try to spawn a few saplings near random existing trees
     let spawns_per_tick = 3u32.min(config.max_saplings - sapling_count);

@@ -16,7 +16,7 @@ use crate::ui::theme;
 #[derive(SystemParam)]
 pub(super) struct WorkerAiParams<'w, 's> {
     all_resources: ResMut<'w, AllPlayerResources>,
-    event_log: ResMut<'w, crate::ui::event_log_widget::GameEventLog>,
+    event_log: ResMut<'w, crate::ui::widgets::event_log_widget::GameEventLog>,
     vfx_assets: Option<Res<'w, VfxAssets>>,
     active_player: Res<'w, ActivePlayer>,
     workers: Query<
@@ -496,7 +496,7 @@ pub(super) fn worker_ai_system(
                         params.event_log.push(
                             time.elapsed_secs(),
                             "Storage full — worker waiting".into(),
-                            crate::ui::event_log_widget::EventCategory::Alert,
+                            crate::ui::widgets::event_log_widget::EventCategory::Alert,
                             Some(tf.translation),
                             Some(*worker_faction),
                         );

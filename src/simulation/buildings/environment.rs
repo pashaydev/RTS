@@ -307,18 +307,54 @@ pub fn storage_aura_bonus(
 
 // ── Sync Storage on Spend ──
 
+/// Build the deterministic key used to order storage candidates when draining
+/// excess resources. Exposed (crate-visible) so determinism tests can verify
+/// that permuting the input list doesn't change the drain order.
+pub(crate) fn storage_drain_sort_key(
+    stored: u32,
+    net_id: Option<u32>,
+    entity_index: u32,
+) -> (u32, u32, u32) {
+    // Primary: largest stored amount first (encoded as `u32::MAX - stored`
+    // so ascending sort puts the biggest stack at the head).
+    // Secondary: smallest NetworkId wins — peer-portable and stable across
+    // reconnects for entities in a single match.
+    // Tertiary: entity index as the last-resort tie-break. Under lockstep
+    // this matches between peers too, but it's only consulted when the
+    // first two keys tie (which implies two empty / just-assigned buildings
+    // before NetworkId issuance).
+    let net_key = net_id.unwrap_or(u32::MAX);
+    (u32::MAX - stored, net_key, entity_index)
+}
+
 pub(super) fn sync_storage_on_spend(
     all_resources: Res<AllPlayerResources>,
-    mut storages: Query<(&Faction, &mut StorageInventory), (With<Building>, With<DepositPoint>)>,
+    mut storages: Query<
+        (
+            Entity,
+            &Faction,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+            &mut StorageInventory,
+        ),
+        (With<Building>, With<DepositPoint>),
+    >,
 ) {
-    // For each faction, sum up all storage inventories per resource type.
-    // If the total exceeds AllPlayerResources (meaning player spent some),
-    // drain from the largest inventory first.
-    use std::collections::HashMap;
+    // When the player spends resources, the aggregate in AllPlayerResources
+    // decreases — but the per-building StorageInventory is the authoritative
+    // breakdown of where those goods are physically stacked on the map. We
+    // must drain storages on every peer in the same order, otherwise two
+    // peers will pick a different "largest" storage for the same tick and
+    // their simulated world states diverge immediately.
+    //
+    // The deterministic order here is: (largest stored amount descending,
+    // NetworkId ascending, Entity index ascending as a last resort). The
+    // NetworkId tie-break assumes `assign_network_ids` has run for this
+    // tick's new buildings; entities without an id yet participate at the
+    // tail via `u32::MAX`, which is still deterministic per peer.
+    use std::collections::BTreeMap;
 
-    // Collect per-faction storage totals
-    let mut faction_totals: HashMap<Faction, [u32; ResourceType::COUNT]> = HashMap::new();
-    for (faction, inv) in &storages {
+    let mut faction_totals: BTreeMap<Faction, [u32; ResourceType::COUNT]> = BTreeMap::new();
+    for (_entity, faction, _net_id, inv) in &storages {
         let totals = faction_totals
             .entry(*faction)
             .or_insert([0; ResourceType::COUNT]);
@@ -327,7 +363,6 @@ pub(super) fn sync_storage_on_spend(
         }
     }
 
-    // For each faction, check if inventories exceed player resources
     for (faction, totals) in &faction_totals {
         let player_res = all_resources.get(faction);
         let mut excess = [0u32; ResourceType::COUNT];
@@ -339,17 +374,45 @@ pub(super) fn sync_storage_on_spend(
             continue;
         }
 
-        // Drain excess from inventories (proportionally)
-        let mut remaining = excess;
-        for (f, mut inv) in &mut storages {
-            if f != faction {
+        // Drain per resource type in a deterministic storage order.
+        for rt in ResourceType::ALL {
+            let i = rt.index();
+            if excess[i] == 0 {
                 continue;
             }
-            for rt in ResourceType::ALL {
-                let i = rt.index();
-                let drain = remaining[i].min(inv.get(rt));
-                inv.amounts[i] -= drain;
-                remaining[i] -= drain;
+
+            let mut candidates: Vec<((u32, u32, u32), Entity)> = storages
+                .iter()
+                .filter_map(|(entity, f, net_id, inv)| {
+                    if f != faction {
+                        return None;
+                    }
+                    let stored = inv.get(rt);
+                    if stored == 0 {
+                        return None;
+                    }
+                    let key = storage_drain_sort_key(
+                        stored,
+                        net_id.map(|id| id.0),
+                        entity.index().index(),
+                    );
+                    Some((key, entity))
+                })
+                .collect();
+            candidates.sort_by_key(|(key, _)| *key);
+
+            let mut remaining = excess[i];
+            for (_, entity) in candidates {
+                if remaining == 0 {
+                    break;
+                }
+                if let Ok((_, _, _, mut inv)) = storages.get_mut(entity) {
+                    let drain = remaining.min(inv.get(rt));
+                    if drain > 0 {
+                        inv.amounts[i] -= drain;
+                        remaining -= drain;
+                    }
+                }
             }
         }
     }
@@ -956,4 +1019,51 @@ fn strip_triangles_in_radius(
 
     mesh.insert_indices(bevy::mesh::Indices::U32(new_indices));
     false
+}
+
+#[cfg(test)]
+mod storage_drain_tests {
+    use super::storage_drain_sort_key;
+
+    /// Sorting by the drain key must put the biggest stash first; given
+    /// two stashes with the same stockpile, the smaller NetworkId wins.
+    /// Permuting the input must not change the final ordering — that's
+    /// the lockstep invariant.
+    #[test]
+    fn drain_order_is_stable_across_permutations() {
+        // (stored, network_id, entity_index)
+        let entries = vec![
+            (500, Some(7u32), 42u32),  // big, high nid
+            (200, Some(3u32), 10u32),  // small, low nid
+            (500, Some(2u32), 99u32),  // big, low nid → should land first
+            (500, Some(2u32), 50u32),  // big, low nid, smaller index → should actually be first
+        ];
+
+        let expected_first_stored = 500u32;
+        let expected_first_nid = Some(2u32);
+        let expected_first_idx = 50u32;
+
+        for shuffle_offset in 0..entries.len() {
+            let mut shuffled: Vec<_> = entries.clone();
+            shuffled.rotate_left(shuffle_offset);
+            shuffled.sort_by_key(|(stored, nid, idx)| storage_drain_sort_key(*stored, *nid, *idx));
+            let (first_stored, first_nid, first_idx) = shuffled[0];
+            assert_eq!(first_stored, expected_first_stored);
+            assert_eq!(first_nid, expected_first_nid);
+            assert_eq!(first_idx, expected_first_idx);
+        }
+    }
+
+    /// An entity without a NetworkId (u32::MAX fallback) must sort AFTER
+    /// one that has an id — otherwise freshly spawned storages would
+    /// eclipse established ones for one tick per spawn.
+    #[test]
+    fn missing_network_id_sorts_after_assigned_id() {
+        let with_id = storage_drain_sort_key(100, Some(5), 0);
+        let without_id = storage_drain_sort_key(100, None, 0);
+        assert!(
+            with_id < without_id,
+            "entities with a NetworkId should drain before ones without"
+        );
+    }
 }

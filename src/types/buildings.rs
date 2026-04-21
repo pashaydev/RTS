@@ -2,7 +2,14 @@
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
+
+// `BTreeMap` / `BTreeSet` are used for [`WallGrid`] / [`FloorGrid`] /
+// [`ObstacleGrid`] because they're authoritative simulation state that gets
+// iterated to compute auto-tiling, mark-dirty fan-out, and build-validity
+// checks. `HashMap` iteration order varies between peers (and even between
+// runs on the same peer when entries reshuffle), which would desync those
+// gameplay-decisive iterations under lockstep.
 
 use super::app::Faction;
 use crate::blueprints::{EntityKind, ResourceCost};
@@ -162,7 +169,7 @@ pub struct WallGridCell {
 
 #[derive(Resource, Default)]
 pub struct WallGrid {
-    pub cells: HashMap<(i32, i32), WallGridCell>,
+    pub cells: BTreeMap<(i32, i32), WallGridCell>,
     pub dirty: Vec<(i32, i32)>,
 }
 
@@ -210,7 +217,7 @@ impl WallGrid {
 
 #[derive(Resource, Default)]
 pub struct FloorGrid {
-    pub cells: HashMap<(i32, i32), FloorGridCell>,
+    pub cells: BTreeMap<(i32, i32), FloorGridCell>,
     pub dirty: Vec<(i32, i32)>,
 }
 
@@ -246,7 +253,7 @@ impl FloorGrid {
 /// Sparse grid of cells occupied by natural obstacles (trees) plus border margin.
 #[derive(Resource, Default)]
 pub struct ObstacleGrid {
-    pub cells: HashSet<(i32, i32)>,
+    pub cells: BTreeSet<(i32, i32)>,
     /// Half-size of the playable area (excludes border hills). 0 = not yet initialised.
     pub playable_half: f32,
 }

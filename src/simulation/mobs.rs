@@ -25,7 +25,7 @@ use crate::presentation::model_assets::UnitModelAssets;
 use crate::simulation::combat::{apply_auto_attack_intent, apply_auto_move_intent, CombatSet};
 use crate::simulation::items::{ItemKind, SpawnItemPickup};
 use crate::types::*;
-use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
+use crate::ui::widgets::event_log_widget::{EventCategory, GameEventLog, LogLevel};
 use crate::world::ground::{is_in_mountain_border, BorderSettings, HeightMap};
 use crate::world::lighting::{DayCycle, DayPhase};
 
@@ -406,9 +406,23 @@ fn night_wave_drip_spawn(
     time: Res<Time<Fixed>>,
     mut wave: ResMut<NightWaveState>,
     target_factions: Query<&Faction>,
-    target_units: Query<(Entity, &Transform, &Faction), With<Unit>>,
+    target_units: Query<
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        With<Unit>,
+    >,
     target_buildings: Query<
-        (Entity, &Transform, &Faction, Option<&EntityKind>),
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&EntityKind>,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
         (With<Building>, Without<Unit>, Without<FloorTile>),
     >,
     mut event_log: ResMut<GameEventLog>,
@@ -563,19 +577,49 @@ fn pick_perimeter_spawn(
 /// Pick the best initial target for a freshly spawned mob. Buildings outrank
 /// units (with Base/Storage outranking other buildings); ties broken by
 /// distance. Returns `None` only if the map has no hostile entities at all.
+///
+/// # Determinism
+///
+/// `Query::iter()` walks entities in archetype order, which is NOT portable
+/// across peers. Two equally-scored hostile buildings (very common on
+/// symmetric FFA maps where bases are equidistant from mob spawn points)
+/// would resolve to whichever the local archetype layout visits first —
+/// host and client could pick different bases, immediately desyncing every
+/// mob's `MobEngagement.primary` (and its downstream `AttackTarget`,
+/// `Order::Attack`, etc., which are all checksummed).
+///
+/// We quantize the score to 1e-3 so float ties round to the same bucket
+/// on every peer, and use `NetworkId` as the secondary key so any actual
+/// tie resolves to the same entity on every peer. This is the same
+/// pattern used by `tower_auto_attack`, `rescan_for_mob`, and
+/// `pick_strategic_target`.
 pub fn pick_primary_target(
     mob_pos: Vec3,
-    units: &Query<(Entity, &Transform, &Faction), With<Unit>>,
+    units: &Query<
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        With<Unit>,
+    >,
     buildings: &Query<
-        (Entity, &Transform, &Faction, Option<&EntityKind>),
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&EntityKind>,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
         (With<Building>, Without<Unit>, Without<FloorTile>),
     >,
     _factions: &Query<&Faction>,
 ) -> Option<(Entity, EngagementTargetKind)> {
-    let mut best_score = f32::MAX;
+    let mut best_key: Option<(i64, u32)> = None;
     let mut best: Option<(Entity, EngagementTargetKind)> = None;
 
-    for (e, tf, faction, opt_kind) in buildings.iter() {
+    for (e, tf, faction, opt_kind, opt_net_id) in buildings.iter() {
         if matches!(faction, Faction::Neutral) {
             continue;
         }
@@ -591,20 +635,26 @@ pub fn pick_primary_target(
             None => 0.0,
         };
         let score = dist + kind_bonus;
-        if score < best_score {
-            best_score = score;
+        let quantized = (score * 1000.0).round() as i64;
+        let nid = opt_net_id.map(|id| id.0).unwrap_or(u32::MAX);
+        let key = (quantized, nid);
+        if best_key.map_or(true, |b| key < b) {
+            best_key = Some(key);
             best = Some((e, EngagementTargetKind::Building));
         }
     }
 
-    for (e, tf, faction, _) in units.iter().map(|(e, tf, f)| (e, tf, f, ())) {
+    for (e, tf, faction, opt_net_id) in units.iter() {
         if matches!(faction, Faction::Neutral) {
             continue;
         }
         let dist = mob_pos.distance(tf.translation);
         let score = dist; // no bonus
-        if score < best_score {
-            best_score = score;
+        let quantized = (score * 1000.0).round() as i64;
+        let nid = opt_net_id.map(|id| id.0).unwrap_or(u32::MAX);
+        let key = (quantized, nid);
+        if best_key.map_or(true, |b| key < b) {
+            best_key = Some(key);
             best = Some((e, EngagementTargetKind::Unit));
         }
     }
@@ -804,9 +854,23 @@ pub fn init_mob_engagement(
     entity: Entity,
     pos: Vec3,
     now: f64,
-    units: &Query<(Entity, &Transform, &Faction), With<Unit>>,
+    units: &Query<
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        With<Unit>,
+    >,
     buildings: &Query<
-        (Entity, &Transform, &Faction, Option<&EntityKind>),
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&EntityKind>,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
         (With<Building>, Without<Unit>, Without<FloorTile>),
     >,
     factions: &Query<&Faction>,
@@ -847,22 +911,30 @@ pub fn goblin_drop_for(tier: MobTier, rng: &mut StdRng) -> Option<ItemKind> {
     Some(pool[rng.random_range(0..pool.len())])
 }
 
-/// Build a per-mob RNG from the active wave seed plus the entity's bits, so
-/// drop rolls stay deterministic across peers without holding wave state in
-/// the death handler.
-pub fn per_mob_drop_rng(wave_seed: u64, entity: Entity) -> StdRng {
-    StdRng::seed_from_u64(wave_seed ^ entity.to_bits().wrapping_mul(PHI_U64))
+/// Build a per-mob RNG from the active wave seed plus a portable stable id,
+/// so drop rolls stay deterministic across peers without holding wave state
+/// in the death handler.
+///
+/// `stable_id` must be a value that matches between peers — NetworkId or
+/// SpawnSerial are both fine. We intentionally avoid raw `Entity::to_bits()`
+/// here because that's a Bevy allocation detail, not an authoritative sim
+/// identity.
+pub fn per_mob_drop_rng(wave_seed: u64, stable_id: u64) -> StdRng {
+    StdRng::seed_from_u64(wave_seed ^ stable_id.wrapping_mul(PHI_U64))
 }
 
 /// Helper for death.rs to spawn a single drop pickup if the tier rolls.
+///
+/// `stable_id` should be the mob's NetworkId (or SpawnSerial) so every peer
+/// seeds the drop roll identically.
 pub fn try_spawn_mob_drop(
     spawns: &mut MessageWriter<SpawnItemPickup>,
     wave_seed: u64,
-    entity: Entity,
+    stable_id: u64,
     tier: MobTier,
     pos: Vec3,
 ) {
-    let mut rng = per_mob_drop_rng(wave_seed, entity);
+    let mut rng = per_mob_drop_rng(wave_seed, stable_id);
     if let Some(item) = goblin_drop_for(tier, &mut rng) {
         spawns.write(SpawnItemPickup {
             item,
@@ -878,4 +950,46 @@ pub fn try_spawn_mob_drop(
 /// nothing.
 pub fn active_wave_seed(wave: &NightWaveState) -> u64 {
     wave.active.as_ref().map(|w| w.seed).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two callers with the same `(wave_seed, stable_id)` must receive an
+    /// RNG that produces the same first value. This is the
+    /// lockstep-determinism invariant: every peer should roll the same
+    /// mob-drop outcome.
+    #[test]
+    fn per_mob_drop_rng_is_stable_across_calls() {
+        let mut a = per_mob_drop_rng(0xABCD_EF01_2345_6789, 42);
+        let mut b = per_mob_drop_rng(0xABCD_EF01_2345_6789, 42);
+        for _ in 0..16 {
+            let lhs: u64 = a.random();
+            let rhs: u64 = b.random();
+            assert_eq!(lhs, rhs, "identical seed+id must produce identical sequence");
+        }
+    }
+
+    /// Different stable ids under the same wave seed must produce distinct
+    /// sequences — otherwise every mob in a wave would roll the same drop.
+    #[test]
+    fn per_mob_drop_rng_diverges_on_different_stable_ids() {
+        let mut a = per_mob_drop_rng(0xDEAD_BEEF_u64, 1);
+        let mut b = per_mob_drop_rng(0xDEAD_BEEF_u64, 2);
+        // Collect eight values from each; they should not all match.
+        let mut any_differ = false;
+        for _ in 0..8 {
+            let lhs: u64 = a.random();
+            let rhs: u64 = b.random();
+            if lhs != rhs {
+                any_differ = true;
+                break;
+            }
+        }
+        assert!(
+            any_differ,
+            "distinct stable ids must yield distinct sub-streams"
+        );
+    }
 }

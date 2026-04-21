@@ -8,7 +8,7 @@ use super::core::components as ui_components;
 use super::core::constants::*;
 use super::core::shared::spawn_hp_bar;
 use super::group_hotkeys_widget::{group_color, ControlGroups};
-use super::selection_widget::{
+use super::selection_panel::{
     DropInventoryItemButton, InventorySlotButton, SelectionInventoryUiState,
     TransferInventoryItemButton, TransferTargetOption,
 };

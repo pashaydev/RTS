@@ -3,14 +3,12 @@
 
 use bevy::prelude::*;
 
-use super::core::constants::*;
 use super::core::hud::MainHudRoot;
 use crate::types::*;
 use crate::ui::theme::{self, Theme};
 
-pub struct NotificationsWidgetPlugin;
-
-impl Plugin for NotificationsWidgetPlugin {
+pub struct NotificationToastsPlugin;
+impl Plugin for NotificationToastsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,

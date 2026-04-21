@@ -15,9 +15,8 @@ use crate::simulation::mobs::NightWaveState;
 use crate::types::{AppState, WaveAlert};
 use crate::ui::theme::Theme;
 
-pub struct WaveBannerWidgetPlugin;
-
-impl Plugin for WaveBannerWidgetPlugin {
+pub struct WaveAlertsOverlayPlugin;
+impl Plugin for WaveAlertsOverlayPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,

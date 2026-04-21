@@ -40,20 +40,35 @@ impl Plugin for CombatProjectilesPlugin {
 fn attach_projectile_visuals(
     mut commands: Commands,
     projectile_assets: Option<Res<ProjectileModelAssets>>,
-    new_projectiles: Query<(Entity, &Projectile), Added<Projectile>>,
+    new_projectiles: Query<
+        (
+            Entity,
+            &Projectile,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+            Option<&crate::infrastructure::net_bridge::SpawnSerial>,
+        ),
+        Added<Projectile>,
+    >,
     sources: Query<&EntityKind>,
 ) {
     let Some(assets) = projectile_assets else {
         return;
     };
-    for (entity, projectile) in &new_projectiles {
+    for (entity, projectile, net_id, spawn_serial) in &new_projectiles {
         let Ok(kind) = sources.get(projectile.source) else {
             continue;
         };
         let Some(visual_kind) = projectile_visual_for(*kind) else {
             continue;
         };
-        let scene = assets.scene_for(visual_kind, entity.to_bits() as usize);
+        // Pick a scene variant from a portable stable id so every peer picks
+        // the same asset. Prefer NetworkId, fall back to SpawnSerial, then
+        // 0 if neither is assigned yet.
+        let variant_key = net_id
+            .map(|id| id.0 as usize)
+            .or_else(|| spawn_serial.map(|s| s.0 as usize))
+            .unwrap_or(0);
+        let scene = assets.scene_for(visual_kind, variant_key);
         let proj_scale = match visual_kind {
             ProjectileVisualKind::Arrow => 0.35,
             ProjectileVisualKind::Bolt => 0.4,

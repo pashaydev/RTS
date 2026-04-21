@@ -3,7 +3,7 @@
 
 use bevy::prelude::*;
 
-use super::actions_widget::BuildGridButton;
+use super::action_panel::BuildGridButton;
 use super::core::constants::*;
 use super::core::shared::{format_cost, widget_content_stack, widget_wrap_row};
 use crate::blueprints::{BlueprintRegistry, EntityKind};

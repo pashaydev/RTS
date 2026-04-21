@@ -35,6 +35,7 @@ pub(super) fn resource_processor_system(
             &Transform,
             &mut ResourceNode,
             Option<&YardResourceNode>,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
         ),
         Without<Building>,
     >,
@@ -99,34 +100,46 @@ pub(super) fn resource_processor_system(
         }
         processor.buffer += amount;
 
-        // Find nearest matching resource node in range and drain from it.
-        // Sawmills with yards only harvest from their own yard nodes.
+        // Find the single deterministically-nearest matching resource node
+        // in range and drain from it. The previous code drained the first
+        // node returned by Bevy's query iterator — archetype-dependent and
+        // not portable across peers. We now collect candidates, sort by
+        // (quantized distance, NetworkId) and pick the head.
         let mut harvested_type = None;
-        for (_node_entity, node_tf, mut node, yard_tag) in &mut nodes {
-            if !processor.resource_types.contains(&node.resource_type) {
-                continue;
-            }
-            // Yard-based filtering: sawmills only use their own yard nodes
-            if is_yard_building {
-                match yard_tag {
-                    Some(YardResourceNode(owner)) if *owner == building_entity => {}
-                    _ => continue,
+        let mut candidates: Vec<(i64, u32, Entity)> = nodes
+            .iter()
+            .filter_map(|(node_entity, node_tf, node, yard_tag, net_id)| {
+                if !processor.resource_types.contains(&node.resource_type) {
+                    return None;
                 }
-            }
-            let dist = building_tf.translation.distance(node_tf.translation);
-            if dist > processor.harvest_radius {
-                continue;
-            }
-            if node.amount_remaining == 0 {
-                continue;
-            }
+                if is_yard_building {
+                    match yard_tag {
+                        Some(YardResourceNode(owner)) if *owner == building_entity => {}
+                        _ => return None,
+                    }
+                }
+                if node.amount_remaining == 0 {
+                    return None;
+                }
+                let dist = building_tf.translation.distance(node_tf.translation);
+                if dist > processor.harvest_radius {
+                    return None;
+                }
+                let quantized = (dist * 1000.0).round() as i64;
+                let nid = net_id.map(|id| id.0).unwrap_or(u32::MAX);
+                Some((quantized, nid, node_entity))
+            })
+            .collect();
+        candidates.sort_by_key(|(quantized, nid, _)| (*quantized, *nid));
 
-            let drain = processor.buffer.min(node.amount_remaining);
-            if drain > 0 {
-                node.amount_remaining -= drain;
-                harvested_type = Some((node.resource_type, drain));
-                processor.buffer -= drain;
-                break;
+        if let Some((_, _, node_entity)) = candidates.first().copied() {
+            if let Ok((_, _, mut node, _, _)) = nodes.get_mut(node_entity) {
+                let drain = processor.buffer.min(node.amount_remaining);
+                if drain > 0 {
+                    node.amount_remaining -= drain;
+                    harvested_type = Some((node.resource_type, drain));
+                    processor.buffer -= drain;
+                }
             }
         }
 
@@ -328,7 +341,16 @@ pub(super) fn processor_worker_visual_system(
         ),
         With<Building>,
     >,
-    nodes: Query<(Entity, &Transform, &ResourceNode, Option<&YardResourceNode>), Without<Unit>>,
+    nodes: Query<
+        (
+            Entity,
+            &Transform,
+            &ResourceNode,
+            Option<&YardResourceNode>,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        Without<Unit>,
+    >,
 ) {
     // Collect nodes targeted by other workers to avoid clustering
     let mut targeted_nodes: Vec<Entity> = Vec::new();
@@ -381,10 +403,13 @@ pub(super) fn processor_worker_visual_system(
 
         match phase {
             AssignedPhase::SeekingNode => {
-                // Find nearest resource node within processor's harvest_radius not targeted by another worker.
-                // Sawmills only target their own yard nodes.
-                let mut best: Option<(Entity, f32)> = None;
-                for (node_entity, node_tf, node_data, yard_tag) in &nodes {
+                // Find nearest resource node within harvest_radius not
+                // already claimed by another worker. Tie-break by NetworkId
+                // so two peers resolve the same candidate when distances
+                // are equal (or round to the same quantum).
+                let mut best_key: Option<(i64, u32)> = None;
+                let mut best: Option<Entity> = None;
+                for (node_entity, node_tf, node_data, yard_tag, net_id) in &nodes {
                     if !processor.resource_types.contains(&node_data.resource_type) {
                         continue;
                     }
@@ -407,13 +432,17 @@ pub(super) fn processor_worker_visual_system(
                         continue;
                     }
                     let dist = tf.translation.distance(node_tf.translation);
-                    if best.is_none() || dist < best.unwrap().1 {
-                        best = Some((node_entity, dist));
+                    let quantized = (dist * 1000.0).round() as i64;
+                    let nid = net_id.map(|id| id.0).unwrap_or(u32::MAX);
+                    let key = (quantized, nid);
+                    if best_key.map_or(true, |b| key < b) {
+                        best_key = Some(key);
+                        best = Some(node_entity);
                     }
                 }
-                if let Some((node, _)) = best {
+                if let Some(node) = best {
                     // Set MoveTarget so the worker physically walks to the node
-                    if let Ok((_, node_tf, _, _)) = nodes.get(node) {
+                    if let Ok((_, node_tf, _, _, _)) = nodes.get(node) {
                         commands
                             .entity(entity)
                             .insert(MoveTarget(node_tf.translation));
@@ -423,7 +452,7 @@ pub(super) fn processor_worker_visual_system(
             }
             AssignedPhase::MovingToNode(node) => {
                 let node = *node;
-                let Ok((_, node_tf, node_data, _)) = nodes.get(node) else {
+                let Ok((_, node_tf, node_data, _, _)) = nodes.get(node) else {
                     *phase = AssignedPhase::SeekingNode;
                     commands.entity(entity).remove::<MoveTarget>();
                     continue;
@@ -451,7 +480,7 @@ pub(super) fn processor_worker_visual_system(
                 if nodes.get(node).is_err()
                     || nodes
                         .get(node)
-                        .map(|(_, _, n, _)| n.amount_remaining == 0)
+                        .map(|(_, _, n, _, _)| n.amount_remaining == 0)
                         .unwrap_or(true)
                 {
                     *phase = AssignedPhase::SeekingNode;
@@ -544,15 +573,29 @@ pub(super) fn lock_assigned_workers_from_user_interaction(
 pub(super) fn reconcile_processor_assignments(
     mut commands: Commands,
     processors: Query<Entity, (With<Building>, With<ResourceProcessor>)>,
-    workers: Query<(Entity, &UnitState, Option<&BuildingAssignment>), With<Unit>>,
+    workers: Query<
+        (
+            Entity,
+            &UnitState,
+            Option<&BuildingAssignment>,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        With<Unit>,
+    >,
     building_lists: Query<
         (Entity, Option<&AssignedWorkers>),
         (With<Building>, With<ResourceProcessor>),
     >,
 ) {
-    let mut expected: HashMap<Entity, Vec<Entity>> = HashMap::new();
+    // `AssignedWorkers` drives gameplay (worker cap enforcement, harvest
+    // throttling), so the vector must be identical on every peer. We sort
+    // by NetworkId — portable across peers — falling back to u32::MAX for
+    // anything not yet assigned (which behaves consistently because every
+    // peer lacks the id at the same tick).
+    use std::collections::BTreeMap;
+    let mut expected: BTreeMap<Entity, Vec<(u32, Entity)>> = BTreeMap::new();
 
-    for (worker, state, assignment) in &workers {
+    for (worker, state, assignment, net_id) in &workers {
         let state_building = state.assigned_processor_building();
         let assignment_building = assignment.map(|a| a.0);
 
@@ -575,18 +618,24 @@ pub(super) fn reconcile_processor_assignments(
 
         if let Some(building) = state_building.or(assignment_building) {
             if processors.contains(building) {
-                expected.entry(building).or_default().push(worker);
+                let key = net_id.map(|id| id.0).unwrap_or(u32::MAX);
+                expected.entry(building).or_default().push((key, worker));
             }
         }
     }
 
-    for workers in expected.values_mut() {
-        workers.sort_by_key(|entity| entity.to_bits());
-        workers.dedup();
+    for list in expected.values_mut() {
+        list.sort_by_key(|(net_key, _)| *net_key);
+        list.dedup_by_key(|(_, entity)| *entity);
     }
 
     for (building, assigned) in &building_lists {
-        let desired = expected.remove(&building).unwrap_or_default();
+        let desired: Vec<Entity> = expected
+            .remove(&building)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, entity)| entity)
+            .collect();
         let current = assigned.map(|aw| aw.workers.clone()).unwrap_or_default();
         if current != desired {
             commands

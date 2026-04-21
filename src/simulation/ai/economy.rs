@@ -311,7 +311,10 @@ pub fn ai_economy_system(
                 .unwrap_or(0);
 
             if cw < 2 {
-                let mut best: Option<(Entity, f32)> = None;
+                // Tie-break on (quantized_dist, worker_pos_bits) so two
+                // peers always pick the same worker for a given site.
+                let mut best_key: Option<(i64, (u32, u32, u32))> = None;
+                let mut best_entity: Option<Entity> = None;
                 for &(w_entity, _) in &faction_snapshot.worker_entities {
                     let Ok((_, w_f, w_tf, w_task)) = workers_q.get(w_entity) else {
                         continue;
@@ -327,11 +330,19 @@ pub fn ai_economy_system(
                         continue;
                     }
                     let d = w_tf.translation.distance(tf.translation);
-                    if best.is_none() || d < best.unwrap().1 {
-                        best = Some((w_entity, d));
+                    let quantized = (d * 1000.0).round() as i64;
+                    let pos_key = (
+                        w_tf.translation.x.to_bits(),
+                        w_tf.translation.y.to_bits(),
+                        w_tf.translation.z.to_bits(),
+                    );
+                    let key = (quantized, pos_key);
+                    if best_key.map_or(true, |b| key < b) {
+                        best_key = Some(key);
+                        best_entity = Some(w_entity);
                     }
                 }
-                if let Some((w_entity, _)) = best {
+                if let Some(w_entity) = best_entity {
                     brain.remove_from_squad(w_entity);
                     brain.add_to_squad(w_entity, SquadRole::BuildConstruction);
                     commands
@@ -537,7 +548,12 @@ fn find_nearest_resource_node_in_snapshot(
     player_base: Option<Vec3>,
     is_friendly: bool,
 ) -> Option<Entity> {
-    let mut best: Option<(Entity, f32)> = None;
+    // Tie-break on (quantized_distance, position_bits). The snapshot Vec is
+    // populated in Bevy archetype order, which is not portable across peers
+    // — without this tie-break two peers could pick different equidistant
+    // nodes for the same worker assignment.
+    let mut best_key: Option<(i64, (u32, u32, u32))> = None;
+    let mut best_entity: Option<Entity> = None;
     let Some(nodes) = snapshot.resource_nodes_by_type.get(&resource_type) else {
         return None;
     };
@@ -556,10 +572,18 @@ fn find_nearest_resource_node_in_snapshot(
             }
         }
 
-        if best.is_none() || d < best.unwrap().1 {
-            best = Some((entity, d));
+        let quantized = (d * 1000.0).round() as i64;
+        let pos_key = (
+            node_pos.x.to_bits(),
+            node_pos.y.to_bits(),
+            node_pos.z.to_bits(),
+        );
+        let key = (quantized, pos_key);
+        if best_key.map_or(true, |b| key < b) {
+            best_key = Some(key);
+            best_entity = Some(entity);
         }
     }
 
-    best.map(|(entity, _)| entity)
+    best_entity
 }

@@ -54,30 +54,54 @@ pub fn handle_death(
             Option<&UnitState>,
             Option<&Faction>,
             Option<&MobTier>,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+            Option<&crate::infrastructure::net_bridge::SpawnSerial>,
         ),
         Without<Dying>,
     >,
-    mut attackers: Query<(Entity, &mut UnitBrain, Option<&mut MobEngagement>), Without<Dying>>,
+    mut attackers: Query<
+        (
+            Entity,
+            &mut UnitBrain,
+            Option<&mut MobEngagement>,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        Without<Dying>,
+    >,
     mut experience_q: Query<&mut Experience>,
     all_assigned_workers: Query<&AssignedWorkers>,
     workers_with_state: Query<(Entity, &UnitState), With<Unit>>,
     time: Res<Time<Fixed>>,
     sim_clock: Res<SimClock>,
-    mut event_log: ResMut<crate::ui::event_log_widget::GameEventLog>,
+    mut event_log: ResMut<crate::ui::widgets::event_log_widget::GameEventLog>,
     mut wave: ResMut<NightWaveState>,
     attacker_factions: Query<&Faction>,
     mut wall_grid: ResMut<WallGrid>,
     wall_coord_q: Query<&WallGridCoord>,
-    rescan_units: Query<(Entity, &Transform, &Faction), With<Unit>>,
+    rescan_units: Query<
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        With<Unit>,
+    >,
     rescan_buildings: Query<
-        (Entity, &Transform, &Faction, Option<&EntityKind>),
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&EntityKind>,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
         (With<Building>, Without<Unit>, Without<FloorTile>),
     >,
 ) {
     let dead_list: Vec<_> = dead
         .iter()
         .filter(|(_, health, ..)| health.current <= 0.0)
-        .map(|(e, _, b, sel, k, tf, us, f, mt)| {
+        .map(|(e, _, b, sel, k, tf, us, f, mt, nid, serial)| {
             (
                 e,
                 b.is_some(),
@@ -87,6 +111,8 @@ pub fn handle_death(
                 us.copied(),
                 f.copied(),
                 mt.copied(),
+                nid.map(|id| id.0),
+                serial.map(|s| s.0),
             )
         })
         .collect();
@@ -102,14 +128,23 @@ pub fn handle_death(
         opt_unit_state,
         opt_faction,
         opt_mob_tier,
+        opt_net_id,
+        opt_spawn_serial,
     ) in &dead_list
     {
         // ── Mob loot: tier-weighted single-item drop.
         if let (Some(tier), Some(transform)) = (opt_mob_tier, opt_transform) {
+            // Prefer NetworkId, then SpawnSerial, then fall back to 0. Under
+            // lockstep at least one of these should be populated by the
+            // time a mob dies (NetworkId is assigned at FixedFirst).
+            let stable_id = opt_net_id
+                .map(|n| n as u64)
+                .or(*opt_spawn_serial)
+                .unwrap_or(0);
             try_spawn_mob_drop(
                 &mut item_pickup_spawns,
                 wave_seed,
-                *dead_entity,
+                stable_id,
                 *tier,
                 transform.translation,
             );
@@ -130,12 +165,12 @@ pub fn handle_death(
         // Find the killing faction via whoever was targeting this entity.
         let killer_entity = attackers
             .iter()
-            .find(|(_, brain, _)| brain.target == Some(*dead_entity))
-            .map(|(e, _, _)| e);
+            .find(|(_, brain, _, _)| brain.target == Some(*dead_entity))
+            .map(|(e, _, _, _)| e);
         let killer_faction = killer_entity.and_then(|e| attacker_factions.get(e).ok()).copied();
 
         // ── Re-target attackers and run the mob's primary-death rescan.
-        for (attacker_entity, mut brain, opt_engagement) in &mut attackers {
+        for (attacker_entity, mut brain, opt_engagement, _attacker_net_id) in &mut attackers {
             if brain.target != Some(*dead_entity) {
                 continue;
             }
@@ -209,7 +244,7 @@ pub fn handle_death(
         event_log.push(
             time.elapsed_secs(),
             format!("{} destroyed", name),
-            crate::ui::event_log_widget::EventCategory::Combat,
+            crate::ui::widgets::event_log_widget::EventCategory::Combat,
             pos,
             *opt_faction,
         );
@@ -270,22 +305,41 @@ pub fn handle_death(
 /// Rescan from the mob's current position for a replacement primary target.
 /// Bias toward buildings; falls back to nearest unit. Returns `None` if
 /// nothing within `RESCAN_RADIUS` qualifies.
+///
+/// Tie-break rules (critical for lockstep determinism): we quantize the
+/// final score to 1e-3 precision and use NetworkId as the secondary key.
+/// Without this, two equidistant candidates could resolve in different
+/// query-iteration order on different peers, desyncing the mob's target.
 fn rescan_for_mob(
     self_entity: Entity,
     pos: Vec3,
-    units: &Query<(Entity, &Transform, &Faction), With<Unit>>,
+    units: &Query<
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
+        With<Unit>,
+    >,
     buildings: &Query<
-        (Entity, &Transform, &Faction, Option<&EntityKind>),
+        (
+            Entity,
+            &Transform,
+            &Faction,
+            Option<&EntityKind>,
+            Option<&crate::infrastructure::net_bridge::NetworkId>,
+        ),
         (With<Building>, Without<Unit>, Without<FloorTile>),
     >,
 ) -> Option<(Entity, EngagementTargetKind)> {
     const RESCAN_RADIUS_SQ: f32 = 80.0 * 80.0;
     const BUILDING_BIAS: f32 = -10.0;
 
-    let mut best_score = f32::MAX;
+    let mut best_key: Option<(i64, u32)> = None;
     let mut best: Option<(Entity, EngagementTargetKind)> = None;
 
-    for (e, tf, faction, opt_kind) in buildings.iter() {
+    for (e, tf, faction, opt_kind, opt_net_id) in buildings.iter() {
         if matches!(faction, Faction::Neutral) {
             continue;
         }
@@ -299,12 +353,15 @@ fn rescan_for_mob(
             _ => BUILDING_BIAS,
         };
         let score = dist + bias;
-        if score < best_score {
-            best_score = score;
+        let quantized = (score * 1000.0).round() as i64;
+        let nid = opt_net_id.map(|id| id.0).unwrap_or(u32::MAX);
+        let key = (quantized, nid);
+        if best_key.map_or(true, |b| key < b) {
+            best_key = Some(key);
             best = Some((e, EngagementTargetKind::Building));
         }
     }
-    for (e, tf, faction) in units.iter() {
+    for (e, tf, faction, opt_net_id) in units.iter() {
         if e == self_entity {
             continue;
         }
@@ -316,8 +373,11 @@ fn rescan_for_mob(
             continue;
         }
         let dist = d_sq.sqrt();
-        if dist < best_score {
-            best_score = dist;
+        let quantized = (dist * 1000.0).round() as i64;
+        let nid = opt_net_id.map(|id| id.0).unwrap_or(u32::MAX);
+        let key = (quantized, nid);
+        if best_key.map_or(true, |b| key < b) {
+            best_key = Some(key);
             best = Some((e, EngagementTargetKind::Unit));
         }
     }

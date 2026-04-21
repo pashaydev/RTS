@@ -129,11 +129,25 @@ pub fn spawn_from_blueprint_with_faction(
         ));
     }
 
-    // Cosmetic per-entity randomness (display name, animation phase) is
-    // derived from the entity bits so playback / lockstep / replays stay
-    // bit-identical. The thread-local `rand::rng()` of the old code was a
-    // desync hazard.
-    let cosmetic_seed = entity_cmds.id().to_bits().wrapping_mul(PHI_U64);
+    // Per-entity randomness used for both cosmetic state (display name,
+    // animation phase) AND simulation-affecting state — most importantly
+    // `MovementSmoothing.speed_variation`, which directly multiplies unit
+    // speed in `units::movement_system`. The seed MUST be derived from
+    // values that match across peers; `entity_cmds.id().to_bits()` is a
+    // Bevy allocation detail that differs between machines and produced
+    // immediate desyncs (workers walked at slightly different speeds).
+    //
+    // (kind, faction, position) are inputs to this spawn call and are
+    // identical across peers under lockstep (same map_seed → same spawn
+    // positions). Two entities spawned at the exact same kind/faction/pos
+    // in the same tick will share cosmetic state — a deterministic
+    // outcome, never a desync.
+    let cosmetic_seed = (kind.to_index() as u64)
+        .wrapping_mul(PHI_U64)
+        .wrapping_add((faction.to_net_index() as u64).wrapping_mul(PHI_U64))
+        ^ (pos.x.to_bits() as u64).wrapping_mul(PHI_U64)
+        ^ (pos.y.to_bits() as u64).wrapping_mul(PHI_U64)
+        ^ (pos.z.to_bits() as u64).wrapping_mul(PHI_U64);
     let mut rng = StdRng::seed_from_u64(cosmetic_seed);
 
     // Category markers

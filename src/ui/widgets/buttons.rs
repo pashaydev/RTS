@@ -5,8 +5,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use game_state::message::InputCommand;
 
-use super::actions_units::PreferResourceButton;
-use super::core::constants::*;
+use super::unit_action_panel::PreferResourceButton;
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::infrastructure::multiplayer::lockstep::GameplayInputSubmit;
 use crate::infrastructure::multiplayer::NetRole;
@@ -45,7 +44,7 @@ pub fn handle_build_buttons(
             Entity,
             &Interaction,
             &BuildButton,
-            Option<&super::actions_widget::BuildGridButton>,
+            Option<&super::action_panel::BuildGridButton>,
         ),
         Changed<Interaction>,
     >,

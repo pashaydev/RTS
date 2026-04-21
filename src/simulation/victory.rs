@@ -9,7 +9,7 @@ use crate::infrastructure::database::{ActiveProfile, GameDatabase};
 use crate::infrastructure::multiplayer::NetRole;
 use crate::types::BuildingState;
 use crate::types::*;
-use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
+use crate::ui::widgets::event_log_widget::{EventCategory, GameEventLog, LogLevel};
 
 pub struct VictoryPlugin;
 

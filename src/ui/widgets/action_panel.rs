@@ -5,22 +5,20 @@ use bevy::prelude::*;
 
 use super::core::framework::WidgetId;
 use super::core::hud::MainHudRoot;
-use super::core::shared::widget_content_stack;
 use crate::blueprints::{BlueprintRegistry, EntityKind};
 use crate::types::*;
 use crate::ui::theme::Theme;
 
 use super::buttons;
 
-use super::actions_buildings::{
+use super::building_action_panel::{
     spawn_building_action_bar, spawn_building_grid, spawn_construction_action_bar,
     spawn_found_base_panel,
 };
-use super::actions_units::spawn_units_action_bar;
+use super::unit_action_panel::spawn_units_action_bar;
 
-pub struct ActionsWidgetPlugin;
-
-impl Plugin for ActionsWidgetPlugin {
+pub struct ActionPanelPlugin;
+impl Plugin for ActionPanelPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ActionBarLayoutRevision>()
             // Spawn actions widget frame

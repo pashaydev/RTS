@@ -1,5 +1,5 @@
 //! Primary unit/building selection panel: portrait, stats, health, and
-//! ability row for the focused entity (delegates to selection_cards for N>1).
+//! ability row for the focused entity (delegates to selection_panel_cards for N>1).
 
 use bevy::prelude::*;
 
@@ -10,7 +10,7 @@ use super::core::framework::{spawn_widget_frame, WidgetId, WidgetRegistry};
 use super::core::hud::WidgetGridArea;
 use super::core::shared::hp_color;
 use super::group_hotkeys_widget::ControlGroups;
-use super::selection_cards::{
+use super::selection_panel_cards::{
     spawn_building_detail_card, spawn_enemy_detail_card, spawn_friendly_detail_card,
     spawn_multi_inventory_summary, spawn_single_inventory_section, spawn_unit_mini_card,
 };
@@ -22,8 +22,7 @@ use crate::simulation::items::{
 use crate::types::*;
 use crate::ui::theme::Theme;
 
-pub struct SelectionWidgetPlugin;
-
+pub struct SelectionPanelPlugin;
 #[derive(Component)]
 struct FormationControls;
 
@@ -70,7 +69,7 @@ pub(super) struct SelectionInventoryUiState {
     pub(super) focused_slot: Option<usize>,
 }
 
-impl Plugin for SelectionWidgetPlugin {
+impl Plugin for SelectionPanelPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SelectionInventoryUiState>()
             .add_systems(
@@ -1394,5 +1393,3 @@ fn label_visibility_presentation(
         )
     }
 }
-
-// Detail card rendering functions have been extracted to selection_cards.rs

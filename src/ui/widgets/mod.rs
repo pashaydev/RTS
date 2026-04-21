@@ -1,5 +1,16 @@
-//! In-game HUD widgets: resources, selection, actions, production queue,
-//! army overview, event log, tech tree, hotkeys, notifications, and more.
+//! In-game HUD composition.
+//!
+//! This module currently contains three different concerns:
+//!
+//! - Dockable widget panels backed by [`WidgetId`] and the grid framework.
+//! - Global HUD bars / overlays that are anchored to the HUD root instead of a
+//!   widget slot.
+//! - Internal support modules used by those panels.
+//!
+//! Keeping those categories explicit makes naming less misleading. A "widget"
+//! in the docking sense should map to a [`WidgetId`], while header bars,
+//! banners, toasts, and onboarding overlays should be named after their HUD
+//! role rather than forced into the widget vocabulary.
 
 /// Generates a system that spawns a widget frame when `WidgetGridArea` is added.
 /// Widgets are parented to the grid area (below the header bar).
@@ -54,21 +65,26 @@ macro_rules! widget_spawn_system {
 
 pub(crate) mod buttons;
 
-pub mod actions_buildings;
-pub mod actions_units;
-pub mod actions_widget;
+// Dockable panels.
+pub mod action_panel;
 pub mod army_overview_widget;
 pub mod event_log_widget;
 pub mod group_hotkeys_widget;
-pub mod hints_widget;
-pub mod notifications;
 pub mod production_queue_widget;
-pub mod resources_widget;
-pub mod selection_cards;
-pub mod selection_widget;
+pub mod selection_panel;
 pub mod tech_tree_widget;
-pub mod wave_banner_widget;
-pub mod widget_toolbar;
+
+// Global HUD sections / overlays.
+pub mod hud_header;
+pub mod notification_toasts;
+pub mod onboarding_hints;
+pub mod wave_alerts_overlay;
+pub mod widget_visibility_toolbar;
+
+// Panel-internal support modules.
+pub mod building_action_panel;
+pub mod selection_panel_cards;
+pub mod unit_action_panel;
 
 pub use super::core;
 pub use super::core::framework as widget_framework;
@@ -86,18 +102,21 @@ pub struct WidgetsPlugin;
 impl Plugin for WidgetsPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            resources_widget::ResourceHeaderBarPlugin,
+            // Root-anchored HUD chrome.
+            hud_header::HudHeaderBarPlugin,
+            onboarding_hints::OnboardingHintsPlugin,
+            notification_toasts::NotificationToastsPlugin,
+            widget_visibility_toolbar::WidgetVisibilityToolbarPlugin,
+            wave_alerts_overlay::WaveAlertsOverlayPlugin,
+
+            // Dockable widget panels.
             army_overview_widget::ArmyOverviewWidgetPlugin,
             tech_tree_widget::TechTreeWidgetPlugin,
-            hints_widget::HintsWidgetPlugin,
-            notifications::NotificationsWidgetPlugin,
-            widget_toolbar::WidgetToolbarPlugin,
             event_log_widget::EventLogWidgetPlugin,
             group_hotkeys_widget::GroupHotkeysWidgetPlugin,
             production_queue_widget::ProductionQueueWidgetPlugin,
-            selection_widget::SelectionWidgetPlugin,
-            actions_widget::ActionsWidgetPlugin,
-            wave_banner_widget::WaveBannerWidgetPlugin,
+            selection_panel::SelectionPanelPlugin,
+            action_panel::ActionPanelPlugin,
             ExternalWidgetFramesPlugin,
         ));
     }

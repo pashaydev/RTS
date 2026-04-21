@@ -18,7 +18,7 @@ use crate::simulation::combat::{
 };
 use crate::simulation::orders;
 use crate::types::*;
-use crate::ui::event_log_widget::{EventCategory, GameEventLog, LogLevel};
+use crate::ui::widgets::event_log_widget::{EventCategory, GameEventLog, LogLevel};
 
 use super::debug_tap;
 use super::transport::{self, MatchboxInbox, PeerMap};
