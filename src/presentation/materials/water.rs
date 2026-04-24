@@ -1,7 +1,8 @@
-//! Water PBR material: waves, reflections, transparency, and time-based
-//! animation used by the ocean/lake plane in the world module.
+//! Water PBR material extension: animated wave normals, fog-of-war masking,
+//! and view-dependent transparency for the ocean/lake planes.
 
 use bevy::{
+    pbr::{ExtendedMaterial, MaterialExtension, StandardMaterial},
     prelude::*,
     render::render_resource::{AsBindGroup, ShaderType},
     shader::ShaderRef,
@@ -9,19 +10,22 @@ use bevy::{
 
 const WATER_SHADER_PATH: &str = "shaders/water.wgsl";
 
+/// Type alias so water can participate in Bevy's lit PBR pipeline.
+pub type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterExtension>;
+
 #[derive(Asset, TypePath, AsBindGroup, Debug, Clone)]
-pub struct WaterMaterial {
-    #[uniform(0)]
+pub struct WaterExtension {
+    #[uniform(100)]
     pub settings: WaterSettings,
 
     /// Fog of war visible (smoothed display) texture — injected after fog spawns.
-    #[texture(1)]
-    #[sampler(2)]
+    #[texture(101)]
+    #[sampler(102)]
     pub fog_visible_texture: Option<Handle<Image>>,
 
     /// Fog of war explored (binary) texture.
-    #[texture(3)]
-    #[sampler(4)]
+    #[texture(103)]
+    #[sampler(104)]
     pub fog_explored_texture: Option<Handle<Image>>,
 }
 
@@ -38,13 +42,9 @@ pub struct WaterSettings {
     pub camera_position: Vec4,
 }
 
-impl Material for WaterMaterial {
+impl MaterialExtension for WaterExtension {
     fn fragment_shader() -> ShaderRef {
         WATER_SHADER_PATH.into()
-    }
-
-    fn alpha_mode(&self) -> AlphaMode {
-        AlphaMode::Blend
     }
 }
 
@@ -54,10 +54,10 @@ impl Default for WaterSettings {
             time: 0.0,
             wave_speed: 0.8,
             wave_scale: 0.3,
-            opacity: 0.75,
-            shallow_color: Vec4::new(0.15, 0.55, 0.65, 1.0),
-            deep_color: Vec4::new(0.03, 0.10, 0.40, 1.0),
-            specular_color: Vec4::new(1.0, 0.95, 0.8, 1.0),
+            opacity: 0.72,
+            shallow_color: Vec4::new(0.10, 0.24, 0.28, 1.0),
+            deep_color: Vec4::new(0.02, 0.06, 0.14, 1.0),
+            specular_color: Vec4::new(1.0, 0.97, 0.90, 1.0),
             sun_direction: Vec4::new(0.5, 0.7, 0.3, 0.0),
             camera_position: Vec4::new(0.0, 50.0, 0.0, 0.0),
         }

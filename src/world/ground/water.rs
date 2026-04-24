@@ -41,9 +41,10 @@ pub fn update_water_time(
 
     for material_handle in &query {
         if let Some(material) = materials.get_mut(&material_handle.0) {
-            material.settings.time = time.elapsed_secs();
-            material.settings.camera_position = Vec4::new(cam_pos.x, cam_pos.y, cam_pos.z, 0.0);
-            material.settings.sun_direction = sun_dir;
+            material.extension.settings.time = time.elapsed_secs();
+            material.extension.settings.camera_position =
+                Vec4::new(cam_pos.x, cam_pos.y, cam_pos.z, 0.0);
+            material.extension.settings.sun_direction = sun_dir;
         }
     }
 }
@@ -60,9 +61,9 @@ pub fn patch_water_fog_textures(
 
     for material_handle in &query {
         if let Some(material) = materials.get_mut(&material_handle.0) {
-            if material.fog_visible_texture.is_none() {
-                material.fog_visible_texture = Some(fog_tex.visible.clone());
-                material.fog_explored_texture = Some(fog_tex.explored.clone());
+            if material.extension.fog_visible_texture.is_none() {
+                material.extension.fog_visible_texture = Some(fog_tex.visible.clone());
+                material.extension.fog_explored_texture = Some(fog_tex.explored.clone());
             }
         }
     }

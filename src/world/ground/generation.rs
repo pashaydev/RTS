@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy::tasks::ComputeTaskPool;
 
 use crate::presentation::materials::terrain::{TerrainExtension, TerrainMaterial, TerrainSettings};
-use crate::presentation::materials::water::{WaterMaterial, WaterSettings};
+use crate::presentation::materials::water::{WaterExtension, WaterMaterial, WaterSettings};
 use crate::types::{Biome, BiomeMap, CullingBounds, GameSetupConfig, GameWorld, Ground, MapSeed};
 
 use super::data::{HeightMap, AMPLITUDE};
@@ -227,9 +227,20 @@ pub fn spawn_ground(
     ));
 
     let water_material = water_materials.add(WaterMaterial {
-        settings: WaterSettings::default(),
-        fog_visible_texture: None,
-        fog_explored_texture: None,
+        base: StandardMaterial {
+            base_color: Color::srgba(0.05, 0.12, 0.20, 0.72),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.08,
+            metallic: 0.0,
+            reflectance: 0.30,
+            double_sided: true,
+            ..default()
+        },
+        extension: WaterExtension {
+            settings: WaterSettings::default(),
+            fog_visible_texture: None,
+            fog_explored_texture: None,
+        },
     });
     let water_bodies = find_water_bodies(&grid_heights, actual_grid_size);
 
