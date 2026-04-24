@@ -11,7 +11,10 @@ use crate::infrastructure::multiplayer::lockstep::GameplayInputSubmit;
 use crate::infrastructure::multiplayer::NetRole;
 use crate::presentation::camera;
 use crate::simulation::buildings;
-use crate::simulation::combat::{apply_manual_hold_intent, clear_combat_intent};
+use crate::simulation::combat::{
+    apply_manual_cast_intent, apply_manual_hold_intent, clear_combat_intent, AbilityRegistry,
+    CastTarget,
+};
 use crate::types::*;
 use crate::ui::theme::{self, Theme};
 
@@ -801,7 +804,6 @@ pub fn handle_assign_worker_button(
             clear_combat_intent(&mut commands, worker_entity, time.elapsed_secs_f64());
             commands
                 .entity(worker_entity)
-                .remove::<AttackTarget>()
                 .remove::<ManualIdleSince>();
             if let Ok(mut queue) = worker_queries.p2().get_mut(worker_entity) {
                 queue.clear();
@@ -1227,7 +1229,6 @@ pub fn handle_hold_position_button(
             commands
                 .entity(entity)
                 .remove::<MoveTarget>()
-                .remove::<AttackTarget>()
                 .insert(UnitState::HoldPosition)
                 .insert(TaskSource::Manual);
             if let Ok(mut queue) = task_queues.get_mut(entity) {
@@ -1291,7 +1292,6 @@ pub fn handle_stop_button(
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
-                    .remove::<AttackTarget>()
                     .insert(UnitState::Idle)
                     .insert(TaskSource::Auto)
                     .insert(grace);
@@ -1435,8 +1435,14 @@ pub fn handle_ability_button(
     mut commands: Commands,
     interactions: Query<(&Interaction, &AbilityButton), Changed<Interaction>>,
     mut online: OnlineInputParams,
+    combat_registry: Res<AbilityRegistry>,
     mut selected_units: Query<
-        (Entity, &Faction, &mut UnitAbilities, &Transform),
+        (
+            Entity,
+            &Faction,
+            &crate::simulation::combat::Abilities,
+            &Transform,
+        ),
         (With<Unit>, With<Selected>),
     >,
     active_player: Res<ActivePlayer>,
@@ -1452,13 +1458,16 @@ pub fn handle_ability_button(
         ui_press.0 = true;
 
         let ability = ability_btn.0;
+        let combat_id = ability.combat_id();
 
         if ability.targeting() == AbilityTargeting::NoTarget {
             if online.submit.submit(
                 selected_units
                     .iter_mut()
                     .filter(|(_, faction, abilities, _)| {
-                        **faction == active_player.0 && abilities.is_ready(ability)
+                        **faction == active_player.0
+                            && abilities.castable.contains(&combat_id)
+                            && abilities.is_ready(&combat_id)
                     })
                     .map(|(entity, _, _, _)| entity),
                 vec![InputCommand::UseAbility {
@@ -1469,18 +1478,27 @@ pub fn handle_ability_button(
                 continue;
             }
             // Execute immediately on all selected units that have this ability
-            for (entity, faction, mut abilities, _tf) in &mut selected_units {
+            let Some(ability_meta) = combat_registry.get(&combat_id) else {
+                continue;
+            };
+            for (entity, faction, abilities, _tf) in &mut selected_units {
                 if *faction != active_player.0 {
                     continue;
                 }
-                if abilities.is_ready(ability) {
-                    abilities.trigger_cooldown(ability);
-                    commands.entity(entity).insert(CastingAbility {
-                        ability,
-                        target_pos: None,
-                        target_entity: None,
-                        cast_timer: Timer::from_seconds(0.3, TimerMode::Once),
-                    });
+                if abilities.castable.contains(&combat_id) && abilities.is_ready(&combat_id) {
+                    let target = match ability_meta.target_type {
+                        crate::simulation::combat::TargetType::Ground => {
+                            CastTarget::Ground(Vec3::ZERO)
+                        }
+                        _ => CastTarget::SelfOnly,
+                    };
+                    apply_manual_cast_intent(
+                        &mut commands,
+                        entity,
+                        combat_id.clone(),
+                        target,
+                        0.0,
+                    );
                 }
             }
         } else {

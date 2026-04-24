@@ -19,6 +19,7 @@ pub(super) fn spawn_units_action_bar(
             Option<&CarryCapacity>,
             Option<&UnitState>,
             Option<&PreferredResource>,
+            Option<&crate::simulation::combat::Abilities>,
         ),
         (With<Unit>, With<Selected>),
     >,
@@ -41,7 +42,7 @@ pub(super) fn spawn_units_action_bar(
         selected_units
             .iter()
             .filter(|(k, ..)| **k == EntityKind::Worker)
-            .map(|(_, _, _, _, pref)| pref.map(|p| p.0)),
+            .map(|(_, _, _, _, pref, _)| pref.map(|p| p.0)),
     );
 
     let label_text = if worker_count == unit_count && worker_count > 0 {
@@ -71,7 +72,7 @@ pub(super) fn spawn_units_action_bar(
     commands.entity(container).add_child(label);
 
     if unit_count == 1 {
-        if let Some((kind, carrying, capacity, worker_state, _)) = selected_units.iter().next() {
+        if let Some((kind, carrying, capacity, worker_state, _, _)) = selected_units.iter().next() {
             if *kind == EntityKind::Worker {
                 if let (Some(carry), Some(cap)) = (carrying, capacity) {
                     if carry.amount > 0 {
@@ -246,7 +247,9 @@ pub(super) fn spawn_units_action_bar(
     let any_carrying = worker_count > 0
         && selected_units
             .iter()
-            .any(|(k, c, _, _, _)| *k == EntityKind::Worker && c.map_or(false, |c| c.amount > 0));
+            .any(|(k, c, _, _, _, _)| {
+                *k == EntityKind::Worker && c.map_or(false, |c| c.amount > 0)
+            });
     if any_carrying {
         let drop_btn = commands
             .spawn((
@@ -318,16 +321,14 @@ pub(super) fn spawn_units_action_bar(
     // --- Ability buttons (shown when a unit with abilities is selected) ---
     {
         let mut shown_abilities = std::collections::HashSet::new();
-        for (kind, _, _, _, _) in selected_units.iter() {
-            let unit_abilities: Vec<AbilityId> = match *kind {
-                EntityKind::Knight => vec![AbilityId::KnightCharge],
-                EntityKind::Mage => vec![AbilityId::MageFireball, AbilityId::MageFrostNova],
-                EntityKind::Priest => vec![AbilityId::PriestHeal, AbilityId::PriestHolySmite],
-                EntityKind::Catapult => vec![AbilityId::CatapultAoeBoulder],
-                _ => vec![],
+        for (_, _, _, _, _, combat_abilities) in selected_units.iter() {
+            let Some(combat_abilities) = combat_abilities else {
+                continue;
             };
-            for a in unit_abilities {
-                shown_abilities.insert(a);
+            for ability in &combat_abilities.castable {
+                if let Some(ui_ability) = AbilityId::from_combat_id(ability) {
+                    shown_abilities.insert(ui_ability);
+                }
             }
         }
 

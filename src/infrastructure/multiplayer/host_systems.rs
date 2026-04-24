@@ -14,7 +14,8 @@ use crate::infrastructure::net_bridge::EntityNetMap;
 use crate::simulation::buildings::{cleanup_worker_assignment, find_best_worker_for_build};
 use crate::simulation::combat::{
     apply_manual_attack_intent, apply_manual_attack_move_intent, apply_manual_hold_intent,
-    apply_manual_move_intent, clear_combat_intent,
+    apply_manual_cast_intent, apply_manual_move_intent, clear_combat_intent, AbilityRegistry,
+    CastTarget, TargetFilter, TargetType,
 };
 use crate::simulation::orders;
 use crate::types::*;
@@ -31,6 +32,74 @@ pub struct BuildWorkerSnapshot {
     pub state: UnitState,
     pub faction: Faction,
     pub kind: EntityKind,
+}
+
+fn matches_cast_filter(
+    caster_faction: &Faction,
+    target_faction: Option<&Faction>,
+    is_building: bool,
+    is_mobile: bool,
+    filter: TargetFilter,
+) -> bool {
+    match filter {
+        TargetFilter::AnyUnit => true,
+        TargetFilter::SelfOnly => false,
+        TargetFilter::Hostile => target_faction.is_some_and(|f| f != caster_faction),
+        TargetFilter::Ally => target_faction == Some(caster_faction),
+        TargetFilter::StructuresOnly => is_building,
+        TargetFilter::MobileOnly => is_mobile,
+    }
+}
+
+fn resolve_cast_target(
+    caster: Entity,
+    caster_faction: &Faction,
+    ability: &crate::simulation::combat::Ability,
+    point: Vec3,
+    targets: &Query<(
+        Entity,
+        &GlobalTransform,
+        Option<&Faction>,
+        Has<Dying>,
+        Has<Unit>,
+        Has<Building>,
+        Has<Mob>,
+        Option<&PickRadius>,
+    )>,
+) -> Option<CastTarget> {
+    match ability.target_type {
+        TargetType::None | TargetType::SelfOnly => Some(CastTarget::SelfOnly),
+        TargetType::Ground => Some(CastTarget::Ground(point)),
+        TargetType::Unit => {
+            let mut best: Option<(Entity, f32)> = None;
+            for (entity, tf, faction, is_dying, is_unit, is_building, is_mob, pick_radius) in targets
+            {
+                if entity == caster || is_dying {
+                    continue;
+                }
+                let is_mobile = is_unit || is_mob;
+                if !matches_cast_filter(
+                    caster_faction,
+                    faction,
+                    is_building,
+                    is_mobile,
+                    ability.target_filter,
+                ) {
+                    continue;
+                }
+                let hit_radius = pick_radius.map_or(1.25, |r| r.0.max(0.6));
+                let pos = tf.translation();
+                let dist = Vec2::new(pos.x - point.x, pos.z - point.z).length();
+                if dist > hit_radius + 0.75 {
+                    continue;
+                }
+                if best.map_or(true, |(_, best_dist)| dist < best_dist) {
+                    best = Some((entity, dist));
+                }
+            }
+            best.map(|(entity, _)| CastTarget::Entity(entity))
+        }
+    }
 }
 
 /// Send a ServerMessage to a specific client by player_id.
@@ -146,7 +215,7 @@ pub fn execute_input_command(
     unit_states: &mut Query<&mut UnitState>,
     carrying_q: &mut Query<&mut Carrying, With<Unit>>,
     health_q: &mut Query<&mut Health, With<Unit>>,
-    unit_abilities_q: &mut Query<&mut UnitAbilities, With<Unit>>,
+    combat_abilities_q: &Query<&crate::simulation::combat::Abilities, With<Unit>>,
     worker_assignments: &Query<&BuildingAssignment, With<Unit>>,
     task_queues: &mut Query<&mut TaskQueue, With<Unit>>,
     training_buildings: &mut Query<
@@ -164,6 +233,17 @@ pub fn execute_input_command(
     workers: &[BuildWorkerSnapshot],
     obstacle_grid: &ObstacleGrid,
     registry: &BlueprintRegistry,
+    ability_registry: &Res<AbilityRegistry>,
+    ability_targets: &Query<(
+        Entity,
+        &GlobalTransform,
+        Option<&Faction>,
+        Has<Dying>,
+        Has<Unit>,
+        Has<Building>,
+        Has<Mob>,
+        Option<&PickRadius>,
+    )>,
     pending_lockstep_builds: &mut ResMut<PendingLockstepBuilds>,
 ) {
     let input_faction = lobby
@@ -221,7 +301,6 @@ pub fn execute_input_command(
                         apply_manual_move_intent(commands, ecs_entity, dest, issue_time);
                         commands
                             .entity(ecs_entity)
-                            .remove::<AttackTarget>()
                             .insert(MoveTarget(dest))
                             .insert(TaskSource::Manual);
                         if let Ok(mut queue) = task_queues.get_mut(ecs_entity) {
@@ -245,7 +324,6 @@ pub fn execute_input_command(
                             commands
                                 .entity(ecs_entity)
                                 .remove::<MoveTarget>()
-                                .insert(AttackTarget(target_ecs))
                                 .insert(TaskSource::Manual);
                             if let Ok(mut queue) = task_queues.get_mut(ecs_entity) {
                                 queue.clear_queued();
@@ -273,7 +351,6 @@ pub fn execute_input_command(
                             clear_combat_intent(commands, ecs_entity, issue_time);
                             commands
                                 .entity(ecs_entity)
-                                .remove::<AttackTarget>()
                                 .insert(MoveTarget(node_pos))
                                 .insert(TaskSource::Manual);
                             if let Ok(mut queue) = task_queues.get_mut(ecs_entity) {
@@ -290,27 +367,42 @@ pub fn execute_input_command(
             }
             InputCommand::UseAbility { ability_id, target } => {
                 let ability = AbilityId::from_u8(*ability_id);
+                let combat_id = ability.combat_id();
                 let target_pos = Vec3::new(target[0], target[1], target[2]);
+                let Some(caster_faction) = input_faction else {
+                    continue;
+                };
+                let Some(ability_meta) = ability_registry.get(&combat_id) else {
+                    continue;
+                };
                 for &eid in &input.entity_ids {
                     let Some(&ecs_entity) = net_map.to_ecs.get(&eid) else {
                         continue;
                     };
-                    let Ok(mut unit_abilities) = unit_abilities_q.get_mut(ecs_entity) else {
+                    let Ok(combat_abilities) = combat_abilities_q.get(ecs_entity) else {
                         continue;
                     };
-                    if !unit_abilities.abilities.contains(&ability)
-                        || !unit_abilities.is_ready(ability)
+                    if !combat_abilities.castable.contains(&combat_id)
+                        || !combat_abilities.is_ready(&combat_id)
                     {
                         continue;
                     }
-                    unit_abilities.trigger_cooldown(ability);
-                    commands.entity(ecs_entity).insert(CastingAbility {
-                        ability,
-                        target_pos: (ability.targeting() != AbilityTargeting::NoTarget)
-                            .then_some(target_pos),
-                        target_entity: None,
-                        cast_timer: Timer::from_seconds(0.3, TimerMode::Once),
-                    });
+                    let Some(target) = resolve_cast_target(
+                        ecs_entity,
+                        &caster_faction,
+                        &ability_meta,
+                        target_pos,
+                        ability_targets,
+                    ) else {
+                        continue;
+                    };
+                    apply_manual_cast_intent(
+                        commands,
+                        ecs_entity,
+                        combat_id.clone(),
+                        target,
+                        issue_time,
+                    );
                 }
             }
             InputCommand::Patrol { target } => {
@@ -326,7 +418,6 @@ pub fn execute_input_command(
                         clear_combat_intent(commands, ecs_entity, issue_time);
                         commands
                             .entity(ecs_entity)
-                            .remove::<AttackTarget>()
                             .remove::<PreferredResource>()
                             .insert(MoveTarget(pos))
                             .insert(TaskSource::Manual);
@@ -348,7 +439,6 @@ pub fn execute_input_command(
                         apply_manual_attack_move_intent(commands, ecs_entity, pos, issue_time);
                         commands
                             .entity(ecs_entity)
-                            .remove::<AttackTarget>()
                             .insert(MoveTarget(pos))
                             .insert(TaskSource::Manual);
                         if let Ok(mut queue) = task_queues.get_mut(ecs_entity) {
@@ -369,7 +459,6 @@ pub fn execute_input_command(
                         commands
                             .entity(ecs_entity)
                             .remove::<MoveTarget>()
-                            .remove::<AttackTarget>()
                             .insert(UnitState::HoldPosition)
                             .insert(TaskSource::Manual);
                         if let Ok(mut queue) = task_queues.get_mut(ecs_entity) {
@@ -415,7 +504,6 @@ pub fn execute_input_command(
                         commands
                             .entity(ecs_entity)
                             .remove::<MoveTarget>()
-                            .remove::<AttackTarget>()
                             .insert(TaskSource::Auto);
                         if let Ok(mut queue) = task_queues.get_mut(ecs_entity) {
                             queue.clear();
@@ -454,7 +542,6 @@ pub fn execute_input_command(
                     commands
                         .entity(ecs_entity)
                         .remove::<MoveTarget>()
-                        .remove::<AttackTarget>()
                         .insert(TaskSource::Auto);
                     if let Ok(mut queue) = task_queues.get_mut(ecs_entity) {
                         queue.clear();
@@ -578,7 +665,6 @@ pub fn execute_input_command(
                 commands
                     .entity(worker_entity)
                     .remove::<MoveTarget>()
-                    .remove::<AttackTarget>()
                     .insert(UnitState::MovingToPlot(build_pos))
                     .insert(TaskSource::Manual)
                     .insert(PendingBuildOrder {

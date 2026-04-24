@@ -157,6 +157,7 @@ pub fn update_action_bar(
             Option<&CarryCapacity>,
             Option<&UnitState>,
             Option<&PreferredResource>,
+            Option<&crate::simulation::combat::Abilities>,
         ),
         (With<Unit>, With<Selected>),
     >,
@@ -264,7 +265,7 @@ pub fn update_action_bar(
         selected_units
             .iter()
             .filter(|(kind, ..)| **kind == EntityKind::Worker)
-            .map(|(_, _, _, _, pref)| pref.map(|pref| pref.0)),
+            .map(|(_, _, _, _, pref, _)| pref.map(|pref| pref.0)),
     );
     let worker_pref_changed = current_worker_pref != *last_worker_pref;
     *last_worker_pref = current_worker_pref;

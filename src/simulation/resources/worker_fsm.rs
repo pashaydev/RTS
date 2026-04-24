@@ -42,8 +42,7 @@ pub fn assign_worker_to_processor(
         .insert(BuildingAssignment(building))
         .insert(MoveTarget(building_pos))
         .remove::<Selected>()
-        .remove::<Hovered>()
-        .remove::<AttackTarget>();
+        .remove::<Hovered>();
 }
 
 /// End a worker's assigned-gathering lifecycle.
@@ -64,6 +63,5 @@ pub fn unassign_worker_from_processor(
         .insert(UnitState::Idle)
         .insert(TaskSource::Auto)
         .remove::<BuildingAssignment>()
-        .remove::<MoveTarget>()
-        .remove::<AttackTarget>();
+        .remove::<MoveTarget>();
 }

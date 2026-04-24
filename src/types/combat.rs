@@ -25,32 +25,7 @@ pub enum TaskSource {
 pub struct ManualIdleSince(pub f64);
 
 // ---------------------------------------------------------------------------
-// 3. IntentSource
-// ---------------------------------------------------------------------------
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum IntentSource {
-    Manual,
-    #[default]
-    Auto,
-}
-
-// ---------------------------------------------------------------------------
-// 4. CombatIntent
-// ---------------------------------------------------------------------------
-
-#[derive(Component, Clone, Copy, PartialEq, Debug, Default)]
-pub enum CombatIntent {
-    #[default]
-    None,
-    Move(Vec3),
-    Attack(Entity, IntentSource),
-    AttackMove(Vec3, IntentSource),
-    Hold,
-}
-
-// ---------------------------------------------------------------------------
-// 4b. OrderSource — priority/origin of a UnitBrain.order
+// 3. OrderSource — priority/origin of a UnitBrain.order
 // ---------------------------------------------------------------------------
 
 /// Priority/origin of the current `UnitBrain.order`. Drives manual-vs-auto
@@ -82,25 +57,7 @@ impl OrderSource {
 }
 
 // ---------------------------------------------------------------------------
-// 5. CombatPhase
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-#[derive(Component, Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum CombatPhase {
-    #[default]
-    Idle,
-    Pursuing,
-    SeekingSlot,
-    InRange,
-    Windup,
-    Committed,
-    Recovery,
-    Blocked,
-}
-
-// ---------------------------------------------------------------------------
-// 6. CombatThinkTimer
+// 4. CombatThinkTimer
 // ---------------------------------------------------------------------------
 
 #[allow(dead_code)]
@@ -344,14 +301,7 @@ pub struct CombatStatsDebug {
 }
 
 // ---------------------------------------------------------------------------
-// 25. AttackTarget
-// ---------------------------------------------------------------------------
-
-#[derive(Component)]
-pub struct AttackTarget(pub Entity);
-
-// ---------------------------------------------------------------------------
-// 26. AttackCooldown
+// 25. AttackCooldown
 // ---------------------------------------------------------------------------
 
 #[derive(Component)]

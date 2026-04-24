@@ -14,8 +14,9 @@ use crate::infrastructure::net_bridge::EntityNetMap;
 use crate::presentation::camera;
 use crate::presentation::minimap::MinimapInteraction;
 use crate::simulation::combat::{
-    apply_manual_attack_intent, apply_manual_attack_move_intent, apply_manual_hold_intent,
-    apply_manual_move_intent, clear_combat_intent,
+    apply_manual_attack_intent, apply_manual_attack_move_intent, apply_manual_cast_intent,
+    apply_manual_hold_intent, apply_manual_move_intent, clear_combat_intent, AbilityRegistry,
+    CastTarget, TargetFilter, TargetType,
 };
 use crate::simulation::items::ItemPickup;
 use crate::types::*;
@@ -23,6 +24,73 @@ use crate::world::ground::HeightMap;
 
 use super::picking::{ray_aabb_dist, ray_sphere_dist};
 use super::{clear_task_queue, enqueue_task, set_current_task};
+
+fn matches_cast_filter(
+    caster_faction: &Faction,
+    target_faction: Option<&Faction>,
+    is_building: bool,
+    is_mobile: bool,
+    filter: TargetFilter,
+) -> bool {
+    match filter {
+        TargetFilter::AnyUnit => true,
+        TargetFilter::SelfOnly => false,
+        TargetFilter::Hostile => target_faction.is_some_and(|f| f != caster_faction),
+        TargetFilter::Ally => target_faction == Some(caster_faction),
+        TargetFilter::StructuresOnly => is_building,
+        TargetFilter::MobileOnly => is_mobile,
+    }
+}
+
+fn resolve_cast_target(
+    caster: Entity,
+    caster_faction: &Faction,
+    ability: &crate::simulation::combat::Ability,
+    point: Vec3,
+    targets: &Query<(
+        Entity,
+        &Transform,
+        Option<&Faction>,
+        Has<Dying>,
+        Has<Unit>,
+        Has<Building>,
+        Has<Mob>,
+        Option<&PickRadius>,
+    )>,
+) -> Option<CastTarget> {
+    match ability.target_type {
+        TargetType::None | TargetType::SelfOnly => Some(CastTarget::SelfOnly),
+        TargetType::Ground => Some(CastTarget::Ground(point)),
+        TargetType::Unit => {
+            let mut best: Option<(Entity, f32)> = None;
+            for (entity, tf, faction, is_dying, is_unit, is_building, is_mob, pick_radius) in targets
+            {
+                if entity == caster || is_dying {
+                    continue;
+                }
+                let is_mobile = is_unit || is_mob;
+                if !matches_cast_filter(
+                    caster_faction,
+                    faction,
+                    is_building,
+                    is_mobile,
+                    ability.target_filter,
+                ) {
+                    continue;
+                }
+                let hit_radius = pick_radius.map_or(1.25, |r| r.0.max(0.6));
+                let dist = Vec2::new(tf.translation.x - point.x, tf.translation.z - point.z).length();
+                if dist > hit_radius + 0.75 {
+                    continue;
+                }
+                if best.map_or(true, |(_, best_dist)| dist < best_dist) {
+                    best = Some((entity, dist));
+                }
+            }
+            best.map(|(entity, _)| CastTarget::Entity(entity))
+        }
+    }
+}
 
 // ── Right-click move / contextual actions ──
 
@@ -312,7 +380,6 @@ pub(crate) fn handle_right_click_move(
                         );
                         let mut ec = commands.entity(*entity);
                         ec.remove::<MoveTarget>()
-                            .insert(AttackTarget(target_entity))
                             .insert(UnitState::Attacking(target_entity));
                         set_current_task(
                             &mut task_queues,
@@ -344,7 +411,6 @@ pub(crate) fn handle_right_click_move(
                             clear_combat_intent(&mut commands, *entity, time.elapsed_secs_f64());
                             commands
                                 .entity(*entity)
-                                .remove::<AttackTarget>()
                                 .remove::<MoveTarget>()
                                 .insert(UnitState::MovingToBuild(target_entity))
                                 .insert(TaskSource::Manual)
@@ -365,7 +431,6 @@ pub(crate) fn handle_right_click_move(
                         );
                         commands
                             .entity(*entity)
-                            .remove::<AttackTarget>()
                             .insert(MoveTarget(pos))
                             .insert(UnitState::Moving(pos))
                             .insert(TaskSource::Manual)
@@ -392,7 +457,6 @@ pub(crate) fn handle_right_click_move(
                                 );
                                 commands
                                     .entity(*entity)
-                                    .remove::<AttackTarget>()
                                     .insert(MoveTarget(gt.translation()))
                                     .insert(UnitState::Gathering(target_entity))
                                     .insert(TaskSource::Manual)
@@ -414,7 +478,6 @@ pub(crate) fn handle_right_click_move(
                         );
                         commands
                             .entity(*entity)
-                            .remove::<AttackTarget>()
                             .insert(MoveTarget(gt.translation()))
                             .insert(UnitState::Moving(gt.translation()))
                             .insert(TaskSource::Manual)
@@ -457,7 +520,6 @@ pub(crate) fn handle_right_click_move(
                             );
                             commands
                                 .entity(*entity)
-                                .remove::<AttackTarget>()
                                 .insert(MoveTarget(dest))
                                 .insert(UnitState::Moving(dest))
                                 .insert(TaskSource::Manual)
@@ -503,7 +565,6 @@ pub(crate) fn handle_right_click_move(
                             clear_combat_intent(&mut commands, *entity, time.elapsed_secs_f64());
                             commands
                                 .entity(*entity)
-                                .remove::<AttackTarget>()
                                 .remove::<MoveTarget>()
                                 .insert(UnitState::MovingToBuild(site_entity))
                                 .insert(TaskSource::Manual)
@@ -524,7 +585,6 @@ pub(crate) fn handle_right_click_move(
                         );
                         commands
                             .entity(*entity)
-                            .remove::<AttackTarget>()
                             .insert(MoveTarget(point))
                             .insert(UnitState::Moving(point))
                             .insert(TaskSource::Manual)
@@ -552,7 +612,6 @@ pub(crate) fn handle_right_click_move(
                         );
                         commands
                             .entity(*ent)
-                            .remove::<AttackTarget>()
                             .insert(MoveTarget(point))
                             .insert(UnitState::Moving(point))
                             .insert(TaskSource::Manual)
@@ -596,7 +655,6 @@ pub(crate) fn handle_right_click_move(
                             );
                             commands
                                 .entity(*entity)
-                                .remove::<AttackTarget>()
                                 .insert(MoveTarget(dest))
                                 .insert(UnitState::Moving(dest))
                                 .insert(TaskSource::Manual)
@@ -654,7 +712,20 @@ pub(crate) fn handle_unit_command_hotkeys(
         (With<Unit>, With<Selected>),
     >,
     mut task_queues: Query<&mut TaskQueue, With<Unit>>,
-    mut unit_abilities: Query<&mut UnitAbilities>,
+    combat: (
+        Res<AbilityRegistry>,
+        Query<&crate::simulation::combat::Abilities>,
+        Query<(
+            Entity,
+            &Transform,
+            Option<&Faction>,
+            Has<Dying>,
+            Has<Unit>,
+            Has<Building>,
+            Has<Mob>,
+            Option<&PickRadius>,
+        )>,
+    ),
     active_player: Res<ActivePlayer>,
     mut formation: ResMut<ActiveFormation>,
     time: Res<Time<Fixed>>,
@@ -666,6 +737,7 @@ pub(crate) fn handle_unit_command_hotkeys(
 ) {
     let (ui_clicked, ui_press, placement) = ui_state;
     let (ref camera_q, ref windows, ref graphics) = viewport;
+    let (combat_registry, combat_abilities, cast_targets) = combat;
     if placement.mode != PlacementMode::None {
         return;
     }
@@ -715,7 +787,6 @@ pub(crate) fn handle_unit_command_hotkeys(
                 commands
                     .entity(entity)
                     .remove::<MoveTarget>()
-                    .remove::<AttackTarget>()
                     .insert(UnitState::HoldPosition)
                     .insert(TaskSource::Manual)
                     .remove::<ManualIdleSince>();
@@ -752,7 +823,6 @@ pub(crate) fn handle_unit_command_hotkeys(
                     commands
                         .entity(entity)
                         .remove::<MoveTarget>()
-                        .remove::<AttackTarget>()
                         .insert(UnitState::Idle)
                         .insert(TaskSource::Auto)
                         .insert(grace);
@@ -826,8 +896,13 @@ pub(crate) fn handle_unit_command_hotkeys(
                 if *faction != active_player.0 {
                     continue;
                 }
-                if let Ok(abilities) = unit_abilities.get(entity) {
-                    if let Some(&ability) = abilities.abilities.get(slot) {
+                if let Ok(abilities) = combat_abilities.get(entity) {
+                    if let Some(ability) = abilities
+                        .castable
+                        .get(slot)
+                        .and_then(AbilityId::from_combat_id)
+                    {
+                        let combat_id = ability.combat_id();
                         if ability.targeting() == AbilityTargeting::NoTarget {
                             if online_submit.submit(
                                 selected_units
@@ -836,10 +911,13 @@ pub(crate) fn handle_unit_command_hotkeys(
                                         **selected_faction == active_player.0
                                     })
                                     .filter_map(|(selected_entity, _, _, _, _)| {
-                                        unit_abilities
+                                        combat_abilities
                                             .get(selected_entity)
                                             .ok()
-                                            .filter(|ab| ab.is_ready(ability))
+                                            .filter(|ab| {
+                                                ab.castable.contains(&combat_id)
+                                                    && ab.is_ready(&combat_id)
+                                            })
                                             .map(|_| selected_entity)
                                     }),
                                 vec![InputCommand::UseAbility {
@@ -850,17 +928,25 @@ pub(crate) fn handle_unit_command_hotkeys(
                                 *cmd_mode = CommandMode::Normal;
                                 return;
                             }
-                            // Execute immediately
-                            if let Ok(mut ab) = unit_abilities.get_mut(entity) {
-                                if ab.is_ready(ability) {
-                                    ab.trigger_cooldown(ability);
-                                    commands.entity(entity).insert(CastingAbility {
-                                        ability,
-                                        target_pos: None,
-                                        target_entity: None,
-                                        cast_timer: Timer::from_seconds(0.3, TimerMode::Once),
-                                    });
-                                }
+                            if let Some(target) = combat_registry
+                                .get(&combat_id)
+                                .and_then(|meta| {
+                                    resolve_cast_target(
+                                        entity,
+                                        faction,
+                                        &meta,
+                                        Vec3::ZERO,
+                                        &cast_targets,
+                                    )
+                                })
+                            {
+                                apply_manual_cast_intent(
+                                    &mut commands,
+                                    entity,
+                                    combat_id,
+                                    target,
+                                    time.elapsed_secs_f64(),
+                                );
                             }
                         } else {
                             *cmd_mode = CommandMode::AbilityTarget(ability);
@@ -952,7 +1038,6 @@ pub(crate) fn handle_unit_command_hotkeys(
                     );
                     commands
                         .entity(*entity)
-                        .remove::<AttackTarget>()
                         .insert(MoveTarget(dest))
                         .insert(UnitState::AttackMoving(dest))
                         .insert(TaskSource::Manual)
@@ -988,7 +1073,6 @@ pub(crate) fn handle_unit_command_hotkeys(
                     clear_combat_intent(&mut commands, *entity, time.elapsed_secs_f64());
                     commands
                         .entity(*entity)
-                        .remove::<AttackTarget>()
                         .insert(MoveTarget(point))
                         .insert(UnitState::Patrolling {
                             target: point,
@@ -1006,12 +1090,15 @@ pub(crate) fn handle_unit_command_hotkeys(
             }
         }
         CommandMode::AbilityTarget(ability) => {
+            let combat_id = ability.combat_id();
             if online_submit.submit(
                 units_vec.iter().filter_map(|(entity, _)| {
-                    unit_abilities
+                    combat_abilities
                         .get(*entity)
                         .ok()
-                        .filter(|abilities| abilities.is_ready(ability))
+                        .filter(|abilities| {
+                            abilities.castable.contains(&combat_id) && abilities.is_ready(&combat_id)
+                        })
                         .map(|_| *entity)
                 }),
                 vec![InputCommand::UseAbility {
@@ -1022,17 +1109,30 @@ pub(crate) fn handle_unit_command_hotkeys(
                 *cmd_mode = CommandMode::Normal;
                 return;
             }
+            let Some(ability_meta) = combat_registry.get(&combat_id) else {
+                *cmd_mode = CommandMode::Normal;
+                return;
+            };
             for (entity, _kind) in &units_vec {
-                if let Ok(mut abilities) = unit_abilities.get_mut(*entity) {
-                    if abilities.is_ready(ability) {
-                        abilities.trigger_cooldown(ability);
-                        commands.entity(*entity).insert(CastingAbility {
-                            ability,
-                            target_pos: Some(point),
-                            target_entity: None,
-                            cast_timer: Timer::from_seconds(0.3, TimerMode::Once),
-                        });
-                    }
+                let Ok(abilities) = combat_abilities.get(*entity) else {
+                    continue;
+                };
+                if !abilities.castable.contains(&combat_id) || !abilities.is_ready(&combat_id) {
+                    continue;
+                }
+                let Ok((_, _, faction, _, _)) = selected_units.get(*entity) else {
+                    continue;
+                };
+                if let Some(target) =
+                    resolve_cast_target(*entity, faction, &ability_meta, point, &cast_targets)
+                {
+                    apply_manual_cast_intent(
+                        &mut commands,
+                        *entity,
+                        combat_id.clone(),
+                        target,
+                        time.elapsed_secs_f64(),
+                    );
                 }
             }
         }

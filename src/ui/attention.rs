@@ -6,7 +6,7 @@ use bevy::prelude::*;
 use crate::blueprints::EntityKind;
 use crate::presentation::camera;
 use crate::types::*;
-use crate::ui::theme::{self, Theme};
+use crate::ui::theme::Theme;
 use crate::world::fog::FogTweakSettings;
 
 pub struct AttentionPlugin;
@@ -206,7 +206,7 @@ fn manage_attention_icons(
         (
             Entity,
             Option<&UnitState>,
-            Option<&AttackTarget>,
+            Option<&crate::simulation::combat::UnitBrain>,
             Option<&UnderAttackTimer>,
         ),
         With<Unit>,
@@ -224,8 +224,12 @@ fn manage_attention_icons(
         icon_map.insert(icon.owner, (icon_entity, icon.kind));
     }
 
-    for (unit_entity, unit_state, attack_target, under_attack) in &units {
-        let desired = determine_attention_kind(unit_state, attack_target.is_some(), under_attack);
+    for (unit_entity, unit_state, brain, under_attack) in &units {
+        let desired = determine_attention_kind(
+            unit_state,
+            brain.and_then(|brain| brain.target).is_some(),
+            under_attack,
+        );
 
         match (icon_map.remove(&unit_entity), desired) {
             (Some((_icon_e, existing_kind)), Some(desired_kind))

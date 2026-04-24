@@ -11,7 +11,7 @@ use crate::simulation::buildings::is_wall_like_kind;
 use crate::simulation::combat::{
     apply_auto_attack_intent, apply_auto_move_intent, apply_manual_attack_intent,
     apply_manual_attack_move_intent, apply_manual_hold_intent, apply_manual_move_intent,
-    clear_combat_intent, reset_combat_state, set_auto_target, target_score,
+    clear_combat_intent, reset_combat_state, set_auto_target, target_score, Order, UnitBrain,
     CombatBudgetState, TargetScoreInput,
 };
 use crate::types::*;
@@ -164,7 +164,7 @@ fn decision_priority_system(
                 Option<&TargetingProfile>,
                 Option<&DamageType>,
                 Option<&RecentCombatDamage>,
-                Option<&CombatIntent>,
+                Option<&UnitBrain>,
                 Option<&mut CombatThinkTimer>,
             ),
             (Option<&TacticalRole>, Option<&ManualIdleSince>),
@@ -208,7 +208,7 @@ fn decision_priority_system(
             opt_targeting_profile,
             opt_damage_type,
             opt_recent_damage,
-            combat_intent,
+            brain,
             _opt_think_timer,
         ),
         (opt_tactical_role, manual_idle_since),
@@ -329,7 +329,6 @@ fn decision_priority_system(
                     apply_auto_move_intent(&mut commands, entity, retreat_pos);
                     commands
                         .entity(entity)
-                        .remove::<AttackTarget>()
                         .insert(MoveTarget(retreat_pos));
                     *state = UnitState::Moving(retreat_pos);
                     *source = TaskSource::Auto;
@@ -477,10 +476,9 @@ fn decision_priority_system(
             if let Some(target) = best_target {
                 apply_auto_attack_intent(&mut commands, entity, target, tf.translation, now);
                 *source = TaskSource::Auto;
-            } else if matches!(
-                combat_intent,
-                Some(CombatIntent::Attack(_, IntentSource::Auto))
-            ) {
+            } else if brain.is_some_and(|brain| {
+                matches!(brain.order, Order::Attack(_)) && brain.order_source == OrderSource::Auto
+            }) {
                 reset_combat_state(&mut commands, entity);
             }
         }
@@ -528,7 +526,6 @@ fn leash_return_system(
             apply_auto_move_intent(&mut commands, entity, leash_origin.0);
             commands
                 .entity(entity)
-                .remove::<AttackTarget>()
                 .remove::<LeashOrigin>()
                 .insert(MoveTarget(leash_origin.0));
             *state = UnitState::Moving(leash_origin.0);
@@ -614,15 +611,14 @@ pub fn task_queue_advance_system(
                 apply_manual_hold_intent(&mut commands, entity, time.elapsed_secs_f64());
                 commands
                     .entity(entity)
-                    .remove::<MoveTarget>()
-                    .remove::<AttackTarget>();
+                    .remove::<MoveTarget>();
             }
         }
     }
 }
 
 /// Translates UnitState into low-level component management.
-/// Handles arrival detection, state transitions, and MoveTarget/AttackTarget sync.
+/// Handles arrival detection, state transitions, and MoveTarget/order sync.
 pub fn unit_state_executor_system(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
@@ -685,8 +681,7 @@ pub fn unit_state_executor_system(
                 // resolve_combat_intents doesn't re-insert a MoveTarget.
                 commands
                     .entity(entity)
-                    .remove::<MoveTarget>()
-                    .remove::<AttackTarget>();
+                    .remove::<MoveTarget>();
                 reset_combat_state(&mut commands, entity);
                 // Transition source Manual → Auto once we're confirmed idle.
                 // The Moving→Idle path deliberately keeps source=Manual for
@@ -747,14 +742,9 @@ pub fn unit_state_executor_system(
                             if let Some(target) = closest_target {
                                 // HoldPosition: retarget without changing the standing Hold order.
                                 set_auto_target(&mut commands, entity, target, now);
-                            } else {
-                                commands.entity(entity).remove::<AttackTarget>();
                             }
                         }
                     }
-                } else {
-                    // Passive stance: no auto-attack
-                    commands.entity(entity).remove::<AttackTarget>();
                 }
             }
 
@@ -795,7 +785,6 @@ pub fn unit_state_executor_system(
                     reset_combat_state(&mut commands, entity);
                     commands
                         .entity(entity)
-                        .remove::<AttackTarget>()
                         .remove::<LeashOrigin>();
 
                     // Resume previous behavioral task if one exists
@@ -1144,7 +1133,6 @@ pub fn unit_state_executor_system(
 
 /// Auto-heal system for Priests: scans nearby allies and heals the lowest-HP one.
 fn auto_heal_system(
-    mut commands: Commands,
     _time: Res<Time<Fixed>>,
     spatial_grid: Res<SpatialHashGrid>,
     teams: Res<TeamConfig>,
@@ -1154,16 +1142,17 @@ fn auto_heal_system(
             Entity,
             &Transform,
             &Faction,
-            &mut UnitAbilities,
+            &mut crate::simulation::combat::UnitBrain,
+            &crate::simulation::combat::Abilities,
             &UnitState,
             &TacticalRole,
-            Option<&CastingAbility>,
         ),
         With<Unit>,
     >,
     allies: Query<(Entity, &Health, &Transform, &Faction), With<Unit>>,
 ) {
-    for (entity, tf, faction, mut abilities, state, role, casting) in &mut priests {
+    let heal_id = crate::simulation::combat::AbilityId::new("priest_heal");
+    for (entity, tf, faction, mut brain, abilities, state, role) in &mut priests {
         if *role != TacticalRole::Healer {
             continue;
         }
@@ -1174,15 +1163,13 @@ fn auto_heal_system(
         ) {
             continue;
         }
-        // Don't interrupt an active cast
-        if casting.is_some() {
+        if brain.is_committed() || brain.is_action_blocked() || brain.active_ability.is_some() {
             continue;
         }
-        // Check if PriestHeal is available and off cooldown
-        if !abilities.abilities.contains(&AbilityId::PriestHeal) {
+        if !abilities.castable.contains(&heal_id) {
             continue;
         }
-        if !abilities.is_ready(AbilityId::PriestHeal) {
+        if !abilities.is_ready(&heal_id) {
             continue;
         }
 
@@ -1212,14 +1199,11 @@ fn auto_heal_system(
         }
 
         if let Some((target, _)) = best_target {
-            // Trigger the heal ability
-            abilities.trigger_cooldown(AbilityId::PriestHeal);
-            commands.entity(entity).insert(CastingAbility {
-                ability: AbilityId::PriestHeal,
-                target_pos: None,
-                target_entity: Some(target),
-                cast_timer: Timer::from_seconds(0.3, TimerMode::Once),
-            });
+            brain.order = crate::simulation::combat::Order::Cast(
+                heal_id.clone(),
+                crate::simulation::combat::CastTarget::Entity(target),
+            );
+            brain.order_source = OrderSource::Auto;
         }
     }
 }

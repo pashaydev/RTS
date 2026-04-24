@@ -95,7 +95,6 @@ pub(super) fn apply_pending_wall_builds(
             crate::simulation::combat::reset_combat_state(&mut commands, worker_entity);
             commands
                 .entity(worker_entity)
-                .remove::<AttackTarget>()
                 .remove::<MoveTarget>()
                 .insert(UnitState::MovingToBuild(first))
                 .insert(TaskSource::Manual);
@@ -161,7 +160,6 @@ pub(super) fn apply_pending_gate_builds(
         crate::simulation::combat::reset_combat_state(&mut commands, worker_entity);
         commands
             .entity(worker_entity)
-            .remove::<AttackTarget>()
             .remove::<MoveTarget>()
             .insert(UnitState::MovingToBuild(segment_entity))
             .insert(TaskSource::Manual);

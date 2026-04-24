@@ -39,10 +39,16 @@ pub fn ai_military_system(
         Query<&Faction, With<Unit>>,
         Query<(Entity, &Faction, &EntityKind, &Transform), (With<Unit>, Without<Building>)>,
         Query<
-            (Entity, &Faction, &EntityKind, &Transform, &UnitState),
+            (
+                Entity,
+                &Faction,
+                &EntityKind,
+                &Transform,
+                &UnitState,
+                Option<&crate::simulation::combat::UnitBrain>,
+            ),
             (
                 With<Unit>,
-                Without<AttackTarget>,
                 Without<MoveTarget>,
                 Without<Building>,
             ),
@@ -74,6 +80,12 @@ pub fn ai_military_system(
         mut train_queues,
     ) = queries;
     let dt = time.delta_secs();
+    let is_idle_military = |entity| {
+        idle_military_q
+            .get(entity)
+            .ok()
+            .is_some_and(|(_, _, _, _, _, brain)| brain.map_or(true, |brain| brain.target.is_none()))
+    };
 
     for &faction in &ai_controlled.factions {
         if !faction_uses_ai(&config, faction) {
@@ -528,7 +540,7 @@ pub fn ai_military_system(
             } else {
                 // Not enough units staged — rally them to staging point
                 for &entity in &attack_members {
-                    if idle_military_q.get(entity).is_ok() {
+                    if is_idle_military(entity) {
                         commands.entity(entity).insert(MoveTarget(rally));
                     }
                 }
@@ -592,7 +604,7 @@ pub fn ai_military_system(
                 .unwrap_or_default();
 
             for &entity in &attack_members {
-                if idle_military_q.get(entity).is_ok() {
+                if is_idle_military(entity) {
                     commands.entity(entity).insert(MoveTarget(rally));
                 }
             }
@@ -608,7 +620,7 @@ pub fn ai_military_system(
                 recall_entities.extend(&squad.members);
             }
             for entity in &recall_entities {
-                if idle_military_q.get(*entity).is_ok() {
+                if is_idle_military(*entity) {
                     commands.entity(*entity).insert(MoveTarget(base_pos));
                 }
             }

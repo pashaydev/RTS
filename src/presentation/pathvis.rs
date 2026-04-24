@@ -103,7 +103,7 @@ fn classify_unit_state(state: &UnitState) -> PathVisCategory {
 fn resolve_target(
     unit_state: &UnitState,
     move_target: Option<&MoveTarget>,
-    attack_target: Option<&AttackTarget>,
+    brain: Option<&crate::simulation::combat::UnitBrain>,
     target_transforms: &Query<&Transform, Without<Unit>>,
 ) -> Option<Vec3> {
     // MoveTarget takes priority when present
@@ -111,10 +111,10 @@ fn resolve_target(
         return Some(mt.0);
     }
 
-    // For Attacking state (no MoveTarget), resolve position from AttackTarget entity
+    // For Attacking state (no MoveTarget), resolve position from the combat brain target.
     if let UnitState::Attacking(_) = unit_state {
-        if let Some(at) = attack_target {
-            return target_transforms.get(at.0).ok().map(|tf| tf.translation);
+        if let Some(target) = brain.and_then(|brain| brain.target) {
+            return target_transforms.get(target).ok().map(|tf| tf.translation);
         }
     }
 
@@ -303,7 +303,7 @@ fn spawn_path_visualization(
             &Faction,
             &UnitState,
             Option<&MoveTarget>,
-            Option<&AttackTarget>,
+            Option<&crate::simulation::combat::UnitBrain>,
             Option<&mut PathVisEntities>,
             Option<&NavPath>,
         ),
@@ -317,7 +317,7 @@ fn spawn_path_visualization(
         faction,
         unit_state,
         move_target,
-        attack_target,
+        brain,
         vis_entities,
         nav_path,
     ) in &mut units
@@ -329,9 +329,8 @@ fn spawn_path_visualization(
         let pos = transform.translation;
         let category = classify_unit_state(unit_state);
 
-        // Resolve target position — may come from MoveTarget or AttackTarget entity
-        let Some(target) =
-            resolve_target(unit_state, move_target, attack_target, &target_transforms)
+        // Resolve target position — may come from MoveTarget or the combat brain target.
+        let Some(target) = resolve_target(unit_state, move_target, brain, &target_transforms)
         else {
             // No valid target — if we had old vis, clean it up
             if let Some(ref state) = vis_entities {
@@ -501,11 +500,14 @@ fn animate_path_ring(time: Res<Time>, mut rings: Query<(&PathRing, &mut Transfor
 fn cleanup_path_vis(
     mut commands: Commands,
     units_without_target: Query<
-        (Entity, &PathVisEntities),
-        (With<Unit>, Without<MoveTarget>, Without<AttackTarget>),
+        (Entity, &PathVisEntities, Option<&crate::simulation::combat::UnitBrain>),
+        (With<Unit>, Without<MoveTarget>),
     >,
 ) {
-    for (unit_entity, vis) in &units_without_target {
+    for (unit_entity, vis, brain) in &units_without_target {
+        if brain.and_then(|brain| brain.target).is_some() {
+            continue;
+        }
         for &e in &vis.entities {
             if let Ok(mut cmd) = commands.get_entity(e) {
                 cmd.try_despawn();

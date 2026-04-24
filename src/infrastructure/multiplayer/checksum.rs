@@ -24,9 +24,10 @@ use game_state::message::{ClientMessage, ServerMessage};
 
 use crate::blueprints::EntityKind;
 use crate::infrastructure::net_bridge::{EntityNetMap, NetworkId};
+use crate::simulation::combat::UnitBrain;
 use crate::types::{
-    AllPlayerResources, AttackTarget, Carrying, Faction, Health, MoveTarget, PreferredResource,
-    ResourceType, SimClock, TaskQueue, UnitState,
+    AllPlayerResources, Carrying, Faction, Health, MoveTarget, PreferredResource, ResourceType,
+    SimClock, TaskQueue, UnitState,
 };
 
 use super::matchbox_transport::{broadcast_reliable, send_to_host};
@@ -234,7 +235,7 @@ pub fn compute_world_checksum(
         Option<&Health>,
         Option<&UnitState>,
         Option<&MoveTarget>,
-        Option<&AttackTarget>,
+        Option<&UnitBrain>,
         Option<&Carrying>,
         Option<&TaskQueue>,
         Option<&PreferredResource>,
@@ -332,7 +333,7 @@ struct EntityRecord {
     unit_state_tag: u8,
     move_qx: i32,
     move_qz: i32,
-    attack_target_id: u32,
+    combat_target_id: u32,
     carrying_amount: u32,
     carrying_type: u8,
     queue_current_tag: u8,
@@ -357,7 +358,7 @@ fn snapshot_world(
         Option<&Health>,
         Option<&UnitState>,
         Option<&MoveTarget>,
-        Option<&AttackTarget>,
+        Option<&UnitBrain>,
         Option<&Carrying>,
         Option<&TaskQueue>,
         Option<&PreferredResource>,
@@ -376,15 +377,16 @@ fn snapshot_world(
                 health,
                 unit_state,
                 move_target,
-                attack_target,
+                brain,
                 carrying,
                 task_queue,
                 preferred_resource,
             )| {
             let pos = transform.translation;
             let move_target = move_target.map(|target| target.0);
-            let attack_target_id = attack_target
-                .and_then(|target| net_map.and_then(|map| map.to_net.get(&target.0).copied()))
+            let combat_target_id = brain
+                .and_then(|brain| brain.target)
+                .and_then(|target| net_map.and_then(|map| map.to_net.get(&target).copied()))
                 .unwrap_or(u32::MAX);
             let (carrying_amount, carrying_type) = carrying
                 .map(|carrying| {
@@ -416,7 +418,7 @@ fn snapshot_world(
                 unit_state_tag: unit_state.map(unit_state_tag).unwrap_or(u8::MAX),
                 move_qx: move_target.map(|pos| quantize(pos.x)).unwrap_or(i32::MIN),
                 move_qz: move_target.map(|pos| quantize(pos.z)).unwrap_or(i32::MIN),
-                attack_target_id,
+                combat_target_id,
                 carrying_amount,
                 carrying_type,
                 queue_current_tag,
@@ -467,7 +469,7 @@ fn hash_snapshot(snapshot: &WorldSnapshot) -> u64 {
         hasher.write_u8(rec.unit_state_tag);
         hasher.write_i32(rec.move_qx);
         hasher.write_i32(rec.move_qz);
-        hasher.write_u32(rec.attack_target_id);
+        hasher.write_u32(rec.combat_target_id);
         hasher.write_u32(rec.carrying_amount);
         hasher.write_u8(rec.carrying_type);
         hasher.write_u8(rec.queue_current_tag);
@@ -534,7 +536,7 @@ fn render_snapshot(
             rec.net_id,
             rec.move_qx,
             rec.move_qz,
-            rec.attack_target_id,
+            rec.combat_target_id,
             rec.carrying_amount,
             rec.carrying_type,
             rec.queue_current_tag,

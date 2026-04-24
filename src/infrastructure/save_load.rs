@@ -716,28 +716,26 @@ fn saved_to_unit_state(state: &SavedUnitState, id_map: &HashMap<u32, Entity>) ->
     }
 }
 
-fn combat_intent_to_saved(
-    intent: &CombatIntent,
+fn brain_order_to_saved(
+    brain: &crate::simulation::combat::UnitBrain,
     entity_map: &HashMap<Entity, u32>,
 ) -> SavedCombatIntent {
-    match intent {
-        CombatIntent::None => SavedCombatIntent::None,
-        CombatIntent::Move(v) => SavedCombatIntent::Move(vec3_to_arr(*v)),
-        CombatIntent::Attack(e, src) => SavedCombatIntent::Attack(
-            *entity_map.get(e).unwrap_or(&u32::MAX),
-            match src {
-                IntentSource::Manual => 0,
-                IntentSource::Auto => 1,
-            },
-        ),
-        CombatIntent::AttackMove(v, src) => SavedCombatIntent::AttackMove(
-            vec3_to_arr(*v),
-            match src {
-                IntentSource::Manual => 0,
-                IntentSource::Auto => 1,
-            },
-        ),
-        CombatIntent::Hold => SavedCombatIntent::Hold,
+    let source = match brain.order_source {
+        OrderSource::Manual => 0,
+        OrderSource::Auto | OrderSource::Retaliate => 1,
+    };
+    match &brain.order {
+        crate::simulation::combat::Order::Stop => SavedCombatIntent::None,
+        crate::simulation::combat::Order::Move(v) => SavedCombatIntent::Move(vec3_to_arr(*v)),
+        crate::simulation::combat::Order::Attack(e) => {
+            SavedCombatIntent::Attack(*entity_map.get(e).unwrap_or(&u32::MAX), source)
+        }
+        crate::simulation::combat::Order::AttackMove(v) => {
+            SavedCombatIntent::AttackMove(vec3_to_arr(*v), source)
+        }
+        crate::simulation::combat::Order::Hold => SavedCombatIntent::Hold,
+        crate::simulation::combat::Order::Cast(_, _)
+        | crate::simulation::combat::Order::Follow(_) => SavedCombatIntent::None,
     }
 }
 
@@ -747,10 +745,6 @@ fn veterancy_to_u8(v: &VeterancyLevel) -> u8 {
         VeterancyLevel::Veteran => 1,
         VeterancyLevel::Elite => 2,
     }
-}
-
-fn ability_id_to_u8(a: &AbilityId) -> u8 {
-    a.to_u8()
 }
 
 fn u8_to_ability_id(v: u8) -> AbilityId {
@@ -928,7 +922,7 @@ fn collect_base_fields(world: &World, entity: Entity, save_id: u32) -> Option<Ba
 fn collect_combat_components(
     world: &World,
     entity: Entity,
-    emap: &HashMap<Entity, u32>,
+    _emap: &HashMap<Entity, u32>,
 ) -> (f32, f32, Option<[f32; 2]>, Option<f32>, Option<u32>) {
     let attack_damage = world
         .get::<AttackDamage>(entity)
@@ -939,15 +933,12 @@ fn collect_combat_components(
         .get::<AttackCooldown>(entity)
         .map(|c| [c.ready_in, c.interval]);
     let aggro_range = world.get::<AggroRange>(entity).map(|a| a.0);
-    let attack_target_id = world
-        .get::<AttackTarget>(entity)
-        .and_then(|t| emap.get(&t.0).copied());
     (
         attack_damage,
         attack_range,
         attack_cooldown,
         aggro_range,
-        attack_target_id,
+        None,
     )
 }
 
@@ -1257,7 +1248,10 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                 experience: get!(entity, Experience)
                     .map(|e| [e.current, veterancy_to_u8(&e.level) as u32]),
                 move_target: get!(entity, MoveTarget).map(|m| vec3_to_arr(m.0)),
-                attack_target_id: atk_target,
+                attack_target_id: get!(entity, crate::simulation::combat::UnitBrain)
+                    .and_then(|brain| brain.target)
+                    .and_then(|target| emap.get(&target).copied())
+                    .or(atk_target),
                 attack_damage: atk_dmg,
                 attack_range: atk_rng,
                 attack_cooldown: atk_cd,
@@ -1267,22 +1261,30 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                 gather_speed: get!(entity, GatherSpeed).map(|g| g.0),
                 carry_capacity: get!(entity, CarryCapacity).map(|c| c.0),
                 gather_accumulator: get!(entity, GatherAccumulator).map(|g| g.0).unwrap_or(0.0),
-                abilities: get!(entity, UnitAbilities)
-                    .map(|a| a.abilities.iter().map(ability_id_to_u8).collect())
+                abilities: get!(entity, crate::simulation::combat::Abilities)
+                    .map(|a| {
+                        a.castable
+                            .iter()
+                            .filter_map(AbilityId::from_combat_id)
+                            .map(|id| id.to_u8())
+                            .collect()
+                    })
                     .unwrap_or_default(),
-                ability_cooldowns: get!(entity, UnitAbilities)
+                ability_cooldowns: get!(entity, crate::simulation::combat::Abilities)
                     .map(|a| {
                         a.cooldowns
                             .iter()
-                            .map(|(id, cd)| (ability_id_to_u8(id), *cd))
+                            .filter_map(|(id, cd)| {
+                                AbilityId::from_combat_id(id).map(|mapped| (mapped.to_u8(), *cd))
+                            })
                             .collect()
                     })
                     .unwrap_or_default(),
                 display_name: get!(entity, UnitDisplayName)
                     .map(|d| d.0.clone())
                     .unwrap_or_default(),
-                combat_intent: get!(entity, CombatIntent)
-                    .map(|c| combat_intent_to_saved(c, emap))
+                combat_intent: get!(entity, crate::simulation::combat::UnitBrain)
+                    .map(|brain| brain_order_to_saved(brain, emap))
                     .unwrap_or(SavedCombatIntent::None),
                 task_source: match get!(entity, TaskSource) {
                     Some(TaskSource::Manual) => 0,
@@ -1390,7 +1392,7 @@ fn handle_save_game_event(world: &mut World, event_label: Option<String>) {
                 attack_range: get!(entity, AttackRange).map(|r| r.0),
                 attack_cooldown: get!(entity, AttackCooldown).map(|c| [c.ready_in, c.interval]),
                 aggro_range: get!(entity, AggroRange).map(|a| a.0),
-                attack_target_id: get!(entity, AttackTarget).and_then(|t| emap.get(&t.0).copied()),
+                attack_target_id: None,
                 tower_auto_attack: get!(entity, TowerAutoAttackEnabled).map(|t| t.0),
                 paused: world.get::<BuildingPaused>(entity).is_some(),
             }),
@@ -1993,18 +1995,27 @@ pub fn load_saved_game(
                 commands
                     .entity(e)
                     .insert(GatherAccumulator(unit_data.gather_accumulator));
-                if !unit_data.abilities.is_empty() {
-                    commands.entity(e).insert(UnitAbilities {
-                        abilities: unit_data
-                            .abilities
-                            .iter()
-                            .map(|a| u8_to_ability_id(*a))
-                            .collect(),
-                        cooldowns: unit_data
+                if !unit_data.abilities.is_empty() || !unit_data.ability_cooldowns.is_empty() {
+                    let castable: Vec<crate::simulation::combat::AbilityId> = unit_data
+                        .abilities
+                        .iter()
+                        .map(|a| u8_to_ability_id(*a).combat_id())
+                        .collect();
+                    let cooldowns: std::collections::BTreeMap<crate::simulation::combat::AbilityId, f32> =
+                        unit_data
                             .ability_cooldowns
                             .iter()
-                            .map(|(a, cd)| (u8_to_ability_id(*a), *cd))
-                            .collect(),
+                            .map(|(a, cd)| (u8_to_ability_id(*a).combat_id(), *cd))
+                            .collect();
+                    commands.queue(move |world: &mut World| {
+                        if let Some(mut abilities) =
+                            world.get_mut::<crate::simulation::combat::Abilities>(e)
+                        {
+                            if !castable.is_empty() {
+                                abilities.castable = castable.clone();
+                            }
+                            abilities.cooldowns = cooldowns.clone();
+                        }
                     });
                 }
                 if !unit_data.display_name.is_empty() {
@@ -2361,13 +2372,6 @@ pub fn load_saved_game(
                 let state = saved_to_unit_state(&unit_data.state, &id_to_entity);
                 commands.entity(entity).insert(state);
 
-                // Resolve attack target
-                if let Some(target_id) = unit_data.attack_target_id {
-                    if let Some(&target) = id_to_entity.get(&target_id) {
-                        commands.entity(entity).insert(AttackTarget(target));
-                    }
-                }
-
                 // Resolve building assignment
                 if let Some(bld_id) = unit_data.building_assignment_id {
                     if let Some(&bld) = id_to_entity.get(&bld_id) {
@@ -2375,42 +2379,88 @@ pub fn load_saved_game(
                     }
                 }
 
-                // Resolve combat intent
-                match &unit_data.combat_intent {
-                    SavedCombatIntent::Attack(target_id, src) => {
-                        if let Some(&target) = id_to_entity.get(target_id) {
-                            let source = if *src == 0 {
-                                IntentSource::Manual
-                            } else {
-                                IntentSource::Auto
-                            };
-                            commands
-                                .entity(entity)
-                                .insert(CombatIntent::Attack(target, source));
-                        }
-                    }
+                let legacy_target = unit_data
+                    .attack_target_id
+                    .and_then(|target_id| id_to_entity.get(&target_id).copied());
+                let (order, order_source, target, anchor) = match &unit_data.combat_intent {
+                    SavedCombatIntent::Attack(target_id, src) => id_to_entity
+                        .get(target_id)
+                        .copied()
+                        .map(|target| {
+                            (
+                                crate::simulation::combat::Order::Attack(target),
+                                if *src == 0 {
+                                    OrderSource::Manual
+                                } else {
+                                    OrderSource::Auto
+                                },
+                                Some(target),
+                                None,
+                            )
+                        })
+                        .unwrap_or((
+                            crate::simulation::combat::Order::Stop,
+                            OrderSource::Auto,
+                            None,
+                            None,
+                        )),
                     SavedCombatIntent::Move(v) => {
-                        commands
-                            .entity(entity)
-                            .insert(CombatIntent::Move(arr_to_vec3(*v)));
+                        let pos = arr_to_vec3(*v);
+                        (
+                            crate::simulation::combat::Order::Move(pos),
+                            OrderSource::Manual,
+                            None,
+                            Some(pos),
+                        )
                     }
                     SavedCombatIntent::AttackMove(v, src) => {
-                        let source = if *src == 0 {
-                            IntentSource::Manual
-                        } else {
-                            IntentSource::Auto
-                        };
-                        commands
-                            .entity(entity)
-                            .insert(CombatIntent::AttackMove(arr_to_vec3(*v), source));
+                        let pos = arr_to_vec3(*v);
+                        (
+                            crate::simulation::combat::Order::AttackMove(pos),
+                            if *src == 0 {
+                                OrderSource::Manual
+                            } else {
+                                OrderSource::Auto
+                            },
+                            legacy_target,
+                            Some(pos),
+                        )
                     }
-                    SavedCombatIntent::Hold => {
-                        commands.entity(entity).insert(CombatIntent::Hold);
-                    }
-                    SavedCombatIntent::None => {
-                        commands.entity(entity).insert(CombatIntent::None);
-                    }
-                }
+                    SavedCombatIntent::Hold => (
+                        crate::simulation::combat::Order::Hold,
+                        OrderSource::Manual,
+                        legacy_target,
+                        None,
+                    ),
+                    SavedCombatIntent::None => legacy_target
+                        .map(|target| {
+                            (
+                                crate::simulation::combat::Order::Attack(target),
+                                OrderSource::Auto,
+                                Some(target),
+                                None,
+                            )
+                        })
+                        .unwrap_or((
+                            crate::simulation::combat::Order::Stop,
+                            OrderSource::Auto,
+                            None,
+                            None,
+                        )),
+                };
+                commands.queue(move |world: &mut World| {
+                    let Some(mut brain) =
+                        world.get_mut::<crate::simulation::combat::UnitBrain>(entity)
+                    else {
+                        return;
+                    };
+                    brain.order = order;
+                    brain.order_source = order_source;
+                    brain.target = target;
+                    brain.anchor = anchor;
+                    brain.target_lock_until = 0.0;
+                    brain.issued_at = 0.0;
+                });
             }
             SavedEntityType::Building(bld_data) => {
                 // Resolve assigned workers
@@ -2423,23 +2473,11 @@ pub fn load_saved_game(
                     commands.entity(entity).insert(AssignedWorkers { workers });
                 }
 
-                // Resolve attack target
-                if let Some(target_id) = bld_data.attack_target_id {
-                    if let Some(&target) = id_to_entity.get(&target_id) {
-                        commands.entity(entity).insert(AttackTarget(target));
-                    }
-                }
             }
             SavedEntityType::Mob(mob_data) => {
                 if let Some(ref saved_state) = mob_data.state {
                     let state = saved_to_unit_state(saved_state, &id_to_entity);
                     commands.entity(entity).insert(state);
-                }
-
-                if let Some(target_id) = mob_data.attack_target_id {
-                    if let Some(&target) = id_to_entity.get(&target_id) {
-                        commands.entity(entity).insert(AttackTarget(target));
-                    }
                 }
             }
             _ => {}

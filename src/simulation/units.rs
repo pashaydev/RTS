@@ -10,6 +10,7 @@ use crate::blueprints::{
 };
 use crate::infrastructure::net_bridge::NetworkId;
 use crate::presentation::model_assets::UnitModelAssets;
+use crate::simulation::combat::UnitBrain;
 use crate::types::*;
 use crate::world::ground::HeightMap;
 use crate::world::pathfinding::{NavDirect, NavGrid, NavPath, NavPending};
@@ -194,7 +195,7 @@ fn spawn_all_players(
 /// don't make assigned workers behave like fully idle bodies in avoidance.
 fn target_building(
     state: &UnitState,
-    attack_target: Option<&AttackTarget>,
+    combat_target: Option<Entity>,
     building_assignment: Option<&BuildingAssignment>,
 ) -> Option<Entity> {
     match state {
@@ -205,9 +206,7 @@ fn target_building(
         UnitState::WaitingForDepot { .. } => None,
         UnitState::AssignedGathering { building, .. } => Some(*building),
         UnitState::Attacking(e) => Some(*e),
-        _ => attack_target
-            .map(|at| at.0)
-            .or_else(|| building_assignment.map(|assignment| assignment.0)),
+        _ => combat_target.or_else(|| building_assignment.map(|assignment| assignment.0)),
     }
 }
 
@@ -224,7 +223,7 @@ fn steer_avoidance(
             Option<&NetworkId>,
             Option<&MoveTarget>,
             Option<&UnitState>,
-            Option<&AttackTarget>,
+            Option<&UnitBrain>,
             Option<&BuildingAssignment>,
             &Faction,
             Option<&mut JustArrived>,
@@ -257,7 +256,7 @@ fn steer_avoidance(
         network_id,
         move_target,
         unit_state,
-        attack_target,
+        brain,
         building_assignment,
         _faction,
         mut just_arrived,
@@ -292,7 +291,7 @@ fn steer_avoidance(
 
         // Determine which building (if any) this unit is trying to reach
         let my_target_building = unit_state
-            .map(|s| target_building(s, attack_target, building_assignment))
+            .map(|s| target_building(s, brain.and_then(|brain| brain.target), building_assignment))
             .unwrap_or(None);
 
         // ── Unit-to-unit avoidance ──
@@ -487,7 +486,6 @@ fn move_units(
             Has<Unit>,
             Option<&Carrying>,
             Option<&CarryCapacity>,
-            Option<&AttackTarget>,
             Option<&mut NavPath>,
             Has<NavPending>,
             Option<&StatusEffects>,
@@ -508,7 +506,6 @@ fn move_units(
         is_unit,
         carrying,
         capacity,
-        attack_target,
         nav_path,
         is_pending,
         opt_status,
@@ -635,7 +632,10 @@ fn move_units(
             let move_dir = flat_dir.normalize();
             let step = move_dir * effective_speed;
             let candidate = transform.translation + step;
-            let ignore_wall = attack_target.map(|at| at.0);
+            let ignore_wall = match opt_unit_state {
+                Some(UnitState::Attacking(target)) => Some(*target),
+                _ => None,
+            };
 
             // If the unit is already inside a blocked cell, relax NavGrid checks
             // so it can walk out rather than being stuck forever.

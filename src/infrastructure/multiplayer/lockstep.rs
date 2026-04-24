@@ -239,7 +239,7 @@ pub struct LockstepApplyContext<'w, 's> {
     >,
     carrying: Query<'w, 's, &'static mut Carrying, With<Unit>>,
     health: Query<'w, 's, &'static mut Health, With<Unit>>,
-    unit_abilities: Query<'w, 's, &'static mut UnitAbilities, With<Unit>>,
+    combat_abilities: Query<'w, 's, &'static crate::simulation::combat::Abilities, With<Unit>>,
     worker_assignments: Query<'w, 's, &'static BuildingAssignment, With<Unit>>,
     task_queues: Query<'w, 's, &'static mut TaskQueue, With<Unit>>,
     training_buildings: Query<
@@ -266,6 +266,21 @@ pub struct LockstepApplyContext<'w, 's> {
     >,
     building_state: Query<'w, 's, (&'static Faction, Has<BuildingPaused>), With<Building>>,
     tower_auto_attack: Query<'w, 's, &'static mut TowerAutoAttackEnabled, With<Building>>,
+    ability_registry: Res<'w, crate::simulation::combat::AbilityRegistry>,
+    ability_targets: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static GlobalTransform,
+            Option<&'static Faction>,
+            Has<Dying>,
+            Has<Unit>,
+            Has<Building>,
+            Has<Mob>,
+            Option<&'static PickRadius>,
+        ),
+    >,
     obstacle_grid: Res<'w, ObstacleGrid>,
     pending_lockstep_builds: ResMut<'w, PendingLockstepBuilds>,
 }
@@ -353,7 +368,7 @@ pub fn lockstep_apply_tick_inputs(
             &mut unit_states,
             &mut exec.carrying,
             &mut exec.health,
-            &mut exec.unit_abilities,
+            &exec.combat_abilities,
             &exec.worker_assignments,
             &mut exec.task_queues,
             &mut exec.training_buildings,
@@ -365,6 +380,8 @@ pub fn lockstep_apply_tick_inputs(
             &workers,
             &exec.obstacle_grid,
             &exec.registry,
+            &exec.ability_registry,
+            &exec.ability_targets,
             &mut exec.pending_lockstep_builds,
         );
     }

@@ -585,8 +585,8 @@ fn pick_perimeter_spawn(
 /// symmetric FFA maps where bases are equidistant from mob spawn points)
 /// would resolve to whichever the local archetype layout visits first —
 /// host and client could pick different bases, immediately desyncing every
-/// mob's `MobEngagement.primary` (and its downstream `AttackTarget`,
-/// `Order::Attack`, etc., which are all checksummed).
+/// mob's `MobEngagement.primary` and downstream combat order state, which are
+/// all checksummed.
 ///
 /// We quantize the score to 1e-3 so float ties round to the same bucket
 /// on every peer, and use `NetworkId` as the secondary key so any actual

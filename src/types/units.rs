@@ -1,7 +1,7 @@
 //! Unit types: state machines, abilities, formations, veterancy, movement.
 
 use bevy::prelude::*;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use super::app::Faction;
 use super::economy::{AssignedPhase, ResourceType};
@@ -475,12 +475,36 @@ impl AbilityId {
 
     pub fn targeting(self) -> AbilityTargeting {
         match self {
-            Self::KnightCharge => AbilityTargeting::PointTarget,
+            Self::KnightCharge => AbilityTargeting::UnitTarget,
             Self::MageFireball => AbilityTargeting::PointTarget,
             Self::MageFrostNova => AbilityTargeting::NoTarget,
             Self::PriestHeal => AbilityTargeting::UnitTarget,
             Self::PriestHolySmite => AbilityTargeting::UnitTarget,
             Self::CatapultAoeBoulder => AbilityTargeting::PointTarget,
+        }
+    }
+
+    pub fn combat_id(self) -> crate::simulation::combat::AbilityId {
+        let id = match self {
+            Self::KnightCharge => "knight_charge",
+            Self::MageFireball => "mage_fireball",
+            Self::MageFrostNova => "mage_frost_nova",
+            Self::PriestHeal => "priest_heal",
+            Self::PriestHolySmite => "priest_smite",
+            Self::CatapultAoeBoulder => "auto_catapult_aoe",
+        };
+        crate::simulation::combat::AbilityId::new(id)
+    }
+
+    pub fn from_combat_id(id: &crate::simulation::combat::AbilityId) -> Option<Self> {
+        match id.as_str() {
+            "knight_charge" => Some(Self::KnightCharge),
+            "mage_fireball" => Some(Self::MageFireball),
+            "mage_frost_nova" => Some(Self::MageFrostNova),
+            "priest_heal" => Some(Self::PriestHeal),
+            "priest_smite" => Some(Self::PriestHolySmite),
+            "auto_catapult_aoe" => Some(Self::CatapultAoeBoulder),
+            _ => None,
         }
     }
 
@@ -500,42 +524,6 @@ pub enum AbilityTargeting {
     NoTarget,
     PointTarget,
     UnitTarget,
-}
-
-/// Component: tracks abilities and their cooldowns for a unit.
-#[derive(Component)]
-pub struct UnitAbilities {
-    pub abilities: Vec<AbilityId>,
-    pub cooldowns: HashMap<AbilityId, f32>,
-}
-
-impl UnitAbilities {
-    pub fn new(abilities: Vec<AbilityId>) -> Self {
-        let cooldowns = abilities.iter().map(|&id| (id, 0.0_f32)).collect();
-        Self {
-            abilities,
-            cooldowns,
-        }
-    }
-
-    pub fn is_ready(&self, id: AbilityId) -> bool {
-        self.cooldowns.get(&id).map_or(false, |&cd| cd <= 0.0)
-    }
-
-    pub fn trigger_cooldown(&mut self, id: AbilityId) {
-        if let Some(cd) = self.cooldowns.get_mut(&id) {
-            *cd = id.cooldown_secs();
-        }
-    }
-}
-
-/// Component: marks a unit as currently casting an ability.
-#[derive(Component)]
-pub struct CastingAbility {
-    pub ability: AbilityId,
-    pub target_pos: Option<Vec3>,
-    pub target_entity: Option<Entity>,
-    pub cast_timer: Timer,
 }
 
 /// Temporary bonus from Knight Charge — next attack deals 2x damage.

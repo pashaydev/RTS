@@ -1004,7 +1004,6 @@ pub fn handle_queue_cancel_buttons(
                 commands
                     .entity(button.unit)
                     .remove::<MoveTarget>()
-                    .remove::<AttackTarget>()
                     .remove::<LeashOrigin>();
             } else if let Some(task_id) = button.task_id {
                 queue.remove_by_id(task_id);

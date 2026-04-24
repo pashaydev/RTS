@@ -40,8 +40,9 @@ mod targeting;
 // All functions deferred-mutate `UnitBrain` via `Commands::queue`.
 pub use intents::{
     apply_auto_attack_intent, apply_auto_move_intent, apply_manual_attack_intent,
-    apply_manual_attack_move_intent, apply_manual_hold_intent, apply_manual_move_intent,
-    clear_combat_intent, reset_combat_state, set_auto_target, CombatBudgetState,
+    apply_manual_attack_move_intent, apply_manual_cast_intent, apply_manual_hold_intent,
+    apply_manual_move_intent, clear_combat_intent, reset_combat_state, set_auto_target,
+    CombatBudgetState,
     CombatIntentsPlugin,
 };
 

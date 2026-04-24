@@ -1411,7 +1411,6 @@ pub(crate) fn confirm_placement(
     commands
         .entity(worker_entity)
         .remove::<MoveTarget>()
-        .remove::<AttackTarget>()
         .insert(UnitState::MovingToPlot(build_pos))
         .insert(TaskSource::Manual)
         .insert(PendingBuildOrder {
@@ -1563,7 +1562,6 @@ pub(crate) fn confirm_wall_plot(
         let target_building = spawned_entities[0];
         commands
             .entity(worker_entity)
-            .remove::<AttackTarget>()
             .remove::<MoveTarget>()
             .insert(UnitState::MovingToBuild(target_building))
             .insert(TaskSource::Manual);
@@ -1703,7 +1701,6 @@ pub(crate) fn confirm_gate_plot(
     crate::simulation::combat::reset_combat_state(&mut commands, worker_entity);
     commands
         .entity(worker_entity)
-        .remove::<AttackTarget>()
         .remove::<MoveTarget>()
         .insert(UnitState::MovingToBuild(segment_entity))
         .insert(TaskSource::Manual);

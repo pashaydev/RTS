@@ -14,7 +14,7 @@ use crate::types::{
     CombatBudget, CombatStatsDebug, CombatTuning, MeleeSlotCache, OrderSource, TaskSource,
 };
 
-use super::brain::{BrainState, Order, UnitBrain};
+use super::brain::{BrainState, CastTarget, Order, UnitBrain};
 
 /// Per-tick budget counters used by AI/combat systems to cap re-path & slot refresh work.
 #[derive(Resource, Default)]
@@ -78,12 +78,10 @@ fn queue_set_order(
         brain.order = order_for_closure;
         brain.order_source = source;
         brain.issued_at = issue_time;
-        if let Some(t) = target {
-            brain.target = Some(t);
+        brain.target = target;
+        brain.anchor = anchor;
+        if target.is_some() {
             brain.target_lock_until = issue_time + lock_secs;
-        }
-        if anchor.is_some() {
-            brain.anchor = anchor;
         }
         // resolve_orders recomputes BrainState from Order; for stop/hold we
         // short-circuit to Idle so in-flight animation doesn't linger.
@@ -123,6 +121,24 @@ pub fn apply_manual_attack_intent(
         commands,
         entity,
         Order::Attack(target),
+        OrderSource::Manual,
+        issue_time,
+        DEFAULT_MANUAL_TARGET_LOCK_SECS,
+    );
+}
+
+pub fn apply_manual_cast_intent(
+    commands: &mut Commands,
+    entity: Entity,
+    ability: super::ability::AbilityId,
+    target: CastTarget,
+    issue_time: f64,
+) {
+    commands.entity(entity).insert(TaskSource::Manual);
+    queue_set_order(
+        commands,
+        entity,
+        Order::Cast(ability, target),
         OrderSource::Manual,
         issue_time,
         DEFAULT_MANUAL_TARGET_LOCK_SECS,

@@ -15,12 +15,13 @@ use bevy::prelude::*;
 use crate::blueprints::{spawn_from_blueprint, BlueprintRegistry, EntityKind, EntityVisualCache};
 use crate::presentation::camera::CameraPanTuning;
 use crate::presentation::model_assets::{BuildingModelAssets, UnitModelAssets};
+use crate::simulation::combat::UnitBrain;
 use crate::simulation::items::{ItemKind, SpawnItemPickup, UnitInventory};
 use crate::types::{
     AiControlledFactions, AiFactionSettings, AllPlayerResources, AllyNotifications, AllyNotifyKind,
-    AppState, AttackTarget, CullReason, Faction, FrustumCulled, FrustumDebugMode, GameFlowSet,
-    GameSetupConfig, GameWorld, GrassDebugSettings, GrassRebuildState, Health, MoveTarget,
-    NightSpawnIntensity, ResourceType, RtsCamera, Selected, UiPressActive, UnitSpeed,
+    AppState, CullReason, Faction, FrustumCulled, FrustumDebugMode, GameFlowSet, GameSetupConfig,
+    GameWorld, GrassDebugSettings, GrassRebuildState, Health, MoveTarget, NightSpawnIntensity,
+    ResourceType, RtsCamera, Selected, UiPressActive, UnitSpeed,
 };
 use crate::world::fog::FogTweakSettings;
 use crate::world::ground::HeightMap;
@@ -1290,7 +1291,7 @@ fn sync_debug_flow_tweaks(
     path_queue: Option<Res<PathRequestQueue>>,
     selected_units: Query<Entity, (With<Selected>, With<crate::types::Unit>)>,
     move_targets: Query<Entity, With<MoveTarget>>,
-    attack_targets: Query<Entity, With<AttackTarget>>,
+    brains: Query<&UnitBrain>,
 ) {
     tweaks.set_readonly_if_changed(
         FLOW_FOLDER,
@@ -1310,7 +1311,11 @@ fn sync_debug_flow_tweaks(
     tweaks.set_readonly_if_changed(
         FLOW_FOLDER,
         "Attack Targets",
-        &attack_targets.iter().count().to_string(),
+        &brains
+            .iter()
+            .filter(|brain| brain.target.is_some())
+            .count()
+            .to_string(),
     );
     tweaks.set_readonly_if_changed(
         FLOW_FOLDER,

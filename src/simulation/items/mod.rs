@@ -18,7 +18,7 @@ use crate::blueprints::EntityKind;
 use crate::simulation::combat::{apply_manual_move_intent, clear_combat_intent};
 use crate::simulation::selection::SelectionSet;
 use crate::types::{
-    AllyNotifications, AllyNotifyKind, AppState, AttackTarget, Faction, GameFlowSet, Hovered,
+    AllyNotifications, AllyNotifyKind, AppState, Faction, GameFlowSet, Hovered,
     MoveTarget, PickRadius, RtsCamera, TaskSource, Unit, UnitState,
 };
 
@@ -606,7 +606,6 @@ fn collect_item_pickups(
                         MoveTarget(ground_target),
                         UnitState::Moving(ground_target),
                     ));
-                    commands.entity(unit).remove::<AttackTarget>();
                     *state = UnitState::Moving(ground_target);
                     *source = TaskSource::Manual;
                     continue;
@@ -685,7 +684,6 @@ fn resolve_pending_item_pickups(
                         time.elapsed_secs_f64(),
                     );
                     commands.entity(unit).insert(MoveTarget(ground_target));
-                    commands.entity(unit).remove::<AttackTarget>();
                     *state = UnitState::Moving(ground_target);
                     *source = TaskSource::Manual;
                 }

@@ -281,7 +281,6 @@ fn derive_impostor_state(
     unit_state: Option<&UnitState>,
     health: Option<&Health>,
     brain: Option<&crate::simulation::combat::UnitBrain>,
-    attack_target: Option<&AttackTarget>,
     move_target: Option<&MoveTarget>,
     smoothing: Option<&MovementSmoothing>,
     unit_speed: Option<&UnitSpeed>,
@@ -297,8 +296,17 @@ fn derive_impostor_state(
 
     if matches!(
         brain_state,
-        Some(BrainState::CastPrep | BrainState::Channeling | BrainState::Windup | BrainState::Impact)
-    ) || attack_target.is_some()
+        Some(
+            BrainState::CastPrep
+                | BrainState::Channeling
+                | BrainState::Windup
+                | BrainState::Impact
+                | BrainState::Recovery
+        )
+    ) || matches!(brain_state, Some(BrainState::InRange))
+        && brain_target.is_some()
+        && target_exists
+        && move_target.is_none()
     {
         return ImpostorAnimState::Attack;
     }
@@ -390,7 +398,6 @@ pub fn impostor_sync_system(
         Option<&UnitState>,
         Option<&Health>,
         Option<&crate::simulation::combat::UnitBrain>,
-        Option<&AttackTarget>,
         Option<&MoveTarget>,
         Option<&MovementSmoothing>,
         Option<&MobTier>,
@@ -408,7 +415,6 @@ pub fn impostor_sync_system(
         unit_state,
         health,
         brain,
-        attack,
         move_target,
         smoothing,
         opt_tier,
@@ -438,7 +444,6 @@ pub fn impostor_sync_system(
             unit_state,
             health,
             brain,
-            attack,
             move_target,
             smoothing,
             unit_speed,
