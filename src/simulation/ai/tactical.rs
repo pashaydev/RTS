@@ -1,11 +1,13 @@
 //! AI fast-response layer: threat detection, defense coordination,
 //! scouting, and enemy intel tracking between strategy ticks.
 
+use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
 use bevy::time::Fixed;
 use std::collections::HashSet;
 
 use crate::blueprints::EntityKind;
+use crate::simulation::mobs::NightWaveState;
 use crate::types::*;
 use crate::world::spatial::SpatialHashGrid;
 
@@ -324,5 +326,61 @@ fn defend_ally_base(
                 }
             }
         }
+    }
+}
+
+/// Listens for Dusk/Dawn and sets `wave_counter_bias` on all AI brains based
+/// on the composition of the next incoming night wave.
+///
+/// At Dusk: inspect `NightWaveState.queued` (already deterministically seeded
+/// in `mobs::on_dusk_compose_wave`) and categorize the threat.
+/// At Dawn: clear the bias so day-time composition reverts to personality defaults.
+pub fn ai_wave_counter_prep(
+    mut ai_state: ResMut<AiState>,
+    wave_state: Res<NightWaveState>,
+    mut dusk: MessageReader<DuskBegan>,
+    mut dawn: MessageReader<DawnBegan>,
+) {
+    let dusk_fired = dusk.read().count() > 0;
+    let dawn_fired = dawn.read().count() > 0;
+
+    if dusk_fired {
+        let bias = wave_state
+            .queued
+            .as_ref()
+            .map(|q| classify_wave(&q.tier_order))
+            .unwrap_or(WaveCounterBias::Runner);
+        for brain in ai_state.factions.values_mut() {
+            brain.wave_counter_bias = Some(bias);
+        }
+    }
+
+    if dawn_fired {
+        for brain in ai_state.factions.values_mut() {
+            brain.wave_counter_bias = None;
+        }
+    }
+}
+
+fn classify_wave(tier_order: &[crate::types::MobTier]) -> WaveCounterBias {
+    let total = tier_order.len() as u32;
+    if total == 0 {
+        return WaveCounterBias::Runner;
+    }
+    let veterans = tier_order
+        .iter()
+        .filter(|t| matches!(t, crate::types::MobTier::Veteran))
+        .count() as u32;
+    let champions = tier_order
+        .iter()
+        .filter(|t| matches!(t, crate::types::MobTier::Champion))
+        .count() as u32;
+
+    if champions * 4 >= total {
+        WaveCounterBias::Champion
+    } else if (veterans + champions) * 2 >= total {
+        WaveCounterBias::Armored
+    } else {
+        WaveCounterBias::Runner
     }
 }

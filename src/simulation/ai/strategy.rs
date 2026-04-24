@@ -6,11 +6,15 @@ use bevy::time::Fixed;
 use std::collections::HashMap;
 
 use crate::blueprints::EntityKind;
+use crate::simulation::ages::{Age, FactionAges};
 use crate::types::*;
 
 use super::helpers::push_if_missing;
 use super::types::*;
 use super::AiWorldSnapshot;
+
+/// How long a `TimedPush` posture lasts before reverting to normal strategy.
+const TIMED_PUSH_DURATION: f32 = 60.0;
 
 // ════════════════════════════════════════════════════════════════════
 // System 1: Strategy — State machine transitions & build queue planning
@@ -26,6 +30,7 @@ pub fn ai_strategy_system(
     snapshot: Res<AiWorldSnapshot>,
     base_state: Res<FactionBaseState>,
     all_completed: Res<AllCompletedBuildings>,
+    faction_ages: Res<FactionAges>,
     buildings_q: Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
     training_queues_q: Query<(&Faction, &TrainingQueue), With<Building>>,
 ) {
@@ -74,6 +79,28 @@ pub fn ai_strategy_system(
         }
         brain.strategy_timer = brain.effective_tick(STRATEGY_TICK);
         brain.game_time += STRATEGY_TICK;
+
+        // ── Age II timed push: detect Settlement → Expansion transition ──
+        let current_age = faction_ages.get_age(&faction);
+        let trigger_timed_push = matches!(brain.last_known_age, Some(Age::Settlement))
+            && current_age == Age::Expansion
+            && matches!(
+                brain.personality,
+                AiPersonality::Aggressive | AiPersonality::Balanced
+            )
+            && brain.relation == AiRelation::Enemy
+            && brain.posture != TacticalPosture::Retreating;
+        brain.last_known_age = Some(current_age);
+        if trigger_timed_push {
+            brain.timed_push_until = Some(brain.game_time + TIMED_PUSH_DURATION);
+            brain.build_queue.clear();
+        }
+        // Expire timed push once its window passes.
+        if let Some(until) = brain.timed_push_until {
+            if brain.game_time > until {
+                brain.timed_push_until = None;
+            }
+        }
 
         let Some(faction_snapshot) = snapshot.factions.get(&faction) else {
             continue;
@@ -224,7 +251,10 @@ pub fn ai_strategy_system(
         }
 
         // ── Persistent build queue — only plan when empty or on state change ──
-        if brain.build_queue.is_empty() {
+        // Suppress new builds during a timed push: the AI is committed to
+        // attacking for the duration and should spend production on units,
+        // not buildings.
+        if brain.build_queue.is_empty() && brain.timed_push_until.is_none() {
             if !has_base && brain.top_state == AiTopState::Founding {
                 brain.build_queue.push(BuildRequest {
                     kind: EntityKind::Base,
@@ -257,6 +287,32 @@ pub fn ai_strategy_system(
                 near_position: None,
             });
         }
+
+        // Base-progression: if workers have been dumping cargo because no depot
+        // can accept it, jump a Storage build to the front of the queue. Clears
+        // the flag whether or not we queue it — a Storage already under
+        // construction will complete eventually.
+        if brain.needs_storage {
+            brain.needs_storage = false;
+            let has_storage_completed = all_completed.has(&faction, EntityKind::Storage);
+            let storage_already_planned = brain
+                .build_queue
+                .iter()
+                .any(|req| req.kind == EntityKind::Storage);
+            let storage_in_progress = brain.pending_builds > 0
+                && brain
+                    .build_queue
+                    .iter()
+                    .any(|req| req.kind == EntityKind::Storage);
+            if !has_storage_completed && !storage_already_planned && !storage_in_progress {
+                brain.build_queue.push(BuildRequest {
+                    kind: EntityKind::Storage,
+                    priority: 0,
+                    near_position: None,
+                });
+            }
+        }
+
         brain.build_queue.sort_by_key(|r| r.priority);
 
         // Set resource goal from first build queue item

@@ -80,6 +80,13 @@ impl Plugin for UnitAiPlugin {
                 auto_heal_system
                     .in_set(UnitAiSet::Heal)
                     .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                ai_cast_opportunistic_abilities
+                    .in_set(UnitAiSet::Heal)
+                    .after(auto_heal_system)
+                    .run_if(in_state(AppState::InGame)),
             );
     }
 }
@@ -1213,6 +1220,238 @@ fn auto_heal_system(
                 target_entity: Some(target),
                 cast_timer: Timer::from_seconds(0.3, TimerMode::Once),
             });
+        }
+    }
+}
+
+/// Opportunistic AI ability casting (new pipeline).
+///
+/// Drives Knight Charge / Mage Fireball / Frost Nova / Priest Heal / Priest Smite
+/// for AI-owned units by writing `Order::Cast` on their `UnitBrain`. The existing
+/// `advance_ability_phase` system then handles windup/impact/cooldown.
+///
+/// Unlike `auto_heal_system` (which uses the legacy `UnitAbilities` component),
+/// this operates on the live `Abilities` component attached at spawn time.
+fn ai_cast_opportunistic_abilities(
+    ai_controlled: Res<crate::types::AiControlledFactions>,
+    teams: Res<crate::types::TeamConfig>,
+    registry: Res<crate::simulation::combat::AbilityRegistry>,
+    spatial_grid: Res<SpatialHashGrid>,
+    mut nearby: Local<Vec<(Entity, Vec3)>>,
+    mut casters: Query<(
+        Entity,
+        &Transform,
+        &Faction,
+        &UnitState,
+        &mut crate::simulation::combat::UnitBrain,
+        &crate::simulation::combat::Abilities,
+    )>,
+    other: Query<(&Transform, &Faction, &Health)>,
+) {
+    use crate::simulation::combat::{CastTarget, Order};
+
+    for (entity, tf, faction, state, mut brain, abilities) in &mut casters {
+        // Gate: AI-controlled factions only.
+        if !ai_controlled.factions.contains(faction) {
+            continue;
+        }
+        // Gate: must be in an idle-capable state.
+        if !matches!(
+            state,
+            UnitState::Idle | UnitState::HoldPosition | UnitState::Attacking(_)
+        ) {
+            continue;
+        }
+        // Gate: not already casting / committed / stunned / dying.
+        if brain.is_committed()
+            || brain.is_action_blocked()
+            || brain.active_ability.is_some()
+        {
+            continue;
+        }
+        if abilities.castable.is_empty() {
+            continue;
+        }
+
+        // Iterate castable in stable (insertion) order — deterministic across peers.
+        for ability_id in abilities.castable.iter() {
+            if !abilities.is_ready(ability_id) {
+                continue;
+            }
+            let Some(ability) = registry.get(ability_id) else {
+                continue;
+            };
+            let range = ability.range.max(1.0);
+            let my_pos = tf.translation;
+
+            let cast_target: Option<CastTarget> = match ability_id.as_str() {
+                "knight_charge" => {
+                    spatial_grid.collect_radius_limited(my_pos, range, 16, &mut nearby);
+                    let mut best: Option<(Entity, Vec3, i64)> = None;
+                    for (e, pos) in nearby.iter() {
+                        if *e == entity {
+                            continue;
+                        }
+                        let Ok((_otf, ofaction, ohealth)) = other.get(*e) else {
+                            continue;
+                        };
+                        if !teams.is_hostile(faction, ofaction) {
+                            continue;
+                        }
+                        if ohealth.current <= 0.0 {
+                            continue;
+                        }
+                        let frac = ohealth.current / ohealth.max.max(1.0);
+                        if frac < 0.5 {
+                            continue; // commit to kills, not cleanup
+                        }
+                        let dist_key = ((my_pos.distance(*pos)) * 1000.0) as i64;
+                        let better = match best {
+                            None => true,
+                            Some((_, _, bk)) => dist_key < bk,
+                        };
+                        if better {
+                            best = Some((*e, *pos, dist_key));
+                        }
+                    }
+                    best.map(|(e, _, _)| CastTarget::Entity(e))
+                }
+                "mage_fireball" => {
+                    // Cluster center: pick the hostile with the most hostiles within 4.0u.
+                    spatial_grid.collect_radius_limited(my_pos, range, 24, &mut nearby);
+                    let hostiles: Vec<(Entity, Vec3)> = nearby
+                        .iter()
+                        .filter_map(|(e, pos)| {
+                            if *e == entity {
+                                return None;
+                            }
+                            let (_, ofaction, ohealth) = other.get(*e).ok()?;
+                            if !teams.is_hostile(faction, ofaction) {
+                                return None;
+                            }
+                            if ohealth.current <= 0.0 {
+                                return None;
+                            }
+                            Some((*e, *pos))
+                        })
+                        .collect();
+                    if hostiles.is_empty() {
+                        None
+                    } else {
+                        const CLUSTER_R: f32 = 4.0;
+                        let mut best: Option<(Vec3, u32, (u32, u32, u32))> = None;
+                        for (_, p) in &hostiles {
+                            let count = hostiles
+                                .iter()
+                                .filter(|(_, q)| p.distance(*q) <= CLUSTER_R)
+                                .count() as u32;
+                            if count < 2 {
+                                continue; // don't waste fireball on singles
+                            }
+                            let key = (p.x.to_bits(), p.y.to_bits(), p.z.to_bits());
+                            let better = match best {
+                                None => true,
+                                Some((_, bc, bk)) => count > bc || (count == bc && key < bk),
+                            };
+                            if better {
+                                best = Some((*p, count, key));
+                            }
+                        }
+                        best.map(|(pos, _, _)| CastTarget::Ground(pos))
+                    }
+                }
+                "mage_frost_nova" => {
+                    // Self-cast if 3+ hostiles within 5.0u (effect radius).
+                    const NOVA_R: f32 = 5.0;
+                    spatial_grid.collect_radius_limited(my_pos, NOVA_R, 16, &mut nearby);
+                    let count = nearby
+                        .iter()
+                        .filter(|(e, _)| {
+                            if *e == entity {
+                                return false;
+                            }
+                            let Ok((_, ofaction, ohealth)) = other.get(*e) else {
+                                return false;
+                            };
+                            teams.is_hostile(faction, ofaction) && ohealth.current > 0.0
+                        })
+                        .count();
+                    if count >= 3 {
+                        Some(CastTarget::SelfOnly)
+                    } else {
+                        None
+                    }
+                }
+                "priest_heal" => {
+                    spatial_grid.collect_radius_limited(my_pos, range, 16, &mut nearby);
+                    let mut best: Option<(Entity, f32, (u32, u32, u32))> = None;
+                    for (e, pos) in nearby.iter() {
+                        if *e == entity {
+                            continue;
+                        }
+                        let Ok((_, ofaction, ohealth)) = other.get(*e) else {
+                            continue;
+                        };
+                        if !teams.is_allied(faction, ofaction) {
+                            continue;
+                        }
+                        if ohealth.current <= 0.0 {
+                            continue;
+                        }
+                        let frac = ohealth.current / ohealth.max.max(1.0);
+                        if frac >= 0.7 {
+                            continue;
+                        }
+                        let key = (pos.x.to_bits(), pos.y.to_bits(), pos.z.to_bits());
+                        let better = match best {
+                            None => true,
+                            Some((_, bf, bk)) => {
+                                frac < bf || (frac == bf && key < bk)
+                            }
+                        };
+                        if better {
+                            best = Some((*e, frac, key));
+                        }
+                    }
+                    best.map(|(e, _, _)| CastTarget::Entity(e))
+                }
+                "priest_smite" => {
+                    spatial_grid.collect_radius_limited(my_pos, range, 16, &mut nearby);
+                    let mut best: Option<(Entity, f32, (u32, u32, u32))> = None;
+                    for (e, pos) in nearby.iter() {
+                        if *e == entity {
+                            continue;
+                        }
+                        let Ok((_, ofaction, ohealth)) = other.get(*e) else {
+                            continue;
+                        };
+                        if !teams.is_hostile(faction, ofaction) {
+                            continue;
+                        }
+                        if ohealth.current <= 0.0 {
+                            continue;
+                        }
+                        let key = (pos.x.to_bits(), pos.y.to_bits(), pos.z.to_bits());
+                        let hp = ohealth.current;
+                        let better = match best {
+                            None => true,
+                            Some((_, bh, bk)) => hp < bh || (hp == bh && key < bk),
+                        };
+                        if better {
+                            best = Some((*e, hp, key));
+                        }
+                    }
+                    best.map(|(e, _, _)| CastTarget::Entity(e))
+                }
+                _ => None,
+            };
+
+            if let Some(target) = cast_target {
+                brain.order = Order::Cast(ability_id.clone(), target);
+                brain.order_source = OrderSource::Auto;
+                // One cast-commit per tick per unit.
+                break;
+            }
         }
     }
 }

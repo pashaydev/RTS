@@ -639,19 +639,13 @@ fn move_units(
 
             // If the unit is already inside a blocked cell, relax NavGrid checks
             // so it can walk out rather than being stuck forever.
-            // Also relax when following a computed NavPath — the pathfinder already
-            // validated the route, so per-step grid checks near cell boundaries
-            // should not block progress.
             let current_blocked = nav_grid.as_ref().is_some_and(|grid| {
                 !grid.is_world_passable(transform.translation.x, transform.translation.z)
             });
-            let has_nav_path = nav_path
-                .as_ref()
-                .is_some_and(|n| n.current_index < n.waypoints.len());
 
             // Wall collision check helper
             let mut is_blocked = |pos: Vec3| -> bool {
-                if !current_blocked && !has_nav_path {
+                if !current_blocked {
                     if nav_grid
                         .as_ref()
                         .is_some_and(|grid| !grid.is_world_passable(pos.x, pos.z))

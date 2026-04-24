@@ -336,7 +336,6 @@ fn build_nav_grid(height_map: Res<HeightMap>, biome_map: Res<BiomeMap>, mut comm
 
     let mut costs = vec![1u8; total];
     let mut heights = vec![0f32; total];
-
     // First pass: sample heights at every cell so the slope test below can
     // compare to neighbours without re-sampling the heightmap repeatedly.
     for gz in 0..grid_size {
@@ -417,18 +416,19 @@ fn compute_cell_terrain_cost(
             if nx < 0 || nz < 0 || nx >= grid_size as i32 || nz >= grid_size as i32 {
                 continue;
             }
-            let nh = heights[nz as usize * grid_size + nx as usize];
-            let diag_scale = if dx != 0 && dz != 0 { 1.4142 } else { 1.0 };
-            let normalized = (h - nh).abs() / diag_scale;
-            if normalized > max_diff {
-                max_diff = normalized;
-            }
-            let mwx = wx + dx as f32 * step * 0.5;
-            let mwz = wz + dz as f32 * step * 0.5;
-            let mh = height_map.sample(mwx, mwz);
-            let mid_diff = (h - mh).abs() * 2.0 / diag_scale;
-            if mid_diff > max_diff {
-                max_diff = mid_diff;
+            let edge_diff = terrain_edge_height_delta(
+                heights,
+                height_map,
+                gx,
+                gz,
+                nx as usize,
+                nz as usize,
+                grid_size,
+                step,
+                half_map,
+            );
+            if edge_diff > max_diff {
+                max_diff = edge_diff;
             }
         }
     }
@@ -532,7 +532,6 @@ fn refresh_nav_grid(
         for i in 0..nav_grid.costs.len() {
             nav_grid.costs[i] = nav_grid.terrain_base_costs[i];
         }
-
         // Stamp ALL building footprints.
         for (tf, footprint, state) in &buildings {
             if *state != BuildingState::Complete && *state != BuildingState::UnderConstruction {
@@ -576,7 +575,6 @@ fn refresh_nav_grid(
                     }
                 }
             }
-
             // Recompute terrain base cost and overwrite costs in the affected
             // region. Any building/wall that overlaps is re-stamped below, so
             // obstacle coverage is preserved.
@@ -692,6 +690,7 @@ fn queue_path_requests(
     mut queue: ResMut<PathRequestQueue>,
     mut request_ids: ResMut<PathRequestIds>,
     nav_grid: Res<NavGrid>,
+    height_map: Res<HeightMap>,
     mut new_movers: Query<
         (
             Entity,
@@ -718,7 +717,9 @@ fn queue_path_requests(
         let flat_dist = Vec2::new(goal.x - start.x, goal.z - start.z).length();
 
         // Skip pathfinding only when the direct segment stays entirely walkable.
-        if flat_dist < DIRECT_MOVE_THRESHOLD && is_direct_path_walkable(&nav_grid, start, goal) {
+        if flat_dist < DIRECT_MOVE_THRESHOLD
+            && is_direct_path_walkable(&nav_grid, &height_map, start, goal)
+        {
             continue;
         }
 
@@ -793,8 +794,12 @@ fn process_pathfinding_requests(
             continue;
         }
 
-        let Some(path) = find_path(&nav_grid, request.start, request.goal) else {
-            commands.entity(request.entity).remove::<NavPending>();
+        let Some(path) = find_path(&nav_grid, &height_map, request.start, request.goal) else {
+            commands
+                .entity(request.entity)
+                .remove::<NavPending>()
+                .remove::<NavPath>()
+                .remove::<MoveTarget>();
             processed += 1;
             continue;
         };
@@ -815,6 +820,8 @@ fn process_pathfinding_requests(
                 waypoints,
                 current_index: 0,
             });
+        } else {
+            entity_commands.remove::<MoveTarget>().remove::<NavPath>();
         }
 
         processed += 1;
@@ -825,7 +832,12 @@ fn process_pathfinding_requests(
 
 /// Find a path from start to goal using A* on the NavGrid.
 /// Returns a smoothed list of world-space (x, z) waypoints.
-pub fn find_path(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> Option<Vec<(f32, f32)>> {
+pub fn find_path(
+    nav_grid: &NavGrid,
+    height_map: &HeightMap,
+    start: Vec3,
+    goal: Vec3,
+) -> Option<Vec<(f32, f32)>> {
     let gs = nav_grid.grid_size;
     let (sx, sz) = nav_grid.world_to_grid(start.x, start.z);
     let (gx, gz) = nav_grid.world_to_grid(goal.x, goal.z);
@@ -833,6 +845,9 @@ pub fn find_path(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> Option<Vec<(f32
     let original_goal_idx = nav_grid.index(gx, gz);
 
     if start_idx == original_goal_idx && nav_grid.costs[original_goal_idx] > 0 {
+        if let Some((wx, wz)) = resolve_exact_goal_approach(nav_grid, height_map, start, goal) {
+            return Some(vec![(wx, wz)]);
+        }
         let (wx, wz) = nav_grid.grid_to_world(gx, gz);
         return Some(vec![(wx, wz)]);
     }
@@ -868,15 +883,24 @@ pub fn find_path(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> Option<Vec<(f32
 
     let goal_gx = goal_idx % gs;
     let goal_gz = goal_idx / gs;
+    let mut best_reachable = start_idx;
+    let mut best_goal_h = octile_heuristic(start_idx % gs, start_idx / gs, goal_gx, goal_gz);
 
     g_cost[start_idx] = 0;
-    let h = octile_heuristic(start_idx % gs, start_idx / gs, goal_gx, goal_gz);
-    open.push(Reverse((h, start_idx)));
+    open.push(Reverse((best_goal_h, start_idx)));
 
     while let Some(Reverse((_, current))) = open.pop() {
+        let current_h = octile_heuristic(current % gs, current / gs, goal_gx, goal_gz);
+        if current_h < best_goal_h
+            || (current_h == best_goal_h && g_cost[current] < g_cost[best_reachable])
+        {
+            best_goal_h = current_h;
+            best_reachable = current;
+        }
+
         if current == goal_idx {
             let grid_path = reconstruct_path(&came_from, start_idx, goal_idx);
-            let smoothed = smooth_path(nav_grid, &grid_path);
+            let smoothed = smooth_path(nav_grid, height_map, &grid_path);
 
             // Convert to world coords
             let world_path: Vec<(f32, f32)> = smoothed
@@ -890,8 +914,21 @@ pub fn find_path(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> Option<Vec<(f32
 
             let mut result = world_path;
             if !goal_is_projected {
-                // Preserve the exact destination when the target itself is valid.
-                result.push((goal.x, goal.z));
+                let approach = result
+                    .last()
+                    .map(|&(x, z)| Vec3::new(x, height_map.sample(x, z), z))
+                    .unwrap_or(start);
+                if let Some((wx, wz)) =
+                    resolve_exact_goal_approach(nav_grid, height_map, approach, goal)
+                {
+                    // Preserve the exact destination when the final terrain approach is valid.
+                    let duplicate = result
+                        .last()
+                        .is_some_and(|&(x, z)| Vec2::new(x - wx, z - wz).length_squared() <= 0.01);
+                    if !duplicate {
+                        result.push((wx, wz));
+                    }
+                }
             }
 
             return Some(result);
@@ -937,6 +974,9 @@ pub fn find_path(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> Option<Vec<(f32
                         continue;
                     }
                 }
+                if !terrain_edge_is_walkable(height_map, nav_grid, current, ni) {
+                    continue;
+                }
 
                 let base_cost = if dx != 0 && dz != 0 { 1414u32 } else { 1000u32 };
                 // Penalize traversal across height deltas. Anything above
@@ -968,18 +1008,45 @@ pub fn find_path(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> Option<Vec<(f32
         }
     }
 
+    if best_reachable != start_idx {
+        let grid_path = reconstruct_path(&came_from, start_idx, best_reachable);
+        if !grid_path.is_empty() {
+            let smoothed = smooth_path(nav_grid, height_map, &grid_path);
+            let world_path: Vec<(f32, f32)> = smoothed
+                .into_iter()
+                .map(|idx| {
+                    let gx = idx % gs;
+                    let gz = idx / gs;
+                    nav_grid.grid_to_world(gx, gz)
+                })
+                .collect();
+            if world_path.len() > 1 {
+                return Some(world_path);
+            }
+        }
+    }
+
     None
 }
 
-fn is_direct_path_walkable(nav_grid: &NavGrid, start: Vec3, goal: Vec3) -> bool {
+fn is_direct_path_walkable(
+    nav_grid: &NavGrid,
+    height_map: &HeightMap,
+    start: Vec3,
+    goal: Vec3,
+) -> bool {
     if !nav_grid.is_world_passable(start.x, start.z) || !nav_grid.is_world_passable(goal.x, goal.z)
     {
         return false;
     }
 
+    if !is_world_segment_walkable(nav_grid, height_map, start, goal) {
+        return false;
+    }
+
     let (sx, sz) = nav_grid.world_to_grid(start.x, start.z);
     let (gx, gz) = nav_grid.world_to_grid(goal.x, goal.z);
-    line_of_sight(nav_grid, sx, sz, gx, gz)
+    line_of_sight(nav_grid, height_map, sx, sz, gx, gz)
 }
 
 fn reconstruct_path(came_from: &[usize], start: usize, goal: usize) -> Vec<usize> {
@@ -998,7 +1065,7 @@ fn reconstruct_path(came_from: &[usize], start: usize, goal: usize) -> Vec<usize
 }
 
 /// Line-of-sight path smoothing: remove unnecessary intermediate waypoints
-fn smooth_path(nav_grid: &NavGrid, path: &[usize]) -> Vec<usize> {
+fn smooth_path(nav_grid: &NavGrid, height_map: &HeightMap, path: &[usize]) -> Vec<usize> {
     if path.len() <= 2 {
         return path.to_vec();
     }
@@ -1017,7 +1084,7 @@ fn smooth_path(nav_grid: &NavGrid, path: &[usize]) -> Vec<usize> {
             let bx = path[probe] % gs;
             let bz = path[probe] / gs;
 
-            if line_of_sight(nav_grid, ax, az, bx, bz) {
+            if line_of_sight(nav_grid, height_map, ax, az, bx, bz) {
                 farthest = probe;
             }
         }
@@ -1033,7 +1100,14 @@ fn smooth_path(nav_grid: &NavGrid, path: &[usize]) -> Vec<usize> {
 /// Rejects when the segment crosses an impassable cell OR when consecutive
 /// cells along the segment have a height delta exceeding MAX_STEP_HEIGHT_DELTA
 /// (so smoothing and direct-walk shortcuts can't cut across cliffs).
-fn line_of_sight(nav_grid: &NavGrid, x0: usize, z0: usize, x1: usize, z1: usize) -> bool {
+fn line_of_sight(
+    nav_grid: &NavGrid,
+    height_map: &HeightMap,
+    x0: usize,
+    z0: usize,
+    x1: usize,
+    z1: usize,
+) -> bool {
     let gs = nav_grid.grid_size;
     let dx = (x1 as i32 - x0 as i32).abs();
     let dz = (z1 as i32 - z0 as i32).abs();
@@ -1042,7 +1116,7 @@ fn line_of_sight(nav_grid: &NavGrid, x0: usize, z0: usize, x1: usize, z1: usize)
     let mut err = dx - dz;
     let mut x = x0 as i32;
     let mut z = z0 as i32;
-    let mut prev_h = nav_grid.heights[z0 * gs + x0];
+    let mut prev_idx = z0 * gs + x0;
 
     loop {
         if x < 0 || z < 0 || x >= gs as i32 || z >= gs as i32 {
@@ -1052,11 +1126,10 @@ fn line_of_sight(nav_grid: &NavGrid, x0: usize, z0: usize, x1: usize, z1: usize)
         if nav_grid.costs[idx] == 0 {
             return false;
         }
-        let cur_h = nav_grid.heights[idx];
-        if (cur_h - prev_h).abs() > MAX_STEP_HEIGHT_DELTA {
+        if idx != prev_idx && !terrain_edge_is_walkable(height_map, nav_grid, prev_idx, idx) {
             return false;
         }
-        prev_h = cur_h;
+        prev_idx = idx;
         if x == x1 as i32 && z == z1 as i32 {
             return true;
         }
@@ -1078,6 +1151,158 @@ fn octile_heuristic(ax: usize, az: usize, bx: usize, bz: usize) -> u32 {
     let diag = dx.min(dz);
     let straight = dx.max(dz) - diag;
     diag * 1414 + straight * 1000
+}
+
+fn terrain_edge_height_delta(
+    heights: &[f32],
+    height_map: &HeightMap,
+    gx: usize,
+    gz: usize,
+    nx: usize,
+    nz: usize,
+    grid_size: usize,
+    step: f32,
+    half_map: f32,
+) -> f32 {
+    let idx = gz * grid_size + gx;
+    let nidx = nz * grid_size + nx;
+    let wx = gx as f32 * step - half_map;
+    let wz = gz as f32 * step - half_map;
+    let nwx = nx as f32 * step - half_map;
+    let nwz = nz as f32 * step - half_map;
+    let midpoint = Vec2::new((wx + nwx) * 0.5, (wz + nwz) * 0.5);
+    let h0 = heights[idx];
+    let h1 = heights[nidx];
+    let hm = height_map.sample(midpoint.x, midpoint.y);
+    let diag_scale = if gx != nx && gz != nz { std::f32::consts::SQRT_2 } else { 1.0 };
+
+    ((h0 - h1).abs() / diag_scale)
+        .max((h0 - hm).abs() * 2.0 / diag_scale)
+        .max((h1 - hm).abs() * 2.0 / diag_scale)
+}
+
+fn terrain_edge_bit(from: usize, to: usize, grid_size: usize) -> Option<(i32, i32)> {
+    let fx = from % grid_size;
+    let fz = from / grid_size;
+    let tx = to % grid_size;
+    let tz = to / grid_size;
+    let dx = tx as i32 - fx as i32;
+    let dz = tz as i32 - fz as i32;
+    if dx.abs() <= 1 && dz.abs() <= 1 && !(dx == 0 && dz == 0) {
+        Some((dx, dz))
+    } else {
+        None
+    }
+}
+
+fn terrain_edge_is_walkable(
+    height_map: &HeightMap,
+    nav_grid: &NavGrid,
+    from: usize,
+    to: usize,
+) -> bool {
+    let Some((_dx, _dz)) = terrain_edge_bit(from, to, nav_grid.grid_size) else {
+        return false;
+    };
+    let fx = from % nav_grid.grid_size;
+    let fz = from / nav_grid.grid_size;
+    let tx = to % nav_grid.grid_size;
+    let tz = to / nav_grid.grid_size;
+    terrain_edge_height_delta(
+        &nav_grid.heights,
+        height_map,
+        fx,
+        fz,
+        tx,
+        tz,
+        nav_grid.grid_size,
+        nav_grid.step,
+        nav_grid.half_map,
+    ) <= MAX_STEP_HEIGHT_DELTA
+}
+
+fn resolve_exact_goal_approach(
+    nav_grid: &NavGrid,
+    height_map: &HeightMap,
+    approach: Vec3,
+    goal: Vec3,
+) -> Option<(f32, f32)> {
+    if is_direct_path_walkable(nav_grid, height_map, approach, goal) {
+        return Some((goal.x, goal.z));
+    }
+
+    let max_radius = nav_grid.step * 1.5;
+    let ring_count = 4;
+    let angle_samples = 16;
+    let mut best: Option<((f32, f32), f32)> = None;
+
+    for ring in 1..=ring_count {
+        let radius = max_radius * ring as f32 / ring_count as f32;
+        for step_idx in 0..angle_samples {
+            let angle = step_idx as f32 / angle_samples as f32 * std::f32::consts::TAU;
+            let wx = goal.x + angle.cos() * radius;
+            let wz = goal.z + angle.sin() * radius;
+            if !nav_grid.is_world_passable(wx, wz) {
+                continue;
+            }
+            let candidate = Vec3::new(wx, height_map.sample(wx, wz), wz);
+            if !is_direct_path_walkable(nav_grid, height_map, approach, candidate) {
+                continue;
+            }
+            let score = Vec2::new(goal.x - wx, goal.z - wz).length_squared();
+            if best.is_none_or(|(_, best_score)| score < best_score) {
+                best = Some(((wx, wz), score));
+            }
+        }
+    }
+
+    best.map(|(point, _)| point)
+}
+
+fn is_world_segment_walkable(
+    nav_grid: &NavGrid,
+    height_map: &HeightMap,
+    start: Vec3,
+    goal: Vec3,
+) -> bool {
+    let flat = Vec2::new(goal.x - start.x, goal.z - start.z);
+    let dist = flat.length();
+    if dist <= 0.001 {
+        return true;
+    }
+
+    let samples = ((dist / (nav_grid.step * 0.35)).ceil() as usize).max(1);
+    let max_slope = MAX_STEP_HEIGHT_DELTA / NAV_GRID_STEP;
+
+    let mut prev = start;
+    let mut prev_h = height_map.sample(start.x, start.z);
+    for i in 1..=samples {
+        let t = i as f32 / samples as f32;
+        let point = start.lerp(goal, t);
+        if !nav_grid.is_world_passable(point.x, point.z) {
+            return false;
+        }
+
+        let h = height_map.sample(point.x, point.z);
+        let seg = Vec2::new(point.x - prev.x, point.z - prev.z).length().max(0.001);
+        if (h - prev_h).abs() / seg > max_slope {
+            return false;
+        }
+
+        let mid = Vec3::new((prev.x + point.x) * 0.5, 0.0, (prev.z + point.z) * 0.5);
+        let mid_h = height_map.sample(mid.x, mid.z);
+        let half_seg = (seg * 0.5).max(0.001);
+        if (mid_h - prev_h).abs() / half_seg > max_slope
+            || (h - mid_h).abs() / half_seg > max_slope
+        {
+            return false;
+        }
+
+        prev = point;
+        prev_h = h;
+    }
+
+    true
 }
 
 /// Find the nearest passable cell to (gx, gz) using a small BFS

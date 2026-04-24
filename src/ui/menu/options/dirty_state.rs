@@ -40,14 +40,27 @@ pub(crate) fn capture_options_snapshot(
     }
 }
 
-/// Toggles Save button visibility based on whether settings have changed from snapshot.
+/// Toggles Apply / Discard button visibility based on whether settings have changed from snapshot.
 pub(crate) fn toggle_save_button_visibility(
     page: Res<MenuPage>,
     graphics: Res<GraphicsSettings>,
     audio_settings: Res<crate::infrastructure::audio::AudioSettings>,
     gameplay: Res<GameplaySettings>,
     snapshot: Option<Res<super::super::OptionsSnapshot>>,
-    mut save_btns: Query<&mut Visibility, With<super::super::SaveSettingsButton>>,
+    mut save_btns: Query<
+        &mut Visibility,
+        (
+            With<super::super::SaveSettingsButton>,
+            Without<super::super::DiscardSettingsButton>,
+        ),
+    >,
+    mut discard_btns: Query<
+        &mut Visibility,
+        (
+            With<super::super::DiscardSettingsButton>,
+            Without<super::super::SaveSettingsButton>,
+        ),
+    >,
 ) {
     if !matches!(*page, MenuPage::Options) {
         return;
@@ -59,12 +72,16 @@ pub(crate) fn toggle_save_button_visibility(
     } else {
         false
     };
-    for mut vis in &mut save_btns {
-        *vis = if dirty {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
+    let vis = if dirty {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut v in &mut save_btns {
+        *v = vis;
+    }
+    for mut v in &mut discard_btns {
+        *v = vis;
     }
 }
 

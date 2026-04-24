@@ -2670,6 +2670,11 @@ fn restore_ai_brain(saved: &SavedAiBrain, id_map: &HashMap<u32, Entity>) -> AiFa
         }),
         base_position: saved.base_position.map(arr_to_vec3),
         prev_health: HashMap::new(),
+        pending_item_targets: std::collections::BTreeMap::new(),
+        wave_counter_bias: None,
+        last_known_age: None,
+        timed_push_until: None,
+        needs_storage: false,
     }
 }
 

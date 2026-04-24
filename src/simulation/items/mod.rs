@@ -385,7 +385,7 @@ fn pickup_failure_for_unit(
     inventory_failure_for_item(pickup.item, inventory)
 }
 
-fn inventory_failure_for_item(
+pub(crate) fn inventory_failure_for_item(
     item: ItemKind,
     inventory: &UnitInventory,
 ) -> Option<ItemPickupFailureReason> {

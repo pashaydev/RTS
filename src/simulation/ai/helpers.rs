@@ -276,6 +276,110 @@ pub fn pick_strategic_target(
     best_pos
 }
 
+/// Economic denial targeting for Aggressive raids.
+///
+/// Priority ladder (deterministic — sorted by position bits on ties):
+/// 1. Isolated enemy workers (>30u from any enemy military).
+/// 2. Under-construction enemy buildings at <50% progress.
+/// 3. Unprotected enemy Outposts (no GuardTower/WatchTower/BallistaTower/BombardTower within 20u).
+/// 4. Falls back to caller's default via `None`.
+pub fn select_harass_target(
+    teams: &TeamConfig,
+    faction: &Faction,
+    enemy_workers: &[(Vec3, u64)],
+    enemy_military: &[Vec3],
+    enemy_buildings: &[HarassBuilding],
+) -> Option<Vec3> {
+    // ── 1. Isolated workers ──
+    let mut isolated: Vec<(Vec3, u64)> = Vec::new();
+    for (pos, bits) in enemy_workers {
+        let min_military_dist = enemy_military
+            .iter()
+            .map(|mp| mp.distance(*pos))
+            .fold(f32::INFINITY, f32::min);
+        if min_military_dist > 30.0 {
+            isolated.push((*pos, *bits));
+        }
+    }
+    if !isolated.is_empty() {
+        // Pick farthest-from-military worker for most exposed target,
+        // tie-break by position bits + entity bits.
+        isolated.sort_by(|a, b| {
+            let da = enemy_military
+                .iter()
+                .map(|mp| mp.distance(a.0))
+                .fold(f32::INFINITY, f32::min);
+            let db = enemy_military
+                .iter()
+                .map(|mp| mp.distance(b.0))
+                .fold(f32::INFINITY, f32::min);
+            let ka = ((-da * 1000.0) as i64, a.0.x.to_bits(), a.0.z.to_bits(), a.1);
+            let kb = ((-db * 1000.0) as i64, b.0.x.to_bits(), b.0.z.to_bits(), b.1);
+            ka.cmp(&kb)
+        });
+        return Some(isolated[0].0);
+    }
+
+    // ── 2. Half-built buildings ──
+    let mut incomplete: Vec<&HarassBuilding> = enemy_buildings
+        .iter()
+        .filter(|b| {
+            teams.is_hostile(faction, &b.faction)
+                && b.faction != Faction::Neutral
+                && b.construction_frac.map_or(false, |f| f < 0.5)
+        })
+        .collect();
+    incomplete.sort_by(|a, b| {
+        (a.position.x.to_bits(), a.position.z.to_bits())
+            .cmp(&(b.position.x.to_bits(), b.position.z.to_bits()))
+    });
+    if let Some(b) = incomplete.first() {
+        return Some(b.position);
+    }
+
+    // ── 3. Unprotected Outposts ──
+    let tower_kinds = [
+        EntityKind::GuardTower,
+        EntityKind::WatchTower,
+        EntityKind::BallistaTower,
+        EntityKind::BombardTower,
+        EntityKind::MageTower,
+    ];
+    let mut outposts: Vec<&HarassBuilding> = enemy_buildings
+        .iter()
+        .filter(|b| {
+            teams.is_hostile(faction, &b.faction)
+                && b.faction != Faction::Neutral
+                && b.kind == EntityKind::Outpost
+        })
+        .collect();
+    outposts.sort_by(|a, b| {
+        (a.position.x.to_bits(), a.position.z.to_bits())
+            .cmp(&(b.position.x.to_bits(), b.position.z.to_bits()))
+    });
+    for op in outposts {
+        let has_nearby_tower = enemy_buildings.iter().any(|b| {
+            b.faction == op.faction
+                && tower_kinds.contains(&b.kind)
+                && b.position.distance(op.position) < 20.0
+        });
+        if !has_nearby_tower {
+            return Some(op.position);
+        }
+    }
+
+    None
+}
+
+/// Snapshot of a building for `select_harass_target`.
+#[derive(Clone)]
+pub struct HarassBuilding {
+    pub faction: Faction,
+    pub kind: EntityKind,
+    pub position: Vec3,
+    pub construction_frac: Option<f32>,
+}
+
 pub fn find_enemy_resource_area(
     buildings: &Query<
         (

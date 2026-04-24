@@ -2,6 +2,7 @@
 
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
+use bevy_inspector_egui::egui::Margin;
 
 use crate::types::*;
 use crate::ui::core::components as ui_components;

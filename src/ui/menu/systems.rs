@@ -36,9 +36,9 @@ pub(crate) fn spawn_menu(
     net_role: Option<Res<NetRole>>,
     client_state: Option<Res<ClientNetState>>,
     theme: Res<Theme>,
-    db: Res<GameDatabase>,
-    profile: Res<ActiveProfile>,
+    db_and_profile: (Res<GameDatabase>, Res<ActiveProfile>, Res<OptionsTab>),
 ) {
+    let (db, profile, options_tab) = db_and_profile;
     let (restart, pending_load, mut next_state) = early_exit;
 
     if restart.is_some() {
@@ -113,6 +113,7 @@ pub(crate) fn spawn_menu(
         &db,
         &profile,
         &asset_server,
+        *options_tab,
     );
 }
 
@@ -134,6 +135,7 @@ fn dispatch_page(
     db: &GameDatabase,
     profile: &ActiveProfile,
     asset_server: &AssetServer,
+    options_tab: OptionsTab,
 ) {
     match *page {
         MenuPage::Title => super::title::spawn_title_page(commands, container, root, fonts, theme),
@@ -149,6 +151,7 @@ fn dispatch_page(
             resolutions,
             fonts,
             theme,
+            options_tab,
         ),
         MenuPage::Multiplayer => {
             multiplayer::spawn_multiplayer_page(commands, container, fonts, theme)
@@ -197,9 +200,10 @@ pub(crate) fn refresh_menu_page(
         Res<ActiveProfile>,
         Res<AssetServer>,
         Res<GameplaySettings>,
+        Res<OptionsTab>,
     ),
 ) {
-    let (db, profile, asset_server, gameplay) = extras;
+    let (db, profile, asset_server, gameplay, options_tab) = extras;
 
     if !page.is_changed() {
         return;
@@ -242,6 +246,7 @@ pub(crate) fn refresh_menu_page(
         &db,
         &profile,
         &asset_server,
+        *options_tab,
     );
 }
 
@@ -267,9 +272,10 @@ pub(crate) fn rebuild_dirty_menu(
         Res<ActiveProfile>,
         Res<AssetServer>,
         Res<GameplaySettings>,
+        Res<OptionsTab>,
     ),
 ) {
-    let (db, profile, asset_server, gameplay) = extras;
+    let (db, profile, asset_server, gameplay, options_tab) = extras;
 
     if dirty.is_none() {
         return;
@@ -313,6 +319,7 @@ pub(crate) fn rebuild_dirty_menu(
         &db,
         &profile,
         &asset_server,
+        *options_tab,
     );
 }
 

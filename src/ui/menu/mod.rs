@@ -193,13 +193,30 @@ pub(crate) struct ConfirmPopupState {
     pub active: bool,
 }
 
-/// Marker for the "SAVE" button on the Options page (visibility toggled by dirty state).
+/// Marker for the "APPLY CHANGES" button on the Options page (visibility toggled by dirty state).
 #[derive(Component)]
 pub(crate) struct SaveSettingsButton;
+
+/// Marker for the "DISCARD" button on the Options page (visibility toggled by dirty state).
+#[derive(Component)]
+pub(crate) struct DiscardSettingsButton;
 
 /// Marker for the unsaved-changes popup overlay.
 #[derive(Component)]
 pub(crate) struct UnsavedChangesPopup;
+
+/// Active tab on the Options page.
+#[derive(Resource, Default, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum OptionsTab {
+    #[default]
+    Graphics,
+    Audio,
+    Gameplay,
+}
+
+/// Marker for an Options page tab button.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct OptionsTabButton(pub OptionsTab);
 
 /// Timer for lobby ping polling.
 #[derive(Resource)]
@@ -243,6 +260,7 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<MenuPage>()
             .init_resource::<MenuNavFocus>()
+            .init_resource::<OptionsTab>()
             .init_resource::<helpers::SliderDragState>()
             .init_resource::<ConfirmPopupState>()
             .init_resource::<crate::types::AvailableResolutions>()
@@ -278,6 +296,7 @@ impl Plugin for MenuPlugin {
             .add_systems(OnEnter(AppState::MainMenu), systems::spawn_menu)
             .add_systems(Update, input::handle_menu_buttons.in_set(MenuSet::Input))
             .add_systems(Update, input::handle_selector_clicks.in_set(MenuSet::Input))
+            .add_systems(Update, options::handle_options_tab_clicks.in_set(MenuSet::Input))
             .add_systems(
                 Update,
                 (

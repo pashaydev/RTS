@@ -3,6 +3,7 @@
 
 mod economy;
 mod helpers;
+mod items;
 mod military;
 mod strategy;
 mod tactical;
@@ -50,7 +51,26 @@ impl Plugin for AiPlugin {
             )
             .add_systems(
                 FixedUpdate,
+                economy::ai_clear_stuck_cargo
+                    .in_set(SimSet::Ai)
+                    .before(economy::ai_economy_system)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
                 (military::ai_military_system, tactical::ai_tactical_system)
+                    .in_set(SimSet::Ai)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                items::ai_item_pickup_dispatch
+                    .in_set(SimSet::Ai)
+                    .run_if(in_state(AppState::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                tactical::ai_wave_counter_prep
                     .in_set(SimSet::Ai)
                     .run_if(in_state(AppState::InGame)),
             )

@@ -2,9 +2,10 @@
 //! personality/difficulty enums used by strategy and tactical ticks.
 
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::blueprints::EntityKind;
+use crate::simulation::ages::Age;
 use crate::types::*;
 
 // ── Constants ──
@@ -226,6 +227,32 @@ pub struct AiFactionBrain {
 
     // Track previous health for damage detection
     pub prev_health: HashMap<Entity, f32>,
+
+    // Item pickup dispatch: maps pickup entity → assigned unit (BTreeMap for deterministic iteration)
+    pub pending_item_targets: BTreeMap<Entity, Entity>,
+
+    // Night wave counter-prep (set at Dusk, cleared at Dawn)
+    pub wave_counter_bias: Option<WaveCounterBias>,
+
+    // Age II timed push: trigger detection and expiry
+    pub last_known_age: Option<Age>,
+    pub timed_push_until: Option<f32>,
+
+    // Base-progression signal: set by `ai_clear_stuck_cargo` when a worker had
+    // to dump cargo because no building could accept it. Consumed by
+    // `ai_strategy_system` to inject a high-priority Storage BuildRequest.
+    pub needs_storage: bool,
+}
+
+/// Which unit types the AI should bias toward building in response to the next night wave.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum WaveCounterBias {
+    /// Mostly runners — stock basic infantry.
+    Runner,
+    /// Veterans present — favor Pierce/ranged (Archers, Ballista).
+    Armored,
+    /// Champions present — favor Magic (Mages, Priests).
+    Champion,
 }
 
 impl AiFactionBrain {

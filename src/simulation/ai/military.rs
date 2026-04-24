@@ -59,6 +59,10 @@ pub fn ai_military_system(
         Query<(&Faction, &EntityKind, &BuildingState, &BuildingLevel), With<Building>>,
         Query<(&Faction, &EntityKind, &mut TrainingQueue), With<Building>>,
     ),
+    building_detail_q: Query<
+        (&Faction, &EntityKind, &Transform, Option<&ConstructionProgress>),
+        (With<Building>, Without<FloorTile>),
+    >,
 ) {
     let (
         all_unit_factions_q,
@@ -139,6 +143,8 @@ pub fn ai_military_system(
         let personality = brain.personality;
 
         // ── Counter-composition training ──
+        let difficulty = brain.difficulty;
+        let wave_bias = brain.wave_counter_bias;
         let desired_composition: Vec<(EntityKind, usize)> = get_desired_composition_with_intel(
             top_state,
             personality,
@@ -146,6 +152,8 @@ pub fn ai_military_system(
             &snapshot,
             active_player.0,
             &brain.enemy_composition,
+            difficulty,
+            wave_bias,
         );
 
         // Find most under-represented unit type and train it
@@ -303,9 +311,41 @@ pub fn ai_military_system(
                         brain.remove_from_squad(e);
                         brain.add_to_squad(e, SquadRole::Raider);
                     }
-                    if let Some(target) =
-                        find_enemy_resource_area(&enemy_buildings_q, &teams, &faction)
-                    {
+
+                    // Build harass input snapshots (deterministic: iterated in
+                    // entity order, then sorted inside select_harass_target).
+                    let mut enemy_workers: Vec<(Vec3, u64)> = Vec::new();
+                    let mut enemy_military_pos: Vec<Vec3> = Vec::new();
+                    for (uent, uf, ukind, utf) in units_q.iter() {
+                        if !teams.is_hostile(&faction, uf) || *uf == Faction::Neutral {
+                            continue;
+                        }
+                        if *ukind == EntityKind::Worker {
+                            enemy_workers.push((utf.translation, uent.to_bits()));
+                        } else {
+                            enemy_military_pos.push(utf.translation);
+                        }
+                    }
+                    let mut enemy_bld_list: Vec<HarassBuilding> = Vec::new();
+                    for (bf, bk, btf, progress) in building_detail_q.iter() {
+                        enemy_bld_list.push(HarassBuilding {
+                            faction: *bf,
+                            kind: *bk,
+                            position: btf.translation,
+                            construction_frac: progress.map(|p| p.timer.fraction()),
+                        });
+                    }
+
+                    let target = select_harass_target(
+                        &teams,
+                        &faction,
+                        &enemy_workers,
+                        &enemy_military_pos,
+                        &enemy_bld_list,
+                    )
+                    .or_else(|| find_enemy_resource_area(&enemy_buildings_q, &teams, &faction));
+
+                    if let Some(target) = target {
                         for &e in &raiders {
                             if units_q.get(e).is_ok() {
                                 commands.entity(e).insert(MoveTarget(target));
@@ -343,6 +383,68 @@ pub fn ai_military_system(
                         brain.ally_attack_target = Some(player_army_center);
                     } else {
                         brain.ally_attack_target = None;
+                    }
+                }
+            }
+        }
+
+        // ── Timed push (Age II completion): commit everything for 60s ──
+        let timed_push_active = brain.timed_push_until.is_some();
+        if timed_push_active && !is_friendly {
+            // Gather every combat-capable squad member.
+            let mut all_pushers: Vec<Entity> = Vec::new();
+            for role in [
+                SquadRole::AttackSquad,
+                SquadRole::DefenseSquad,
+                SquadRole::Raider,
+            ] {
+                if let Some(sq) = brain.get_squad(role) {
+                    all_pushers.extend(&sq.members);
+                }
+            }
+            // Pick a target the same way a raid would, but fall through to
+            // strategic targeting if no exploit exists.
+            let mut enemy_workers: Vec<(Vec3, u64)> = Vec::new();
+            let mut enemy_military_pos: Vec<Vec3> = Vec::new();
+            for (uent, uf, ukind, utf) in units_q.iter() {
+                if !teams.is_hostile(&faction, uf) || *uf == Faction::Neutral {
+                    continue;
+                }
+                if *ukind == EntityKind::Worker {
+                    enemy_workers.push((utf.translation, uent.to_bits()));
+                } else {
+                    enemy_military_pos.push(utf.translation);
+                }
+            }
+            let mut enemy_bld_list: Vec<HarassBuilding> = Vec::new();
+            for (bf, bk, btf, progress) in building_detail_q.iter() {
+                enemy_bld_list.push(HarassBuilding {
+                    faction: *bf,
+                    kind: *bk,
+                    position: btf.translation,
+                    construction_frac: progress.map(|p| p.timer.fraction()),
+                });
+            }
+            let push_target = select_harass_target(
+                &teams,
+                &faction,
+                &enemy_workers,
+                &enemy_military_pos,
+                &enemy_bld_list,
+            )
+            .or_else(|| {
+                pick_strategic_target(
+                    base_pos,
+                    &brain.known_threats,
+                    &enemy_buildings_q,
+                    &teams,
+                    &faction,
+                )
+            });
+            if let Some(target) = push_target {
+                for &e in &all_pushers {
+                    if units_q.get(e).is_ok() {
+                        commands.entity(e).insert(MoveTarget(target));
                     }
                 }
             }
@@ -514,7 +616,12 @@ pub fn ai_military_system(
     }
 }
 
-/// Composition with counter-intelligence: blend enemy composition awareness with personality
+/// Composition with counter-intelligence: blends personality defaults with
+/// observed enemy composition and (optionally) the incoming night wave bias.
+///
+/// Easy/Medium difficulty: legacy melee-vs-ranged heuristic.
+/// Hard difficulty: damage-vs-armor matrix scoring — picks the top-scoring
+/// friendly unit types against the observed enemy armor histogram.
 fn get_desired_composition_with_intel(
     state: AiTopState,
     personality: AiPersonality,
@@ -522,13 +629,38 @@ fn get_desired_composition_with_intel(
     snapshot: &AiWorldSnapshot,
     active_player: Faction,
     enemy_composition: &HashMap<EntityKind, u32>,
+    difficulty: AiDifficulty,
+    wave_bias: Option<WaveCounterBias>,
 ) -> Vec<(EntityKind, usize)> {
     let base = get_desired_composition(state, personality, is_friendly, snapshot, active_player);
 
-    if enemy_composition.is_empty() {
-        return base;
+    // Start from base; apply counter-weights in place.
+    let mut result = base.clone();
+
+    if !enemy_composition.is_empty() {
+        match difficulty {
+            AiDifficulty::Hard => {
+                apply_hard_counter_matrix(&mut result, enemy_composition);
+            }
+            _ => {
+                apply_simple_counter_heuristic(&mut result, enemy_composition);
+            }
+        }
     }
 
+    // Apply night-wave counter-prep on top. These boosts survive the day —
+    // they bias training between Dusk and Dawn.
+    if let Some(bias) = wave_bias {
+        apply_wave_bias(&mut result, bias);
+    }
+
+    result
+}
+
+fn apply_simple_counter_heuristic(
+    result: &mut Vec<(EntityKind, usize)>,
+    enemy_composition: &HashMap<EntityKind, u32>,
+) {
     let enemy_melee: u32 = enemy_composition
         .iter()
         .filter(|(k, _)| {
@@ -545,25 +677,104 @@ fn get_desired_composition_with_intel(
         .map(|(_, v)| v)
         .sum();
 
-    let mut result = base.clone();
-
     if enemy_melee > enemy_ranged + 2 {
         for (kind, count) in result.iter_mut() {
-            match kind {
-                EntityKind::Archer | EntityKind::Mage => *count = (*count + 2).min(*count * 2),
-                _ => {}
+            if matches!(kind, EntityKind::Archer | EntityKind::Mage) {
+                *count = (*count + 2).min(*count * 2);
             }
         }
     } else if enemy_ranged > enemy_melee + 2 {
         for (kind, count) in result.iter_mut() {
-            match kind {
-                EntityKind::Knight | EntityKind::Cavalry => *count = (*count + 2).min(*count * 2),
-                _ => {}
+            if matches!(kind, EntityKind::Knight | EntityKind::Cavalry) {
+                *count = (*count + 2).min(*count * 2);
             }
         }
     }
+}
 
-    result
+/// Hard-difficulty counter: use damage/armor matrix to pick top counter units.
+/// Computes a weighted enemy armor histogram, then scores each friendly unit
+/// kind by summed damage multiplier vs that histogram. Top two scorers get +2.
+fn apply_hard_counter_matrix(
+    result: &mut Vec<(EntityKind, usize)>,
+    enemy_composition: &HashMap<EntityKind, u32>,
+) {
+    // Sort enemy kinds for deterministic iteration (HashMap otherwise drifts).
+    let mut enemy_sorted: Vec<(EntityKind, u32)> =
+        enemy_composition.iter().map(|(k, v)| (*k, *v)).collect();
+    enemy_sorted.sort_by_key(|(k, _)| k.to_index());
+
+    let mut armor_hist: [u32; 4] = [0; 4]; // [Light, Heavy, Siege, Structure]
+    for (kind, count) in &enemy_sorted {
+        let a = armor_for_kind(*kind) as usize;
+        armor_hist[a] += count;
+    }
+
+    // Score each of our candidate unit types.
+    let mut scored: Vec<(EntityKind, i64)> = result
+        .iter()
+        .map(|(kind, _)| {
+            let dmg = damage_for_kind(*kind);
+            let mut score: f32 = 0.0;
+            for a_idx in 0..4 {
+                let armor = match a_idx {
+                    0 => ArmorType::Light,
+                    1 => ArmorType::Heavy,
+                    2 => ArmorType::Siege,
+                    _ => ArmorType::Structure,
+                };
+                let mult = dmg.multiplier_vs(armor);
+                score += armor_hist[a_idx] as f32 * mult;
+            }
+            // Quantize for integer tie-break.
+            ((*kind), (score * 1000.0) as i64)
+        })
+        .collect();
+    // Stable sort by (score desc, kind index asc).
+    scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_index().cmp(&b.0.to_index())));
+
+    // Boost top 2 scoring kinds.
+    for (boost_kind, _) in scored.iter().take(2) {
+        for (kind, count) in result.iter_mut() {
+            if kind == boost_kind {
+                *count = *count + 2;
+            }
+        }
+    }
+}
+
+fn apply_wave_bias(result: &mut Vec<(EntityKind, usize)>, bias: WaveCounterBias) {
+    let boosted: &[EntityKind] = match bias {
+        WaveCounterBias::Runner => &[EntityKind::Soldier],
+        WaveCounterBias::Armored => &[EntityKind::Archer, EntityKind::BallistaTower],
+        WaveCounterBias::Champion => &[EntityKind::Mage, EntityKind::Priest],
+    };
+    for (kind, count) in result.iter_mut() {
+        if boosted.contains(kind) {
+            *count = (*count as f32 * 1.5).ceil() as usize;
+        }
+    }
+}
+
+/// Map unit kind → its primary damage type (mirrors blueprint defaults).
+fn damage_for_kind(kind: EntityKind) -> DamageType {
+    match kind {
+        EntityKind::Archer | EntityKind::Scout | EntityKind::BallistaTower => DamageType::Pierce,
+        EntityKind::Mage | EntityKind::Priest | EntityKind::MageTower => DamageType::Magic,
+        EntityKind::Catapult | EntityKind::BatteringRam | EntityKind::BombardTower => {
+            DamageType::SiegeDmg
+        }
+        _ => DamageType::Melee,
+    }
+}
+
+/// Map unit kind → its primary armor type (mirrors blueprint defaults).
+fn armor_for_kind(kind: EntityKind) -> ArmorType {
+    match kind {
+        EntityKind::Knight | EntityKind::Tank | EntityKind::Cavalry => ArmorType::Heavy,
+        EntityKind::Catapult | EntityKind::BatteringRam => ArmorType::Siege,
+        _ => ArmorType::Light,
+    }
 }
 
 fn get_desired_composition(

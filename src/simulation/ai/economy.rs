@@ -251,9 +251,14 @@ pub fn ai_economy_system(
                 player_base_pos,
                 is_friendly,
             ) {
+                // `PreferredResource` makes the worker's return-to-gather loop use
+                // the global depot-aware scan (find_nearest_node_of_type), which
+                // skips resource nodes whose resource type has no accepting deposit
+                // for this faction — preventing the "stuck carrying" failure mode.
                 commands
                     .entity(*entity)
-                    .insert(UnitState::Gathering(node_entity));
+                    .insert(UnitState::Gathering(node_entity))
+                    .insert(PreferredResource(needed));
                 brain.add_to_squad(*entity, role);
             }
         }
@@ -586,4 +591,101 @@ fn find_nearest_resource_node_in_snapshot(
     }
 
     best_entity
+}
+
+/// Drop-cargo safety net for AI workers.
+///
+/// Mirrors the player's `handle_drop_cargo_button` (ui/widgets/buttons.rs:527-578)
+/// for workers that got stuck because no building can accept what they're carrying.
+///
+/// Trigger conditions:
+/// 1. Worker is in `WaitingForDepot` or `WaitingForStorage` (already stuck by the
+///    worker FSM for lack of a valid depot).
+/// 2. Worker is carrying resource R but the faction has zero completed buildings
+///    whose `StorageInventory` accepts R.
+///
+/// In either case: zero the `Carrying` and reset to `Idle` so the normal AI
+/// worker-assignment loop can re-pick a resource with a reachable depot (the
+/// `PreferredResource` insertion in `ai_economy_system` then keeps them on
+/// a valid target from that point).
+pub fn ai_clear_stuck_cargo(
+    time: Res<Time<Fixed>>,
+    config: Res<GameSetupConfig>,
+    active_player: Res<ActivePlayer>,
+    ai_controlled: Res<AiControlledFactions>,
+    mut ai_state: ResMut<AiState>,
+    mut commands: Commands,
+    mut workers: Query<
+        (Entity, &Faction, &mut Carrying, &mut UnitState),
+        (With<Unit>, With<GatherSpeed>),
+    >,
+    depots: Query<(&Faction, &StorageInventory, &BuildingState), With<Building>>,
+) {
+    let _ = time;
+
+    for &faction in &ai_controlled.factions {
+        if !faction_uses_ai(&config, faction) {
+            continue;
+        }
+        if faction == active_player.0 {
+            continue;
+        }
+
+        // Build the set of resource types this faction's completed depots will accept.
+        // (Deterministic: a fixed-size bitmap, no iteration-order sensitivity.)
+        let mut accepted = [false; ResourceType::COUNT];
+        for (bf, inv, state) in depots.iter() {
+            if *bf != faction || *state != BuildingState::Complete {
+                continue;
+            }
+            for rt in ResourceType::ALL {
+                if inv.accepts(rt) {
+                    accepted[rt.index()] = true;
+                }
+            }
+        }
+
+        let mut cleared_any = false;
+        for (entity, wf, mut carrying, mut state) in workers.iter_mut() {
+            if *wf != faction {
+                continue;
+            }
+
+            let stuck_by_fsm = matches!(
+                *state,
+                UnitState::WaitingForDepot { .. } | UnitState::WaitingForStorage { .. }
+            );
+            let carrying_unaccepted = carrying
+                .resource_type
+                .map(|rt| carrying.amount > 0 && !accepted[rt.index()])
+                .unwrap_or(false);
+
+            if !stuck_by_fsm && !carrying_unaccepted {
+                continue;
+            }
+
+            // Mirror handle_drop_cargo_button: clear cargo + reset stuck states.
+            carrying.amount = 0;
+            carrying.weight = 0.0;
+            carrying.resource_type = None;
+            if matches!(
+                *state,
+                UnitState::ReturningToDeposit { .. }
+                    | UnitState::WaitingForStorage { .. }
+                    | UnitState::WaitingForDepot { .. }
+                    | UnitState::Depositing { .. }
+            ) {
+                *state = UnitState::Idle;
+            }
+            // Force a fresh resource pick next economy tick.
+            commands.entity(entity).remove::<PreferredResource>();
+            cleared_any = true;
+        }
+
+        if cleared_any {
+            if let Some(brain) = ai_state.factions.get_mut(&faction) {
+                brain.needs_storage = true;
+            }
+        }
+    }
 }

@@ -7,10 +7,37 @@ use bevy::window::{Monitor, PresentMode};
 
 use super::{resolution_index, resolution_label, ResolutionRow};
 use crate::types::*;
+use crate::ui::core::interactions::UiClickEvent;
 use crate::ui::menu::helpers::*;
-use crate::ui::menu::{BRIGHTNESS_OPTIONS, UI_SCALE_OPTIONS};
+use crate::ui::menu::{
+    MenuDirty, MenuPage, OptionsTab, OptionsTabButton, BRIGHTNESS_OPTIONS, UI_SCALE_OPTIONS,
+};
 use crate::ui::theme::Theme;
 use crate::ui::theme::{BG_ELEVATED, HIGHLIGHT, HIGHLIGHT_SUBTLE, TEXT_DISABLED, TEXT_PRIMARY};
+use bevy::ecs::message::MessageReader;
+
+// ── Options Tab Switching ──
+
+pub(crate) fn handle_options_tab_clicks(
+    mut click_events: MessageReader<UiClickEvent>,
+    tab_buttons: Query<&OptionsTabButton>,
+    page: Res<MenuPage>,
+    mut active_tab: ResMut<OptionsTab>,
+    mut commands: Commands,
+) {
+    if !matches!(*page, MenuPage::Options) {
+        return;
+    }
+    for event in click_events.read() {
+        let Ok(tab_btn) = tab_buttons.get(event.entity) else {
+            continue;
+        };
+        if *active_tab != tab_btn.0 {
+            *active_tab = tab_btn.0;
+            commands.insert_resource(MenuDirty);
+        }
+    }
+}
 
 // ── Apply Settings ──
 

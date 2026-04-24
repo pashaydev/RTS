@@ -464,10 +464,12 @@ pub(super) fn construction_progress_system(
                 }
             }
 
-            sfx.write(PlaySfx {
-                kind: SfxKind::ConstructionComplete,
-                position: Some(transform.translation),
-            });
+            if !super::is_wall_like_kind(*kind) && !super::is_floor_kind(*kind) {
+                sfx.write(PlaySfx {
+                    kind: SfxKind::ConstructionComplete,
+                    position: Some(transform.translation),
+                });
+            }
 
             // Log construction complete event
             event_log.push(
